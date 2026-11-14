@@ -208,6 +208,23 @@ engine's plugin, checked one by one against a real server, never assumed. What t
 engine teaches about the shape of `execute_request`, `options` and the result rules may change
 them before a second plugin depends on them; after that, only additions.
 
+## Implementation (2026-11-14): protocol 1.1
+Point 2 is in `docs/plugin-protocol.md` and the protocol crates. What was settled while
+writing it:
+
+- **A request's `sql` is empty,** not the typed text point 2 said: a plugin that has the text
+  could be tempted to read it, and nothing it says about an error needs it (the core already
+  names the statement and its position).
+- **The core refuses before sending.** A plugin that chose 1.0 is never sent a request or a
+  `connect` with `options`: the host answers with an error naming both versions, and the plugin
+  never sees either (`spelaion-test-plugin`'s `minor-zero` program, which exits if it does).
+  `options` is left out of `connect` when empty, so a plugin of 1.0 sees what it always saw.
+- **`ObjectKind::is_relation`** says which kinds the core writes SQL for; renaming and dropping
+  a `collection`, `node_label` or `relationship_type` is refused with that reason, an edit
+  target is never one, and the ER diagram never draws one.
+- No engine of the configuration has `options` yet: the resolver sends none until an engine's
+  list of settings exists (the MongoDB engine, SDB-181).
+
 ## Consequences
 - These engines reach v0.10 with an editor, results, an explorer and the guard, and without
   agents, read-only mode, table data tabs, edits, import or exports to a file. The app says so

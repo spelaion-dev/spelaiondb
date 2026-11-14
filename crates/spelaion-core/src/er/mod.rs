@@ -171,7 +171,11 @@ pub enum DiagramError {
 fn is_table(kind: ObjectKind) -> bool {
     match kind {
         ObjectKind::Table | ObjectKind::PartitionedTable | ObjectKind::ForeignTable => true,
-        ObjectKind::View | ObjectKind::MaterializedView => false,
+        ObjectKind::View
+        | ObjectKind::MaterializedView
+        | ObjectKind::Collection
+        | ObjectKind::NodeLabel
+        | ObjectKind::RelationshipType => false,
     }
 }
 

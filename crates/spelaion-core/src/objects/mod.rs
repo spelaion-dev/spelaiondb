@@ -901,6 +901,9 @@ fn rename(
             "only tables, views and columns can be renamed here".into(),
         )),
         ObjectTarget::Relation { schema, name, kind } => {
+            if !kind.is_relation() {
+                return Err(ObjectError::Unsupported(NOT_A_RELATION.into()));
+            }
             if name == new_name {
                 return Err(ObjectError::SameName);
             }
@@ -927,6 +930,11 @@ fn rename(
                         ObjectKind::View => "VIEW",
                         ObjectKind::MaterializedView => "MATERIALIZED VIEW",
                         ObjectKind::ForeignTable => "FOREIGN TABLE",
+                        ObjectKind::Collection
+                        | ObjectKind::NodeLabel
+                        | ObjectKind::RelationshipType => {
+                            return Err(ObjectError::Unsupported(NOT_A_RELATION.into()));
+                        }
                     };
                     Ok(format!("ALTER {what} {old} RENAME TO {}", quote(new_name)))
                 }
@@ -961,6 +969,9 @@ fn rename(
     }
 }
 
+/// Why the core writes no SQL for an object that is not a relation (ADR-056).
+const NOT_A_RELATION: &str = "the core writes SQL only for tables and views: this object is read with its engine's own language";
+
 fn drop(
     dialect: &dyn Dialect,
     target: &ObjectTarget,
@@ -986,6 +997,9 @@ fn drop(
                 ObjectKind::View => "VIEW",
                 ObjectKind::MaterializedView => "MATERIALIZED VIEW",
                 ObjectKind::ForeignTable => "FOREIGN TABLE",
+                ObjectKind::Collection | ObjectKind::NodeLabel | ObjectKind::RelationshipType => {
+                    return unsupported(NOT_A_RELATION);
+                }
             };
             format!("DROP {what} {}{cascade}", qualified(schema, name))
         }
@@ -1300,6 +1314,54 @@ mod tests {
 
     fn drop_sql(dialect: &dyn Dialect, target: ObjectTarget, cascade: bool) -> String {
         change_script(dialect, &ObjectChange::Drop { target, cascade }).unwrap()
+    }
+
+    #[test]
+    fn no_sql_is_written_for_what_is_not_a_relation() {
+        // ADR-056: a collection or a graph's labels are read with their engine's own language;
+        // a SQL dialect's `ALTER TABLE` or `RENAME TABLE` must never be written for them.
+        let dialects: [&dyn Dialect; 5] = [
+            &PostgresDialect,
+            &MysqlDialect,
+            &SqliteDialect,
+            &SqlServerDialect,
+            &DuckdbDialect,
+        ];
+        for kind in [
+            ObjectKind::Collection,
+            ObjectKind::NodeLabel,
+            ObjectKind::RelationshipType,
+        ] {
+            assert!(!kind.is_relation());
+            for dialect in dialects {
+                let rename = ObjectChange::Rename {
+                    target: relation("s", "c", kind),
+                    new_name: "d".into(),
+                };
+                assert!(
+                    matches!(
+                        change_script(dialect, &rename),
+                        Err(ObjectError::Unsupported(_))
+                    ),
+                    "{kind:?} renamed on {}",
+                    dialect.name()
+                );
+                for cascade in [false, true] {
+                    let drop = ObjectChange::Drop {
+                        target: relation("s", "c", kind),
+                        cascade,
+                    };
+                    assert!(
+                        matches!(
+                            change_script(dialect, &drop),
+                            Err(ObjectError::Unsupported(_))
+                        ),
+                        "{kind:?} dropped on {}",
+                        dialect.name()
+                    );
+                }
+            }
+        }
     }
 
     fn object(

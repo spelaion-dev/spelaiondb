@@ -1,5 +1,6 @@
 //! The JSON-RPC 2.0 messages: their envelope, the method names and what each carries.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -364,6 +365,10 @@ pub struct Connect {
     pub connect_addr: Option<SocketAddr>,
     #[serde(default)]
     pub connect_timeout_ms: Option<u64>,
+    /// The engine's own connection settings, checked by the core (version 1.1, ADR-056).
+    /// Left out when empty, so a plugin of version 1.0 sees what it always saw.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub options: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -407,6 +412,11 @@ pub enum Run {
     },
     /// The engine's own plan request.
     Plan(PlanRun),
+    /// The canonical request of an engine whose language is not SQL (version 1.1, ADR-056):
+    /// run exactly this, never the statement's text.
+    Request {
+        request: Value,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -572,6 +582,12 @@ mod tests {
                 Run::Plan(PlanRun::Analyze { query_result: true }),
                 r#"{"kind":"plan","mode":"analyze","query_result":true}"#,
             ),
+            (
+                Run::Request {
+                    request: serde_json::json!({"args": ["GET", "k"]}),
+                },
+                r#"{"kind":"request","request":{"args":["GET","k"]}}"#,
+            ),
         ] {
             assert_eq!(serde_json::to_string(&run).unwrap(), json);
             assert_eq!(serde_json::from_str::<Run>(json).unwrap(), run);
@@ -596,10 +612,28 @@ mod tests {
             read_only: false,
             connect_addr: Some("127.0.0.1:50211".parse().unwrap()),
             connect_timeout_ms: Some(15_000),
+            options: BTreeMap::new(),
         };
         let json = serde_json::to_value(&connect).unwrap();
         assert_eq!(json["tls"], "verify-full");
         assert_eq!(json["connect_addr"], "127.0.0.1:50211");
         assert_eq!(json["password"], "hunter2");
+        // A plugin of version 1.0 sees no field it does not know when there are no settings.
+        assert!(json.get("options").is_none());
+    }
+
+    #[test]
+    fn a_connect_carries_the_engines_own_settings_and_reads_without_them() {
+        let mut json = serde_json::json!({"session": 1, "engine": "mongodb", "host": "db",
+            "port": 27017, "user": "app", "database": "shop", "tls": "disable"});
+        let connect: Connect = serde_json::from_value(json.clone()).unwrap();
+        assert!(connect.options.is_empty(), "a 1.0 core sends none");
+        json["options"] = serde_json::json!({"authSource": "admin"});
+        let connect: Connect = serde_json::from_value(json).unwrap();
+        assert_eq!(connect.options["authSource"], "admin");
+        assert_eq!(
+            serde_json::to_value(&connect).unwrap()["options"],
+            serde_json::json!({"authSource": "admin"})
+        );
     }
 }

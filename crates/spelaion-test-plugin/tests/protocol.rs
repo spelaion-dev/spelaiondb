@@ -461,11 +461,83 @@ async fn connect_carries_what_the_driver_needs_and_nothing_else() {
     assert_eq!(
         seen,
         "db.test:5555 user=app tls=VerifyFull addr=Some(127.0.0.1:50211) read_only=true \
-         app=Some(\"SpelaionDB\") timeout=Some(7s) ca=Some(\"ca.pem\")"
+         app=Some(\"SpelaionDB\") timeout=Some(7s) ca=Some(\"ca.pem\") options={}"
     );
     assert_eq!(one(connection.as_ref(), "engine").await, "test2");
     assert!(connection.capabilities().insert_rows);
     assert!(!connection.capabilities().editable_results);
+}
+
+#[tokio::test]
+async fn a_request_reaches_the_driver_as_the_core_sent_it() {
+    // ADR-056: an engine whose language is not SQL is sent the canonical request the core
+    // read, never the typed text, and its results come back as any statement's do.
+    let plugin = Plugin::new(PROGRAM);
+    let connection = connect(&plugin).await;
+    let request = serde_json::json!({
+        "database": "shop",
+        "command": {"find": "users", "filter": {"age": {"$gt": 30}, "name": "ñ'\""}},
+    });
+    let events = connection
+        .execute_request(request.clone(), &ExecOptions::default())
+        .await
+        .expect("the request starts");
+    let events: Vec<_> = within(events.collect()).await;
+    let seen = texts(&events);
+    assert_eq!(seen.len(), 1);
+    let back: serde_json::Value = serde_json::from_str(&seen[0]).unwrap();
+    assert_eq!(back, request);
+    assert_eq!(shape(&events).last().unwrap(), "done None");
+}
+
+#[tokio::test]
+async fn connect_carries_the_engines_own_settings() {
+    let plugin = Plugin::new(PROGRAM);
+    let mut params = params("made");
+    params.options.insert("authSource".into(), "admin".into());
+    params.options.insert("replicaSet".into(), "rs0".into());
+    let connection = within(plugin.driver("test").connect(&params))
+        .await
+        .unwrap();
+    let seen = one(connection.as_ref(), "params").await;
+    assert!(
+        seen.ends_with(r#"options={"authSource": "admin", "replicaSet": "rs0"}"#),
+        "{seen}"
+    );
+}
+
+#[tokio::test]
+async fn a_plugin_of_version_1_0_is_never_sent_a_request_or_settings() {
+    let program = program_named("minor-zero");
+    let plugin = Plugin::new(&program);
+    let connection = within(plugin.driver("test").connect(&params("made")))
+        .await
+        .expect("a plugin of 1.0 still serves what 1.0 has");
+    let Err(error) = connection
+        .execute_request(
+            serde_json::json!({"args": ["PING"]}),
+            &ExecOptions::default(),
+        )
+        .await
+    else {
+        panic!("a request was sent to a plugin of 1.0");
+    };
+    let message = error.to_string();
+    assert!(message.contains("speaks version 1.0"), "{message}");
+    assert!(message.contains("need version 1.1"), "{message}");
+
+    let mut with_settings = params("made");
+    with_settings
+        .options
+        .insert("authSource".into(), "admin".into());
+    let Err(error) = within(plugin.driver("test").connect(&with_settings)).await else {
+        panic!("settings were sent to a plugin of 1.0");
+    };
+    assert!(error.to_string().contains("connection settings"), "{error}");
+    // It was refused in the core: the plugin is still there, and never saw either.
+    assert!(within(plugin.is_running()).await);
+    drop(connection);
+    let _ = std::fs::remove_file(program);
 }
 
 // ------------------------------------------------------------------------ one process
@@ -940,4 +1012,51 @@ async fn the_test_plugin_conforms() {
 ",
     );
     assert!(failures.contains("not \"postgres\""), "{failures}");
+}
+
+#[tokio::test]
+async fn a_plugin_of_requests_is_checked_through_requests() {
+    use spelaion_plugin_host::conformance::{
+        RequestTarget, assert_conforms_requests, check_requests,
+    };
+    let target = RequestTarget {
+        program: PROGRAM.into(),
+        engine: "test".into(),
+        params: params("made"),
+        one_row: serde_json::json!({"run": "rows 1"}),
+        refused: serde_json::json!({"run": "refused"}),
+        slow: Some(serde_json::json!({"run": "sleep"})),
+    };
+    assert_conforms_requests(&target).await;
+
+    let wrong = RequestTarget {
+        one_row: serde_json::json!({"run": "rows 3"}),
+        refused: serde_json::json!({"run": "rows 1"}),
+        slow: Some(serde_json::json!({"run": "update"})),
+        ..target
+    };
+    let failures = check_requests(&wrong).await.join("\n");
+    assert!(failures.contains("returned 3 rows, not one"), "{failures}");
+    assert!(failures.contains("was not refused"), "{failures}");
+    assert!(
+        failures.contains("without saying it was cancelled"),
+        "{failures}"
+    );
+
+    // A plugin that chose 1.0 cannot pass as a plugin of requests.
+    let program = program_named("minor-zero-conformance");
+    let old = RequestTarget {
+        program: program.clone(),
+        engine: "test".into(),
+        params: params("made"),
+        one_row: serde_json::json!({"run": "rows 1"}),
+        refused: serde_json::json!({"run": "refused"}),
+        slow: None,
+    };
+    let failures = check_requests(&old).await.join("\n");
+    assert!(
+        failures.contains("speaks version 1.0 of the protocol; requests need 1.1"),
+        "{failures}"
+    );
+    let _ = std::fs::remove_file(program);
 }

@@ -18,7 +18,10 @@ pub use message::{
 };
 
 /// The version this build of the protocol speaks.
-pub const VERSION: Version = Version { major: 1, minor: 0 };
+pub const VERSION: Version = Version { major: 1, minor: 1 };
+
+/// The version that added requests (`Run::Request`) and connection options (ADR-056).
+pub const REQUESTS: Version = Version { major: 1, minor: 1 };
 
 /// How many record batches a plugin may have sent on a stream without credit given back, when
 /// it has no reason to choose otherwise.

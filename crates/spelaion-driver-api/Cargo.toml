@@ -12,6 +12,8 @@ async-trait.workspace = true
 futures-util.workspace = true
 # The contract travels as messages to engines that run as their own program (ADR-041).
 serde = { version = "1", features = ["derive"] }
+# The canonical request of an engine whose language is not SQL (ADR-056).
+serde_json = "1"
 thiserror.workspace = true
 # AsyncRead/AsyncWrite for remote programs (remote.rs).
 tokio.workspace = true

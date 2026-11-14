@@ -410,6 +410,22 @@ impl Connection for Tracked {
         })))
     }
 
+    async fn execute_request(
+        &self,
+        request: serde_json::Value,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        let busy = self.activity.begin().await;
+        let events = self.observe(self.inner.execute_request(request, opts).await)?;
+        let inner = self.inner.clone();
+        let health = self.health.clone();
+        Ok(Box::pin(events.map(move |event| {
+            let _busy = &busy;
+            observe(&*inner, &health, &event);
+            event
+        })))
+    }
+
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
         self.inner.cancel_handle()
     }

@@ -3523,7 +3523,10 @@ export type ObjectItem = ObjectItem_Serialize | ObjectItem_Deserialize;
 export type ObjectItem_Deserialize = {
 	schema: string,
 	name: string,
-	/**  `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`. */
+	/**
+	 *  `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`, and for
+	 *  engines whose language is not SQL `collection`, `node_label`, `relationship_type`.
+	 */
 	kind: string,
 	estimatedRows?: number | null,
 	comment?: string | null,
@@ -3532,7 +3535,10 @@ export type ObjectItem_Deserialize = {
 export type ObjectItem_Serialize = {
 	schema: string,
 	name: string,
-	/**  `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`. */
+	/**
+	 *  `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`, and for
+	 *  engines whose language is not SQL `collection`, `node_label`, `relationship_type`.
+	 */
 	kind: string,
 	estimatedRows: number | null,
 	comment: string | null,

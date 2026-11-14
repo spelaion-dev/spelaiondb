@@ -91,6 +91,10 @@ pub struct ConnectParams {
     /// How long connecting may take: the TCP connection, TLS and the login. `None` for
     /// [`ConnectParams::DEFAULT_CONNECT_TIMEOUT`] (ADR-032).
     pub connect_timeout: Option<std::time::Duration>,
+    /// The engine's own connection settings (MongoDB's `authSource`, `replicaSet`…), by name.
+    /// The core checks every key against that engine's own list before a connection opens
+    /// (ADR-056); never a secret, which travels only as `password`.
+    pub options: std::collections::BTreeMap<String, String>,
 }
 
 impl ConnectParams {
@@ -240,6 +244,21 @@ pub trait Connection: Send + Sync {
     ) -> Result<EventStream> {
         Err(DriverError::Other(
             "this connection cannot bind parameters".into(),
+        ))
+    }
+
+    /// Executes **one** request of an engine whose language is not SQL (ADR-056): the
+    /// canonical request the core turned a statement into (a MongoDB command document, a Redis
+    /// argument list, an HTTP method, path and body). The driver runs exactly this request and
+    /// never the text it was typed as. Results and errors are those of
+    /// [`Connection::execute`]. Engines queried with SQL do not support it.
+    async fn execute_request(
+        &self,
+        _request: serde_json::Value,
+        _opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        Err(DriverError::Other(
+            "this engine does not run requests: it is queried with SQL".into(),
         ))
     }
 

@@ -137,7 +137,12 @@ pub async fn editable_query_table(
     };
     match object.kind {
         ObjectKind::Table | ObjectKind::PartitionedTable => {}
-        ObjectKind::View | ObjectKind::MaterializedView | ObjectKind::ForeignTable => {
+        ObjectKind::View
+        | ObjectKind::MaterializedView
+        | ObjectKind::ForeignTable
+        | ObjectKind::Collection
+        | ObjectKind::NodeLabel
+        | ObjectKind::RelationshipType => {
             return Ok(None);
         }
     }

@@ -499,6 +499,7 @@ async fn connecting(shared: &Shared, message: &Message) -> Result<Value, RpcErro
         // A program on another machine is the core's to start (ADR-018): never a plugin's.
         remote: None,
         connect_timeout: request.connect_timeout_ms.map(Duration::from_millis),
+        options: request.options,
     };
     let connected = tokio::select! {
         biased;
@@ -713,6 +714,7 @@ async fn execute(shared: &Arc<Shared>, id: u64, message: &Message) {
                         .await
                 }
                 Run::Plan(mode) => connection.execute_plan(&request.sql, mode.into()).await,
+                Run::Request { request } => connection.execute_request(request, &options).await,
             };
             started.map_err(driver_error)
         }

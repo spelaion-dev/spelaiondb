@@ -167,6 +167,11 @@ impl Process {
         &self.info
     }
 
+    /// The plugin's name, as its messages show it.
+    pub(crate) fn name(&self) -> &str {
+        &self.shared.name
+    }
+
     pub(crate) fn is_dead(&self) -> bool {
         self.shared.dead.load(Ordering::SeqCst)
     }
