@@ -1,6 +1,174 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConnectionFile",
+  "description": "A connection: `.spelaion/connections/<folders>/<id>.toml`.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Format version of this file.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "name": {
+      "description": "Display name. If missing, the identifier (the file path) is used.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "description": {
+      "description": "What the database is for, in the user's words: shown as the connection's tooltip and\nto agents in `list_connections`. It may span lines; at most 2000 characters.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tags": {
+      "description": "Short labels to find and group connections (`billing`, `eu`, `reporting`…): at most\n20, of up to 32 characters each, without commas, and unique ignoring case.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "engine": {
+      "$ref": "#/$defs/Engine"
+    },
+    "env": {
+      "description": "Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type\nin `connection-types.toml`; its badge and safeguards apply. Any other text is a plain\nlabel with no behaviour.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "host": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "port": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "database": {
+      "description": "Database; for SQLite and DuckDB, the file path (relative to the repository root).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "user": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "password": {
+      "description": "Reference to the secret, never the value: `{ secret = \"keychain\" }`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SecretSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tunnel": {
+      "description": "Name of a tunnel (a network profile) in `.spelaion/tunnels/`. With a Kubernetes profile\n(ADR-050), `[kubernetes]` may set what the profile leaves out, such as the resource.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "local_port": {
+      "description": "A fixed port on 127.0.0.1 for this connection's end of its SSH tunnel, so other tools\ncan use it too. A free port when absent (from the personal `[tunnels]` range, if set).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "kubernetes": {
+      "description": "Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):\n`port` is then the resource's port and `host` is only the name TLS checks. With a\nKubernetes network profile in `tunnel` (ADR-050), only what the profile leaves out.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KubernetesConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sqlite3": {
+      "description": "SQLite with a tunnel: the file is on the tunnel's last hop, opened by its `sqlite3`\n(ADR-018); this names that program when it is not `sqlite3` on the PATH.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "read_only": {
+      "description": "Read-only (ADR-053): only reads, session settings and transaction control run, and the\nengine's own read-only mode is set where it has one (the file opened read-only on SQLite\nand DuckDB, read-only transactions on PostgreSQL, MySQL and MariaDB).",
+      "type": "boolean"
+    },
+    "keepalive": {
+      "description": "Seconds of idleness after which the app sends the server a keep-alive (ADR-028), so a\nfirewall or the server's own idle timeout does not end an idle session. None while a\ntransaction is open. Off when absent or 0; database servers only.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "connect_timeout": {
+      "description": "Seconds the database may take to answer when connecting: the TCP connection, TLS and\nthe login (ADR-032). 15 when absent; database servers only. A tunnel's hops have their\nown `connect_timeout` in the tunnel file.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "statement_timeout": {
+      "description": "Seconds a statement run from the editor may take before it is cancelled and fails as\ntimed out (ADR-035); none when absent or 0. A run can set its own. Unlike\n`connect_timeout`, it counts once connected, for every engine.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "tls": {
+      "$ref": "#/$defs/TlsConfig"
+    },
+    "session": {
+      "description": "How every new session starts (ADR-037): setup statements, the default schema and the\nisolation level, applied each time a session opens (reconnecting included).",
+      "$ref": "#/$defs/SessionConfig"
+    },
+    "mcp": {
+      "$ref": "#/$defs/McpConfig"
+    },
+    "masking": {
+      "description": "Columns whose values the app shows as `••••••` (ADR-051): in the grid, copies,\nexports, statistics and agents' answers.",
+      "$ref": "#/$defs/MaskingConfig"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "engine"
+  ],
   "$defs": {
     "Engine": {
+      "type": "string",
       "enum": [
         "postgres",
         "sqlite",
@@ -8,48 +176,27 @@
         "mariadb",
         "duckdb",
         "sqlserver"
-      ],
-      "type": "string"
+      ]
     },
-    "IsolationLevel": {
-      "description": "A transaction isolation level (ADR-037), as SQL names it.",
-      "oneOf": [
-        {
-          "enum": [
-            "read-uncommitted",
-            "read-committed",
-            "repeatable-read",
-            "serializable"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "snapshot",
-          "description": "SQL Server only, where the database allows snapshot isolation.",
+    "SecretSpec": {
+      "description": "Reference to a secret. Accepted forms:\n`keychain`, `keychain:<name>`, `env:<VARIABLE>`, `op://<vault>/<item>/<field>`,\n`cmd:<command>` and `prompt` (asked when connecting).",
+      "type": "object",
+      "properties": {
+        "secret": {
           "type": "string"
         }
+      },
+      "additionalProperties": false,
+      "required": [
+        "secret"
       ]
     },
     "KubernetesConfig": {
-      "additionalProperties": false,
       "description": "The cluster resource a connection reaches through `kubectl port-forward` (ADR-015).",
+      "type": "object",
       "properties": {
         "context": {
           "description": "Context of the kubeconfig; its current context when absent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "kubeconfig": {
-          "description": "A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "kubectl": {
-          "description": "The `kubectl` executable; `kubectl` on the PATH when absent.",
           "type": [
             "string",
             "null"
@@ -65,109 +212,31 @@
         "resource": {
           "description": "`svc/<name>`, `pod/<name>` or `deployment/<name>`. Left out only when the connection's\nKubernetes network profile names it (ADR-050).",
           "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "MaskingConfig": {
-      "additionalProperties": false,
-      "description": "A connection's column masking (ADR-051). Patterns match result column names, ignoring\ncase: `*` is any characters, `?` one character, and a pattern without them is a name.\nMasking keeps values off the screen, the clipboard, files and agents' answers in normal\nwork; it is not access control (an alias such as `SELECT email AS e` gets past it).",
-      "properties": {
-        "always": {
-          "description": "Columns to mask (`*password*`, `email`, `card_number`).",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
         },
-        "never": {
-          "description": "Columns to leave visible although a pattern of `always`, or one of the user's own\npatterns, matches them (`email_verified`). Never a connection type's `mask_columns`.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "McpConfig": {
-      "additionalProperties": false,
-      "description": "What an agent can do with this connection (ADR-008).",
-      "properties": {
-        "exposed": {
-          "default": false,
-          "description": "Visible to agents. Off by default.",
-          "type": "boolean"
-        },
-        "max_rows": {
-          "description": "Maximum rows per response.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "writes": {
-          "$ref": "#/$defs/WritePolicy",
-          "default": "deny",
-          "description": "What agents may do (ADR-019): `deny` (read only, the default) or `allow` (writes\nthrough `execute_write`). `confirm` is not supported yet."
-        }
-      },
-      "type": "object"
-    },
-    "SecretSpec": {
-      "additionalProperties": false,
-      "description": "Reference to a secret. Accepted forms:\n`keychain`, `keychain:<name>`, `env:<VARIABLE>`, `op://<vault>/<item>/<field>`,\n`cmd:<command>` and `prompt` (asked when connecting).",
-      "properties": {
-        "secret": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "secret"
-      ],
-      "type": "object"
-    },
-    "SessionConfig": {
-      "additionalProperties": false,
-      "description": "How every new session of a connection starts (ADR-037). Applied in this order when a\nsession opens: the isolation level, the default schema, then the setup statements.",
-      "properties": {
-        "ignore_setup_errors": {
-          "description": "A setup statement the database rejects is skipped instead of failing the session. A\nstatement refused because it writes on a read-only connection still refuses it.",
-          "type": "boolean"
-        },
-        "isolation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/IsolationLevel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The isolation level of the session's transactions; the server's default when absent.\nPostgreSQL, MySQL, MariaDB and SQL Server (`snapshot` only there)."
-        },
-        "schema": {
-          "description": "Where unqualified names are found when a session opens: `search_path` on PostgreSQL\n(this schema, then `public`), the database on MySQL and MariaDB, `SET schema` on DuckDB.\nSQL Server and SQLite have no per-session schema.",
+        "kubeconfig": {
+          "description": "A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).",
           "type": [
             "string",
             "null"
           ]
         },
-        "setup": {
-          "description": "SQL run on every new session, split into statements like the editor does (`SET\nsearch_path TO app, public;`, `SET TIME ZONE 'UTC';`…). Sent as written: `${…}`\nvariables are not expanded here. On a read-only connection, on Production and in\nagents' sessions it may only read or change session settings; a statement that writes\nrefuses the session. At most 20000 characters.",
+        "kubectl": {
+          "description": "The `kubectl` executable; `kubectl` on the PATH when absent.",
           "type": [
             "string",
             "null"
           ]
         }
       },
-      "type": "object"
+      "additionalProperties": false
     },
     "TlsConfig": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
+        "mode": {
+          "$ref": "#/$defs/TlsModeConfig",
+          "default": "prefer"
+        },
         "ca": {
           "description": "Certificate (PEM) of the authority, relative to the repository root or with `~/`.",
           "type": [
@@ -188,199 +257,130 @@
             "string",
             "null"
           ]
-        },
-        "mode": {
-          "$ref": "#/$defs/TlsModeConfig",
-          "default": "prefer"
         }
       },
-      "type": "object"
+      "additionalProperties": false
     },
     "TlsModeConfig": {
       "description": "Same names as libpq's `sslmode`.",
+      "type": "string",
       "enum": [
         "disable",
         "prefer",
         "require",
         "verify-ca",
         "verify-full"
-      ],
-      "type": "string"
+      ]
+    },
+    "SessionConfig": {
+      "description": "How every new session of a connection starts (ADR-037). Applied in this order when a\nsession opens: the isolation level, the default schema, then the setup statements.",
+      "type": "object",
+      "properties": {
+        "setup": {
+          "description": "SQL run on every new session, split into statements like the editor does (`SET\nsearch_path TO app, public;`, `SET TIME ZONE 'UTC';`…). Sent as written: `${…}`\nvariables are not expanded here. On a read-only connection, on Production and in\nagents' sessions it may only read or change session settings; a statement that writes\nrefuses the session. At most 20000 characters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ignore_setup_errors": {
+          "description": "A setup statement the database rejects is skipped instead of failing the session. A\nstatement refused because it writes on a read-only connection still refuses it.",
+          "type": "boolean"
+        },
+        "schema": {
+          "description": "Where unqualified names are found when a session opens: `search_path` on PostgreSQL\n(this schema, then `public`), the database on MySQL and MariaDB, `SET schema` on DuckDB.\nSQL Server and SQLite have no per-session schema.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isolation": {
+          "description": "The isolation level of the session's transactions; the server's default when absent.\nPostgreSQL, MySQL, MariaDB and SQL Server (`snapshot` only there).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsolationLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "IsolationLevel": {
+      "description": "A transaction isolation level (ADR-037), as SQL names it.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "read-uncommitted",
+            "read-committed",
+            "repeatable-read",
+            "serializable"
+          ]
+        },
+        {
+          "description": "SQL Server only, where the database allows snapshot isolation.",
+          "type": "string",
+          "const": "snapshot"
+        }
+      ]
+    },
+    "McpConfig": {
+      "description": "What an agent can do with this connection (ADR-008).",
+      "type": "object",
+      "properties": {
+        "exposed": {
+          "description": "Visible to agents. Off by default.",
+          "type": "boolean",
+          "default": false
+        },
+        "max_rows": {
+          "description": "Maximum rows per response.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "writes": {
+          "description": "What agents may do (ADR-019): `deny` (read only, the default) or `allow` (writes\nthrough `execute_write`). `confirm` is not supported yet.",
+          "$ref": "#/$defs/WritePolicy",
+          "default": "deny"
+        }
+      },
+      "additionalProperties": false
     },
     "WritePolicy": {
+      "type": "string",
       "enum": [
         "deny",
         "confirm",
         "allow"
-      ],
-      "type": "string"
-    }
-  },
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "description": "A connection: `.spelaion/connections/<folders>/<id>.toml`.",
-  "properties": {
-    "connect_timeout": {
-      "description": "Seconds the database may take to answer when connecting: the TCP connection, TLS and\nthe login (ADR-032). 15 when absent; database servers only. A tunnel's hops have their\nown `connect_timeout` in the tunnel file.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
       ]
     },
-    "database": {
-      "description": "Database; for SQLite and DuckDB, the file path (relative to the repository root).",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "description": {
-      "description": "What the database is for, in the user's words: shown as the connection's tooltip and\nto agents in `list_connections`. It may span lines; at most 2000 characters.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "engine": {
-      "$ref": "#/$defs/Engine"
-    },
-    "env": {
-      "description": "Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type\nin `connection-types.toml`; its badge and safeguards apply. Any other text is a plain\nlabel with no behaviour.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "host": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "keepalive": {
-      "description": "Seconds of idleness after which the app sends the server a keep-alive (ADR-028), so a\nfirewall or the server's own idle timeout does not end an idle session. None while a\ntransaction is open. Off when absent or 0; database servers only.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "kubernetes": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/KubernetesConfig"
+    "MaskingConfig": {
+      "description": "A connection's column masking (ADR-051). Patterns match result column names, ignoring\ncase: `*` is any characters, `?` one character, and a pattern without them is a name.\nMasking keeps values off the screen, the clipboard, files and agents' answers in normal\nwork; it is not access control (an alias such as `SELECT email AS e` gets past it).",
+      "type": "object",
+      "properties": {
+        "always": {
+          "description": "Columns to mask (`*password*`, `email`, `card_number`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
-        {
-          "type": "null"
+        "never": {
+          "description": "Columns to leave visible although a pattern of `always`, or one of the user's own\npatterns, matches them (`email_verified`). Never a connection type's `mask_columns`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
-      ],
-      "description": "Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):\n`port` is then the resource's port and `host` is only the name TLS checks. With a\nKubernetes network profile in `tunnel` (ADR-050), only what the profile leaves out."
-    },
-    "local_port": {
-      "description": "A fixed port on 127.0.0.1 for this connection's end of its SSH tunnel, so other tools\ncan use it too. A free port when absent (from the personal `[tunnels]` range, if set).",
-      "format": "uint16",
-      "maximum": 65535,
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "masking": {
-      "$ref": "#/$defs/MaskingConfig",
-      "description": "Columns whose values the app shows as `••••••` (ADR-051): in the grid, copies,\nexports, statistics and agents' answers."
-    },
-    "mcp": {
-      "$ref": "#/$defs/McpConfig"
-    },
-    "name": {
-      "description": "Display name. If missing, the identifier (the file path) is used.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "password": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SecretSpec"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Reference to the secret, never the value: `{ secret = \"keychain\" }`."
-    },
-    "port": {
-      "format": "uint16",
-      "maximum": 65535,
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "read_only": {
-      "description": "Read-only (ADR-053): only reads, session settings and transaction control run, and the\nengine's own read-only mode is set where it has one (the file opened read-only on SQLite\nand DuckDB, read-only transactions on PostgreSQL, MySQL and MariaDB).",
-      "type": "boolean"
-    },
-    "schema_version": {
-      "description": "Format version of this file.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer"
-    },
-    "session": {
-      "$ref": "#/$defs/SessionConfig",
-      "description": "How every new session starts (ADR-037): setup statements, the default schema and the\nisolation level, applied each time a session opens (reconnecting included)."
-    },
-    "sqlite3": {
-      "description": "SQLite with a tunnel: the file is on the tunnel's last hop, opened by its `sqlite3`\n(ADR-018); this names that program when it is not `sqlite3` on the PATH.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "statement_timeout": {
-      "description": "Seconds a statement run from the editor may take before it is cancelled and fails as\ntimed out (ADR-035); none when absent or 0. A run can set its own. Unlike\n`connect_timeout`, it counts once connected, for every engine.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "tags": {
-      "description": "Short labels to find and group connections (`billing`, `eu`, `reporting`…): at most\n20, of up to 32 characters each, without commas, and unique ignoring case.",
-      "items": {
-        "type": "string"
       },
-      "type": "array"
-    },
-    "tls": {
-      "$ref": "#/$defs/TlsConfig"
-    },
-    "tunnel": {
-      "description": "Name of a tunnel (a network profile) in `.spelaion/tunnels/`. With a Kubernetes profile\n(ADR-050), `[kubernetes]` may set what the profile leaves out, such as the resource.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "user": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "additionalProperties": false
     }
-  },
-  "required": [
-    "schema_version",
-    "engine"
-  ],
-  "title": "ConnectionFile",
-  "type": "object"
+  }
 }

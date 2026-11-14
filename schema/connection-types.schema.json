@@ -1,54 +1,38 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConnectionTypesFile",
+  "description": "Connection types (ADR-029): `.spelaion/connection-types.toml` (the team's, shared in git)\nand `connection-types.toml` in the personal directory, with the same format.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 1
+    },
+    "types": {
+      "description": "One table per type, by id (lowercase letters, digits, `-` and `_`). `dev`, `test` and\n`prod` are the built-in ones: defining them changes their looks or adds safeguards.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ConnectionTypeConfig"
+      },
+      "default": {}
+    }
+  },
+  "additionalProperties": false,
   "$defs": {
     "ConnectionTypeConfig": {
-      "additionalProperties": false,
       "description": "One connection type. Safeguards only add up: a layer can turn one on, never off.",
+      "type": "object",
       "properties": {
-        "close_idle_after": {
-          "description": "Close a session after this many seconds without use. Never while a transaction is\nopen; nothing reconnects by itself. Off when absent or 0.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "confirm_data_changes": {
-          "description": "The editor asks before any statement that is not a read, and table edits are\nconfirmed (what Production does).",
-          "type": "boolean"
-        },
-        "confirm_execution": {
-          "description": "The editor asks before running any script.",
-          "type": "boolean"
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "manual_commit": {
-          "description": "Editor tabs start with auto-commit off: changes wait for Commit (ADR-031).",
-          "type": "boolean"
-        },
-        "mask_columns": {
-          "description": "Columns every connection of this type masks (ADR-051), as `[masking] always`\npatterns. They add up across layers, and no connection's `never` unmasks them.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "name": {
           "type": [
             "string",
             "null"
           ]
         },
-        "smart_commit": {
-          "description": "The first statement that is not a read switches an auto-commit tab to manual commit,\nuntil that transaction is committed or rolled back (ADR-031). On for Production.",
-          "type": "boolean"
-        },
         "tone": {
+          "description": "The tone of its badge, from the app's palette (it looks right in both themes).",
           "anyOf": [
             {
               "$ref": "#/$defs/Tone"
@@ -56,43 +40,59 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confirm_execution": {
+          "description": "The editor asks before running any script.",
+          "type": "boolean"
+        },
+        "confirm_data_changes": {
+          "description": "The editor asks before any statement that is not a read, and table edits are\nconfirmed (what Production does).",
+          "type": "boolean"
+        },
+        "close_idle_after": {
+          "description": "Close a session after this many seconds without use. Never while a transaction is\nopen; nothing reconnects by itself. Off when absent or 0.",
+          "type": [
+            "integer",
+            "null"
           ],
-          "description": "The tone of its badge, from the app's palette (it looks right in both themes)."
+          "format": "uint32",
+          "minimum": 0
+        },
+        "manual_commit": {
+          "description": "Editor tabs start with auto-commit off: changes wait for Commit (ADR-031).",
+          "type": "boolean"
+        },
+        "smart_commit": {
+          "description": "The first statement that is not a read switches an auto-commit tab to manual commit,\nuntil that transaction is committed or rolled back (ADR-031). On for Production.",
+          "type": "boolean"
+        },
+        "mask_columns": {
+          "description": "Columns every connection of this type masks (ADR-051), as `[masking] always`\npatterns. They add up across layers, and no connection's `never` unmasks them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
-      "type": "object"
+      "additionalProperties": false
     },
     "Tone": {
       "description": "The tones a connection type's badge can have: a fixed palette the app draws for the light\nand the dark theme (ADR-029).",
+      "type": "string",
       "enum": [
         "neutral",
         "green",
         "blue",
         "amber",
         "red"
-      ],
-      "type": "string"
+      ]
     }
-  },
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "description": "Connection types (ADR-029): `.spelaion/connection-types.toml` (the team's, shared in git)\nand `connection-types.toml` in the personal directory, with the same format.",
-  "properties": {
-    "schema_version": {
-      "default": 1,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer"
-    },
-    "types": {
-      "additionalProperties": {
-        "$ref": "#/$defs/ConnectionTypeConfig"
-      },
-      "default": {},
-      "description": "One table per type, by id (lowercase letters, digits, `-` and `_`). `dev`, `test` and\n`prod` are the built-in ones: defining them changes their looks or adds safeguards.",
-      "type": "object"
-    }
-  },
-  "title": "ConnectionTypesFile",
-  "type": "object"
+  }
 }
