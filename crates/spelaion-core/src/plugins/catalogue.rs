@@ -34,9 +34,10 @@ pub const MAX_CATALOGUE_BYTES: usize = 1 << 20;
 /// `.pub` file). **Not the update key** (ADR-021): an app release can replace this key; this
 /// key can never replace the app.
 ///
-/// `None` until the key exists: until then no catalogue is accepted, and the only plugins are
-/// the ones pinned into the build.
-const SHIPPED_KEY: Option<&str> = None;
+/// Made on 2026-11-14 (key id `AC4BA582C66EEAC8`); its secret half is only in the
+/// `plugins-catalogue` environment of this repository, which only `dev` can use. `None` would
+/// mean no catalogue is accepted, and the only plugins are the ones pinned into the build.
+const SHIPPED_KEY: Option<&str> = Some("RWTI6m7GgqVLrBCOhXxMIDv0z2NkGZ4YE2oLOPCh/X0kvn2fCDy5CPGB");
 
 /// The key a catalogue must be signed with.
 #[derive(Debug, Clone)]

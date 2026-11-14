@@ -11,9 +11,8 @@
 #   again.
 # - Nothing new in the pins: nothing is signed or published.
 # - What is published is first checked with the key compiled into this commit's build, as the
-#   app checks it (`spelaion-write-catalogue --check`). While that key is not there
-#   (`SHIPPED_KEY` is `None`), every run that has something to publish fails at that step,
-#   before publishing.
+#   app checks it (`spelaion-write-catalogue --check`): a file the app would refuse fails that
+#   step, before publishing.
 # - Everything it runs is pinned: actions by commit (the same as `ci.yml`), Rust by version,
 #   minisign by the SHA-256 of its release archive (0.12, whose signature was checked against
 #   its author's published key when it was pinned).

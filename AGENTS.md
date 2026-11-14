@@ -101,7 +101,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   The catalogue of ADR-055 is three more files there, with no page, download or publishing
   workflow yet. `plugins/catalogue.rs`: a file shaped like `plugins.toml` (every version ever
   pinned, a serial, the withdrawn builds), read only after its minisign signature by the key
-  compiled in (`SHIPPED_KEY`: none yet, so no catalogue is accepted; never the update key), and
+  compiled in (`SHIPPED_KEY`, whose secret half is only in the `plugins-catalogue` environment,
+  usable only from `dev`; never the update key), and
   it carries no address: an archive's is written from the checked name and repository
   (`PinnedPlugin::archive_address`). `plugins/installed.rs`: the user's store
   (`<personal folder>/plugins`), which is not trusted: the kept catalogue is checked again at
