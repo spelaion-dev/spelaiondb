@@ -1,36 +1,112 @@
 {
-  "$defs": {
-    "HopConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "auth": {
-          "default": [
-            "agent"
-          ],
-          "description": "Methods to try, in order. Defaults to `[\"agent\"]`.",
-          "items": {
-            "$ref": "#/$defs/SshAuth"
-          },
-          "type": "array"
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TunnelFile",
+  "description": "A network profile (ADR-027): `.spelaion/tunnels/<name>.toml`. SSH hops, after a proxy or an\nAWS SSM session, or one of those alone; or a Kubernetes cluster (ADR-050).",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "keepalive_interval": {
+      "description": "Seconds without hearing from a server before sending it an SSH keep-alive (OpenSSH's\n`ServerAliveInterval`), so a NAT or firewall does not drop an idle tunnel. 15 when\nabsent; 0 sends none.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "keepalive_count": {
+      "description": "Unanswered keep-alives before the tunnel is closed as down (`ServerAliveCountMax`). 3\nwhen absent; 0 never gives up.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "connect_timeout": {
+      "description": "Seconds each hop may take to answer and finish the SSH handshake (authentication,\nwhich may wait for the person, is not counted). 15 when absent.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "proxy": {
+      "description": "A SOCKS5 or HTTP proxy (ADR-027): the first hop is reached through it or, with no\nhops, it reaches the database itself.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProxyConfig"
         },
-        "command": {
-          "description": "External command used as the transport, like `ProxyCommand` (`%h` and `%p`).\nRequires trusting the repository.",
-          "type": [
-            "string",
-            "null"
-          ]
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ssm": {
+      "description": "AWS SSM Session Manager port forwarding through a managed node (ADR-050): the first hop\nis reached through it or, with no hops, it reaches the database itself.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SsmConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "kubernetes": {
+      "description": "`kubectl port-forward` through a cluster, shared by every connection that names this\nprofile (ADR-050). It has no hops or proxy.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KubernetesProfileConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hops": {
+      "description": "Hops in order; the last one is the one that reaches the database. None with a proxy\nthat reaches the database alone, or with Kubernetes.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HopConfig"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version"
+  ],
+  "$defs": {
+    "ProxyConfig": {
+      "description": "A tunnel's proxy (ADR-027).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "`socks5` (the proxy resolves the target's name) or `http` (`CONNECT`).",
+          "$ref": "#/$defs/ProxyType"
         },
         "host": {
           "type": "string"
         },
-        "identity_file": {
-          "description": "A specific private key (it also filters the agent's keys).",
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "user": {
           "type": [
             "string",
             "null"
           ]
         },
         "password": {
+          "description": "Reference to the secret, never the value, as for hops. Only with `user`.",
           "anyOf": [
             {
               "$ref": "#/$defs/SecretSpec"
@@ -39,46 +115,76 @@
               "type": "null"
             }
           ]
-        },
-        "port": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "user": {
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "host",
+        "port"
+      ]
+    },
+    "ProxyType": {
+      "type": "string",
+      "enum": [
+        "socks5",
+        "http"
+      ]
+    },
+    "SecretSpec": {
+      "description": "Reference to a secret. Accepted forms:\n`keychain`, `keychain:<name>`, `env:<VARIABLE>`, `op://<vault>/<item>/<field>`,\n`cmd:<command>` and `prompt` (asked when connecting).",
+      "type": "object",
+      "properties": {
+        "secret": {
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
-        "host",
-        "user"
-      ],
-      "type": "object"
+        "secret"
+      ]
+    },
+    "SsmConfig": {
+      "description": "AWS SSM in a network profile (ADR-050). It holds no secret: the AWS CLI uses the user's own\ncredentials.",
+      "type": "object",
+      "properties": {
+        "target": {
+          "description": "The managed node: an instance (`i-…`), on-premises (`mi-…`) or ECS target.",
+          "type": "string"
+        },
+        "region": {
+          "description": "The AWS region; the AWS CLI's default when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "description": "The AWS CLI profile; its default when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aws": {
+          "description": "The AWS CLI executable; `aws` on the PATH (or in its installer's folder) when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ]
     },
     "KubernetesProfileConfig": {
-      "additionalProperties": false,
       "description": "A Kubernetes network profile (ADR-050): the settings of `[kubernetes]` in a connection\n(ADR-015), shared. Each one is set here or in the connection that uses the profile, never\nin both; the resource may be left to each connection.",
+      "type": "object",
       "properties": {
         "context": {
           "description": "Context of the kubeconfig; its current context when absent here and in the connection.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "kubeconfig": {
-          "description": "A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "kubectl": {
-          "description": "The `kubectl` executable; `kubectl` on the PATH when absent.",
           "type": [
             "string",
             "null"
@@ -97,16 +203,58 @@
             "string",
             "null"
           ]
+        },
+        "kubeconfig": {
+          "description": "A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubectl": {
+          "description": "The `kubectl` executable; `kubectl` on the PATH when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "additionalProperties": false
     },
-    "ProxyConfig": {
-      "additionalProperties": false,
-      "description": "A tunnel's proxy (ADR-027).",
+    "HopConfig": {
+      "type": "object",
       "properties": {
         "host": {
           "type": "string"
+        },
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "user": {
+          "type": "string"
+        },
+        "auth": {
+          "description": "Methods to try, in order. Defaults to `[\"agent\"]`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SshAuth"
+          },
+          "default": [
+            "agent"
+          ]
+        },
+        "identity_file": {
+          "description": "A specific private key (it also filters the agent's keys).",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "password": {
           "anyOf": [
@@ -116,178 +264,30 @@
             {
               "type": "null"
             }
-          ],
-          "description": "Reference to the secret, never the value, as for hops. Only with `user`."
+          ]
         },
-        "port": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "type": {
-          "$ref": "#/$defs/ProxyType",
-          "description": "`socks5` (the proxy resolves the target's name) or `http` (`CONNECT`)."
-        },
-        "user": {
+        "command": {
+          "description": "External command used as the transport, like `ProxyCommand` (`%h` and `%p`).\nRequires trusting the repository.",
           "type": [
             "string",
             "null"
           ]
         }
       },
-      "required": [
-        "type",
-        "host",
-        "port"
-      ],
-      "type": "object"
-    },
-    "ProxyType": {
-      "enum": [
-        "socks5",
-        "http"
-      ],
-      "type": "string"
-    },
-    "SecretSpec": {
       "additionalProperties": false,
-      "description": "Reference to a secret. Accepted forms:\n`keychain`, `keychain:<name>`, `env:<VARIABLE>`, `op://<vault>/<item>/<field>`,\n`cmd:<command>` and `prompt` (asked when connecting).",
-      "properties": {
-        "secret": {
-          "type": "string"
-        }
-      },
       "required": [
-        "secret"
-      ],
-      "type": "object"
+        "host",
+        "user"
+      ]
     },
     "SshAuth": {
+      "type": "string",
       "enum": [
         "agent",
         "key",
         "password",
         "keyboard-interactive"
-      ],
-      "type": "string"
-    },
-    "SsmConfig": {
-      "additionalProperties": false,
-      "description": "AWS SSM in a network profile (ADR-050). It holds no secret: the AWS CLI uses the user's own\ncredentials.",
-      "properties": {
-        "aws": {
-          "description": "The AWS CLI executable; `aws` on the PATH (or in its installer's folder) when absent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "profile": {
-          "description": "The AWS CLI profile; its default when absent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "region": {
-          "description": "The AWS region; the AWS CLI's default when absent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "target": {
-          "description": "The managed node: an instance (`i-…`), on-premises (`mi-…`) or ECS target.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "target"
-      ],
-      "type": "object"
+      ]
     }
-  },
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "description": "A network profile (ADR-027): `.spelaion/tunnels/<name>.toml`. SSH hops, after a proxy or an\nAWS SSM session, or one of those alone; or a Kubernetes cluster (ADR-050).",
-  "properties": {
-    "connect_timeout": {
-      "description": "Seconds each hop may take to answer and finish the SSH handshake (authentication,\nwhich may wait for the person, is not counted). 15 when absent.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "hops": {
-      "description": "Hops in order; the last one is the one that reaches the database. None with a proxy\nthat reaches the database alone, or with Kubernetes.",
-      "items": {
-        "$ref": "#/$defs/HopConfig"
-      },
-      "type": "array"
-    },
-    "keepalive_count": {
-      "description": "Unanswered keep-alives before the tunnel is closed as down (`ServerAliveCountMax`). 3\nwhen absent; 0 never gives up.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "keepalive_interval": {
-      "description": "Seconds without hearing from a server before sending it an SSH keep-alive (OpenSSH's\n`ServerAliveInterval`), so a NAT or firewall does not drop an idle tunnel. 15 when\nabsent; 0 sends none.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "kubernetes": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/KubernetesProfileConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "`kubectl port-forward` through a cluster, shared by every connection that names this\nprofile (ADR-050). It has no hops or proxy."
-    },
-    "proxy": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ProxyConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "A SOCKS5 or HTTP proxy (ADR-027): the first hop is reached through it or, with no\nhops, it reaches the database itself."
-    },
-    "schema_version": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer"
-    },
-    "ssm": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SsmConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "AWS SSM Session Manager port forwarding through a managed node (ADR-050): the first hop\nis reached through it or, with no hops, it reaches the database itself."
-    }
-  },
-  "required": [
-    "schema_version"
-  ],
-  "title": "TunnelFile",
-  "type": "object"
+  }
 }
