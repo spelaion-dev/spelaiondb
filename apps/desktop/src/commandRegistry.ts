@@ -91,6 +91,7 @@ export const COMMANDS = [
   { id: "view.savedQueries", category: "view", label: "shell:savedQueries", menus: ["activity"] },
   { id: "view.mcp", category: "view", label: "shell:mcpServer", menus: ["activity"] },
   { id: "view.settings", category: "view", label: "settings:title", shortcut: "Ctrl+,", scope: "global", menus: ["activity"] },
+  { id: "view.plugins", category: "view", label: "settings:plugins.title" },
 ] as const satisfies readonly CommandSpec[];
 
 export type CommandId = (typeof COMMANDS)[number]["id"];

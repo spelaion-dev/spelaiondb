@@ -11,15 +11,19 @@ import { useApp, useDialogs } from "../store";
 import { manualUpdateKey, useUpdate } from "../update";
 import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
+import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "scripts" | "editor" | "map";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "scripts", "editor", "map"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "map";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "map"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
-  const [category, setCategory] = useState<Category>("appearance");
+  // In the store, so the connection picker can open Settings on Plugins.
+  const stored = useApp((s) => s.settingsCategory);
+  const category: Category = CATEGORIES.find((c) => c === stored) ?? "appearance";
+  const setCategory = (next: Category) => useApp.setState({ settingsCategory: next });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -68,6 +72,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "history" && <HistorySettings />}
         {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}
+        {category === "plugins" && <PluginsSettings />}
         {category === "scripts" && <ScriptSettings />}
         {category === "editor" && <EditorSettings />}
         {category === "map" && <MapSettings />}

@@ -26,6 +26,7 @@ import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
 import { toggleResultsMaximized } from "../tabActions";
 import { Icon } from "./Icons";
+import { MissingPlugin } from "./MissingPlugin";
 import { useCompletionCatalog } from "../useCompletionCatalog";
 import { mayChangeCompletionCatalog } from "../sqlCompletion";
 import { useEngineInfo } from "../engines";
@@ -1338,6 +1339,8 @@ function Results({
   /** Results shown as a chart instead of the grid, and what each chart draws (ADR-040). */
   const [chartShown, setChartShown] = useState<Record<number, boolean>>({});
   const [charts, setCharts] = useState<Record<number, ChartSettings | null>>({});
+  // A connection that could not open may need a plugin that is not installed.
+  const connectionEngine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? null);
   const maximizeButton = maximize && (
     <button
       className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
@@ -1449,6 +1452,7 @@ function Results({
         ) : (
           <div className="messages">
             {error && <pre className="error-box">{error}</pre>}
+            {run.error?.translation?.key === "messages.connectionFailed" && connectionEngine && <MissingPlugin engine={connectionEngine} />}
             {run.messages.map((m, i) => (
               <div key={i} className={`message message-${m.kind}`}>
                 {m.translation ? translated(m.translation, t, numbers) : m.text}

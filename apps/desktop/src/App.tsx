@@ -18,6 +18,7 @@ import { HistoryPanel } from "./components/HistoryPanel";
 import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
 import { SearchPanel } from "./components/SearchPanel";
 import { SettingsDialog } from "./components/Settings";
+import { watchPlugins } from "./plugins";
 import { ReleaseNotesDialog } from "./components/ReleaseNotesDialog";
 import { SnippetsPanel } from "./components/SnippetsPanel";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
@@ -104,6 +105,8 @@ export default function App() {
       const path = await commands.startupPlanPath();
       if (path) await openSavedPlan(path);
     });
+    // Which engines need a plugin that is not installed (ADR-055), for the picker and failures.
+    watchPlugins();
     const unlisten = events.interactionRequest.listen((e) =>
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );

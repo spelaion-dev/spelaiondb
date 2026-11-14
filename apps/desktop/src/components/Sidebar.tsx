@@ -69,6 +69,7 @@ import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 import { ObjectMenu } from "./ObjectMenu";
+import { MissingPlugin } from "./MissingPlugin";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -1945,6 +1946,7 @@ function ConnectionNode({
         <div className="children">
           {busy && <div className="muted small">{t(schemas ? "refreshing" : "connecting")}</div>}
           {error && <div className="error small">{error}</div>}
+          {error && schemas === null && <MissingPlugin engine={connection.engine} />}
           {!foldersFirst && schemaNodes}
           {schemas && SERVER_FOLDERS.map((folder) => {
             const items = shownServerObjects.filter((o) => serverFolder(o.kind) === folder);
