@@ -54,17 +54,16 @@ SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TE
   request.
 
 ### Memory and jobs
-DuckDB is compiled into the app from its C++ sources (`libduckdb-sys`, bundled), and that is
-what decides how much memory a build needs:
+The core compiles SQLite (bundled, from its C sources) and no other engine, and a full build
+still needs a lot of memory:
 
-- **Debug builds** (`cargo clippy`, `cargo test`, `npm run tauri dev`) peak near 8 GB with 8
-  jobs (`-j 8`).
-- **Release builds** compile DuckDB with optimizations, and each C++ compiler job then holds
-  about 2 GB. With cargo's default of one job per thread, a 16 GB machine runs out of memory
-  (8 jobs went past 9 GB). On 16 GB use **3 jobs** (`CARGO_BUILD_JOBS=3`): the build below
-  built everything, DuckDB included, with a peak of 4.8 GB in 23 minutes on a 16-thread laptop.
+- **Debug builds** (`cargo clippy`, `cargo test`, `npm run tauri dev`) peaked near 8 GB with 8
+  jobs (`-j 8`) when DuckDB was compiled in; they now need less, but the figure has not been
+  measured again.
+- **Release builds** optimize everything, and a 16 GB machine can run out of memory with
+  cargo's default of one job per thread. On 16 GB use **3 jobs** (`CARGO_BUILD_JOBS=3`).
 
-`CARGO_BUILD_JOBS` (or `-j`) caps cargo's jobs and the C++ compiler jobs together, because the
+`CARGO_BUILD_JOBS` (or `-j`) caps cargo's jobs and the C compiler jobs together, because the
 build script shares cargo's job slots. On Linux, cap the build's memory too, so that the kernel
 stops the compiler and not your desktop:
 
@@ -92,13 +91,11 @@ target/release/spelaion-fetch-plugins --into target/release
 ```
 
 Without them, the smoke test fails at the first engine that is no longer compiled in.
-Building them separately (`npx tauri build`, then `cargo build --release -p spelaion-cli`)
-compiles DuckDB twice, about 20 minutes each with 3 jobs: DuckDB's build script has build
-dependencies of its own (`serde`, `serde_json`, `flate2`…), cargo turns on their features from
-all the packages of the same command only, and the app's build dependencies (Tauri's) turn on
-more of them than the CLI's. Each set of packages therefore gets its own DuckDB, and so does
-`cargo build --release -p spelaion-driver-duckdb` alone. Build both again with the same command
-after a change and only what changed is rebuilt.
+Building the app and the CLI separately (`npx tauri build`, then
+`cargo build --release -p spelaion-cli`) builds every dependency whose features differ between
+the two twice: cargo turns on the features of build dependencies from the packages of the same
+command only. Build both again with the same command after a change and only what changed is
+rebuilt.
 
 ### The smoke test
 Both drive the release build in `target/release` with `examples/demo` and a temporary personal

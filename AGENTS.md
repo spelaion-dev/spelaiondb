@@ -500,8 +500,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
   menus against it. The palette's objects are only what the explorer already read (`catalog.ts`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
-  bundled DuckDB is compiled once: `npx tauri build --no-bundle -- -p spelaion-desktop -p
-  spelaion-cli`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`, see `CONTRIBUTING.md`).
+  nothing is built twice: `npx tauri build --no-bundle -- -p spelaion-desktop -p
+  spelaion-cli -p spelaion-plugin-fetch`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`,
+  see `CONTRIBUTING.md`).
   It drives WebView2 over CDP, so the whole test runs on **Windows** only. Its window is moved
   left of every monitor as it opens and never takes the foreground (`SPELAION_E2E_OFFSCREEN`, read only by
   `open_main_window`), so the user's real mouse and keyboard cannot reach it; never make a step
