@@ -77,10 +77,21 @@ The smoke test needs both the app and the `spelaiondb` CLI. Build them **in one 
 `apps/desktop`:
 
 ```bash
-CARGO_BUILD_JOBS=3 npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli
+CARGO_BUILD_JOBS=3 npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli -p spelaion-plugin-fetch
 ```
 
 The app ends up in `target/release/spelaion-desktop` and the CLI in `target/release/spelaiondb`.
+
+The engines that are plugins (ADR-042) are not compiled here: a release build starts only the
+builds `plugins.toml` pins, and only from the folder the app is in, where the installer puts
+them. Put them there the same way, from the repository's root (it downloads each pinned
+release and lets a program in only with the pinned hashes):
+
+```bash
+target/release/spelaion-fetch-plugins --into target/release
+```
+
+Without them, the smoke test fails at the first engine that is no longer compiled in.
 Building them separately (`npx tauri build`, then `cargo build --release -p spelaion-cli`)
 compiles DuckDB twice, about 20 minutes each with 3 jobs: DuckDB's build script has build
 dependencies of its own (`serde`, `serde_json`, `flate2`…), cargo turns on their features from

@@ -111,10 +111,15 @@ jobs:
           cat "$RUNNER_TEMP/apt.log"
           echo "::endgroup::"
           test "$(cat "$RUNNER_TEMP/apt.status" 2> /dev/null)" = ready
-      # The app and the CLI in one command, so bundled DuckDB is compiled once (CONTRIBUTING.md).
+      # The app, the CLI and the tool that fetches the plugins in one command, so nothing is
+      # compiled twice (CONTRIBUTING.md).
       - name: Build the release app and CLI
-        run: npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli
+        run: npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli -p spelaion-plugin-fetch
         working-directory: apps/desktop
+      # The engines that are plugins go next to the app, as the installer puts them (ADR-042):
+      # a release build starts only a pinned program that is there, with the pinned hash.
+      - name: Put the pinned plugins next to the app
+        run: target/release/spelaion-fetch-plugins --into target/release > /dev/null
       - run: python3 examples/demo/make-shop-db.py
       - name: Wait for the test services
         run: |

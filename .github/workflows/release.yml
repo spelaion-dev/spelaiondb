@@ -119,6 +119,18 @@ jobs:
           if [ -n "${{ matrix.args }}" ]; then out="../../target/${{ matrix.target }}/release"; fi
           mkdir -p src-tauri/binaries
           cp "$out/spelaiondb$ext" "src-tauri/binaries/spelaiondb-${{ matrix.target }}$ext"
+          # The engines that are plugins ship inside the installer too, next to the app
+          # (ADR-042): the builds plugins.toml pins for this target, downloaded and let in only
+          # with the pinned hashes. The app starts one only while its file has the pinned hash.
+          # tauri.release.conf.json names each of them (a test of spelaion-plugin-fetch checks
+          # that list against the pins).
+          cargo run -q --locked -p spelaion-plugin-fetch -- \
+            --platform "${{ matrix.target }}" --into "$RUNNER_TEMP/plugins" > /dev/null
+          for program in "$RUNNER_TEMP"/plugins/spelaiondb-plugin-*; do
+            name=$(basename "$program" "$ext")
+            cp "$program" "src-tauri/binaries/$name-${{ matrix.target }}$ext"
+          done
+          ls -l src-tauri/binaries
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
