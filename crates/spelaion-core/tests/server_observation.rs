@@ -122,11 +122,18 @@ async fn blocking_pair(engine: Engine) {
         let snapshot = list_locks(&monitor)
             .await
             .unwrap_or_else(|e| panic!("{label}: listing locks: {e}"));
-        if snapshot
+        let waits = snapshot
             .waits
             .iter()
-            .any(|w| w.waiting == waiter_id && w.blocking == holder_id)
-        {
+            .any(|w| w.waiting == waiter_id && w.blocking == holder_id);
+        // MySQL lists a wait an instant before it says since when it waits: the snapshot that
+        // is checked below is one that has both. If the time has not come after five seconds
+        // it never will, and the check below says so.
+        let timed = snapshot
+            .locks
+            .iter()
+            .any(|l| l.session == waiter_id && !l.granted && l.seconds.is_some());
+        if waits && (timed || started.elapsed() >= Duration::from_secs(5)) {
             break snapshot;
         }
         assert!(
