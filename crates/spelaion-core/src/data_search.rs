@@ -696,7 +696,7 @@ async fn search_table(
         Ok(info) => info.primary_key,
         Err(e) => return failed(e.to_string()),
     };
-    let (begin, end) = match barrier(dialect.name()) {
+    let (begin, end) = match barrier(session) {
         Ok(statements) => statements,
         Err(e) => return failed(e.to_string()),
     };

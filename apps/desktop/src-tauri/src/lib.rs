@@ -1276,7 +1276,7 @@ async fn paste_connection(text: String, state: State<'_, AppState>) -> CmdResult
 fn engine_display_name(engine: spelaion_config::Engine) -> String {
     spelaion_core::engine_catalog()
         .into_iter()
-        .find(|info| info.engine == Some(engine))
+        .find(|info| info.engine == Some(engine) && !info.is_kind())
         .map_or_else(|| engine.as_str().to_string(), |info| info.name.to_string())
 }
 

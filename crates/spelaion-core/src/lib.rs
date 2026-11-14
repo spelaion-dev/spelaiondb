@@ -35,6 +35,7 @@ mod params;
 mod pending;
 pub mod plan;
 pub mod plugins;
+mod postgres_family;
 mod processes;
 mod progress;
 mod query_page;
@@ -153,6 +154,7 @@ pub use pending::{
     Block, BulkAction, CellEdit, EditOutcome, MAX_PASTE_BYTES, MAX_UNDO_STEPS, PendingEdit,
     PendingEdits, parse_block,
 };
+pub use postgres_family::ServerFamily;
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use progress::{ROWS_PROGRESS_INTERVAL, coalesce_rows};
 pub use query_page::{

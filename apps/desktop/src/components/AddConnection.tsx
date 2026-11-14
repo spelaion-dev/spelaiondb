@@ -50,6 +50,9 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const editing = dialog.kind === "edit" ? dialog.id : null;
   const [engines, setEngines] = useState<EngineItem[]>([]);
   const [engine, setEngine] = useState<EngineItem | null>(null);
+  /** The server picked when it is a kind of another engine's connection (CockroachDB is a
+   *  PostgreSQL connection, SDB-169): it names the form, the connection is `engine`'s. */
+  const [kind, setKind] = useState<EngineItem | null>(null);
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
   const [importing, setImporting] = useState<ImportClientId | null>(null);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
@@ -103,13 +106,13 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
       <div className="modal wizard" role="dialog" aria-modal="true" aria-label={t("title")}>
         <div className="wizard-header">
           <h2>
-            {engine && <EngineBadge engine={engine} />}
+            {engine && <EngineBadge engine={kind ?? engine} />}
             {editing
               ? t("editTitle", { name: initial?.name ?? editing })
               : importing
                 ? t("importer.title", { client: IMPORT_CLIENTS.find((c) => c.id === importing)?.label })
                 : engine
-                  ? t("formTitle", { engine: engine.name })
+                  ? t("formTitle", { engine: (kind ?? engine).name })
                   : t("title")}
           </h2>
           <button className="ghost" aria-label={t("close")} onClick={close}>
@@ -137,7 +140,8 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
                 initialPassword={carriedPassword}
                 revision={revision}
                 passwordStored={passwordStored}
-                engines={engines.filter((e) => e.available)}
+                // A kind (SDB-169) is its engine's connection: switching is between engines.
+                engines={engines.filter((e) => e.available && e.engine === e.id)}
                 savedEngine={savedEngine ?? engine.id}
                 engineChange={engineChange}
                 onChangeEngine={changeEngine}
@@ -154,6 +158,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
             prefill={prefill ?? undefined}
             onBack={() => {
               setEngine(null);
+              setKind(null);
               setPrefill(null);
             }}
             onCancel={close}
@@ -164,8 +169,25 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
             engines={engines}
             onImport={(client) => setImporting(client)}
             onPick={(picked, fields) => {
-              setPrefill(fields ?? null);
-              setEngine(picked);
+              const base = connectionEngine(engines, picked);
+              if (!base) return;
+              setKind(base === picked ? null : picked);
+              // A kind starts from its server's port, user and database; the rest is the form's.
+              setPrefill(
+                fields ??
+                  (base === picked
+                    ? null
+                    : {
+                        engine: base.id,
+                        host: "",
+                        port: picked.defaultPort,
+                        database: picked.defaultDatabase ?? "",
+                        user: picked.defaultUser ?? "",
+                        password: null,
+                        tlsMode: null,
+                      }),
+              );
+              setEngine(base);
             }}
           />
         )}
@@ -176,8 +198,15 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
 
 function EngineBadge({ engine }: { engine: EngineItem }) {
   return (
-    <EngineIcon engine={engine.id} />
+    <EngineIcon engine={engine.id} fallback={engine.engine} />
   );
+}
+
+/** The catalog entry whose form a picked entry opens: itself, or for a kind of another
+ *  engine's connection (SDB-169), that engine's. */
+function connectionEngine(engines: EngineItem[], picked: EngineItem): EngineItem | null {
+  if (!picked.engine || picked.engine === picked.id) return picked;
+  return engines.find((e) => e.id === picked.engine && e.available) ?? null;
 }
 
 function EnginePicker({
@@ -267,7 +296,7 @@ function EnginePicker({
               <h3 id={`engines-${category}`}>{t(`categories.${category}`)}</h3>
               <div className="engine-grid">
                 {items.map((e) => {
-                  const needed = e.available ? pluginNeeded(plugins, e.id) : null;
+                  const needed = e.available ? pluginNeeded(plugins, e.engine ?? e.id) : null;
                   return (
                     <button
                       key={e.id}

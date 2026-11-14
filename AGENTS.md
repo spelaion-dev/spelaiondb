@@ -296,7 +296,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
   ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
   IPC windows).
-  `catalog.rs` lists the engines of the "add connection" picker (planned ones included).
+  `catalog.rs` lists the engines of the "add connection" picker (planned ones included); a
+  server that speaks another engine's protocol is a kind of that engine's connection there
+  (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169), and
+  `postgres_family.rs` reads which server a PostgreSQL session reached from its `version()`:
+  one that does not enforce `BEGIN READ ONLY` or the session's read-only mode gets no agents,
+  streaming reads or read-only connections (unchecked forks neither). Like `readonly.rs`, any
+  change there needs tests that try to get around it (`tests/postgres_family.rs`, against
+  `testing/docker/pg-family`).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the

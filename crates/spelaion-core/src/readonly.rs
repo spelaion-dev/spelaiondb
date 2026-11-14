@@ -89,6 +89,16 @@ impl Session {
         let sql = sql.trim().trim_end_matches(';').trim();
         reject_mysql_executable_comments(engine, sql).map_err(ReadError::Rejected)?;
         let kind = classify_read_only(engine, sql).map_err(ReadError::Rejected)?;
+        // A server of PostgreSQL's protocol that accepts `BEGIN READ ONLY` and still writes has
+        // no second layer (SDB-169): nothing is sent.
+        if let Some(family) = self.server_family()
+            && !family.read_only_transactions()
+        {
+            return Err(ReadError::Unsupported(format!(
+                "{}: it does not enforce read-only transactions (BEGIN READ ONLY)",
+                family.name()
+            )));
+        }
         let started = Instant::now();
 
         let run = async {

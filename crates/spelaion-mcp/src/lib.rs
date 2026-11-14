@@ -613,6 +613,13 @@ impl SpelaionMcp {
                 ),
                 other => other.to_string(),
             })?;
+        // Agents get nothing on a server that accepts a read-only transaction without
+        // enforcing it (SDB-169): their reads are refused when the session opens, their writes
+        // here.
+        if let Some(reason) = open.session.read_only_transaction_refusal() {
+            open.close().await;
+            return Err(reason);
+        }
         let cached = Cached::new(open, definition);
         let open = cached.open.clone();
         sessions.insert(key, cached);

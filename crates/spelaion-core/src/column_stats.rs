@@ -225,8 +225,7 @@ async fn read_rows(
     if cancel.is_cancelled() {
         return Err(ColumnStatsError::Cancelled);
     }
-    let (begin, end) =
-        barrier(session.dialect().name()).map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
+    let (begin, end) = barrier(session).map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
     drain(session, begin)
         .await
         .map_err(|e| ColumnStatsError::Failed(e.to_string()))?;

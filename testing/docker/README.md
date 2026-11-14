@@ -60,6 +60,18 @@ Manual check with OpenSSH:
 ssh -i testing/docker/keys/id_ed25519 -J spelaion@127.0.0.1:2221 -p 22 spelaion@bastion2 -N -L 15432:postgres:5432
 ```
 
+## Servers that speak PostgreSQL's protocol
+
+`pg-family/compose.yaml` is a project of its own (`spelaion-test-pg-family`) with CockroachDB,
+YugabyteDB, TimescaleDB, RisingWave, Materialize and CrateDB, each as its image starts and
+without a password, for `crates/spelaion-core/tests/postgres_family.rs` (SDB-169). Its images
+are large (RisingWave's is about 11 GB), so nothing starts them unless asked, and CI does not.
+The ports and variables are at the top of the file.
+
+```bash
+docker compose -f testing/docker/pg-family/compose.yaml up -d --wait
+```
+
 ## Clearing test leftovers
 
 Tests that create objects on these servers give them a per-run name (`<prefix>_<process id>`,

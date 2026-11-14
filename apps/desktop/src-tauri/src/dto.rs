@@ -2565,6 +2565,13 @@ pub enum SecretLabel {
 pub struct EngineItem {
     pub id: String,
     pub name: String,
+    /// The engine its connections are saved as (`postgres` for CockroachDB, SDB-169): the
+    /// same as `id` except for a server reached through another engine's protocol. `None`
+    /// while it is only planned.
+    pub engine: Option<String>,
+    /// What a new connection of a kind starts from: its server's usual user and database.
+    pub default_user: Option<String>,
+    pub default_database: Option<String>,
     /// `relational`, `analytical` or `nosql`.
     pub category: String,
     /// `network` or `file`.
@@ -2582,6 +2589,9 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
         Self {
             id: info.id.into(),
             name: info.name.into(),
+            engine: info.engine.map(|engine| engine.as_str().to_string()),
+            default_user: info.default_user.map(str::to_string),
+            default_database: info.default_database.map(str::to_string),
             category: info.category.as_str().into(),
             access: match info.access {
                 spelaion_core::EngineAccess::Network => "network",
