@@ -166,6 +166,9 @@ pub struct Session {
     /// The connection is read-only (ADR-053): a run refuses, before anything is sent, a script
     /// with a statement that is not a read, a session setting or transaction control.
     read_only: bool,
+    /// The server a PostgreSQL session reached (SDB-169), read by [`crate::open_connection`]
+    /// when it opens; `None` for the other engines and for sessions built without it.
+    server_family: Option<crate::ServerFamily>,
 }
 
 /// How long Commit, Rollback or the auto-commit switch wait for one of the core's own reads
@@ -264,7 +267,27 @@ impl Session {
             cancel_gate: CancelGate::default(),
             masking: Arc::new(MaskPolicy::none()),
             read_only: false,
+            server_family: None,
         }
+    }
+
+    /// The server this PostgreSQL session reached (SDB-169): which barriers it enforces.
+    pub fn with_server_family(mut self, family: crate::ServerFamily) -> Self {
+        self.server_family = Some(family);
+        self
+    }
+
+    pub fn server_family(&self) -> Option<&crate::ServerFamily> {
+        self.server_family.as_ref()
+    }
+
+    /// Why a read that relies on the engine's read-only transaction (agents' reads, streaming
+    /// exports, column statistics, the data search) cannot run on this session, if it cannot:
+    /// its server accepts `BEGIN READ ONLY` without enforcing it (SDB-169).
+    pub fn read_only_transaction_refusal(&self) -> Option<String> {
+        self.server_family
+            .as_ref()
+            .and_then(crate::ServerFamily::read_only_transactions_refusal)
     }
 
     /// Makes the session refuse every script a read-only connection does not run (ADR-053).

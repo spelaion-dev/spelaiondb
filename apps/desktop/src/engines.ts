@@ -12,6 +12,8 @@ const BADGES: Record<string, string> = {
   sqlserver: "MS",
   oracle: "OR",
   cockroachdb: "CR",
+  yugabytedb: "YB",
+  timescaledb: "TS",
   duckdb: "DK",
   clickhouse: "CH",
   snowflake: "SF",

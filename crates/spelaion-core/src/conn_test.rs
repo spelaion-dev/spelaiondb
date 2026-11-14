@@ -673,6 +673,16 @@ async fn connection_steps(
         .server_version()
         .await
         .map_err(|e| driver_failure(&e))?;
+    // A read-only connection to a server of PostgreSQL's protocol that would not keep it from
+    // writing cannot open (SDB-169): the test says so at the login, as opening would.
+    if resolved.params.read_only
+        && crate::dialect_of(resolved.engine).is_some_and(|d| d.name() == "postgres")
+        && let Some(reason) = crate::postgres_family::read_family(connection.as_ref())
+            .await
+            .read_only_sessions_refusal()
+    {
+        return Err((FailureKind::Other, reason));
+    }
     drop(connection);
     run.ok_running();
     Ok(Some(version))
@@ -869,7 +879,9 @@ fn open_failure(error: &OpenError) -> Failure {
         }
         OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
         // The test logs in without the session setup; only an opened session runs it.
-        OpenError::Setup(_) => (FailureKind::Other, error.to_string()),
+        OpenError::Setup(_) | OpenError::NoReadOnlyBarrier(_) => {
+            (FailureKind::Other, error.to_string())
+        }
     }
 }
 

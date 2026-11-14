@@ -288,6 +288,11 @@ pub enum OpenError {
     /// closed again.
     #[error("{0}")]
     Setup(#[from] SetupError),
+
+    /// The connection is read-only, or the session only reads, and its server does not enforce
+    /// the barrier that relies on (SDB-169); it was closed again.
+    #[error("{0}")]
+    NoReadOnlyBarrier(String),
 }
 
 /// Open tunnels, shared between connections (ADR-004): two tabs against the same database,
@@ -501,11 +506,32 @@ pub async fn open_connection(
     .await?;
 
     let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
+    // Which server of PostgreSQL's protocol this is decides which of its barriers can be
+    // relied on (SDB-169): it is asked to the server, never taken from the file or the plugin.
+    let family = match dialect.name() {
+        "postgres" => Some(crate::postgres_family::read_family(connection.as_ref()).await),
+        _ => None,
+    };
     // Every result of the session is masked as its connection says (ADR-051).
-    let session = Session::new(connection, dialect, results)
+    let mut session = Session::new(connection, dialect, results)
         .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
         // A read-only connection runs only reads, settings and transaction control (ADR-053).
         .with_read_only(resolved.params.read_only);
+    let refusal = family.as_ref().and_then(|family| {
+        let read_only = resolved
+            .params
+            .read_only
+            .then(|| family.read_only_sessions_refusal())
+            .flatten();
+        let reads = options
+            .read_only_session
+            .then(|| family.read_only_transactions_refusal())
+            .flatten();
+        read_only.or(reads)
+    });
+    if let Some(family) = family {
+        session = session.with_server_family(family);
+    }
     // A tunnel that goes down takes its sessions with it (ADR-028).
     match &tunnel {
         Some(ActiveTunnel::Ssh(t)) => session.health_handle().watch_tunnel(t.state()),
@@ -520,6 +546,12 @@ pub async fn open_connection(
         setup: SetupReport::default(),
         tunnel,
     };
+    // A read-only connection, or a session that only reads, on a server that would not keep
+    // it from writing: refused before anything of the connection's runs.
+    if let Some(reason) = refusal {
+        open.close().await;
+        return Err(OpenError::NoReadOnlyBarrier(reason));
+    }
     match apply_session_setup(&open.session, &open.resolved, restricted).await {
         Ok(report) => open.setup = report,
         Err(error) => {

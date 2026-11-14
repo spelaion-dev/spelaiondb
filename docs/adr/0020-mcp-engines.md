@@ -45,6 +45,24 @@ ADR-019's writes. What changes per engine is the second layer:
 - **DuckDB opens a file in one mode per process** (ADR-016): where agents may write, the
   MCP's read session shares the writable file and relies on the read-only transaction.
 
+### Servers that speak PostgreSQL's protocol (2026-11-14, SDB-169)
+A PostgreSQL connection may reach a server that only speaks PostgreSQL's protocol, through the
+PostgreSQL plugin. Which one is read from the server (`select version()`) when a session opens,
+never from the connection's file or the plugin (`spelaion-core`'s `postgres_family.rs`), and
+the PostgreSQL row of the table above applies only where the server enforces it, checked against
+each server's image (`testing/docker/pg-family`):
+
+| Server | `BEGIN READ ONLY` | Session's read-only mode | What it gets |
+|---|---|---|---|
+| PostgreSQL (and TimescaleDB, an extension), CockroachDB 24.3, YugabyteDB 2026.1 | enforced | enforced | everything |
+| RisingWave 3.1 | enforced | accepted with a notice, ignored | no read-only connections, so no agents (their reads open read-only); streaming reads |
+| Materialize 26.50 | refuses `INSERT`, lets `CREATE TABLE` through | refused | no agents, read-only connections or streaming reads |
+| CrateDB 6.5 | accepted, ignored (no transactions) | accepted, ignored | no agents, read-only connections or streaming reads |
+| A fork that names itself and was not checked (Redshift, Greenplum…), or a server whose version does not start with `PostgreSQL` | not assumed | not assumed | no agents, read-only connections or streaming reads |
+
+The refusal comes when the session opens (a read-only connection, agents' sessions) or before
+the read is sent (streaming exports, column statistics, the data search), with the reason.
+
 ## Alternatives
 - **Only the classifier for the new engines:** it cannot see what a function does. The
   engine's own barrier stays.

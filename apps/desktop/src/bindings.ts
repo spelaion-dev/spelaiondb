@@ -2252,6 +2252,15 @@ export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;
 export type EngineItem_Deserialize = {
 	id: string,
 	name: string,
+	/**
+	 *  The engine its connections are saved as (`postgres` for CockroachDB, SDB-169): the
+	 *  same as `id` except for a server reached through another engine's protocol. `None`
+	 *  while it is only planned.
+	 */
+	engine?: string | null,
+	/**  What a new connection of a kind starts from: its server's usual user and database. */
+	defaultUser?: string | null,
+	defaultDatabase?: string | null,
 	/**  `relational`, `analytical` or `nosql`. */
 	category: string,
 	/**  `network` or `file`. */
@@ -2268,6 +2277,15 @@ export type EngineItem_Deserialize = {
 export type EngineItem_Serialize = {
 	id: string,
 	name: string,
+	/**
+	 *  The engine its connections are saved as (`postgres` for CockroachDB, SDB-169): the
+	 *  same as `id` except for a server reached through another engine's protocol. `None`
+	 *  while it is only planned.
+	 */
+	engine: string | null,
+	/**  What a new connection of a kind starts from: its server's usual user and database. */
+	defaultUser: string | null,
+	defaultDatabase: string | null,
 	/**  `relational`, `analytical` or `nosql`. */
 	category: string,
 	/**  `network` or `file`. */

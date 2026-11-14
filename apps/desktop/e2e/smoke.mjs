@@ -4250,8 +4250,20 @@ try {
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   {
     let wizard = page.locator(".modal.wizard");
+    // SDB-169: CockroachDB is a kind of PostgreSQL connection, starting from its own port,
+    // user and database; the form is PostgreSQL's.
+    await wizard.locator(".engine-card", { hasText: "CockroachDB" }).click();
+    await wizard.getByRole("heading", { name: "New CockroachDB connection" }).waitFor();
+    assert.equal(await wizard.getByLabel("Port", { exact: true }).inputValue(), "26257");
+    assert.equal(await wizard.getByLabel("User", { exact: true }).inputValue(), "root");
+    assert.equal(await wizard.getByLabel("Database", { exact: true }).inputValue(), "defaultdb");
+    assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Kubernetes", "Session", "Options"]);
+    await shot("sdb-169-cockroachdb-form");
+    await wizard.getByRole("button", { name: "Back", exact: true }).click();
     await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
     await wizard.getByRole("heading", { name: "New PostgreSQL connection" }).waitFor();
+    // Back to the picker cleared the kind: PostgreSQL starts empty.
+    assert.equal(await wizard.getByLabel("Port", { exact: true }).inputValue(), "");
     assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Kubernetes", "Session", "Options"]);
     await wizard.getByLabel("Name", { exact: true }).fill("PG session setup");
     await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");

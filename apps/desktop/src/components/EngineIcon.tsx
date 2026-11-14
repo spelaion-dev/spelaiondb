@@ -15,10 +15,13 @@ import cassandra from "../assets/engines/apachecassandra.svg";
 
 const icons: Record<string, string> = { mysql, postgres, mariadb, sqlite, duckdb, sqlserver, oracle, cockroachdb, clickhouse, snowflake, bigquery, mongodb, redis, cassandra };
 
-/** Engine marks are decorative: the engine name is already present in the surrounding UI. */
-export function EngineIcon({ engine }: { engine: string | null }) {
-  const src = engine ? icons[engine] : undefined;
+/** Engine marks are decorative: the engine name is already present in the surrounding UI.
+ *  `fallback` is the engine whose mark stands in when `engine` has none of its own (a server
+ *  reached through PostgreSQL's protocol shows PostgreSQL's). */
+export function EngineIcon({ engine, fallback }: { engine: string | null; fallback?: string | null }) {
+  const shown = engine && icons[engine] ? engine : fallback ?? null;
+  const src = shown ? icons[shown] : undefined;
   return src
-    ? <img className={`engine-icon ${engine === "sqlserver" || engine === "oracle" ? "colored" : ""}`} src={src} alt="" aria-hidden="true" />
+    ? <img className={`engine-icon ${shown === "sqlserver" || shown === "oracle" ? "colored" : ""}`} src={src} alt="" aria-hidden="true" />
     : <span className="engine-icon engine-icon-fallback" aria-hidden="true">●</span>;
 }

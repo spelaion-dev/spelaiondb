@@ -391,8 +391,14 @@ fn checked_read(dialect: &dyn Dialect, sql: &str) -> Result<String, ExportError>
 }
 
 /// The statements around the read: the engine's read-only transaction, always rolled back.
-pub(crate) fn barrier(engine: &str) -> Result<(&'static str, Option<&'static str>), ExportError> {
-    Ok(match engine {
+/// Refused on a server that accepts that transaction without enforcing it (SDB-169).
+pub(crate) fn barrier(
+    session: &Session,
+) -> Result<(&'static str, Option<&'static str>), ExportError> {
+    if let Some(reason) = session.read_only_transaction_refusal() {
+        return Err(ExportError::Invalid(reason));
+    }
+    Ok(match session.dialect().name() {
         "postgres" => ("begin read only", Some("rollback")),
         "mysql" => ("start transaction read only", Some("rollback")),
         "sqlserver" => ("begin transaction", Some("if @@trancount > 0 rollback")),
@@ -434,7 +440,7 @@ async fn stream_read(
     if cancel.is_cancelled() {
         return Err(ExportError::Cancelled);
     }
-    let (begin, end) = barrier(session.dialect().name())?;
+    let (begin, end) = barrier(session)?;
     drain(session, begin).await?;
     let result = write_stream(session, sql, path, export, cancel, progress).await;
     match (&result, end) {
