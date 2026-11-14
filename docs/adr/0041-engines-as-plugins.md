@@ -1,7 +1,8 @@
 # ADR-041: Engines as plugins: every driver in its own process, behind the same contract
 
 - **Status:** Accepted (stage 0 implemented, 2026-11-13: see "Implementation"; the engines
-  leave the core as their repositories are created. Where our plugins are built and how they
+  leave the core as their repositories are created, **except SQLite, which stays compiled in:
+  see "SQLite stays compiled in", 2026-11-14**. Where our plugins are built and how they
   are checked is superseded by ADR-042; how our plugins are found, installed and updated, by
   ADR-055)
 - **Date:** 2026-11-10
@@ -179,6 +180,39 @@ Stage 0 is in the repository; the protocol's specification is `docs/plugin-proto
   gone): with every driver compiled in, 619 s, 7.8 GB of test executables and a 25.3 GB target
   folder; without DuckDB, 297 s, 2.2 GB and 10.0 GB; without DuckDB, SQL Server, MySQL/MariaDB
   and PostgreSQL, 218 s, 1.4 GB and 7.4 GB. DuckDB is most of it, as the Context expected.
+
+## SQLite stays compiled in (2026-11-14)
+Stage 2 ended with "then SQLite files on this machine (last: … that one is only for having one
+path)", and this ADR said an engine that is not worth moving stays built in and is recorded
+here. **SQLite is that engine: its driver stays in this repository, compiled into the core, for
+files on this machine as for files on a server.**
+
+- **Nothing is saved.** The core links SQLite for its own store (ADR-011) whether or not the
+  driver is a plugin. The saving this ADR is about came from DuckDB and the three server
+  engines (see "Implementation").
+- **It would split one driver in two that must stay identical.** SQLite on a server (point 6)
+  stays in the core in any case, and it is not a driver of its own: it shares with the local
+  one every catalog query and its reading (`catalog.rs`) and the whole of the dynamic typing
+  (ADR-006: the affinities, what was seen in a column, the type decided, how a value is
+  written, in `exec.rs`), about 700 lines. Moving the local driver to a repository of its own
+  would leave that code in two repositories, with the explorer and the types of a file having
+  to come out the same whether it is here or on a server. Point 6 said SQLite on a server
+  "does not use the SQLite library": it does not open a database with it, but it is built on
+  the same code as the driver that does.
+- **It is the engine a plugin costs most.** Through a plugin a million-row import took 13.7 %
+  longer: inside the gate, and the closest to it of every engine, because SQLite loads a
+  million rows in about a second and a plugin's cost per row is the same for all of them.
+- **What "one path" would have bought is small**: the core already treats every engine as a
+  `Driver` from its engines, compiled in or a plugin, and no code asks which.
+
+**Its plugin program stays too, as a test and never shipped**
+(`crates/spelaion-driver-sqlite/src/bin/spelaion-plugin-sqlite.rs`): it is how a change to the
+protocol is tried with a real engine without leaving this repository
+(`scripts/test-through-plugins.sh`, `scripts/measure-plugins.sh`), which the made-up engine of
+`spelaion-test-plugin` cannot do.
+
+Revisit if the core stops linking SQLite for its store, or if a tunnel's channel can be handed
+to a plugin (then both halves could move together).
 
 ## Alternatives
 - **Hybrid for good** (the five inside, the rest as plugins): the least work, and two classes
