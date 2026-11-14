@@ -482,11 +482,16 @@ fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
             database: path.display().to_string(),
             ..Default::default()
         };
+        // How DuckDB says the file is another process's: its own lock on Linux and macOS, the
+        // system's refusal to open the file on Windows.
+        let locked = |error: &str| {
+            error.contains("Could not set lock") || error.contains("being used by another process")
+        };
         let mut tries = 0;
         let conn = loop {
             match driver.connect(&params).await {
                 Ok(conn) => break conn,
-                Err(e) if tries < 100 && e.to_string().contains("Could not set lock") => {
+                Err(e) if tries < 100 && locked(&e.to_string()) => {
                     tries += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
