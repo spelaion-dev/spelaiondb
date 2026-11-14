@@ -14,6 +14,10 @@
 //! the secrets it was given already taken out (`spelaiondb mcp` keeps standard output for its
 //! own protocol).
 
+pub mod catalogue;
+pub mod choice;
+pub mod fetch;
+pub mod installed;
 pub mod pins;
 
 use std::collections::HashMap;
