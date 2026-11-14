@@ -113,7 +113,8 @@ async fn download(
     what: &'static str,
     address: &str,
     most: u64,
-    sink: &mut dyn Write,
+    // `Send`, so the futures that fetch can run on the app's threads.
+    sink: &mut (dyn Write + Send),
 ) -> Result<u64, FetchError> {
     let not_https = |address: &str| FetchError::NotHttps {
         what,
@@ -329,6 +330,23 @@ mod tests {
             );
             assert!(sink.is_empty());
         }
+    }
+
+    /// The app awaits these in its commands, which run on any of its threads.
+    #[test]
+    fn fetching_can_run_on_any_thread() {
+        fn sendable<T: Send>(_: T) {}
+        // Compiled, never run: it only has to type-check.
+        fn futures(
+            store: &PluginStore,
+            transport: &dyn Transport,
+            catalogue: &Catalogue,
+            app: &AppBuild,
+        ) {
+            sendable(refresh_catalogue(store, transport, false));
+            sendable(install_offered(store, transport, catalogue, app, ""));
+        }
+        let _ = futures;
     }
 
     #[test]
