@@ -449,6 +449,67 @@ function DropDialog({
   );
 }
 
+/**
+ * A collection of an engine whose language is not SQL (ADR-056): opening it runs the core's
+ * statement for it (a bounded page) in an editor tab, where it can be changed and run again.
+ * Nothing the core writes SQL for is offered on it.
+ */
+function CollectionNode({ session, connectionId, object }: { session: string; connectionId: string; object: ObjectItem }) {
+  const { t } = useTranslation("shell");
+  const [menu, setMenu] = useContextMenu();
+  const [error, setError] = useState<string | null>(null);
+  const { row, revealed } = useRevealedRow(
+    (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
+  );
+  const open = async () => {
+    setMenu(null);
+    setError(null);
+    try {
+      const statement = await call(commands.browseStatement(session, object.schema, object.name, object.kind, object.comment ?? null));
+      if (statement !== null) openSqlTab(connectionId, session, object.schema, statement, true);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+  return (
+    <div className="node">
+      <div
+        ref={row}
+        className={`row leaf-row${revealed}`}
+        title={object.comment ?? undefined}
+        tabIndex={0}
+        onDoubleClick={() => void open()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void open();
+          handleCopyKey(e, session, () => [{ schema: object.schema, names: [object.name] }], setError);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        <TreeIcon kind="table" />
+        <span className="label">{object.name}</span>
+        {object.comment && <span className="muted small">{object.comment}</span>}
+      </div>
+      {error && <div className="error small">{error}</div>}
+      {menu && (
+        <ObjectMenu at={menu}>
+          <button role="menuitem" onClick={() => void open()}>
+            {t("openCollection")}
+          </button>
+          <CopyMenuItems
+            session={session}
+            paths={[{ schema: object.schema, names: [object.name] }]}
+            close={() => setMenu(null)}
+            onError={setError}
+          />
+        </ObjectMenu>
+      )}
+    </div>
+  );
+}
+
 /** A constraint or foreign key of a table: its menu can drop it, where the engine can. */
 function LeafRow({
   session,
@@ -813,8 +874,10 @@ function FilterMenuItems({
   );
 }
 
-/** The explorer's folders under a schema, in order (ADR-024). */
+/** The explorer's folders under a schema, in order (ADR-024). Collections are an engine's
+ *  whose language is not SQL (ADR-056). */
 const SCHEMA_FOLDERS = [
+  "collections",
   "tables",
   "foreignTables",
   "views",
@@ -832,6 +895,8 @@ type SchemaFolder = (typeof SCHEMA_FOLDERS)[number];
 
 function relationFolder(kind: string): SchemaFolder {
   switch (kind) {
+    case "collection":
+      return "collections";
     case "foreign_table":
       return "foreignTables";
     case "view":
@@ -1928,7 +1993,10 @@ function ConnectionNode({
               const family = backupFamily(connection.engine);
               return family && familyRestores(family) ? () => openBackup(connection, session, "restore") : undefined;
             })(),
-            runFile: () => useRunFile.getState().open({ session, connectionName: connection.name }),
+            // An .sql file is split and run as SQL: not on an engine whose language is not.
+            runFile: connection.sql
+              ? () => useRunFile.getState().open({ session, connectionName: connection.name })
+              : undefined,
             duplicate,
             copy,
             paste: () => {
@@ -2049,6 +2117,9 @@ function SchemaNode({
   const [refreshed, setRefreshed] = useState(0);
   const sort = useSortByName();
   const actions = useObjectActions(session);
+  /** Whether its engine is queried with SQL: importing and the ER diagram write and read SQL
+   *  (ADR-056). */
+  const sql = useApp((s) => s.connections.find((c) => c.id === connectionId)?.sql ?? true);
   const [dropping, setDropping] = useState(false);
   /** The create table form (ADR-047); other kinds open their statement in a tab. */
   const [creatingTable, setCreatingTable] = useState(false);
@@ -2245,25 +2316,29 @@ function SchemaNode({
             {t("refreshAllSchemas")}
           </button>
           <FilterMenuItems kind="schemas" names={[schema]} onFilterName={onFilterName} close={() => setMenu(null)} />
-          <hr />
-          <button
-            role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              useImport.getState().open({ session, connectionId, schema, table: null, text: null });
-            }}
-          >
-            {t("importNewTable")}
-          </button>
-          <button
-            role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              openDiagram(connectionId, { kind: "schema", schema, filter: objectFilter }, session);
-            }}
-          >
-            {t("diagram.menuSchema")}
-          </button>
+          {sql && (
+            <>
+              <hr />
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  useImport.getState().open({ session, connectionId, schema, table: null, text: null });
+                }}
+              >
+                {t("importNewTable")}
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  openDiagram(connectionId, { kind: "schema", schema, filter: objectFilter }, session);
+                }}
+              >
+                {t("diagram.menuSchema")}
+              </button>
+            </>
+          )}
           {actions && actions.create.some((kind) => kind !== "schema") && <hr />}
           {actions?.create
             .filter((kind) => kind !== "schema")
@@ -2352,7 +2427,10 @@ function SchemaNode({
                         : undefined;
                     })()}
                   >
-                    {relations.map((o) => (
+                    {relations.filter((o) => o.kind === "collection").map((o) => (
+                      <CollectionNode key={o.name} session={session} connectionId={connectionId} object={o} />
+                    ))}
+                    {relations.filter((o) => o.kind !== "collection").map((o) => (
                       <ObjectNode
                         key={o.name}
                         session={session}

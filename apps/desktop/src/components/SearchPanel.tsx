@@ -257,7 +257,8 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
 
   const list = useMemo(() => Object.values(schemas), [schemas]);
   const choices = useMemo(
-    () => connections.filter((c) => connected.includes(c.id) && list.some((s) => s.connectionId === c.id)),
+    // The data search writes a SELECT per table: only engines queried with SQL (ADR-056).
+    () => connections.filter((c) => c.sql && connected.includes(c.id) && list.some((s) => s.connectionId === c.id)),
     [connections, connected, list],
   );
   // The active tab's connection first, then the first one with tables loaded.

@@ -536,6 +536,12 @@ export const commands = {
 	 *  for the explorer's "Copy qualified name".
 	 */
 	qualifiedNames: (session: string, paths: ObjectPathItem[]) => typedError<string[], string>(__TAURI_INVOKE("qualified_names", { session, paths })),
+	/**
+	 *  The statement that shows an object of an engine whose language is not SQL, written by the
+	 *  core (ADR-056): the explorer opens it in an editor tab and runs it. `None` for SQL, whose
+	 *  objects open in a table data tab.
+	 */
+	browseStatement: (session: string, schema: string, name: string, kind: string, comment: string | null) => typedError<string | null, string>(__TAURI_INVOKE("browse_statement", { session, schema, name, kind, comment })),
 	/**  What the explorer may offer on this session's engine: the core decides (ADR-026). */
 	objectActions: (session: string) => typedError<ObjectActionsItem, string>(__TAURI_INVOKE("object_actions", { session })),
 	/**
@@ -1686,6 +1692,11 @@ export type ConnectionItem_Deserialize = {
 	mcpExposed: boolean,
 	historyEnabled: boolean,
 	readOnly: boolean,
+	/**
+	 *  Whether its engine is queried with SQL. One that is not (ADR-056) is read by the core in
+	 *  its own language: what the app writes SQL for is not offered on it.
+	 */
+	sql: boolean,
 };
 
 export type ConnectionItem_Serialize = {
@@ -1708,6 +1719,11 @@ export type ConnectionItem_Serialize = {
 	mcpExposed: boolean,
 	historyEnabled: boolean,
 	readOnly: boolean,
+	/**
+	 *  Whether its engine is queried with SQL. One that is not (ADR-056) is read by the core in
+	 *  its own language: what the app writes SQL for is not offered on it.
+	 */
+	sql: boolean,
 };
 
 /**
@@ -2271,6 +2287,11 @@ export type EngineItem_Deserialize = {
 	sessionSchema: boolean,
 	/**  Isolation levels a session can be set to (`read-committed`…); empty for one level. */
 	isolationLevels: string[],
+	/**
+	 *  Queried with SQL. An engine that is not (ADR-056) has no read-only mode, no agents and no
+	 *  session setup yet: the form does not offer them.
+	 */
+	sql: boolean,
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
@@ -2296,6 +2317,11 @@ export type EngineItem_Serialize = {
 	sessionSchema: boolean,
 	/**  Isolation levels a session can be set to (`read-committed`…); empty for one level. */
 	isolationLevels: string[],
+	/**
+	 *  Queried with SQL. An engine that is not (ADR-056) has no read-only mode, no agents and no
+	 *  session setup yet: the form does not offer them.
+	 */
+	sql: boolean,
 };
 
 /**  The answer to a paused run. */

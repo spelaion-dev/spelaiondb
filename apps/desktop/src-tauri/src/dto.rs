@@ -1305,6 +1305,9 @@ pub struct ConnectionItem {
     pub mcp_exposed: bool,
     pub history_enabled: bool,
     pub read_only: bool,
+    /// Whether its engine is queried with SQL. One that is not (ADR-056) is read by the core in
+    /// its own language: what the app writes SQL for is not offered on it.
+    pub sql: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -2582,6 +2585,9 @@ pub struct EngineItem {
     pub session_schema: bool,
     /// Isolation levels a session can be set to (`read-committed`…); empty for one level.
     pub isolation_levels: Vec<String>,
+    /// Queried with SQL. An engine that is not (ADR-056) has no read-only mode, no agents and no
+    /// session setup yet: the form does not offer them.
+    pub sql: bool,
 }
 
 impl From<spelaion_core::EngineInfo> for EngineItem {
@@ -2601,6 +2607,7 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
             default_port: info.default_port,
             available: info.engine.is_some(),
             session_schema: info.engine.is_some_and(|e| e.has_session_schema()),
+            sql: info.engine.is_none_or(|e| e.is_sql()),
             isolation_levels: info
                 .engine
                 .map(|engine| {
@@ -3433,8 +3440,26 @@ pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
         "mariadb" => Engine::Mariadb,
         "duckdb" => Engine::Duckdb,
         "sqlserver" => Engine::Sqlserver,
+        "mongodb" => Engine::Mongodb,
         other => return Err(format!("unsupported engine: {other}")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::engine_named;
+
+    /// Every engine the "add connection" picker offers comes back from the id the form sends:
+    /// one missing here fails the form's test, save and engine change.
+    #[test]
+    fn every_engine_of_the_picker_is_named_by_its_id() {
+        for engine in spelaion_core::engine_catalog()
+            .into_iter()
+            .filter_map(|info| info.engine)
+        {
+            assert_eq!(engine_named(engine.as_str()), Ok(engine));
+        }
+    }
 }
 
 /// What changing a connection's engine does to its settings (ADR-030), by the file's field

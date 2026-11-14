@@ -179,7 +179,7 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         planned("clickhouse", "ClickHouse", Analytical, Network, Some(8123)),
         planned("snowflake", "Snowflake", Analytical, Network, None),
         planned("bigquery", "BigQuery", Analytical, Network, None),
-        planned("mongodb", "MongoDB", NoSql, Network, Some(27017)),
+        supported(Engine::Mongodb, "MongoDB", NoSql, Network),
         planned("redis", "Redis", NoSql, Network, Some(6379)),
         planned("cassandra", "Cassandra", NoSql, Network, Some(9042)),
     ]
@@ -218,6 +218,7 @@ mod tests {
             Engine::Mariadb,
             Engine::Sqlserver,
             Engine::Duckdb,
+            Engine::Mongodb,
         ] {
             assert_eq!(
                 catalog

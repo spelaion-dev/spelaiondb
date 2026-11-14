@@ -192,6 +192,11 @@ db.getSiblingDB("spelaion_core_mongo_a").here.find()"#,
     assert!(ran.errors.is_empty(), "{:?}", ran.errors);
     assert_eq!(texts(&results, ran.results[0], "_id"), [Some("b".into())]);
     assert_eq!(texts(&results, ran.results[1], "_id"), [Some("a".into())]);
+    // What the editor and the explorer take as the tab's schema, asked without SQL.
+    assert_eq!(
+        spelaion_core::active_schema(&session).await,
+        Ok(Some("spelaion_core_mongo_b".into()))
+    );
 }
 
 #[test]
