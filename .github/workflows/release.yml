@@ -191,6 +191,12 @@ jobs:
           name="spelaiondb-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$name"
           cp LICENSE "$name/"
+          # The engines that are plugins ship with the CLI too, next to it (ADR-042): without
+          # them `spelaiondb mcp` from this archive would have SQLite and nothing else. The
+          # builds plugins.toml pins for this target, let in only with the pinned hashes.
+          cargo run -q --locked -p spelaion-plugin-fetch -- \
+            --platform "${{ matrix.target }}" --into "$name" > /dev/null
+          ls -l "$name"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/spelaiondb.exe" "$name/"
             7z a "$name.zip" "$name" > /dev/null
