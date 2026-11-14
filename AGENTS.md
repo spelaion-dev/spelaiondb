@@ -540,7 +540,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   runs `.github/workflows/release.yml` (installers for every OS, the `spelaiondb` CLI, notes from
   `docs/releases/vX.Y.Z.md` plus every commit since the previous tag, from
   `scripts/release-notes.sh`, so commit subjects must read well in a changelog); the tag must
-  match the version in `Cargo.toml` and `tauri.conf.json`.
+  match the version in `Cargo.toml` and `tauri.conf.json`. Pushing a branch `release-test/<x>`
+  runs the same workflow as a rehearsal: the same installers and CLI archives, uploaded as the
+  run's artifacts and checked by `scripts/check-release-plugins.sh` (each pinned plugin next to
+  `spelaiondb` with its pinned hash). Its jobs only read the repository, never name a secret and
+  build without update artifacts (`tauri.rehearsal.conf.json`); only the tagged jobs have
+  `contents: write`. Pushing such a branch is a maintainer's step, never an agent's.
 
 ## Branches
 Several people and agents work at the same time: nobody pushes to `dev` or `main`.
