@@ -22,7 +22,7 @@
 #   archive_size = 12345678
 #   program_sha256 = "…"                                 # of the program inside the archive
 #
-# Pinned so far: SQL Server, MySQL and MariaDB (one plugin), PostgreSQL. Their drivers are
+# Pinned so far: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL. Their drivers are
 # still compiled into the core until each engine's migration is merged: a pin alone changes
 # nothing for a user.
 
@@ -126,3 +126,36 @@ archive = "spelaiondb-plugin-postgres-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "846a7f41d41b4343082557c4b885d99559c7ecce6eb4f0faa5b6a0e015e6c57b"
 archive_size = 2838046
 program_sha256 = "3268ab96c6bc5466d74005eca4ebdf2e31b9867963173c5df8f6ff71a41b41bf"
+
+# DuckDB.
+[[plugin]]
+name = "spelaiondb-plugin-duckdb"
+repository = "spelaion-dev/spelaiondb-plugin-duckdb"
+version = "0.1.0"
+protocol = "1.0"
+engines = ["duckdb"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-duckdb-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "534cef2e33030f6e04665bf8694913fffa6d2a89c3a2bedc674ffd9803207f40"
+archive_size = 18224339
+program_sha256 = "74e1e72d3049cd0695bb511069e374853313f0d061cb39522dec696aea4a0c9c"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "2890bb880426dc3da66a0ccd8466b8489ebcb8ff3172cf83179c1afcaa8de31a"
+archive_size = 19760434
+program_sha256 = "948bdf11746cb8611023c05c40f37d72ce17e783b9a42cb16a150d2453764ef2"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "a53ced043b60a30dd57eb1134078445d8ad36cc5f74ce583b8a688b9433d17d8"
+archive_size = 15666533
+program_sha256 = "08752f79eba92e017c1672a643de109e37428389d1b574297d66d16d427b4d5d"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "ea4c3bce168de9e8ea7352856b2cb71cdc17616fcb7407cc710270b2949744e8"
+archive_size = 21548145
+program_sha256 = "db0dca9c90cf922a1a9e6ea06273217a84b28c065601bd810d8452863bdb8a96"
