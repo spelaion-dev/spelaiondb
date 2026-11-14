@@ -21,7 +21,6 @@
 /crates/spelaion-ssh/src/auth.rs                @petilolz @frglez
 
 # Patched TLS libraries and dependency rules.
-/vendor/                                        @petilolz @frglez
 /deny.toml                                      @petilolz @frglez
 
 # Which plugin builds are tested, shipped and started (ADR-042, ADR-055).
