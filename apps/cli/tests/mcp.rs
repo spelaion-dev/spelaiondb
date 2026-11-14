@@ -474,13 +474,25 @@ fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
         let driver = engines
             .get(spelaion_config::Engine::Duckdb)
             .expect("DuckDB has a driver");
-        let conn = driver
-            .connect(&ConnectParams {
-                database: path.display().to_string(),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
+        // DuckDB lets one process at a time open a file. When its engine is a plugin, the one
+        // that had the file (a server this test just stopped, or this helper's last call)
+        // ends a moment after whoever started it, and holds the file until then. The open is
+        // tried again while the file is locked, for at most ten seconds; anything else fails.
+        let params = ConnectParams {
+            database: path.display().to_string(),
+            ..Default::default()
+        };
+        let mut tries = 0;
+        let conn = loop {
+            match driver.connect(&params).await {
+                Ok(conn) => break conn,
+                Err(e) if tries < 100 && e.to_string().contains("Could not set lock") => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(e) => panic!("opening {}: {e}", path.display()),
+            }
+        };
         let mut values = Vec::new();
         for sql in script {
             let mut events = conn.execute(sql, &ExecOptions::default()).await.unwrap();
