@@ -18,6 +18,10 @@ use spelaion_core::plugins::catalogue::{
     Catalogue, CatalogueError, CatalogueKey, signed_catalogue,
 };
 use spelaion_core::plugins::choice::{PluginState, Source, states};
+use spelaion_core::plugins::fetch::{
+    Body, CATALOGUE_ADDRESS, FetchError, Transport, TransportError, install_offered,
+    refresh_catalogue, refresh_catalogue_with,
+};
 use spelaion_core::plugins::installed::{AppBuild, InstallError, NotUsable, PluginStore};
 use spelaion_core::plugins::pins::{PLATFORMS, Pins, platform, program_file_name, sha256_of};
 use spelaion_driver_api::{ConnectParams, DriverError, ExecEvent, ExecOptions};
@@ -1157,4 +1161,351 @@ async fn removing_a_build_stops_it_and_takes_its_engines_away() {
     // Removing what is not there is not an error; a name that is not a plugin's is.
     machine.store.remove(NAME, (0, 2, 0)).await.unwrap();
     assert!(machine.store.remove("../..", (0, 2, 0)).await.is_err());
+}
+
+/// The network of a test: what each address answers. It stands for the adapter's HTTP client.
+#[derive(Default)]
+struct Network {
+    pages: std::sync::Mutex<std::collections::HashMap<String, Page>>,
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+/// What an address answers.
+#[derive(Clone)]
+struct Page {
+    /// Where the answer finally comes from, after any redirect.
+    from: String,
+    bytes: Vec<u8>,
+    /// It stops arriving after its first piece, and never ends.
+    stalls: bool,
+}
+
+impl Network {
+    fn serve(&self, address: &str, bytes: &[u8]) {
+        self.serve_page(
+            address,
+            Page {
+                from: address.to_string(),
+                bytes: bytes.to_vec(),
+                stalls: false,
+            },
+        );
+    }
+
+    fn serve_page(&self, address: &str, page: Page) {
+        self.pages.lock().unwrap().insert(address.to_string(), page);
+    }
+
+    fn forget(&self, address: &str) {
+        self.pages.lock().unwrap().remove(address);
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for Network {
+    async fn get(&self, address: &str) -> Result<Box<dyn Body>, TransportError> {
+        self.asked.lock().unwrap().push(address.to_string());
+        let page = self.pages.lock().unwrap().get(address).cloned();
+        let page = page.ok_or_else(|| TransportError("the host did not answer".into()))?;
+        Ok(Box::new(Arriving {
+            from: page.from,
+            pieces: page.bytes.chunks(1 << 16).map(<[u8]>::to_vec).collect(),
+            stalls: page.stalls,
+        }))
+    }
+}
+
+struct Arriving {
+    from: String,
+    pieces: std::collections::VecDeque<Vec<u8>>,
+    stalls: bool,
+}
+
+#[async_trait::async_trait]
+impl Body for Arriving {
+    fn address(&self) -> String {
+        self.from.clone()
+    }
+
+    async fn chunk(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
+        match self.pieces.pop_front() {
+            Some(piece) => {
+                if self.stalls {
+                    self.pieces.clear();
+                }
+                Ok(Some(piece))
+            }
+            None if self.stalls => std::future::pending().await,
+            None => Ok(None),
+        }
+    }
+}
+
+/// Where the core says the archive of `version` is.
+fn address_of(version: &str, archive: &Path) -> String {
+    format!(
+        "https://github.com/spelaion-dev/{NAME}/releases/download/v{version}/{}",
+        archive.file_name().unwrap().to_string_lossy()
+    )
+}
+
+/// What a download left behind in the store.
+fn downloads_left(machine: &Machine) -> Vec<std::ffi::OsString> {
+    std::fs::read_dir(machine.store.folder().join("downloads"))
+        .map(|entries| entries.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn the_catalogue_and_an_archive_are_fetched_only_from_where_the_core_says() {
+    let machine = Machine::new("fetched");
+    let network = Network::default();
+    let archive = machine.archive("0.2.0");
+    let text = catalogue(3, &[listed("0.2.0", here(), &archive)]);
+    network.serve(
+        CATALOGUE_ADDRESS,
+        &signed_catalogue(&machine.signer.sign(text.as_bytes()), text.as_bytes()),
+    );
+    network.serve(
+        &address_of("0.2.0", &archive),
+        &std::fs::read(&archive).unwrap(),
+    );
+
+    let accepted = refresh_catalogue_with(&machine.key(), &machine.store, &network, true)
+        .await
+        .expect("the published catalogue");
+    assert_eq!(accepted.serial(), 3);
+    assert_eq!(machine.catalogue().unwrap().serial(), 3);
+    // Nothing is installed for being offered: that is the user's click.
+    assert_eq!(machine.store.installed(), []);
+
+    let installed = install_offered(&machine.store, &network, &accepted, &machine.app(), NAME)
+        .await
+        .expect("the offered build");
+    assert_eq!(installed.version, "0.2.0");
+    assert_eq!(downloads_left(&machine), [] as [std::ffi::OsString; 0]);
+    pid_through(&machine.engines(&Pins::none())).await.unwrap();
+    assert!(running(&installed.program).await);
+
+    // Two requests, to the two addresses the core wrote.
+    assert_eq!(
+        network.asked(),
+        [CATALOGUE_ADDRESS.to_string(), address_of("0.2.0", &archive)]
+    );
+}
+
+#[tokio::test]
+async fn with_update_checks_off_the_catalogue_is_not_read() {
+    let machine = Machine::new("switched-off");
+    let network = Network::default();
+    let archive = machine.archive("0.2.0");
+    let text = catalogue(3, &[listed("0.2.0", here(), &archive)]);
+    network.serve(
+        CATALOGUE_ADDRESS,
+        &signed_catalogue(&machine.signer.sign(text.as_bytes()), text.as_bytes()),
+    );
+    let refused = refresh_catalogue_with(&machine.key(), &machine.store, &network, false).await;
+    assert!(
+        matches!(refused, Err(FetchError::SwitchedOff)),
+        "{refused:?}"
+    );
+    assert_eq!(network.asked(), [] as [String; 0], "a request was made");
+    assert!(machine.catalogue().is_none());
+
+    // The app's own way in takes only its own key, whatever the network answers.
+    assert!(
+        refresh_catalogue(&machine.store, &network, true)
+            .await
+            .is_err()
+    );
+    assert!(machine.store.catalogue().is_none());
+}
+
+/// Arriving from the right address makes nothing trusted: the bounds, where it really came
+/// from, the signature and the hashes are all still asked.
+#[tokio::test]
+async fn what_arrives_is_checked_whatever_the_network_answers() {
+    let machine = Machine::new("arrives");
+    let network = Network::default();
+    let key = machine.key();
+    let archive = machine.archive("0.2.0");
+    let bytes = std::fs::read(&archive).unwrap();
+    let text = catalogue(3, &[listed("0.2.0", here(), &archive)]);
+    let signed = signed_catalogue(&machine.signer.sign(text.as_bytes()), text.as_bytes());
+    let plain = |address: &str| address.replacen("https://", "http://", 1);
+
+    // The catalogue: nobody answers.
+    let refused = refresh_catalogue_with(&key, &machine.store, &network, true).await;
+    assert!(
+        matches!(&refused, Err(FetchError::Unreachable { address, .. })
+            if address == CATALOGUE_ADDRESS),
+        "{refused:?}"
+    );
+    // It was redirected to plain HTTP.
+    network.serve_page(
+        CATALOGUE_ADDRESS,
+        Page {
+            from: plain(CATALOGUE_ADDRESS),
+            bytes: signed.clone(),
+            stalls: false,
+        },
+    );
+    let refused = refresh_catalogue_with(&key, &machine.store, &network, true).await;
+    assert!(
+        matches!(refused, Err(FetchError::NotHttps { .. })),
+        "{refused:?}"
+    );
+    // It never ends.
+    network.serve(CATALOGUE_ADDRESS, &vec![b'#'; 4 << 20]);
+    let refused = refresh_catalogue_with(&key, &machine.store, &network, true).await;
+    assert!(
+        matches!(refused, Err(FetchError::TooLarge { .. })),
+        "{refused:?}"
+    );
+    // Someone else signed it.
+    let theirs = Signer::new(9).sign(text.as_bytes());
+    network.serve(
+        CATALOGUE_ADDRESS,
+        &signed_catalogue(&theirs, text.as_bytes()),
+    );
+    let refused = refresh_catalogue_with(&key, &machine.store, &network, true).await;
+    assert!(
+        matches!(
+            refused,
+            Err(FetchError::Catalogue(CatalogueError::Signature(_)))
+        ),
+        "{refused:?}"
+    );
+    assert!(machine.catalogue().is_none());
+
+    // Ours is accepted. Now the archive.
+    network.serve(CATALOGUE_ADDRESS, &signed);
+    let accepted = refresh_catalogue_with(&key, &machine.store, &network, true)
+        .await
+        .unwrap();
+    let app = machine.app();
+    let address = address_of("0.2.0", &archive);
+    let mut longer = bytes.clone();
+    longer.push(0);
+    let mut other = bytes.clone();
+    let last = other.len() - 1;
+    other[last] ^= 0xff;
+    let answers: Vec<(&str, Option<Page>)> = vec![
+        ("nobody", None),
+        (
+            "plain HTTP after a redirect",
+            Some(Page {
+                from: plain(&address),
+                bytes: bytes.clone(),
+                stalls: false,
+            }),
+        ),
+        (
+            "one byte more than the entry says",
+            Some(Page {
+                from: address.clone(),
+                bytes: longer,
+                stalls: false,
+            }),
+        ),
+        (
+            "one byte less than the entry says",
+            Some(Page {
+                from: address.clone(),
+                bytes: bytes[..bytes.len() - 1].to_vec(),
+                stalls: false,
+            }),
+        ),
+        (
+            "other bytes of the right size",
+            Some(Page {
+                from: address.clone(),
+                bytes: other,
+                stalls: false,
+            }),
+        ),
+    ];
+    for (what, page) in answers {
+        match page {
+            Some(page) => network.serve_page(&address, page),
+            None => network.forget(&address),
+        }
+        let refused = install_offered(&machine.store, &network, &accepted, &app, NAME).await;
+        let fits = match what {
+            "nobody" => matches!(refused, Err(FetchError::Unreachable { .. })),
+            "plain HTTP after a redirect" => matches!(refused, Err(FetchError::NotHttps { .. })),
+            "one byte more than the entry says" => {
+                matches!(refused, Err(FetchError::TooLarge { .. }))
+            }
+            "one byte less than the entry says" => matches!(refused, Err(FetchError::Short { .. })),
+            _ => matches!(
+                refused,
+                Err(FetchError::Install(InstallError::NotTheBuild { .. }))
+            ),
+        };
+        assert!(fits, "answered by {what}: {refused:?}");
+        machine.assert_store_is_empty();
+        assert_eq!(
+            downloads_left(&machine),
+            [] as [std::ffi::OsString; 0],
+            "answered by {what}"
+        );
+    }
+
+    // A plugin the catalogue does not offer is never asked for.
+    let before = network.asked().len();
+    let refused = install_offered(
+        &machine.store,
+        &network,
+        &accepted,
+        &app,
+        "spelaiondb-plugin-other",
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(FetchError::NotOffered(_))),
+        "{refused:?}"
+    );
+    assert_eq!(network.asked().len(), before);
+    // Every request went to one of the two addresses the core wrote.
+    assert!(
+        network
+            .asked()
+            .iter()
+            .all(|asked| asked == CATALOGUE_ADDRESS || asked == &address),
+        "{:?}",
+        network.asked()
+    );
+}
+
+/// The user closes the page, or stops the download: nothing of it stays.
+#[tokio::test]
+async fn a_download_dropped_half_way_leaves_nothing() {
+    let machine = Machine::new("dropped-download");
+    let network = Network::default();
+    let archive = machine.archive("0.2.0");
+    let accepted = machine
+        .accept(&catalogue(3, &[listed("0.2.0", here(), &archive)]))
+        .unwrap();
+    network.serve_page(
+        &address_of("0.2.0", &archive),
+        Page {
+            from: address_of("0.2.0", &archive),
+            bytes: std::fs::read(&archive).unwrap(),
+            stalls: true,
+        },
+    );
+    let app = machine.app();
+    let download = install_offered(&machine.store, &network, &accepted, &app, NAME);
+    let stopped = tokio::time::timeout(Duration::from_millis(300), download).await;
+    assert!(
+        stopped.is_err(),
+        "a download that stalls ended: {stopped:?}"
+    );
+    assert_eq!(downloads_left(&machine), [] as [std::ffi::OsString; 0]);
+    machine.assert_store_is_empty();
 }

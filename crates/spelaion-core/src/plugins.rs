@@ -16,6 +16,7 @@
 
 pub mod catalogue;
 pub mod choice;
+pub mod fetch;
 pub mod installed;
 pub mod pins;
 

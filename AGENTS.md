@@ -122,6 +122,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   that function as a program for the publishing workflow: it must be told which catalogue is
   published (its one signed file, checked with the key compiled in) or `--first`, writes
   nothing when nothing is new, and signs nothing.
+  `plugins/fetch.rs` brings the catalogue and an archive, and the core still has no HTTP
+  client: the adapter gives a `Transport` that only moves bytes. No function there takes an
+  address: the catalogue's is a constant and an archive's is the one the core writes for its
+  entry. HTTPS where it starts and where it ends, a catalogue bounded and an archive of exactly
+  its entry's size, a stalled download given up on, the file removed whatever happens, and what
+  arrives goes through the same checks as a file the user picked. The catalogue is read only
+  when `updates_allowed` (the user's setting; `SPELAION_NO_UPDATES` can only switch it off); an
+  archive only on the user's click. Tests with a made-up network in the same `catalogue.rs`.
   `crates/spelaion-plugin-fetch` (`spelaion-fetch-plugins`, never shipped) is how the pinned
   builds get here, for CI, the release and a developer: it downloads each pinned release from
   its plugin's repository and lets a program into the folder it is given only if the archive
