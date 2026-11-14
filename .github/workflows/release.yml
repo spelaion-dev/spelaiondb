@@ -6,7 +6,8 @@
 # `TAURI_SIGNING_PRIVATE_KEY` (ADR-021).
 #
 # Rehearsal: pushing a branch `release-test/<anything>` builds the same installers and CLI
-# archives, with the pinned plugins inside, and uploads them as this run's artifacts (and
+# archives, with the pinned plugins inside (their archives in the installers, ADR-057; their
+# programs next to `spelaiondb` in the CLI archives), and uploads them as this run's artifacts (and
 # checks each one with `scripts/check-release-plugins.sh`). A rehearsal can never publish:
 # the jobs that create, upload to or publish a release run only for a tag, and they are the
 # only ones with `contents: write`; the rehearsal jobs read the repository and nothing else,
@@ -126,18 +127,15 @@ jobs:
           if [ -n "${{ matrix.args }}" ]; then out="../../target/${{ matrix.target }}/release"; fi
           mkdir -p src-tauri/binaries
           cp "$out/spelaiondb$ext" "src-tauri/binaries/spelaiondb-${{ matrix.target }}$ext"
-          # The engines that are plugins ship inside the installer too, next to the app
-          # (ADR-042): the builds plugins.toml pins for this target, downloaded and let in only
-          # with the pinned hashes. The app starts one only while its file has the pinned hash.
-          # tauri.release.conf.json names each of them (a test of spelaion-plugin-fetch checks
-          # that list against the pins).
-          cargo run -q --locked -p spelaion-plugin-fetch -- \
-            --platform "${{ matrix.target }}" --into "$RUNNER_TEMP/plugins" > /dev/null
-          for program in "$RUNNER_TEMP"/plugins/spelaiondb-plugin-*; do
-            name=$(basename "$program" "$ext")
-            cp "$program" "src-tauri/binaries/$name-${{ matrix.target }}$ext"
-          done
-          ls -l src-tauri/binaries
+          # The engines that are plugins ship inside the installer too (ADR-042), as the
+          # release archives of the builds plugins.toml pins for this target (ADR-057): a signed
+          # app and an AppImage change the programs they carry, and nothing changes an archive.
+          # Each is let in only once it and its program have the pinned hashes;
+          # tauri.release.conf.json puts every one into the installer's resources, and the app
+          # installs them into the user's plugins at its first start, checked again.
+          cargo run -q --locked -p spelaion-plugin-fetch -- --platform "${{ matrix.target }}" \
+            --into "$RUNNER_TEMP/plugins" --archives-into src-tauri/plugins > /dev/null
+          ls -l src-tauri/binaries src-tauri/plugins
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -308,13 +306,9 @@ jobs:
           if [ -n "${{ matrix.args }}" ]; then out="../../target/${{ matrix.target }}/release"; fi
           mkdir -p src-tauri/binaries
           cp "$out/spelaiondb$ext" "src-tauri/binaries/spelaiondb-${{ matrix.target }}$ext"
-          cargo run -q --locked -p spelaion-plugin-fetch -- \
-            --platform "${{ matrix.target }}" --into "$RUNNER_TEMP/plugins" > /dev/null
-          for program in "$RUNNER_TEMP"/plugins/spelaiondb-plugin-*; do
-            name=$(basename "$program" "$ext")
-            cp "$program" "src-tauri/binaries/$name-${{ matrix.target }}$ext"
-          done
-          ls -l src-tauri/binaries
+          cargo run -q --locked -p spelaion-plugin-fetch -- --platform "${{ matrix.target }}" \
+            --into "$RUNNER_TEMP/plugins" --archives-into src-tauri/plugins > /dev/null
+          ls -l src-tauri/binaries src-tauri/plugins
       # What tauri-action runs in the app job (the same `tauri build` and arguments), with
       # tauri.rehearsal.conf.json merged last: no update artifacts, so no signing key is wanted.
       - name: Build the installers
@@ -337,11 +331,11 @@ jobs:
         shell: bash
         run: |
           case "$RUNNER_OS" in
-            Windows) scripts/check-release-plugins.sh "${{ matrix.target }}" \
+            Windows) scripts/check-release-plugins.sh --installer "${{ matrix.target }}" \
                        target/release/bundle/nsis/*-setup.exe target/release/bundle/msi/*.msi ;;
-            macOS) scripts/check-release-plugins.sh "${{ matrix.target }}" \
+            macOS) scripts/check-release-plugins.sh --installer "${{ matrix.target }}" \
                      target/${{ matrix.target }}/release/bundle/macos/*.app ;;
-            Linux) scripts/check-release-plugins.sh "${{ matrix.target }}" \
+            Linux) scripts/check-release-plugins.sh --installer "${{ matrix.target }}" \
                      target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage ;;
           esac
 

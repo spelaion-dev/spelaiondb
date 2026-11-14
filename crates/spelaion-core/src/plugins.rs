@@ -122,6 +122,60 @@ pub fn shipped_folder() -> Option<PathBuf> {
     Some(plain(&file_of(&program)).parent()?.to_path_buf())
 }
 
+/// The product's name, which names its resource folder on Linux: `productName` in
+/// `apps/desktop/src-tauri/tauri.conf.json` (a test checks they agree).
+pub const PRODUCT_NAME: &str = "SpelaionDB";
+
+/// The folder of the installer's resources where the archives of the pinned builds are
+/// (ADR-057), found from this program's folder as Tauri lays out each installer: the app and
+/// the `spelaiondb` that ships with it are in the same folder.
+pub fn bundled_folder() -> Option<PathBuf> {
+    bundled_folder_of(&shipped_folder()?)
+}
+
+/// [`bundled_folder`] for a program in `folder`: `<app>.app/Contents/Resources/plugins` on
+/// macOS, `/usr/lib/<product>/plugins` (or the AppImage's) on Linux, `plugins` next to the
+/// program on Windows.
+pub fn bundled_folder_of(folder: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        Some(folder.parent()?.join("Resources").join("plugins"))
+    } else if cfg!(windows) {
+        Some(folder.join("plugins"))
+    } else {
+        Some(
+            folder
+                .parent()?
+                .join("lib")
+                .join(PRODUCT_NAME)
+                .join("plugins"),
+        )
+    }
+}
+
+/// Installs, into `store`, the pinned builds whose archives came inside the installer
+/// ([`installed::PluginStore::install_bundled`]). What fails is written to standard error (never
+/// standard output: `spelaiondb mcp` speaks its protocol there), and its engines then say which
+/// file is missing.
+pub fn install_bundled(store: &installed::PluginStore) {
+    let Some(folder) = bundled_folder() else {
+        return;
+    };
+    if !folder.is_dir() {
+        return;
+    }
+    let catalogue = store.catalogue();
+    for result in store.install_bundled(
+        pins::Pins::shipped(),
+        catalogue.as_ref(),
+        &installed::AppBuild::this(),
+        &folder,
+    ) {
+        if let Err(error) = result {
+            eprintln!("SpelaionDB: a plugin inside the installer was not installed: {error}");
+        }
+    }
+}
+
 /// `path` as a person writes it. Windows gives a resolved path in its verbatim form
 /// (`\\?\C:\…`), which is what a user would then read in "this plugin is missing".
 fn plain(path: &Path) -> PathBuf {

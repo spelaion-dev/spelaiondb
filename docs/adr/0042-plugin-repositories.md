@@ -3,7 +3,8 @@
 - **Status:** Accepted (the part in this repository is implemented, 2026-11-13: see
   "Implementation"; it changes how ADR-041's stages are carried out;
   amended by ADR-055: what the app downloads is pinned by a signed catalogue, so a plugin fix no
-  longer waits for an app release)
+  longer waits for an app release; amended by ADR-057: the installers carry the pinned builds'
+  archives, installed into the user's store at the first start, not the programs)
 - **Date:** 2026-11-10
 - **Supersedes:** in ADR-041, "built from this repository" and "always the same build as the
   core" (point 5, "Ours") and the check of downloaded engines against the update key; in

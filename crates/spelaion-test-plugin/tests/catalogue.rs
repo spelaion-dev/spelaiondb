@@ -1580,3 +1580,214 @@ async fn a_download_dropped_half_way_leaves_nothing() {
     assert_eq!(downloads_left(&machine), [] as [std::ffi::OsString; 0]);
     machine.assert_store_is_empty();
 }
+
+// ---------------------------------------------------------------------------------------------
+// The pinned builds inside the installer (ADR-057): a signed app or an AppImage changes the
+// programs it carries, so the installer carries each pinned build's archive, installed into the
+// user's store as that pin.
+// ---------------------------------------------------------------------------------------------
+
+impl Machine {
+    /// The installer's resource folder of this machine, holding `archive` as the release has it.
+    fn bundle(&self, archive: &Path) -> PathBuf {
+        let folder = self.root.join("installer");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::copy(archive, folder.join(archive.file_name().unwrap())).unwrap();
+        folder
+    }
+}
+
+/// Pins naming `archive` as the build of `version` for this platform.
+fn pins_of(version: &str, archive: &Path) -> Pins {
+    Pins::parse(&format!(
+        "schema_version = 1\n{}",
+        listed(version, here(), archive)
+    ))
+    .expect("the test's pins")
+}
+
+#[tokio::test]
+async fn an_archive_inside_the_installer_is_installed_as_its_pin_and_serves_its_engines() {
+    let machine = Machine::new("bundled");
+    let archive = machine.archive("0.2.0");
+    let pins = pins_of("0.2.0", &archive);
+    let folder = machine.bundle(&archive);
+
+    let done = machine
+        .store
+        .install_bundled(&pins, None, &machine.app(), &folder);
+    assert_eq!(done.len(), 1, "{done:?}");
+    let installed = done.into_iter().next().unwrap().expect("installed");
+    assert_eq!(installed.version, "0.2.0");
+    assert_eq!(
+        sha256_of(&installed.program).unwrap(),
+        sha256_of(Path::new(PROGRAM)).unwrap()
+    );
+    // Started from the store, as the pin it is: no catalogue was needed.
+    let engines = machine.engines(&pins);
+    pid_through(&engines).await.unwrap();
+    assert!(running(&installed.program).await);
+    spelaion_core::plugins::stop(&installed.program).await;
+
+    // At the next start it is already there: nothing is read again.
+    let again = machine
+        .store
+        .install_bundled(&pins, None, &machine.app(), &folder);
+    assert!(again.is_empty(), "{again:?}");
+}
+
+#[test]
+fn a_changed_archive_inside_the_installer_is_not_installed() {
+    let machine = Machine::new("bundled-changed");
+    let archive = machine.archive("0.2.0");
+    let pins = pins_of("0.2.0", &archive);
+    let folder = machine.bundle(&archive);
+    // One byte more: what a tool that rewrote the archive would leave.
+    let inside = folder.join(archive.file_name().unwrap());
+    let mut bytes = std::fs::read(&inside).unwrap();
+    bytes.push(0);
+    std::fs::write(&inside, bytes).unwrap();
+
+    let done = machine
+        .store
+        .install_bundled(&pins, None, &machine.app(), &folder);
+    assert!(
+        matches!(done.as_slice(), [Err(InstallError::NotTheBuild { .. })]),
+        "{done:?}"
+    );
+    machine.assert_store_is_empty();
+}
+
+#[test]
+fn an_archive_whose_program_is_not_the_pinned_one_is_not_installed() {
+    let machine = Machine::new("bundled-program");
+    // The pins name this archive by its own hash, but the program inside is another one.
+    let archive = machine.archive_of(
+        &format!("{NAME}-0.2.0-{}.tar.gz", here()),
+        &[Member::file(
+            &program_file_name(NAME),
+            b"not the pinned program",
+        )],
+    );
+    let pins = pins_of("0.2.0", &archive);
+    let folder = machine.bundle(&archive);
+
+    let done = machine
+        .store
+        .install_bundled(&pins, None, &machine.app(), &folder);
+    assert!(
+        matches!(done.as_slice(), [Err(InstallError::Program { .. })]),
+        "{done:?}"
+    );
+    machine.assert_store_is_empty();
+}
+
+#[test]
+fn only_the_pinned_archives_inside_the_installer_are_looked_at() {
+    let machine = Machine::new("bundled-others");
+    let pinned = machine.archive("0.2.0");
+    let pins = pins_of("0.2.0", &pinned);
+    std::fs::remove_file(&pinned).unwrap();
+    // Another version's real archive, the program itself and a stray file: none is the pinned
+    // archive's file name, so none is read.
+    let other = machine.archive("0.3.0");
+    let folder = machine.bundle(&other);
+    std::fs::copy(PROGRAM, folder.join(program_file_name(NAME))).unwrap();
+    std::fs::write(folder.join("plugins.toml"), "schema_version = 1\n").unwrap();
+
+    let done = machine
+        .store
+        .install_bundled(&pins, None, &machine.app(), &folder);
+    assert!(done.is_empty(), "{done:?}");
+    machine.assert_store_is_empty();
+}
+
+#[test]
+fn another_versions_archive_under_the_pinned_name_is_not_installed() {
+    let machine = Machine::new("bundled-renamed");
+    let pinned = machine.archive("0.2.0");
+    let pins = pins_of("0.2.0", &pinned);
+    let pinned_name = pinned.file_name().unwrap().to_os_string();
+    // 0.3.0's archive, renamed to the file name the pin gives.
+    let other = machine.archive("0.3.0");
+    let folder = machine.root.join("installer");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::copy(&other, folder.join(&pinned_name)).unwrap();
+
+    let done = machine
+        .store
+        .install_bundled(&pins, None, &machine.app(), &folder);
+    assert!(
+        matches!(done.as_slice(), [Err(InstallError::NotTheBuild { .. })]),
+        "{done:?}"
+    );
+    machine.assert_store_is_empty();
+}
+
+#[test]
+fn a_pin_the_catalogue_withdrew_is_not_installed_from_the_installer() {
+    let machine = Machine::new("bundled-withdrawn");
+    let archive = machine.archive("0.2.0");
+    let pins = pins_of("0.2.0", &archive);
+    let folder = machine.bundle(&archive);
+    let accepted = machine
+        .accept(&catalogue(
+            2,
+            &[
+                listed("0.2.0", here(), &archive),
+                withdrawn("0.2.0", "It lost rows on import."),
+            ],
+        ))
+        .unwrap();
+
+    let done = machine
+        .store
+        .install_bundled(&pins, Some(&accepted), &machine.app(), &folder);
+    assert!(
+        matches!(
+            done.as_slice(),
+            [Err(InstallError::NotUsable {
+                why: NotUsable::Withdrawn(_),
+                ..
+            })]
+        ),
+        "{done:?}"
+    );
+    machine.assert_store_is_empty();
+}
+
+#[test]
+fn a_pin_for_another_platform_is_not_installed_from_the_installer() {
+    let machine = Machine::new("bundled-platform");
+    let archive = machine.archive("0.2.0");
+    // Pinned for another platform only.
+    let pins = Pins::parse(&format!(
+        "schema_version = 1\n{}",
+        listed("0.2.0", elsewhere(), &archive)
+    ))
+    .unwrap();
+    let folder = machine.bundle(&archive);
+
+    let done = machine
+        .store
+        .install_bundled(&pins, None, &machine.app(), &folder);
+    assert!(done.is_empty(), "{done:?}");
+    machine.assert_store_is_empty();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_inside_the_installer_is_not_followed() {
+    let machine = Machine::new("bundled-link");
+    let archive = machine.archive("0.2.0");
+    let pins = pins_of("0.2.0", &archive);
+    let folder = machine.root.join("installer");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::os::unix::fs::symlink(&archive, folder.join(archive.file_name().unwrap())).unwrap();
+
+    let done = machine
+        .store
+        .install_bundled(&pins, None, &machine.app(), &folder);
+    assert!(done.is_empty(), "{done:?}");
+    machine.assert_store_is_empty();
+}

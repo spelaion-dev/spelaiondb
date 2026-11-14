@@ -44,7 +44,11 @@ impl Engines {
     /// that the pins or the catalogue this SpelaionDB accepted name
     /// ([`crate::plugins::choice::states`]). What the app and `spelaiondb mcp` use; neither
     /// downloads anything here.
+    ///
+    /// The pinned builds that came inside the installer as archives are installed into
+    /// `store` first (ADR-057, [`crate::plugins::install_bundled`]).
     pub fn builtin_with(store: &crate::plugins::installed::PluginStore) -> Self {
+        crate::plugins::install_bundled(store);
         Self::compiled_in()
             .with_our_plugins(Some(store))
             .with_dev_plugins()
