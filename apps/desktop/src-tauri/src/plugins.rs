@@ -269,9 +269,18 @@ async fn overview(state: &AppState) -> PluginsOverview {
         plugins: states
             .iter()
             .map(|plugin| {
+                // The pinned build is the installer's, even once unpacked into the store
+                // (ADR-057): it is not offered for removal, since the next start would only
+                // install it again.
+                let pinned = Pins::shipped()
+                    .plugins()
+                    .iter()
+                    .find(|pin| pin.name == plugin.name)
+                    .map(|pin| pin.version.as_str());
                 let versions = installed
                     .iter()
                     .filter(|build| build.name == plugin.name)
+                    .filter(|build| Some(build.version.as_str()) != pinned)
                     .map(|build| build.version.clone())
                     .collect();
                 item(plugin, versions, &sessions)
