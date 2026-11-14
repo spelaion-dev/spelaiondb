@@ -709,7 +709,7 @@ async fn open_run_session(
     let (open, password) = self::source(state, source).await?;
     spelaion_core::open_connection(
         open.resolved.clone(),
-        &state.engines,
+        &state.engines(),
         spelaion_core::OpenOptions {
             tunnels: state.tunnels.clone(),
             known_hosts: KnownHosts::for_user(&state.user_dir),

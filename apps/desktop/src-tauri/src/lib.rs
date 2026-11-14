@@ -13,6 +13,7 @@ mod interaction;
 mod library;
 mod mcp;
 mod plans;
+mod plugins;
 mod update;
 
 use std::collections::HashMap;
@@ -51,7 +52,11 @@ struct AppState {
     workspace: RwLock<Option<PathBuf>>,
     workspace_version: AtomicU64,
     config: RwLock<Config>,
-    engines: Engines,
+    /// The engines the next connection uses. Swapped whole when the plugins change (ADR-055):
+    /// a connection already open keeps the plugin process it has. Read with `engines()`.
+    engines: std::sync::RwLock<Arc<Engines>>,
+    /// The Plugins page's operations (`plugins.rs`).
+    plugins: plugins::PluginOps,
     tunnels: Arc<TunnelPool>,
     results: Arc<ResultStore>,
     plans: Arc<spelaion_core::plan::PlanStore>,
@@ -116,6 +121,11 @@ impl ConnectionTests {
 type CmdResult<T> = Result<T, String>;
 
 impl AppState {
+    /// The engines a connection opened now uses (ADR-055: they change when the plugins do).
+    fn engines(&self) -> Arc<Engines> {
+        self.engines.read().expect("lock poisoned").clone()
+    }
+
     /// Every change to the trust store goes through `TrustStore::update`, one at a time, so
     /// none saves over another it did not see (SDB-276).
     fn change_trust<T, E: From<spelaion_config::ConfigError> + ToString>(
@@ -972,7 +982,7 @@ async fn test_connection(
         let _ = on_step.send(steps.iter().map(TestStepItem::from).collect());
     };
     let report =
-        spelaion_core::test_connection(resolved, &state.engines, options, &observer, stop).await;
+        spelaion_core::test_connection(resolved, &state.engines(), options, &observer, stop).await;
     state.tests.end(test);
     Ok(ConnectionTestOutcome::Tested {
         report: report.into(),
@@ -1738,28 +1748,28 @@ async fn connect(
         password: password.clone(),
         read_only_session: false,
     };
-    let open = match open_connection(resolved, &state.engines, options, state.results.clone()).await
-    {
-        Ok(open) => open,
-        Err(OpenError::PasswordRequired { save_to }) => {
-            return Ok(ConnectOutcome::PasswordRequired {
-                can_remember: save_to.is_some(),
-            });
-        }
-        // SQLSTATE 28xxx: authorization rejected (password or user). Only then does it make
-        // sense to ask for the password again; any other failure is shown as is.
-        Err(OpenError::Driver(DriverError::Database {
-            code: Some(code),
-            message,
-            ..
-        })) if code.starts_with("28") => {
-            return Ok(ConnectOutcome::AuthFailed {
+    let open =
+        match open_connection(resolved, &state.engines(), options, state.results.clone()).await {
+            Ok(open) => open,
+            Err(OpenError::PasswordRequired { save_to }) => {
+                return Ok(ConnectOutcome::PasswordRequired {
+                    can_remember: save_to.is_some(),
+                });
+            }
+            // SQLSTATE 28xxx: authorization rejected (password or user). Only then does it make
+            // sense to ask for the password again; any other failure is shown as is.
+            Err(OpenError::Driver(DriverError::Database {
+                code: Some(code),
                 message,
-                can_remember: save_to.is_some(),
-            });
-        }
-        Err(e) => return Err(e.to_string()),
-    };
+                ..
+            })) if code.starts_with("28") => {
+                return Ok(ConnectOutcome::AuthFailed {
+                    message,
+                    can_remember: save_to.is_some(),
+                });
+            }
+            Err(e) => return Err(e.to_string()),
+        };
     // Remember in the keychain only if it was asked for and the connection worked.
     if remember && let (Some(account), Some(secret)) = (save_to, &password) {
         let config = state.config.read().await;
@@ -1853,7 +1863,7 @@ async fn connect_from_session(
     };
     let open = open_connection(
         source_open.resolved.clone(),
-        &state.engines,
+        &state.engines(),
         options,
         state.results.clone(),
     )
@@ -2754,7 +2764,7 @@ async fn open_export_session(
     };
     match open_connection(
         source_open.resolved.clone(),
-        &state.engines,
+        &state.engines(),
         options,
         state.results.clone(),
     )
@@ -2990,7 +3000,7 @@ async fn create_database(
 ) -> CmdResult<()> {
     let engine = engine_named(&engine)?;
     state
-        .engines
+        .engines()
         .create_file_database(engine, Path::new(&path))
         .await
         .map_err(|e| e.to_string())
@@ -5143,6 +5153,12 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update::update_check,
             update::update_install,
             update::update_open_releases_page,
+            plugins::plugins_overview,
+            plugins::plugins_refresh_catalogue,
+            plugins::plugins_install,
+            plugins::plugins_cancel_install,
+            plugins::plugins_install_file,
+            plugins::plugins_remove,
             engine_catalog,
             keychain_available,
             list_tunnels,
@@ -5334,7 +5350,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             InteractionClosed,
             SessionLost,
             TransactionChanged,
-            QuitRequested
+            QuitRequested,
+            plugins::PluginInstallProgress,
+            plugins::PluginsChanged
         ])
 }
 
@@ -5480,15 +5498,14 @@ pub fn run() {
     // Its writer runs on Tauri's runtime, which `block_on` starts here.
     let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
     // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
-    let engines = Engines::builtin_with(
-        &spelaion_core::plugins::installed::PluginStore::in_user_dir(&user_dir),
-    );
+    let engines = plugins::engines_for(&user_dir);
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
         workspace_version: AtomicU64::new(0),
         config: RwLock::new(config),
-        engines,
+        engines: std::sync::RwLock::new(engines),
+        plugins: plugins::PluginOps::default(),
         tunnels: Arc::new(TunnelPool::new()),
         results: Arc::new(ResultStore::new()),
         plans: Arc::new(spelaion_core::plan::PlanStore::new()),
