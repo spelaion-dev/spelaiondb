@@ -460,11 +460,16 @@ impl SpelaionMcp {
         if let Err(reason) = &current {
             eprintln!("spelaiondb mcp: {reason}");
         }
+        // The plugins the app installed, under the last catalogue it accepted (ADR-055). This
+        // server never downloads one.
+        let engines = Engines::builtin_with(
+            &spelaion_core::plugins::installed::PluginStore::in_user_dir(&options.user_dir),
+        );
         Ok(Self {
             state: Arc::new(State {
                 current: Mutex::new(current),
                 options,
-                engines: Engines::builtin(),
+                engines,
                 tunnels: Arc::new(TunnelPool::new()),
                 store: Mutex::new(Some(store)),
                 audit_session: audit_session_id(),

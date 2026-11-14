@@ -27,6 +27,9 @@
 # Which plugin builds are tested, shipped and started (ADR-042, ADR-055).
 /plugins.toml                                   @petilolz @frglez
 /crates/spelaion-core/src/plugins/pins.rs       @petilolz @frglez
+/crates/spelaion-core/src/plugins/catalogue.rs  @petilolz @frglez
+/crates/spelaion-core/src/plugins/installed.rs  @petilolz @frglez
+/crates/spelaion-core/src/plugins/choice.rs     @petilolz @frglez
 
 # Automatic updates and their signing (ADR-021).
 /apps/desktop/src-tauri/src/update.rs           @petilolz @frglez

@@ -5479,12 +5479,16 @@ pub fn run() {
         .expect("error while opening the local query history");
     // Its writer runs on Tauri's runtime, which `block_on` starts here.
     let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
+    // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
+    let engines = Engines::builtin_with(
+        &spelaion_core::plugins::installed::PluginStore::in_user_dir(&user_dir),
+    );
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
         workspace_version: AtomicU64::new(0),
         config: RwLock::new(config),
-        engines: Engines::builtin(),
+        engines,
         tunnels: Arc::new(TunnelPool::new()),
         results: Arc::new(ResultStore::new()),
         plans: Arc::new(spelaion_core::plan::PlanStore::new()),

@@ -130,58 +130,13 @@ impl Pins {
                 plugin: plugin.name.clone(),
                 problem,
             };
-            if !is_program_name(&plugin.name) {
-                return Err(wrong(
-                    "its name must be `spelaiondb-plugin-` and lowercase letters, digits or `-`"
-                        .into(),
-                ));
-            }
+            plugin.check().map_err(wrong)?;
             if !names.insert(plugin.name.as_str()) {
                 return Err(wrong("it is pinned twice".into()));
             }
-            if !is_our_repository(&plugin.repository, &plugin.name) {
-                return Err(wrong(format!(
-                    "its repository must be spelaion-dev/{}",
-                    plugin.name
-                )));
-            }
-            if !is_version(&plugin.version) || !is_version(&plugin.min_app) {
-                return Err(wrong(
-                    "`version` and `min_app` are three numbers, as in 0.1.0".into(),
-                ));
-            }
-            if protocol_of(&plugin.protocol).is_none() {
-                return Err(wrong("`protocol` is two numbers, as in 1.0".into()));
-            }
-            if plugin.engines.is_empty() {
-                return Err(wrong("it serves no engine".into()));
-            }
             for engine in &plugin.engines {
-                if !is_engine_name(engine) {
-                    return Err(wrong(format!("{engine:?} is not an engine's name")));
-                }
                 if !engines.insert(engine.clone()) {
                     return Err(wrong(format!("the engine {engine:?} is pinned twice")));
-                }
-            }
-            if plugin.platforms.is_empty() {
-                return Err(wrong("it has no build".into()));
-            }
-            for (platform, build) in &plugin.platforms {
-                if !PLATFORMS.contains(&platform.as_str()) {
-                    return Err(wrong(format!(
-                        "{platform:?} is not a platform we build for"
-                    )));
-                }
-                if !is_sha256(&build.archive_sha256) || !is_sha256(&build.program_sha256) {
-                    return Err(wrong(format!(
-                        "{platform}: a SHA-256 is 64 lowercase hexadecimal digits"
-                    )));
-                }
-                if build.archive_size == 0 || !is_file_name(&build.archive) {
-                    return Err(wrong(format!(
-                        "{platform}: the archive needs a file name and a size"
-                    )));
                 }
             }
         }
@@ -221,6 +176,77 @@ impl PinnedPlugin {
     /// The protocol version it speaks.
     pub fn protocol(&self) -> (u32, u32) {
         protocol_of(&self.protocol).unwrap_or((0, 0))
+    }
+
+    /// Its release, as numbers: what "newer" is decided with.
+    pub fn version(&self) -> (u32, u32, u32) {
+        version_of(&self.version).unwrap_or((0, 0, 0))
+    }
+
+    /// The lowest SpelaionDB it works with, as numbers.
+    pub fn min_app(&self) -> (u32, u32, u32) {
+        version_of(&self.min_app).unwrap_or((0, 0, 0))
+    }
+
+    /// Where its archive for a platform is: a release of its own repository under
+    /// `spelaion-dev` on GitHub, over HTTPS. The address is written here from what was checked
+    /// ([`PinnedPlugin::check`]); no pin and no catalogue carries one, so none can name
+    /// another host or another repository.
+    pub fn archive_address(&self, build: &PinnedBuild) -> String {
+        format!(
+            "https://github.com/{}/releases/download/v{}/{}",
+            self.repository, self.version, build.archive
+        )
+    }
+
+    /// Whether this is a pin as one must be written: what `plugins.toml` asks of each plugin,
+    /// and the signed catalogue of each version it lists (ADR-055). The problem, if it is not.
+    pub(crate) fn check(&self) -> Result<(), String> {
+        if !is_program_name(&self.name) {
+            return Err(
+                "its name must be `spelaiondb-plugin-` and lowercase letters, digits or `-`".into(),
+            );
+        }
+        if !is_our_repository(&self.repository, &self.name) {
+            return Err(format!("its repository must be spelaion-dev/{}", self.name));
+        }
+        if !is_version(&self.version) || !is_version(&self.min_app) {
+            return Err("`version` and `min_app` are three numbers, as in 0.1.0".into());
+        }
+        if protocol_of(&self.protocol).is_none() {
+            return Err("`protocol` is two numbers, as in 1.0".into());
+        }
+        if self.engines.is_empty() {
+            return Err("it serves no engine".into());
+        }
+        let mut engines = HashSet::new();
+        for engine in &self.engines {
+            if !is_engine_name(engine) {
+                return Err(format!("{engine:?} is not an engine's name"));
+            }
+            if !engines.insert(engine.as_str()) {
+                return Err(format!("the engine {engine:?} is pinned twice"));
+            }
+        }
+        if self.platforms.is_empty() {
+            return Err("it has no build".into());
+        }
+        for (platform, build) in &self.platforms {
+            if !PLATFORMS.contains(&platform.as_str()) {
+                return Err(format!("{platform:?} is not a platform we build for"));
+            }
+            if !is_sha256(&build.archive_sha256) || !is_sha256(&build.program_sha256) {
+                return Err(format!(
+                    "{platform}: a SHA-256 is 64 lowercase hexadecimal digits"
+                ));
+            }
+            if build.archive_size == 0 || !is_file_name(&build.archive) {
+                return Err(format!(
+                    "{platform}: the archive needs a file name and a size"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -291,7 +317,7 @@ pub fn check_file(path: &Path, sha256: &str) -> Result<(), PluginRefused> {
     Ok(())
 }
 
-fn is_program_name(name: &str) -> bool {
+pub(crate) fn is_program_name(name: &str) -> bool {
     name.strip_prefix("spelaiondb-plugin-").is_some_and(|rest| {
         !rest.is_empty()
             && rest.len() <= 40
@@ -317,9 +343,21 @@ fn is_engine_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
-fn is_version(text: &str) -> bool {
+pub(crate) fn is_version(text: &str) -> bool {
+    version_of(text).is_some()
+}
+
+/// A version's three numbers: `0.10.2` is `(0, 10, 2)`.
+pub(crate) fn version_of(text: &str) -> Option<(u32, u32, u32)> {
     let parts: Vec<&str> = text.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| is_number(p))
+    if parts.len() != 3 || !parts.iter().all(|p| is_number(p)) {
+        return None;
+    }
+    Some((
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ))
 }
 
 fn protocol_of(text: &str) -> Option<(u32, u32)> {

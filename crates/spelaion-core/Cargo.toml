@@ -37,6 +37,13 @@ specta = { version = "=2.0.0-rc.26", features = ["derive"], optional = true }
 sha2 = "0.10"
 # plugins.toml, compiled in, is read when the engines are set up (plugins/pins.rs).
 toml = "1"
+# The signature of the plugin catalogue (plugins/catalogue.rs, ADR-055): the verifier the
+# app's updater already uses, with no dependencies of its own.
+minisign-verify = "0.3"
+# A plugin's archive, a `.tar.gz`, of which only the program is unpacked
+# (plugins/installed.rs). No extended attributes: nothing of an archive's is kept but bytes.
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
 # process + io-util: `kubectl port-forward` for Kubernetes tunnels (kube.rs) and the native
 # backup tools (backup/, ADR-049), whose files are written with fs.
 tokio = { workspace = true, features = ["sync", "time", "process", "io-util", "net", "macros", "fs"] }
