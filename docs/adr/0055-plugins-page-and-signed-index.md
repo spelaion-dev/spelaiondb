@@ -118,8 +118,10 @@ What points 4, 6, 7 and 8 ask of the core is written and tested
 `crates/spelaion-test-plugin/tests/catalogue.rs`). The page and the download are not. The
 workflow that writes, signs and publishes the catalogue is `.github/workflows/plugins-catalogue.yml`;
 it checks what it would publish with the key compiled into its own build
-(`spelaion-write-catalogue --check`), so it publishes nothing until the key is created and
-`SHIPPED_KEY` set. What was settled while writing it:
+(`spelaion-write-catalogue --check`), so it publishes nothing the app would refuse. The key was
+made on 2026-11-14 (id `AC4BA582C66EEAC8`): its public half is `SHIPPED_KEY`, its secret half and
+password are only in the repository's `plugins-catalogue` environment, which only `dev` can
+deploy from. What was settled while writing it:
 
 - **The catalogue has the shape of `plugins.toml`**: `schema_version`, `serial`, a `[[plugin]]`
   for every version ever pinned (the same keys, checked by the same code as a pin), and
