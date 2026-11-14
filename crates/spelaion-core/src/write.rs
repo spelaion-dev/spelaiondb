@@ -102,6 +102,9 @@ pub enum AgentView {
     NotExposed,
     /// A repository's connection while the repository is not trusted (ADR-022).
     UntrustedRepository,
+    /// An engine whose language is not SQL, which has no agents' barrier yet (ADR-056,
+    /// point 6): never visible, whatever `[mcp]` says.
+    EngineWithoutBarrier,
     Visible(AgentAccess),
 }
 
@@ -111,6 +114,9 @@ pub fn agent_view(
     repository_trusted: bool,
     all_read_only: bool,
 ) -> AgentView {
+    if !entry.file.engine.is_sql() {
+        return AgentView::EngineWithoutBarrier;
+    }
     if !entry.file.mcp.exposed {
         return AgentView::NotExposed;
     }
@@ -671,5 +677,34 @@ mod tests {
             agent_view(&entry(Source::User, writable), false, false),
             AgentView::Visible(AgentAccess::ReadWrite)
         );
+    }
+
+    #[test]
+    fn an_engine_without_its_barrier_is_never_shown_to_agents() {
+        // ADR-056, point 6: MongoDB has no agents' barrier yet, whatever `[mcp]` says.
+        let mongodb = |extra: &str| ConnectionEntry {
+            id: spelaion_config::ConnectionId {
+                source: Source::User,
+                path: "shop".into(),
+            },
+            file_path: "shop.toml".into(),
+            file: toml::from_str(&format!(
+                "schema_version = 1\nname = \"Shop\"\nengine = \"mongodb\"\nhost = \"db\"\n{extra}"
+            ))
+            .unwrap(),
+        };
+        for extra in [
+            "",
+            "[mcp]\nexposed = true\n",
+            "[mcp]\nexposed = true\nwrites = \"allow\"\n",
+        ] {
+            for all_read_only in [false, true] {
+                assert_eq!(
+                    agent_view(&mongodb(extra), true, all_read_only),
+                    AgentView::EngineWithoutBarrier,
+                    "{extra}"
+                );
+            }
+        }
     }
 }

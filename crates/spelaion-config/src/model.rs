@@ -153,6 +153,9 @@ pub enum Engine {
     Mariadb,
     Duckdb,
     Sqlserver,
+    /// MongoDB, and the servers that speak its protocol (FerretDB). Its language is not SQL:
+    /// the core reads it and sends requests (ADR-056).
+    Mongodb,
 }
 
 impl Engine {
@@ -164,6 +167,21 @@ impl Engine {
             Engine::Mariadb => "mariadb",
             Engine::Duckdb => "duckdb",
             Engine::Sqlserver => "sqlserver",
+            Engine::Mongodb => "mongodb",
+        }
+    }
+
+    /// Whether the engine is queried with SQL. One that is not (ADR-056) has no read-only mode
+    /// and no agents until its own barrier exists, and none has one yet.
+    pub fn is_sql(self) -> bool {
+        match self {
+            Engine::Postgres
+            | Engine::Sqlite
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Duckdb
+            | Engine::Sqlserver => true,
+            Engine::Mongodb => false,
         }
     }
 
@@ -171,7 +189,11 @@ impl Engine {
     pub fn is_file(self) -> bool {
         match self {
             Engine::Sqlite | Engine::Duckdb => true,
-            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => false,
+            Engine::Postgres
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Sqlserver
+            | Engine::Mongodb => false,
         }
     }
 
@@ -181,6 +203,7 @@ impl Engine {
             Engine::Sqlite | Engine::Duckdb => None,
             Engine::Mysql | Engine::Mariadb => Some(3306),
             Engine::Sqlserver => Some(1433),
+            Engine::Mongodb => Some(27017),
         }
     }
 }
@@ -315,8 +338,9 @@ impl IsolationLevel {
         match engine {
             Engine::Postgres | Engine::Mysql | Engine::Mariadb => self != IsolationLevel::Snapshot,
             Engine::Sqlserver => true,
-            // A file engine has one level: SQLite serializes, DuckDB uses snapshots.
-            Engine::Sqlite | Engine::Duckdb => false,
+            // A file engine has one level: SQLite serializes, DuckDB uses snapshots. MongoDB
+            // has no session isolation level.
+            Engine::Sqlite | Engine::Duckdb | Engine::Mongodb => false,
         }
     }
 
@@ -330,7 +354,7 @@ impl Engine {
     pub fn has_session_schema(self) -> bool {
         match self {
             Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Duckdb => true,
-            Engine::Sqlserver | Engine::Sqlite => false,
+            Engine::Sqlserver | Engine::Sqlite | Engine::Mongodb => false,
         }
     }
 }

@@ -13,7 +13,7 @@
 use std::ops::ControlFlow;
 
 use spelaion_config::Safeguards;
-use spelaion_driver_api::{Dialect, StatementSpan};
+use spelaion_driver_api::{Dialect, RequestClass, StatementSpan};
 use sqlparser::ast::{Statement, visit_statements};
 use sqlparser::dialect::{
     Dialect as SqlDialect, DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect,
@@ -65,10 +65,42 @@ pub fn script_risks(
         .into_iter()
         .enumerate()
         .filter_map(|(index, span)| {
-            statement_risk(dialect.name(), span.text(script), mode, safeguards)
-                .map(|risk| RiskyStatement { index, span, risk })
+            let text = span.text(script);
+            match request_risk(dialect, text, safeguards) {
+                Some(risk) => risk,
+                None => statement_risk(dialect.name(), text, mode, safeguards),
+            }
+            .map(|risk| RiskyStatement { index, span, risk })
         })
         .collect()
+}
+
+/// The risk of a statement of a language that is not SQL (ADR-056, point 4), read from the
+/// request the core makes of it, so every way of writing a command is judged alike: `None`
+/// for a language that is SQL. A drop, or a delete or update of every document, always asks;
+/// a write, and whatever the core cannot tell (never taken for a read), ask where the
+/// connection's type confirms data changes; every statement where it confirms execution. A
+/// statement the core cannot read asks as one it cannot tell: running it fails anyway.
+fn request_risk(
+    dialect: &dyn Dialect,
+    text: &str,
+    safeguards: &Safeguards,
+) -> Option<Option<Risk>> {
+    // The database does not change what a command is.
+    let class = match dialect.to_request(text, "guard")? {
+        Ok(request) => dialect.request_class(&request),
+        Err(_) => RequestClass::Unknown,
+    };
+    let risk = match class {
+        RequestClass::Drop => Some(Risk::Drop),
+        RequestClass::DeleteAll => Some(Risk::DeleteAll),
+        RequestClass::UpdateAll => Some(Risk::UpdateAll),
+        RequestClass::Write | RequestClass::Unknown if safeguards.confirm_data_changes => {
+            Some(Risk::DataChange)
+        }
+        RequestClass::Read | RequestClass::Write | RequestClass::Unknown => None,
+    };
+    Some(risk.or_else(|| safeguards.confirm_execution.then_some(Risk::Execution)))
 }
 
 fn statement_risk(

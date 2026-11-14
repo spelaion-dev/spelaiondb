@@ -602,6 +602,25 @@ pub struct ObjectActions {
 }
 
 pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
+    // The core writes no SQL for an engine whose language is not SQL (ADR-056): none of these.
+    if dialect.reads_requests() {
+        return ObjectActions {
+            rename_views: false,
+            drop_schemas: false,
+            drop_constraints: false,
+            rebuild_drops: false,
+            routine_source: false,
+            routine_calls: false,
+            create: Vec::new(),
+            new_index: Vec::new(),
+            active_schema: false,
+            add_constraints: false,
+            add_triggers: false,
+            before_triggers: false,
+            trigger_function: false,
+            add_check_constraints: false,
+        };
+    }
     let engine = dialect.name();
     let create = match engine {
         "postgres" => vec![
@@ -1314,6 +1333,14 @@ mod tests {
 
     fn drop_sql(dialect: &dyn Dialect, target: ObjectTarget, cascade: bool) -> String {
         change_script(dialect, &ObjectChange::Drop { target, cascade }).unwrap()
+    }
+
+    #[test]
+    fn a_language_that_is_not_sql_is_offered_no_object_action() {
+        let actions = object_actions(&spelaion_dialect::MongodbDialect);
+        assert!(actions.create.is_empty() && actions.new_index.is_empty());
+        assert!(!actions.drop_schemas && !actions.rename_views && !actions.active_schema);
+        assert!(!actions.add_triggers && !actions.add_constraints && !actions.routine_calls);
     }
 
     #[test]

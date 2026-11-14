@@ -122,7 +122,11 @@ impl ExplainPolicy {
             flavor: match open.resolved.engine {
                 Engine::Mysql => Some(Flavor::Mysql),
                 Engine::Mariadb => Some(Flavor::Mariadb),
-                Engine::Postgres | Engine::Sqlite | Engine::Duckdb | Engine::Sqlserver => None,
+                Engine::Postgres
+                | Engine::Sqlite
+                | Engine::Duckdb
+                | Engine::Sqlserver
+                | Engine::Mongodb => None,
             },
         }
     }

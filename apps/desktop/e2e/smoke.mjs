@@ -495,7 +495,7 @@ try {
   await settingsDialog.getByText(/^Version \d+\.\d+\.\d+$/).waitFor();
   await settingsDialog.getByRole("status").filter({ hasText: "not available in this build" }).waitFor();
   assert.equal(await page.locator(".update-notice").count(), 0, "no update notice");
-  // Plugins (ADR-055): the four engines' plugins came inside the installer (next to the app);
+  // Plugins (ADR-055): the engines' plugins came inside the installer (next to the app);
   // with SPELAION_NO_UPDATES the catalogue is not read, and the page says so.
   await settingsDialog.getByRole("button", { name: "Plugins", exact: true }).click();
   await settingsDialog.getByRole("heading", { name: "Plugins" }).waitFor();
@@ -505,6 +505,7 @@ try {
     ["spelaiondb-plugin-mysql", "MariaDB, MySQL"],
     ["spelaiondb-plugin-postgres", "PostgreSQL"],
     ["spelaiondb-plugin-duckdb", "DuckDB"],
+    ["spelaiondb-plugin-mongodb", "MongoDB"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();

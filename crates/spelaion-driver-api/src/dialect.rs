@@ -48,6 +48,69 @@ pub trait Dialect: Send + Sync {
     fn code_ranges(&self, script: &str) -> Vec<Range<usize>> {
         code_ranges(script, standard_skip)
     }
+
+    /// Whether this is a language that is not SQL (ADR-056), whose statements become requests
+    /// ([`Dialect::to_request`]).
+    fn reads_requests(&self) -> bool {
+        false
+    }
+
+    /// For an engine whose language is not SQL (ADR-056): the canonical request `statement`
+    /// is, run in `database`, which is what the core checks and what the plugin is sent
+    /// ([`crate::Connection::execute_request`]). `None` for an engine queried with SQL.
+    fn to_request(
+        &self,
+        _statement: &str,
+        _database: &str,
+    ) -> Option<Result<serde_json::Value, RequestError>> {
+        None
+    }
+
+    /// The statement the explorer runs to show `object`, for a language that is not SQL
+    /// (ADR-056, point 5): bounded, and visible in an editor tab as what it is. The object is
+    /// as the driver listed it (its kind and comment may say how to read it: a Redis key's
+    /// type). `None` for SQL, whose objects open in a table data tab.
+    fn browse_statement(&self, _object: &crate::ObjectInfo) -> Option<String> {
+        None
+    }
+
+    /// What the guard makes of a request [`Dialect::to_request`] wrote (ADR-056, point 4).
+    /// Read from the request, not the text, so every way of writing it is judged alike.
+    fn request_class(&self, _request: &serde_json::Value) -> RequestClass {
+        RequestClass::Unknown
+    }
+}
+
+/// Why a statement of a language that is not SQL could not be read (ADR-056): nothing is sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestError {
+    /// Byte offset in the statement where reading stopped.
+    pub position: usize,
+    pub message: String,
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// What a request is to the guard (ADR-056, point 4). Lists compiled into the core decide it;
+/// whatever they do not know is [`RequestClass::Unknown`], never a read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestClass {
+    /// Reads and changes nothing.
+    Read,
+    /// Changes data, with a filter.
+    Write,
+    /// Deletes every document (or row) of a collection: an empty filter.
+    DeleteAll,
+    /// Changes every document of a collection: an empty filter.
+    UpdateAll,
+    /// Drops, or replaces whole, a collection, an index or a database.
+    Drop,
+    /// The core cannot tell (a command it does not list, code that runs on the server).
+    Unknown,
 }
 
 /// The ranges of `script` between what `skip` skips: `skip(script, i)` is the byte after a

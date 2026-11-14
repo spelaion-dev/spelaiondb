@@ -3315,7 +3315,9 @@ export type McpSettingsItem = {
 	outputFormat: ToolOutputItem,
 };
 
-export type McpVisibilityItem = "visible" | "notExposed" | "untrusted";
+export type McpVisibilityItem = "visible" | "notExposed" | "untrusted" | 
+/**  The engine has no agents' barrier yet (ADR-056). */
+"noAgents";
 
 /**  A connection moved to another folder. */
 export type MovedItem = {

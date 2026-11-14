@@ -4568,6 +4568,8 @@ pub enum McpVisibilityItem {
     Visible,
     NotExposed,
     Untrusted,
+    /// The engine has no agents' barrier yet (ADR-056).
+    NoAgents,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Type)]
@@ -4611,6 +4613,7 @@ impl McpAccessItem {
         let (visibility, access, reason) = match view {
             AgentView::NotExposed => (McpVisibilityItem::NotExposed, None, None),
             AgentView::UntrustedRepository => (McpVisibilityItem::Untrusted, None, None),
+            AgentView::EngineWithoutBarrier => (McpVisibilityItem::NoAgents, None, None),
             AgentView::Visible(AgentAccess::ReadWrite) => (
                 McpVisibilityItem::Visible,
                 Some(McpAccessKindItem::ReadWrite),

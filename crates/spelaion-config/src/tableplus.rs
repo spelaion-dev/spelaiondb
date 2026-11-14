@@ -398,7 +398,7 @@ fn tls_mode(engine: Engine, mode: i64, unmapped: &mut Vec<String>) -> Option<Tls
             }
         },
         // TablePlus has no TLS settings for these.
-        Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb => None,
+        Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb | Engine::Mongodb => None,
     }
 }
 
