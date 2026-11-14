@@ -135,6 +135,7 @@
     "schema": "Schema"
   },
   "folders": {
+    "collections": "Collections",
     "tables": "Tables",
     "foreignTables": "Foreign tables",
     "views": "Views",
@@ -310,6 +311,7 @@
     "save": "Save and connect"
   },
   "copyName": "Copy name",
+  "openCollection": "Open (first 200 documents)",
   "copyNames": "Copy {{count}} names",
   "copyQualifiedName": "Copy qualified name",
   "copyQualifiedNames": "Copy {{count}} qualified names",

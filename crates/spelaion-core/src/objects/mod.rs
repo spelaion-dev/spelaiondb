@@ -204,7 +204,14 @@ pub async fn set_active_schema(session: &Session, schema: &str) -> Result<(), Ob
 
 /// The schema where this session finds unqualified names (for "Link with editor").
 pub async fn active_schema(session: &Session) -> Result<Option<String>, String> {
-    let sql = match session.dialect().name() {
+    // An engine whose language is not SQL (ADR-056) cannot be asked in SQL: its schema is its
+    // current database, as on MySQL.
+    let engine = if session.dialect().reads_requests() {
+        "mysql"
+    } else {
+        session.dialect().name()
+    };
+    let sql = match engine {
         "mysql" => {
             return session
                 .connection()

@@ -587,6 +587,11 @@ function ConnectionForm(props: {
     sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
     localPort: network && useTunnel && !useKubernetes ? (draft.localPort ?? null) : null,
     kubernetes: network && useKubernetes ? kubernetes : null,
+    // ADR-056: nothing of what such an engine has not got yet is saved (the form hides it, but
+    // a connection whose engine was changed may still carry it).
+    ...(engine.sql
+      ? {}
+      : { readOnly: false, mcpExposed: false, mcpWrites: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }),
   };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.running;
@@ -732,11 +737,12 @@ function ConnectionForm(props: {
   }
 
   const onServer = remoteFile && useTunnel;
-  const tabs: FormTab[] = network
-    ? ["main", "ssl", "ssh", "kubernetes", "session", "options"]
+  // An engine whose language is not SQL runs no session setup (ADR-056).
+  const tabs: FormTab[] = (network
+    ? ["main", "ssl", "ssh", "kubernetes", "session", "options"] as FormTab[]
     : remoteFile
-      ? ["main", "ssh", "session", "options"]
-      : ["main", "session", "options"];
+      ? ["main", "ssh", "session", "options"] as FormTab[]
+      : ["main", "session", "options"] as FormTab[]).filter((t) => engine.sql || t !== "session");
   // Where the session setup may only read and change settings (ADR-037), as the core decides
   // when the session opens: a read-only connection or a type that confirms data changes.
   const setupRestricted = draft.readOnly || Boolean(selectedType?.safeguards.confirmDataChanges);
@@ -1252,7 +1258,7 @@ function ConnectionForm(props: {
             </Field>
             <p className="muted small">{t("fields.statementTimeoutHint")}</p>
           </fieldset>
-          <fieldset>
+          {engine.sql ? <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">
               <input type="checkbox" checked={draft.readOnly} onChange={(e) => update({ readOnly: e.target.checked })} />
@@ -1277,7 +1283,13 @@ function ConnectionForm(props: {
               <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
             )}
             <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
-          </fieldset>
+          </fieldset> : (
+            <fieldset>
+              <legend>{t("sections.safety")}</legend>
+              {/* ADR-056: neither has a barrier on this engine yet, so neither is offered. */}
+              <p className="muted small">{t("fields.noSqlSafety")}</p>
+            </fieldset>
+          )}
           <fieldset>
             <legend>{t("sections.masking")}</legend>
             {/* ADR-051: one pattern per line; the core trims them and checks them. */}

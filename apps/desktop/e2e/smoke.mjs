@@ -5806,6 +5806,71 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await sqlServerMonitor.getByRole("button", { name: "Cancel query" }).getAttribute("title"), "SQL Server can only end another session, not cancel its query separately.");
   assert.ok(await sqlServerMonitor.getByRole("button", { name: "End connection" }).isEnabled());
   await activities.getByRole("button", { name: "Connections", exact: true }).click();
+
+  step("MongoDB: a new connection, shell statements sent as commands, a collection opened from the explorer");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "MongoDB" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("MongoDB (Docker)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("27017");
+  await wizard.getByLabel("User", { exact: true }).fill("spelaion");
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+  await wizard.getByLabel("Database", { exact: true }).fill("spelaion_smoke");
+  // No session setup, read-only mode or agents (ADR-056): the form says why instead.
+  assert.equal(await wizard.getByRole("tab", { name: "Session" }).count(), 0);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByText(/^Read-only mode and agents are not available for this engine yet/).waitFor();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 8\./ }).waitFor();
+  await shot("12a5-mongodb-form");
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  {
+    const file = readFileSync(join(userDir, "connections", "mongodb-docker.toml"), "utf8");
+    assert.match(file, /engine = "mongodb"/);
+    assert.doesNotMatch(file, /read_only|\[session\]/);
+  }
+  // The core reads each line and sends its command document; the text is never run.
+  panel = await newQuery("MongoDB (Docker)", 'db.smoke.replaceOne({_id: 1}, {name: "ñandú", n: NumberLong(1)}, {upsert: true})\ndb.smoke.find({_id: 1})');
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for MongoDB (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await panel.locator(".grid-scroller").waitFor();
+  // What the core cannot read is refused where it is, and nothing is sent.
+  await replaceQuery(panel, "db.smoke.find({$where: function () { return true }})");
+  await run(panel);
+  await panel.getByText(/the shell's JavaScript is not run/).first().waitFor();
+  // The guard asks from the command, not the text.
+  await replaceQuery(panel, "db.smoke.drop()");
+  await run(panel);
+  risk = page.getByRole("dialog", { name: "Run these statements?" });
+  assert.equal(await risk.locator(".risk-list pre").innerText(), "db.smoke.drop()");
+  await page.keyboard.press("Enter");
+  await risk.waitFor({ state: "detached" });
+  // No SQL completion is loaded for a language that is not SQL, so nothing fails there.
+  assert.equal(await panel.getByText(/^Could not load completion metadata/).count(), 0);
+  // The explorer lists the database's collections; opening one runs a bounded find.
+  await page.locator('.connection-row:has-text("MongoDB (Docker)") .twisty').click();
+  // The password was not saved: the explorer's own session asks for it too.
+  await page.getByRole("dialog").getByText("Password for MongoDB (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  const mongoSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion_smoke", exact: true });
+  if ((await mongoSchema.getAttribute("aria-expanded")) !== "true") await mongoSchema.click();
+  const collections = mongoSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Collections", exact: true });
+  if ((await collections.getAttribute("aria-expanded")) !== "true") await collections.click();
+  const tabsBeforeCollection = await page.getByRole("tab").count();
+  await mongoSchema.locator("xpath=..").locator(".leaf-row", { hasText: /^smoke/ }).dblclick();
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length > count, tabsBeforeCollection);
+  const collectionPanel = page.locator(".tab-panel:not([hidden])");
+  await collectionPanel.locator(".cm-content", { hasText: 'db.getSiblingDB("spelaion_smoke").getCollection("smoke").find({}).limit(200)' }).waitFor();
+  await collectionPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await shot("12a5-mongodb");
   // The query ends in a word, which may open the completion list as it is typed: the next
   // dialog must not find it on top (the editor closes it when it loses focus).
 

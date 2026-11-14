@@ -18,7 +18,15 @@ export async function openFound(connectionId: string, found: FoundObjectItem) {
   const app = useApp.getState();
   const { schema, name } = found.object;
   const database = explorerDatabase(connectionId, schema);
-  if (found.kind === "relation") {
+  if (found.kind === "relation" && found.object.kind === "collection") {
+    // An engine whose language is not SQL (ADR-056): the core's statement for it, run in a tab.
+    const statement = await call(commands.browseStatement(session, schema, name, found.object.kind, found.object.comment ?? null));
+    if (statement !== null) {
+      const tab = app.addTab(connectionId, statement);
+      app.updateTab(tab, { runOnOpen: true });
+      connectTabFromExplorer(tab, session, database);
+    }
+  } else if (found.kind === "relation") {
     connectTabFromExplorer(app.addTableTab(connectionId, schema, name), session, database);
   } else {
     const sql = await call(commands.objectDefinition(session, found.object));

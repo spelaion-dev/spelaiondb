@@ -658,6 +658,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             mcp_exposed: c.file.mcp.exposed,
             history_enabled,
             read_only: c.file.read_only,
+            sql: c.file.engine.is_sql(),
         });
     }
     Ok(items)
@@ -4310,6 +4311,37 @@ async fn qualified_names(
         .collect())
 }
 
+/// The statement that shows an object of an engine whose language is not SQL, written by the
+/// core (ADR-056): the explorer opens it in an editor tab and runs it. `None` for SQL, whose
+/// objects open in a table data tab.
+#[tauri::command]
+#[specta::specta]
+async fn browse_statement(
+    session: String,
+    schema: String,
+    name: String,
+    kind: String,
+    comment: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    // Only the kinds of engines whose language is not SQL are browsed this way.
+    let kind = match kind.as_str() {
+        "collection" => spelaion_driver_api::ObjectKind::Collection,
+        "node_label" => spelaion_driver_api::ObjectKind::NodeLabel,
+        "relationship_type" => spelaion_driver_api::ObjectKind::RelationshipType,
+        _ => return Ok(None),
+    };
+    let object = spelaion_driver_api::ObjectInfo {
+        schema,
+        name,
+        kind,
+        estimated_rows: None,
+        comment,
+    };
+    let open = state.session(&session).await?;
+    Ok(open.session.dialect().browse_statement(&object))
+}
+
 /// What the explorer may offer on this session's engine: the core decides (ADR-026).
 #[tauri::command]
 #[specta::specta]
@@ -5233,6 +5265,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             count_table_rows,
             quote_identifier,
             qualified_names,
+            browse_statement,
             object_actions,
             preview_object_change,
             apply_object_change,
