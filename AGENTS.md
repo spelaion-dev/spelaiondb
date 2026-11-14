@@ -114,6 +114,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   engines from `Engines::builtin_with(store)`; neither downloads. Any change to the three needs
   tests that try to get around it (`crates/spelaion-test-plugin/tests/catalogue.rs`, which signs
   its own catalogues with a key of the test).
+  The catalogue is written, never edited: `Catalogue::next` gives the text that follows the
+  published one from the pins, and **only adds** (a published version never changes, a
+  withdrawn build stays withdrawn and is never pinned again, the serial is the next one).
+  `plugins.toml` withdraws a build with a `[[withdrawn]]` entry and its reason; it cannot be the
+  pinned build. `spelaion-write-catalogue` (in `crates/spelaion-plugin-fetch`, never shipped) is
+  that function as a program for the publishing workflow: it must be told which catalogue is
+  published (its one signed file, checked with the key compiled in) or `--first`, writes
+  nothing when nothing is new, and signs nothing.
   `crates/spelaion-plugin-fetch` (`spelaion-fetch-plugins`, never shipped) is how the pinned
   builds get here, for CI, the release and a developer: it downloads each pinned release from
   its plugin's repository and lets a program into the folder it is given only if the archive

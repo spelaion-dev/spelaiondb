@@ -139,6 +139,13 @@ writes, signs and publishes the catalogue are not. What was settled while writin
 - **What is started** is the newest build on the machine that passes every check; of one
   version in both places, the one inside the installer. `min_app` is asked only of catalogue
   entries: a pinned build was tested with the very app that carries the pin.
+- **The catalogue is written, never edited, and only grows.** A build is withdrawn with a
+  `[[withdrawn]]` entry in `plugins.toml` (it cannot be the pinned build). The next catalogue
+  is the published one plus what the pins add (`Catalogue::next`, run by
+  `spelaion-write-catalogue`): a published version never changes, a withdrawn build stays
+  withdrawn in every catalogue after it and cannot be pinned again, and the serial is spent
+  only when something is new. The tool must be told which catalogue is published, and reads it
+  only with our signature: a failed download cannot start the serial again.
 - **A build that may not be started is said, not skipped**: when a plugin has builds on the
   machine and none passes, its engines answer with the reason (and the version that can be
   installed), and do not fall back to anything else.

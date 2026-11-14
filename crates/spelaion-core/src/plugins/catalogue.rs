@@ -24,13 +24,11 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
-use super::pins::{PinnedPlugin, is_program_name, version_of};
+pub use super::pins::Withdrawn;
+use super::pins::{PinnedPlugin, Pins, version_of};
 
 /// A catalogue larger than this is not read: ours lists a handful of plugins.
 pub const MAX_CATALOGUE_BYTES: usize = 1 << 20;
-
-/// The longest reason a withdrawn build may carry: it is shown to the user.
-const MAX_REASON_CHARS: usize = 300;
 
 /// The public half of the catalogue's key, as minisign prints it (the second line of its
 /// `.pub` file). **Not the update key** (ADR-021): an app release can replace this key; this
@@ -97,15 +95,25 @@ pub enum CatalogueError {
     Io(String),
 }
 
-/// A build that was withdrawn: never started again once a catalogue that says so is accepted.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Withdrawn {
-    /// The plugin's name: `spelaiondb-plugin-duckdb`.
-    pub name: String,
-    pub version: String,
-    /// Why, as the user reads it.
-    pub reason: String,
+/// Why the catalogue that follows the published one cannot be written.
+#[derive(Debug, thiserror::Error)]
+pub enum NextError {
+    #[error(
+        "{plugin} {version} is already in the published catalogue with other contents: a \
+         published version never changes, release another one"
+    )]
+    Changed { plugin: String, version: String },
+    #[error(
+        "{plugin} {version} is pinned and was withdrawn: a release must not carry a build we \
+         withdrew"
+    )]
+    Withdrawn { plugin: String, version: String },
+    #[error("the next catalogue would lose something the published one has")]
+    Drops,
+    #[error("the next catalogue would not be one: {0}")]
+    Wrong(CatalogueError),
+    #[error("the published catalogue has the highest serial there is")]
+    Serial,
 }
 
 #[derive(Deserialize)]
@@ -183,28 +191,14 @@ impl Catalogue {
         }
         let mut withdrawn = HashSet::new();
         for entry in &file.withdrawn {
-            let wrong = |problem: &str| CatalogueError::Entry {
+            let wrong = |problem: String| CatalogueError::Entry {
                 plugin: entry.name.clone(),
                 version: entry.version.clone(),
                 problem: format!("withdrawn: {problem}"),
             };
-            if !is_program_name(&entry.name) {
-                return Err(wrong("that is not a plugin's name"));
-            }
-            let Some(version) = version_of(&entry.version) else {
-                return Err(wrong("a version is three numbers, as in 0.1.0"));
-            };
-            let reason = entry.reason.trim();
-            if reason.is_empty()
-                || entry.reason.chars().count() > MAX_REASON_CHARS
-                || entry.reason.chars().any(char::is_control)
-            {
-                return Err(wrong(
-                    "it needs a reason: one line of at most 300 characters",
-                ));
-            }
-            if !withdrawn.insert((entry.name.as_str(), version)) {
-                return Err(wrong("it is withdrawn twice"));
+            entry.check().map_err(wrong)?;
+            if !withdrawn.insert((entry.name.as_str(), entry.version())) {
+                return Err(wrong("it is withdrawn twice".into()));
             }
         }
         Ok(Self {
@@ -243,6 +237,197 @@ impl Catalogue {
             .find(|entry| entry.name == name && version_of(&entry.version) == Some(version))
             .map(|entry| entry.reason.as_str())
     }
+
+    /// The catalogue `signed` is: one file, its signature's four lines and then its text
+    /// ([`signed_catalogue`]), as it is published and kept.
+    pub fn verify_signed(key: &CatalogueKey, signed: &[u8]) -> Result<Self, CatalogueError> {
+        let (signature, text) = split_signed(signed)?;
+        Self::verify(key, text, signature)
+    }
+
+    /// The text of the catalogue that follows `published` (none yet, the first time), given
+    /// the pins as they are now: what the publishing workflow signs. `None` when it would say
+    /// nothing new.
+    ///
+    /// **It only adds.** Every version and every withdrawn build of the published catalogue
+    /// stays, as it was; each pinned version it does not list yet is added, and each build the
+    /// pins withdraw. A pinned version that is already published must be the published one,
+    /// byte for byte: a version's build never changes. The serial is the next one. (A
+    /// withdrawn build's reason may be reworded: the pins' wording replaces the published
+    /// one.)
+    pub fn next(published: Option<&Catalogue>, pins: &Pins) -> Result<Option<String>, NextError> {
+        let mut versions: Vec<&PinnedPlugin> = published
+            .map(|published| published.plugins.iter().collect())
+            .unwrap_or_default();
+        let mut withdrawn: Vec<&Withdrawn> = published
+            .map(|published| published.withdrawn.iter().collect())
+            .unwrap_or_default();
+        let mut news = false;
+        for pin in pins.plugins() {
+            match versions
+                .iter()
+                .find(|listed| listed.name == pin.name && listed.version() == pin.version())
+            {
+                Some(listed) if *listed == pin => {}
+                Some(_) => {
+                    return Err(NextError::Changed {
+                        plugin: pin.name.clone(),
+                        version: pin.version.clone(),
+                    });
+                }
+                None => {
+                    versions.push(pin);
+                    news = true;
+                }
+            }
+        }
+        for entry in pins.withdrawn() {
+            match withdrawn
+                .iter_mut()
+                .find(|listed| listed.name == entry.name && listed.version() == entry.version())
+            {
+                Some(listed) if listed.reason == entry.reason => {}
+                Some(listed) => {
+                    *listed = entry;
+                    news = true;
+                }
+                None => {
+                    withdrawn.push(entry);
+                    news = true;
+                }
+            }
+        }
+        // The pins must not bring back a build that was withdrawn, here or in a catalogue
+        // already published.
+        if let Some(pin) = pins.plugins().iter().find(|pin| {
+            withdrawn
+                .iter()
+                .any(|entry| entry.name == pin.name && entry.version() == pin.version())
+        }) {
+            return Err(NextError::Withdrawn {
+                plugin: pin.name.clone(),
+                version: pin.version.clone(),
+            });
+        }
+        if published.is_some() && !news {
+            return Ok(None);
+        }
+        let serial = match published {
+            Some(published) => published.serial.checked_add(1).ok_or(NextError::Serial)?,
+            None => 1,
+        };
+        let text = written(serial, &versions, &withdrawn);
+        // What was written is read as the app will read it: an engine claimed by two plugins,
+        // or anything else a catalogue may not hold, stops here and not in users' apps.
+        let next = Self::read(text.as_bytes()).map_err(NextError::Wrong)?;
+        // By construction; checked all the same, because a catalogue that loses a withdrawn
+        // build lets it start again.
+        if published.is_some_and(|published| !next.keeps(published)) {
+            return Err(NextError::Drops);
+        }
+        Ok(Some(text))
+    }
+
+    /// Whether this catalogue has everything `older` had: each version as it was, and each
+    /// withdrawn build.
+    pub fn keeps(&self, older: &Catalogue) -> bool {
+        older
+            .plugins
+            .iter()
+            .all(|was| self.version(&was.name, was.version()) == Some(was))
+            && older
+                .withdrawn
+                .iter()
+                .all(|was| self.why_withdrawn(&was.name, was.version()).is_some())
+    }
+}
+
+/// A catalogue and its signature as one file: the signature's four lines (a minisign
+/// signature file's), then the catalogue's text byte for byte. How it is kept in the store, so
+/// the two are replaced together, and how it is published, so the two are fetched together.
+pub fn signed_catalogue(signature: &str, text: &[u8]) -> Vec<u8> {
+    let mut signed = Vec::with_capacity(signature.len() + text.len() + 4);
+    for line in signature.lines().take(4) {
+        signed.extend_from_slice(line.trim_end().as_bytes());
+        signed.push(b'\n');
+    }
+    signed.extend_from_slice(text);
+    signed
+}
+
+/// The signature and the text of a signed catalogue file.
+pub(crate) fn split_signed(signed: &[u8]) -> Result<(&str, &[u8]), CatalogueError> {
+    // A catalogue and the four lines of its signature.
+    if signed.len() > MAX_CATALOGUE_BYTES + 8192 {
+        return Err(CatalogueError::TooLarge(signed.len()));
+    }
+    let no_signature = || CatalogueError::Signature("it has no signature".into());
+    let end = signed
+        .iter()
+        .enumerate()
+        .filter(|(_, byte)| **byte == b'\n')
+        .nth(3)
+        .map(|(at, _)| at + 1)
+        .ok_or_else(no_signature)?;
+    let signature = std::str::from_utf8(&signed[..end]).map_err(|_| no_signature())?;
+    Ok((signature, &signed[end..]))
+}
+
+/// A catalogue's text, as the tool writes it: the published file is never edited by hand.
+fn written(serial: u64, versions: &[&PinnedPlugin], withdrawn: &[&Withdrawn]) -> String {
+    let mut text = String::from(
+        "# The catalogue of SpelaionDB's plugins (ADR-055): every build that was pinned in\n\
+         # plugins.toml, and the ones withdrawn. Written from plugins.toml and signed when the\n\
+         # pins change; never edited by hand.\n\n",
+    );
+    text.push_str(&format!("schema_version = 1\nserial = {serial}\n"));
+    for plugin in versions {
+        let engines: Vec<String> = plugin.engines.iter().map(|engine| quoted(engine)).collect();
+        text.push_str(&format!(
+            "\n[[plugin]]\nname = {}\nrepository = {}\nversion = {}\nprotocol = {}\nengines = \
+             [{}]\nmin_app = {}\n",
+            quoted(&plugin.name),
+            quoted(&plugin.repository),
+            quoted(&plugin.version),
+            quoted(&plugin.protocol),
+            engines.join(", "),
+            quoted(&plugin.min_app),
+        ));
+        for (platform, build) in &plugin.platforms {
+            text.push_str(&format!(
+                "\n[plugin.platform.{platform}]\narchive = {}\narchive_sha256 = \
+                 {}\narchive_size = {}\nprogram_sha256 = {}\n",
+                quoted(&build.archive),
+                quoted(&build.archive_sha256),
+                build.archive_size,
+                quoted(&build.program_sha256),
+            ));
+        }
+    }
+    for entry in withdrawn {
+        text.push_str(&format!(
+            "\n[[withdrawn]]\nname = {}\nversion = {}\nreason = {}\n",
+            quoted(&entry.name),
+            quoted(&entry.version),
+            quoted(&entry.reason),
+        ));
+    }
+    text
+}
+
+/// A TOML string. What goes in was checked to hold no control character; a quote or a
+/// backslash in a reason is escaped.
+fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        if c == '"' || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]
@@ -433,5 +618,186 @@ program_sha256 = "{HASH_B}"
         }
         assert!(CatalogueKey::from_base64("not a key").is_err());
         assert!(CatalogueKey::from_base64("").is_err());
+    }
+
+    #[test]
+    fn a_signed_catalogue_is_its_signature_then_its_text() {
+        let signature = "untrusted comment: a\r\nAAAA\r\ntrusted comment: b\r\nBBBB\r\n";
+        let text = b"schema_version = 1\nserial = 3\n\n# a comment\n";
+        let signed = signed_catalogue(signature, text);
+        let (again, same) = split_signed(&signed).expect("four lines and a text");
+        assert_eq!(
+            again,
+            "untrusted comment: a\nAAAA\ntrusted comment: b\nBBBB\n"
+        );
+        assert_eq!(same, text);
+        // Fewer than four lines is not a signed catalogue, and neither is something huge.
+        assert!(split_signed(b"one\ntwo\nthree").is_err());
+        assert!(split_signed(b"").is_err());
+        assert!(matches!(
+            split_signed(&vec![b'\n'; MAX_CATALOGUE_BYTES + 8193]),
+            Err(CatalogueError::TooLarge(_))
+        ));
+    }
+
+    /// The pins of a `plugins.toml` that holds `text`.
+    fn pins(text: &str) -> Pins {
+        Pins::parse(&format!("schema_version = 1\n{text}")).expect("the test's pins")
+    }
+
+    fn withdrawn(number: &str, reason: &str) -> String {
+        format!(
+            "\n[[withdrawn]]\nname = \"spelaiondb-plugin-duckdb\"\nversion = \
+             \"{number}\"\nreason = \"{reason}\"\n"
+        )
+    }
+
+    fn next(published: Option<&Catalogue>, pins: &Pins) -> Catalogue {
+        let text = Catalogue::next(published, pins)
+            .expect("a next catalogue")
+            .expect("something new");
+        Catalogue::read(text.as_bytes()).expect("what was written is a catalogue")
+    }
+
+    #[test]
+    fn the_first_catalogue_lists_the_pins() {
+        let now = pins(&format!(
+            "{}{}",
+            version("0.1.0"),
+            withdrawn("0.0.9", "It lost rows.")
+        ));
+        let first = next(None, &now);
+        assert_eq!(first.serial(), 1);
+        assert_eq!(first.versions(), now.plugins());
+        assert_eq!(first.withdrawn(), now.withdrawn());
+        // With nothing pinned yet there is still a first catalogue: it offers nothing.
+        let empty = next(None, &Pins::none());
+        assert_eq!(empty.serial(), 1);
+        assert!(empty.versions().is_empty());
+    }
+
+    /// What was published stays published: a version, as it was; a withdrawn build, for good.
+    #[test]
+    fn the_next_catalogue_only_adds() {
+        // Serial 7: 0.1.0 and 0.1.1 listed, 0.1.0 withdrawn.
+        let published = Catalogue::read(catalogue().as_bytes()).unwrap();
+        // The pin moved to 0.2.0, and 0.1.1 is withdrawn too.
+        let now = pins(&format!(
+            "{}{}",
+            version("0.2.0"),
+            withdrawn("0.1.1", "It could not cancel.")
+        ));
+        let eight = next(Some(&published), &now);
+        assert_eq!(eight.serial(), 8);
+        assert!(eight.keeps(&published));
+        let listed: Vec<&str> = eight
+            .versions()
+            .iter()
+            .map(|v| v.version.as_str())
+            .collect();
+        assert_eq!(listed, ["0.1.0", "0.1.1", "0.2.0"]);
+        assert_eq!(
+            eight.why_withdrawn("spelaiondb-plugin-duckdb", (0, 1, 0)),
+            Some("It lost rows on import.")
+        );
+        assert_eq!(
+            eight.why_withdrawn("spelaiondb-plugin-duckdb", (0, 1, 1)),
+            Some("It could not cancel.")
+        );
+
+        // The same pins again say nothing new: no catalogue, no serial spent.
+        assert!(Catalogue::next(Some(&eight), &now).unwrap().is_none());
+        // Pins that no longer mention the old versions or the withdrawn builds (the file was
+        // tidied, or someone tried): nothing is dropped, and nothing is new.
+        let tidied = pins(&version("0.2.0"));
+        assert!(Catalogue::next(Some(&eight), &tidied).unwrap().is_none());
+        // Nothing pinned at all: the engine left the installer, and its builds stay offered.
+        assert!(
+            Catalogue::next(Some(&eight), &Pins::none())
+                .unwrap()
+                .is_none()
+        );
+
+        // A reason reworded is the one thing that changes.
+        let reworded = pins(&format!(
+            "{}{}",
+            version("0.2.0"),
+            withdrawn("0.1.1", "It could not cancel a running statement.")
+        ));
+        let nine = next(Some(&eight), &reworded);
+        assert_eq!(nine.serial(), 9);
+        assert!(nine.keeps(&eight));
+        assert_eq!(
+            nine.why_withdrawn("spelaiondb-plugin-duckdb", (0, 1, 1)),
+            Some("It could not cancel a running statement.")
+        );
+        assert_eq!(nine.versions(), eight.versions());
+    }
+
+    #[test]
+    fn a_published_version_never_changes_and_a_withdrawn_build_is_never_pinned() {
+        let published = Catalogue::read(catalogue().as_bytes()).unwrap();
+        // 0.1.1 again, with another program in it.
+        let changed = pins(&version("0.1.1").replace(HASH_B, &"c".repeat(64)));
+        assert!(matches!(
+            Catalogue::next(Some(&published), &changed),
+            Err(NextError::Changed { version, .. }) if version == "0.1.1"
+        ));
+        // The same version under another spelling is still that version.
+        let respelled =
+            pins(&version("0.1.1").replace("version = \"0.1.1\"", "version = \"0.01.1\""));
+        assert!(matches!(
+            Catalogue::next(Some(&published), &respelled),
+            Err(NextError::Changed { .. })
+        ));
+        // 0.1.0 was withdrawn by a catalogue already published: it cannot be pinned again,
+        // even though the pins no longer say it is withdrawn.
+        let back = pins(&version("0.1.0"));
+        assert!(matches!(
+            Catalogue::next(Some(&published), &back),
+            Err(NextError::Withdrawn { version, .. }) if version == "0.1.0"
+        ));
+        // An engine that is already another plugin's.
+        let taken =
+            pins(&version("0.3.0").replace("spelaiondb-plugin-duckdb", "spelaiondb-plugin-quack"));
+        assert!(matches!(
+            Catalogue::next(Some(&published), &taken),
+            Err(NextError::Wrong(CatalogueError::Entry { .. }))
+        ));
+        // `keeps` is what "only adds" means: a catalogue without one of them does not keep it.
+        let without_withdrawn = Catalogue::read(
+            catalogue()
+                .split("\n[[withdrawn]]")
+                .next()
+                .unwrap()
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(!without_withdrawn.keeps(&published));
+        assert!(published.keeps(&without_withdrawn));
+        let one_version = Catalogue::read(
+            format!("schema_version = 1\nserial = 9\n{}", version("0.1.1")).as_bytes(),
+        )
+        .unwrap();
+        assert!(!one_version.keeps(&without_withdrawn));
+    }
+
+    /// A reason is the one free text in the file: whatever it holds, it is read back as it
+    /// was given, and cannot add a line to the catalogue.
+    #[test]
+    fn a_reason_is_written_as_it_was_given() {
+        // As plugins.toml would hold it: a path with backslashes and a quoted word.
+        let now = pins(&withdrawn(
+            "0.1.0",
+            r#"It read C:\\data as \"data\" = [[plugin]]."#,
+        ));
+        assert_eq!(
+            now.withdrawn()[0].reason,
+            r#"It read C:\data as "data" = [[plugin]]."#
+        );
+        let first = next(None, &now);
+        assert_eq!(first.withdrawn(), now.withdrawn());
+        assert!(first.versions().is_empty());
+        assert_eq!(quoted(r#"a "b" \c"#), r#""a \"b\" \\c""#);
     }
 }
