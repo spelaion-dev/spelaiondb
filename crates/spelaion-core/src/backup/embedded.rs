@@ -64,7 +64,11 @@ pub fn embedded_dump_path(
     let extension = match resolved.engine {
         Engine::Sqlite => ".sqlite",
         Engine::Duckdb => "",
-        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => {
+        Engine::Postgres
+        | Engine::Mysql
+        | Engine::Mariadb
+        | Engine::Sqlserver
+        | Engine::Mongodb => {
             return Err(BackupError::Invalid(format!(
                 "{} databases are backed up with a client tool",
                 resolved.engine.as_str()
@@ -166,7 +170,11 @@ pub async fn embedded_dump(
                 DuckdbExportFormat::Csv => "csv",
             }
         ),
-        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => {
+        Engine::Postgres
+        | Engine::Mysql
+        | Engine::Mariadb
+        | Engine::Sqlserver
+        | Engine::Mongodb => {
             unreachable!("embedded_dump_path refused it")
         }
     };

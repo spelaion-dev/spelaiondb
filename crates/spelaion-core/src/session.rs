@@ -132,6 +132,49 @@ impl StatementError {
     }
 }
 
+/// The request a statement is, for an engine whose language is not SQL (ADR-056), run in the
+/// session's current database: `None` for an engine queried with SQL. A statement the core
+/// cannot read is an error with its position, and nothing is sent.
+async fn request_of(
+    language: &dyn Dialect,
+    connection: &dyn Connection,
+    statement: &str,
+) -> Option<Result<serde_json::Value, DriverError>> {
+    if !language.reads_requests() {
+        return None;
+    }
+    let database = connection
+        .current_database()
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    Some(
+        language
+            .to_request(statement, &database)?
+            .map_err(|error| request_error(statement, error)),
+    )
+}
+
+/// A statement the core could not read, as the error the editor shows at its place.
+fn request_error(statement: &str, error: spelaion_driver_api::RequestError) -> DriverError {
+    let at = error.position.min(statement.len());
+    // The engine-like position: characters, 1-based, within the statement.
+    let position = statement
+        .get(..at)
+        .map(|before| before.chars().count() as u32 + 1);
+    DriverError::Database {
+        code: None,
+        message: format!(
+            "SpelaionDB could not read this statement: {}",
+            error.message
+        ),
+        detail: None,
+        hint: None,
+        position,
+    }
+}
+
 pub struct Session {
     /// Unique in this process: a result read through this session remembers it (SDB-137).
     id: u64,
@@ -669,6 +712,9 @@ impl Session {
         };
         let spans = dialect.split_statements(&script);
         let engine = dialect.name();
+        // An engine whose language is not SQL is sent the request the core reads from each
+        // statement, never its text (ADR-056).
+        let language = dialect.clone();
         let session_dialect = self.dialect.clone();
         let connection = self.connection.clone();
         let results = self.results.clone();
@@ -814,7 +860,11 @@ impl Session {
                 let execute = async {
                     match plan_mode {
                         Some(mode) => connection.execute_plan(text, mode).await,
-                        None => connection.execute(text, &options).await,
+                        None => match request_of(&*language, &*connection, text).await {
+                            Some(Ok(request)) => connection.execute_request(request, &options).await,
+                            Some(Err(error)) => Err(error),
+                            None => connection.execute(text, &options).await,
+                        },
                     }
                 };
                 tokio::pin!(execute);

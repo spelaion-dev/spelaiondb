@@ -194,6 +194,18 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   its tests run through that plugin, unchanged, with `SPELAION_TEST_MSSQL=127.0.0.1:11433`:
   the pinned build next to the program, or, in a development build, the one
   `SPELAION_DEV_PLUGIN_SQLSERVER` points at.
+- **MongoDB is a plugin whose language is not SQL** (ADR-056): its driver lives in
+  `spelaion-dev/spelaiondb-plugin-mongodb` (MongoDB and FerretDB), pinned in `plugins.toml`.
+  Its language is the core's, in `spelaion-dialect`'s `mongodb.rs`: a closed subset of the
+  shell's method calls, never run as JavaScript. `Dialect::reads_requests` marks such a
+  language: the session turns each statement into its command document (`Dialect::to_request`)
+  and sends it with `Connection::execute_request` (protocol 1.1), never the text; the guard reads
+  the command (`Dialect::request_class`), so `db.c.drop()` and `db.runCommand({drop: "c"})` ask
+  alike. `Engine::is_sql` is false for it: a connection file with `read_only` or `[session]` is
+  refused when it loads, and agents never see it (`AgentView::EngineWithoutBarrier`), until its
+  own barrier exists. Tests: `spelaion-core`'s `tests/mongodb.rs` with
+  `SPELAION_TEST_MONGO=127.0.0.1:27017` (or `SPELAION_DEV_PLUGIN_MONGODB` in a development
+  build).
 - **DuckDB is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives in
   `spelaion-dev/spelaiondb-plugin-duckdb` with its type zoo, and this repository pins the
   release it ships (`plugins.toml`). The core does not compile DuckDB. Here, DuckDB's tests
@@ -647,7 +659,8 @@ outside the team.
   `SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
-  SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 cargo test --workspace`.
+  SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
+  cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),

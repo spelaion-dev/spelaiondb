@@ -475,6 +475,14 @@ pub(crate) fn validate_connection(
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
             .collect(),
+        // MongoDB may need no login, and the database can be chosen in the explorer.
+        Engine::Mongodb => [(
+            "host",
+            file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+        )]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
     };
     if !missing.is_empty() {
         return Err(ConfigError::new(
@@ -508,6 +516,23 @@ pub(crate) fn validate_connection(
             ),
         ));
     }
+    // ADR-056, point 6: an engine whose language is not SQL has no read-only mode yet, and
+    // its sessions run no SQL. Opening it anyway would let writes through or fail later.
+    if !file.engine.is_sql() {
+        let label = engine_label(file.engine);
+        if file.read_only {
+            return Err(ConfigError::new(
+                path,
+                format!("{label} has no read-only mode in SpelaionDB yet: remove `read_only`"),
+            ));
+        }
+        if !file.session.is_default() {
+            return Err(ConfigError::new(
+                path,
+                format!("{label} sessions run no setup statements: remove `[session]`"),
+            ));
+        }
+    }
     if file.tls.cert.is_some() != file.tls.key.is_some() {
         return Err(ConfigError::new(
             path,
@@ -516,7 +541,8 @@ pub(crate) fn validate_connection(
     }
     if file.tls.cert.is_some() {
         match file.engine {
-            Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
+            // MongoDB reads both from one PEM file: the plugin says so if they differ.
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Mongodb => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,
@@ -793,6 +819,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Sqlserver => "SQL Server",
         Engine::Sqlite => "SQLite",
         Engine::Duckdb => "DuckDB",
+        Engine::Mongodb => "MongoDB",
     }
 }
 

@@ -125,6 +125,7 @@
       "readWrite": "Read and write",
       "notExposed": "Nothing: not exposed to agents",
       "untrusted": "Nothing: the project is not trusted",
+      "noAgents": "Nothing: agents are not offered on this engine yet",
       "because": {
         "allAgents": "Read-only mode is on.",
         "connection": "The connection is read-only.",

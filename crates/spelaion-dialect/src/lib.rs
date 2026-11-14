@@ -14,12 +14,14 @@ use std::sync::Arc;
 use spelaion_driver_api::Dialect;
 
 pub mod duckdb;
+pub mod mongodb;
 pub mod mysql;
 pub mod postgres;
 pub mod sqlite;
 pub mod sqlserver;
 
 pub use duckdb::DuckdbDialect;
+pub use mongodb::MongodbDialect;
 pub use mysql::MysqlDialect;
 pub use postgres::PostgresDialect;
 pub use sqlite::SqliteDialect;
@@ -37,6 +39,8 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "sqlite" => Some(Arc::new(SqliteDialect)),
         "sqlserver" => Some(Arc::new(SqlServerDialect)),
         "duckdb" => Some(Arc::new(DuckdbDialect)),
+        // Not SQL: the core reads it and sends requests (ADR-056).
+        "mongodb" => Some(Arc::new(MongodbDialect)),
         _ => None,
     }
 }
@@ -54,10 +58,34 @@ mod tests {
             ("sqlite", "sqlite"),
             ("sqlserver", "sqlserver"),
             ("duckdb", "duckdb"),
+            ("mongodb", "mongodb"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");
         }
+    }
+
+    #[test]
+    fn only_a_language_that_is_not_sql_reads_requests() {
+        // ADR-056: a SQL engine's statements are sent as text; only MongoDB's become requests.
+        for engine in [
+            "postgres",
+            "mysql",
+            "mariadb",
+            "sqlite",
+            "sqlserver",
+            "duckdb",
+        ] {
+            let dialect = for_engine(engine).unwrap();
+            assert!(!dialect.reads_requests(), "{engine}");
+            assert!(dialect.to_request("select 1", "db").is_none(), "{engine}");
+        }
+        let mongodb = for_engine("mongodb").unwrap();
+        assert!(mongodb.reads_requests());
+        assert!(matches!(
+            mongodb.to_request("db.c.find()", "db"),
+            Some(Ok(_))
+        ));
     }
 
     #[test]

@@ -10,6 +10,8 @@ publish.workspace = true
 # with these, whatever program talks to the server (ADR-041).
 [dependencies]
 spelaion-driver-api.workspace = true
+# The canonical requests of the languages that are not SQL (ADR-056).
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [lints]
 workspace = true

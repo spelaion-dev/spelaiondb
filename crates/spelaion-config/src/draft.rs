@@ -381,7 +381,7 @@ impl ConnectionDraft {
             PasswordChoice::CloudToken(token) => {
                 match self.engine {
                     Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
-                    Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb => {
+                    Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb | Engine::Mongodb => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -466,7 +466,11 @@ impl ConnectionDraft {
                 // A path on the server is the server's: as typed.
                 Engine::Sqlite if remote_sqlite => d,
                 Engine::Sqlite | Engine::Duckdb => portable_path(&d, root),
-                Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => d,
+                Engine::Postgres
+                | Engine::Mysql
+                | Engine::Mariadb
+                | Engine::Sqlserver
+                | Engine::Mongodb => d,
             }),
             user: non_empty(&self.user).filter(|_| network),
             password: password

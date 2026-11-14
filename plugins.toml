@@ -172,3 +172,35 @@ archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "ea4c3bce168de9e8ea7352856b2cb71cdc17616fcb7407cc710270b2949744e8"
 archive_size = 21548145
 program_sha256 = "db0dca9c90cf922a1a9e6ea06273217a84b28c065601bd810d8452863bdb8a96"
+
+[[plugin]]
+name = "spelaiondb-plugin-mongodb"
+repository = "spelaion-dev/spelaiondb-plugin-mongodb"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["mongodb"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-mongodb-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "06c2a077edf8bd542d0c9abf61171d7192c6d7c597770d856fc208321650742c"
+archive_size = 3643789
+program_sha256 = "fbfc8d7141585cfd111c1db4bc323feef6a94d2fe67d447e714daa8d88e67858"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-mongodb-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "0d143cf210338bd76f21d9cc03a93786a57a25b26ece111b250f6f3dfab107a7"
+archive_size = 3904489
+program_sha256 = "07e72df9438ec6ab2e09672469dc5a6b20edb0d5cc642dcdeca8c42f823e0e7e"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-mongodb-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "73254768d91ad12e5103ba3fbe73d5f76fe03e5fda9401dc29374cb5555dc0a8"
+archive_size = 4012809
+program_sha256 = "16539cd652b0ae55bf4d797db48e47981cf1094df36a522a0c97ae71b8779af9"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-mongodb-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "9714fa1347fb2f406023a9f3191c21d0c02b2791d54a6962ba0b25a645c300b6"
+archive_size = 4244298
+program_sha256 = "12dbf132dd5f4e049f601ad296e0916a277a01eb16ee2771b90fdc46fb4fb91d"

@@ -125,6 +125,7 @@
       "readWrite": "Leer y escribir",
       "notExposed": "Nada: no está expuesta a los agentes",
       "untrusted": "Nada: el proyecto no es de confianza",
+      "noAgents": "Nada: este motor aún no admite agentes",
       "because": {
         "allAgents": "El modo solo lectura está activado.",
         "connection": "La conexión es de solo lectura.",

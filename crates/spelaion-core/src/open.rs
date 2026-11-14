@@ -91,6 +91,7 @@ impl Engines {
             Engine::Mariadb,
             Engine::Duckdb,
             Engine::Sqlserver,
+            Engine::Mongodb,
         ] {
             let variable = crate::plugins::dev_plugin_variable(engine.as_str());
             let pointed = std::env::var_os(variable);
@@ -196,7 +197,11 @@ impl Engines {
         let not_a_file = || DriverError::Other(format!("{} is not a file", engine.as_str()));
         match engine {
             Engine::Sqlite | Engine::Duckdb => {}
-            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => {
+            Engine::Postgres
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Sqlserver
+            | Engine::Mongodb => {
                 return Err(not_a_file());
             }
         }

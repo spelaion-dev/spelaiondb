@@ -10,6 +10,7 @@
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307 and SQL
 # Server on 11433, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
 services:
@@ -153,6 +154,22 @@ services:
       interval: 3s
       retries: 60
       start_period: 10s
+    networks: [data, direct]
+
+  # MongoDB 8.0, reached through its plugin (SpelaionDB's ADR-056). The user `spelaion`
+  # (password `spelaion`) is in `admin`. 127.0.0.1:27017 (SPELAION_TEST_MONGO).
+  mongodb:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: spelaion
+      MONGO_INITDB_ROOT_PASSWORD: spelaion
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      retries: 60
+      start_period: 5s
     networks: [data, direct]
 
 networks:

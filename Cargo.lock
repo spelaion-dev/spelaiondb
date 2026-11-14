@@ -5608,6 +5608,7 @@ dependencies = [
 name = "spelaion-dialect"
 version = "0.9.0"
 dependencies = [
+ "serde_json",
  "spelaion-driver-api",
 ]
 

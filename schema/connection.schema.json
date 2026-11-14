@@ -168,14 +168,23 @@
   ],
   "$defs": {
     "Engine": {
-      "type": "string",
-      "enum": [
-        "postgres",
-        "sqlite",
-        "mysql",
-        "mariadb",
-        "duckdb",
-        "sqlserver"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "postgres",
+            "sqlite",
+            "mysql",
+            "mariadb",
+            "duckdb",
+            "sqlserver"
+          ]
+        },
+        {
+          "description": "MongoDB, and the servers that speak its protocol (FerretDB). Its language is not SQL:\nthe core reads it and sends requests (ADR-056).",
+          "type": "string",
+          "const": "mongodb"
+        }
       ]
     },
     "SecretSpec": {

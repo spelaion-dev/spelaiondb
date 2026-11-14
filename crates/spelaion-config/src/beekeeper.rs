@@ -801,7 +801,7 @@ fn tls_of(row: &Row, engine: Option<Engine>) -> Option<ImportedTls> {
             (true, true) => Some(TlsModeConfig::VerifyFull),
             (true, false) => Some(TlsModeConfig::Require),
         },
-        Some(Engine::Sqlite | Engine::Duckdb) | None => None,
+        Some(Engine::Sqlite | Engine::Duckdb | Engine::Mongodb) | None => None,
     };
     let (ca, cert, key) = if ssl {
         (ca, cert, key)
