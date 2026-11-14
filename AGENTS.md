@@ -98,6 +98,22 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one check, which the catalogue's plugins and a user's own will use with their own hash
   (ADR-055). Like `trust.rs`, any change there needs tests that try to get around it
   (`crates/spelaion-test-plugin/tests/pins.rs`).
+  The catalogue of ADR-055 is three more files there, with no page, download or publishing
+  workflow yet. `plugins/catalogue.rs`: a file shaped like `plugins.toml` (every version ever
+  pinned, a serial, the withdrawn builds), read only after its minisign signature by the key
+  compiled in (`SHIPPED_KEY`: none yet, so no catalogue is accepted; never the update key), and
+  it carries no address: an archive's is written from the checked name and repository
+  (`PinnedPlugin::archive_address`). `plugins/installed.rs`: the user's store
+  (`<personal folder>/plugins`), which is not trusted: the kept catalogue is checked again at
+  every read and never replaced by one with a lower serial, and an archive (`.tar.gz` on every
+  platform) is installed only as the entry whose hashes it has, only its program unpacked.
+  `plugins/choice.rs`: for each plugin, the newest build on this machine (next to the app or
+  installed) that the pins or the accepted catalogue name, that speaks the core's protocol, that
+  this app is not too old for and that was not withdrawn; when builds are here and none may be
+  started, its engines say why and do not fall back. The app and `spelaiondb mcp` take their
+  engines from `Engines::builtin_with(store)`; neither downloads. Any change to the three needs
+  tests that try to get around it (`crates/spelaion-test-plugin/tests/catalogue.rs`, which signs
+  its own catalogues with a key of the test).
   `crates/spelaion-plugin-fetch` (`spelaion-fetch-plugins`, never shipped) is how the pinned
   builds get here, for CI, the release and a developer: it downloads each pinned release from
   its plugin's repository and lets a program into the folder it is given only if the archive
