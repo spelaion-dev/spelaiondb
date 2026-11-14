@@ -1089,6 +1089,77 @@ async fn the_newest_build_on_this_machine_is_the_one_started() {
     assert_eq!(state.chosen.as_ref().unwrap().source, Source::Shipped);
 }
 
+/// A plugin this SpelaionDB was made to carry, whose program is not next to the app: its
+/// engines say which file is missing instead of "engine not available". Not installed is not
+/// refused: a driver compiled in still serves, and so does a build installed afterwards.
+#[tokio::test]
+async fn a_pinned_plugin_that_is_not_there_says_which_file_is_missing() {
+    let machine = Machine::new("missing");
+    let (shipped, pins) = machine.ship("0.1.0");
+    std::fs::remove_file(&shipped).unwrap();
+
+    let state = machine.state(&pins);
+    assert_eq!(state.chosen, None);
+    let missing = state.missing.as_ref().expect("the pinned build is missing");
+    assert_eq!(missing.program, shipped);
+    assert_eq!(missing.version, "0.1.0");
+    let error = pid_through(&machine.engines(&pins))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("is not installed")
+            && error.contains("is missing")
+            && error.contains(&program_file_name(NAME)),
+        "{error}"
+    );
+
+    // The same pin for an engine whose driver is compiled in: that driver still serves.
+    let entry = listed("0.1.0", here(), &machine.archive("0.1.0"));
+    let for_sqlite = Pins::parse(&format!(
+        "schema_version = 1\n{}",
+        entry.replace("[\"test\", \"test2\"]", "[\"sqlite\"]")
+    ))
+    .unwrap();
+    let engines = machine.engines(&for_sqlite);
+    let file = machine.root.join("made.sqlite");
+    engines
+        .driver("sqlite")
+        .expect("SQLite is compiled in")
+        .create_database(file.to_str().unwrap())
+        .await
+        .expect("the driver compiled in serves");
+    assert!(file.exists());
+
+    // Pinned for another platform only: nothing was meant to be here, so nothing is missing.
+    let for_elsewhere = Pins::parse(&format!(
+        "schema_version = 1\n{}",
+        listed("0.1.0", elsewhere(), &machine.archive("0.1.0"))
+    ))
+    .unwrap();
+    assert_eq!(machine.state(&for_elsewhere).missing, None);
+    assert!(machine.engines(&for_elsewhere).driver("test").is_none());
+
+    // Installed from the catalogue, the plugin serves: what is missing next to the app no
+    // longer matters.
+    let archive = machine.archive("0.2.0");
+    let accepted = machine
+        .accept(&catalogue(3, &[listed("0.2.0", here(), &archive)]))
+        .unwrap();
+    // Before the install, the message also says what can be installed.
+    let error = pid_through(&machine.engines(&pins))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Version 0.2.0 can be installed"), "{error}");
+    let installed = machine
+        .store
+        .install(&accepted, &machine.app(), &archive)
+        .unwrap();
+    pid_through(&machine.engines(&pins)).await.unwrap();
+    assert!(running(&installed.program).await);
+}
+
 #[tokio::test]
 async fn a_build_for_another_platform_is_neither_offered_nor_installed() {
     let machine = Machine::new("platform");
