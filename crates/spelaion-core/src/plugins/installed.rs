@@ -37,7 +37,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use sha2::{Digest, Sha256};
 use spelaion_config::atomic_file::{self, NewFileMode};
 
-use super::catalogue::{Catalogue, CatalogueError, CatalogueKey, MAX_CATALOGUE_BYTES};
+use super::catalogue::{
+    Catalogue, CatalogueError, CatalogueKey, MAX_CATALOGUE_BYTES, signed_catalogue, split_signed,
+};
 use super::pins::{
     self, PinnedBuild, PinnedPlugin, is_program_name, program_file_name, sha256_of, version_of,
 };
@@ -263,7 +265,7 @@ impl PluginStore {
             return None;
         }
         let bytes = std::fs::read(&file).ok()?;
-        let (signature, text) = split_signed(&bytes)?;
+        let (signature, text) = split_signed(&bytes).ok()?;
         let catalogue = Catalogue::verify(key, text, signature).ok()?;
         Some((catalogue, text.to_vec()))
     }
@@ -331,11 +333,7 @@ impl PluginStore {
         key: &CatalogueKey,
         signed: &[u8],
     ) -> Result<Catalogue, CatalogueError> {
-        if signed.len() > MAX_CATALOGUE_BYTES + 8192 {
-            return Err(CatalogueError::TooLarge(signed.len()));
-        }
-        let (signature, text) = split_signed(signed)
-            .ok_or_else(|| CatalogueError::Signature("it has no signature".into()))?;
+        let (signature, text) = split_signed(signed)?;
         self.accept_catalogue_with(key, text, signature)
     }
 
@@ -573,31 +571,6 @@ fn folder_names(folder: &Path) -> Vec<String> {
         .collect()
 }
 
-/// A catalogue and its signature as one file: the signature's four lines (a minisign
-/// signature file's), then the catalogue's text byte for byte. How it is kept in the store, so
-/// the two are replaced together, and how it is published, so the two are fetched together.
-pub fn signed_catalogue(signature: &str, text: &[u8]) -> Vec<u8> {
-    let mut kept = Vec::with_capacity(signature.len() + text.len() + 4);
-    for line in signature.lines().take(4) {
-        kept.extend_from_slice(line.trim_end().as_bytes());
-        kept.push(b'\n');
-    }
-    kept.extend_from_slice(text);
-    kept
-}
-
-/// The signature and the text of a kept catalogue.
-fn split_signed(kept: &[u8]) -> Option<(&str, &[u8])> {
-    let end = kept
-        .iter()
-        .enumerate()
-        .filter(|(_, byte)| **byte == b'\n')
-        .nth(3)
-        .map(|(at, _)| at + 1)?;
-    let signature = std::str::from_utf8(&kept[..end]).ok()?;
-    Some((signature, &kept[end..]))
-}
-
 /// A folder for one install, removed when this value goes.
 struct Work {
     path: PathBuf,
@@ -773,22 +746,6 @@ mod tests {
         ] {
             assert!(!is_plain_name(bad), "{bad:?}");
         }
-    }
-
-    #[test]
-    fn a_kept_catalogue_is_its_signature_then_its_text() {
-        let signature = "untrusted comment: a\r\nAAAA\r\ntrusted comment: b\r\nBBBB\r\n";
-        let text = b"schema_version = 1\nserial = 3\n\n# a comment\n";
-        let kept = signed_catalogue(signature, text);
-        let (again, same) = split_signed(&kept).expect("four lines and a text");
-        assert_eq!(
-            again,
-            "untrusted comment: a\nAAAA\ntrusted comment: b\nBBBB\n"
-        );
-        assert_eq!(same, text);
-        // Fewer than four lines is not a kept catalogue.
-        assert!(split_signed(b"one\ntwo\nthree").is_none());
-        assert!(split_signed(b"").is_none());
     }
 
     #[test]

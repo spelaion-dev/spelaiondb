@@ -14,11 +14,11 @@ use blake2::{Blake2b512, Digest};
 use ed25519_dalek::{Signer as _, SigningKey};
 use futures_util::StreamExt;
 use spelaion_core::Engines;
-use spelaion_core::plugins::catalogue::{Catalogue, CatalogueError, CatalogueKey};
-use spelaion_core::plugins::choice::{PluginState, Source, states};
-use spelaion_core::plugins::installed::{
-    AppBuild, InstallError, NotUsable, PluginStore, signed_catalogue,
+use spelaion_core::plugins::catalogue::{
+    Catalogue, CatalogueError, CatalogueKey, signed_catalogue,
 };
+use spelaion_core::plugins::choice::{PluginState, Source, states};
+use spelaion_core::plugins::installed::{AppBuild, InstallError, NotUsable, PluginStore};
 use spelaion_core::plugins::pins::{PLATFORMS, Pins, platform, program_file_name, sha256_of};
 use spelaion_driver_api::{ConnectParams, DriverError, ExecEvent, ExecOptions};
 
