@@ -98,6 +98,40 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one check, which the catalogue's plugins and a user's own will use with their own hash
   (ADR-055). Like `trust.rs`, any change there needs tests that try to get around it
   (`crates/spelaion-test-plugin/tests/pins.rs`).
+  The catalogue of ADR-055 is three more files there, with no page, download or publishing
+  workflow yet. `plugins/catalogue.rs`: a file shaped like `plugins.toml` (every version ever
+  pinned, a serial, the withdrawn builds), read only after its minisign signature by the key
+  compiled in (`SHIPPED_KEY`: none yet, so no catalogue is accepted; never the update key), and
+  it carries no address: an archive's is written from the checked name and repository
+  (`PinnedPlugin::archive_address`). `plugins/installed.rs`: the user's store
+  (`<personal folder>/plugins`), which is not trusted: the kept catalogue is checked again at
+  every read and never replaced by one with a lower serial, and an archive (`.tar.gz` on every
+  platform) is installed only as the entry whose hashes it has, only its program unpacked.
+  `plugins/choice.rs`: for each plugin, the newest build on this machine (next to the app or
+  installed) that the pins or the accepted catalogue name, that speaks the core's protocol, that
+  this app is not too old for and that was not withdrawn; when builds are here and none may be
+  started, its engines say why and do not fall back; when the pinned build's program is not
+  next to the app, an engine served only by its plugin says which file is missing (one whose
+  driver is compiled in is still served by it). The app and `spelaiondb mcp` take their
+  engines from `Engines::builtin_with(store)`; neither downloads. Any change to the three needs
+  tests that try to get around it (`crates/spelaion-test-plugin/tests/catalogue.rs`, which signs
+  its own catalogues with a key of the test).
+  The catalogue is written, never edited: `Catalogue::next` gives the text that follows the
+  published one from the pins, and **only adds** (a published version never changes, a
+  withdrawn build stays withdrawn and is never pinned again, the serial is the next one).
+  `plugins.toml` withdraws a build with a `[[withdrawn]]` entry and its reason; it cannot be the
+  pinned build. `spelaion-write-catalogue` (in `crates/spelaion-plugin-fetch`, never shipped) is
+  that function as a program for the publishing workflow: it must be told which catalogue is
+  published (its one signed file, checked with the key compiled in) or `--first`, writes
+  nothing when nothing is new, and signs nothing.
+  `plugins/fetch.rs` brings the catalogue and an archive, and the core still has no HTTP
+  client: the adapter gives a `Transport` that only moves bytes. No function there takes an
+  address: the catalogue's is a constant and an archive's is the one the core writes for its
+  entry. HTTPS where it starts and where it ends, a catalogue bounded and an archive of exactly
+  its entry's size, a stalled download given up on, the file removed whatever happens, and what
+  arrives goes through the same checks as a file the user picked. The catalogue is read only
+  when `updates_allowed` (the user's setting; `SPELAION_NO_UPDATES` can only switch it off); an
+  archive only on the user's click. Tests with a made-up network in the same `catalogue.rs`.
   `crates/spelaion-plugin-fetch` (`spelaion-fetch-plugins`, never shipped) is how the pinned
   builds get here, for CI, the release and a developer: it downloads each pinned release from
   its plugin's repository and lets a program into the folder it is given only if the archive

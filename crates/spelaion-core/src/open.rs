@@ -30,22 +30,56 @@ pub struct Engines {
 }
 
 impl Engines {
-    /// The engines that ship with SpelaionDB: the drivers still compiled in, and the pinned
-    /// plugins next to this program (DuckDB is one, ADR-041).
+    /// The engines that ship with SpelaionDB: the driver compiled in (SQLite) and the pinned
+    /// plugins next to this program (ADR-041, ADR-042). What has no personal folder to read
+    /// uses this.
     pub fn builtin() -> Self {
+        Self::compiled_in()
+            .with_our_plugins(None)
+            .with_dev_plugins()
+    }
+
+    /// [`Engines::builtin`], and the plugins the user installed from the Plugins page
+    /// (ADR-055): for each plugin of ours, the newest build next to this program or in `store`
+    /// that the pins or the catalogue this SpelaionDB accepted name
+    /// ([`crate::plugins::choice::states`]). What the app and `spelaiondb mcp` use; neither
+    /// downloads anything here.
+    pub fn builtin_with(store: &crate::plugins::installed::PluginStore) -> Self {
+        Self::compiled_in()
+            .with_our_plugins(Some(store))
+            .with_dev_plugins()
+    }
+
+    /// The drivers compiled into the core.
+    fn compiled_in() -> Self {
         let drivers: Vec<Arc<dyn Driver>> = vec![Arc::new(SqliteDriver::default())];
-        let mut engines = Self {
+        Self {
             drivers: drivers
                 .into_iter()
                 .map(|d| (d.engine().to_string(), d))
                 .collect(),
-        };
-        // The pinned plugins that ship next to this program (ADR-042).
-        if let Some(folder) = crate::plugins::shipped_folder() {
-            engines = engines.with_pinned_plugins(crate::plugins::pins::Pins::shipped(), &folder);
         }
-        // A development build can be pointed at a plugin built on this machine, engine by
-        // engine; a release build cannot (ADR-042).
+    }
+
+    /// These engines with our plugins that are on this machine: next to this program and, with
+    /// a store, the ones installed there, under the catalogue it keeps.
+    fn with_our_plugins(self, store: Option<&crate::plugins::installed::PluginStore>) -> Self {
+        let shipped = crate::plugins::shipped_folder();
+        let catalogue = store.and_then(|store| store.catalogue());
+        let states = crate::plugins::choice::states(
+            crate::plugins::pins::Pins::shipped(),
+            shipped.as_deref(),
+            store,
+            catalogue.as_ref(),
+            &crate::plugins::installed::AppBuild::this(),
+        );
+        self.with_plugin_states(&states)
+    }
+
+    /// A development build can be pointed at a plugin built on this machine, engine by engine,
+    /// in place of anything else; a release build cannot (ADR-042).
+    fn with_dev_plugins(self) -> Self {
+        let mut engines = self;
         for engine in [
             Engine::Postgres,
             Engine::Sqlite,
@@ -90,28 +124,49 @@ impl Engines {
     /// folder is looked at. A pinned program is started only while its file has the pinned
     /// hash, checked at every start; one that does not is refused there, and its engines do not
     /// fall back to anything else.
-    pub fn with_pinned_plugins(mut self, pins: &crate::plugins::pins::Pins, folder: &Path) -> Self {
-        let Some(platform) = crate::plugins::pins::platform() else {
-            return self;
-        };
-        for (pinned, build) in pins.for_platform(platform) {
-            let program = folder.join(crate::plugins::pins::program_file_name(&pinned.name));
-            if !program.is_file() {
-                // Pinned and not here: its engines say so when they are used, unless a driver
-                // compiled in serves them.
-                for engine in &pinned.engines {
-                    if self.driver(engine).is_none() {
-                        self = self.with_driver(Arc::new(MissingPlugin {
-                            engine: engine.clone(),
-                            program: program.clone(),
-                        }));
+    pub fn with_pinned_plugins(self, pins: &crate::plugins::pins::Pins, folder: &Path) -> Self {
+        let states = crate::plugins::choice::states(
+            pins,
+            Some(folder),
+            None,
+            None,
+            &crate::plugins::installed::AppBuild::this(),
+        );
+        self.with_plugin_states(&states)
+    }
+
+    /// These engines with what [`crate::plugins::choice::states`] decided for each plugin of
+    /// ours: the build it chose, started only while its file has the hash that names it; or,
+    /// when a plugin has builds here and none may be started (withdrawn, another protocol),
+    /// engines that say why. Neither falls back to anything else.
+    pub fn with_plugin_states(mut self, states: &[crate::plugins::choice::PluginState]) -> Self {
+        for state in states {
+            if let Some(chosen) = &state.chosen {
+                let plugin = crate::plugins::pinned_plugin(&chosen.program, &chosen.sha256);
+                for engine in &chosen.engines {
+                    self = self.with_plugin(Arc::new(plugin.driver(engine)));
+                }
+            } else if let Some(why) = state.message() {
+                let says_why = |engine: &String| {
+                    Arc::new(crate::plugins::choice::RefusedPlugin {
+                        engine: engine.clone(),
+                        why: why.clone(),
+                    })
+                };
+                if let Some(refused) = state.refused.first() {
+                    for engine in &refused.engines {
+                        self = self.with_plugin(says_why(engine));
+                    }
+                } else if let Some(missing) = &state.missing {
+                    // Not installed is not refused: an engine whose driver is compiled in is
+                    // still served by it. One served only by its plugin says which file is
+                    // missing, instead of "engine not available".
+                    for engine in &missing.engines {
+                        if self.driver(engine).is_none() {
+                            self = self.with_driver(says_why(engine));
+                        }
                     }
                 }
-                continue;
-            }
-            let plugin = crate::plugins::pinned_plugin(&program, &build.program_sha256);
-            for engine in &pinned.engines {
-                self = self.with_plugin(Arc::new(plugin.driver(engine)));
             }
         }
         self
@@ -149,49 +204,6 @@ impl Engines {
             )));
         };
         driver.create_database(database).await
-    }
-}
-
-/// An engine whose plugin is pinned and is not where it should be: it says so, with the file
-/// that is missing, instead of "engine not available".
-struct MissingPlugin {
-    engine: String,
-    program: std::path::PathBuf,
-}
-
-impl MissingPlugin {
-    fn error(&self) -> DriverError {
-        // What gets it back depends on who is asking.
-        let how = if crate::plugins::RELEASE_BUILD {
-            "Install SpelaionDB again to get it back.".to_string()
-        } else {
-            format!(
-                "This is a development build: fetch the pinned plugins (cargo run -p \
-                 spelaion-plugin-fetch -- --into <folder>, which prints the variables to set) \
-                 or point {} at a build of the plugin.",
-                crate::plugins::dev_plugin_variable(&self.engine)
-            )
-        };
-        DriverError::Connection(format!(
-            "{} is served by a plugin that is not installed: {} is missing. {how}",
-            self.engine,
-            self.program.display()
-        ))
-    }
-}
-
-#[async_trait::async_trait]
-impl Driver for MissingPlugin {
-    fn engine(&self) -> &str {
-        &self.engine
-    }
-
-    async fn connect(&self, _params: &ConnectParams) -> Result<Box<dyn Connection>, DriverError> {
-        Err(self.error())
-    }
-
-    async fn create_database(&self, _database: &str) -> Result<(), DriverError> {
-        Err(self.error())
     }
 }
 

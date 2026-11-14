@@ -5,12 +5,22 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# `cargo run -p spelaion-plugin-fetch -- --into <folder>` is the fetch.
+default-run = "spelaion-fetch-plugins"
 
 # A tool of this repository (ADR-042): CI, the release and a developer run it. Releases build
 # `spelaion-cli` and the desktop app, never this crate.
 [[bin]]
 name = "spelaion-fetch-plugins"
 path = "src/main.rs"
+test = false
+doc = false
+
+# Writes the next plugin catalogue from plugins.toml, for the workflow that signs and
+# publishes it (ADR-055). It signs nothing itself.
+[[bin]]
+name = "spelaion-write-catalogue"
+path = "src/write_catalogue.rs"
 test = false
 doc = false
 
