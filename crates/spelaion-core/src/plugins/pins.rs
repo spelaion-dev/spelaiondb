@@ -59,10 +59,52 @@ pub struct Pins {
     schema_version: u32,
     #[serde(default, rename = "plugin")]
     plugins: Vec<PinnedPlugin>,
+    /// The builds that were withdrawn: what the catalogue is told to refuse (ADR-055).
+    #[serde(default)]
+    withdrawn: Vec<Withdrawn>,
+}
+
+/// A build that was withdrawn, by a pull request that says why: never started again once a
+/// catalogue that says so is accepted.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Withdrawn {
+    /// The plugin's name: `spelaiondb-plugin-duckdb`.
+    pub name: String,
+    pub version: String,
+    /// Why, as the user reads it: one line.
+    pub reason: String,
+}
+
+/// The longest reason a withdrawn build may carry: it is shown to the user.
+const MAX_REASON_CHARS: usize = 300;
+
+impl Withdrawn {
+    /// Its version, as numbers.
+    pub fn version(&self) -> (u32, u32, u32) {
+        version_of(&self.version).unwrap_or((0, 0, 0))
+    }
+
+    /// Whether it is written as one must be. The problem, if it is not.
+    pub(crate) fn check(&self) -> Result<(), String> {
+        if !is_program_name(&self.name) {
+            return Err("that is not a plugin's name".into());
+        }
+        if !is_version(&self.version) {
+            return Err("a version is three numbers, as in 0.1.0".into());
+        }
+        if self.reason.trim().is_empty()
+            || self.reason.chars().count() > MAX_REASON_CHARS
+            || self.reason.chars().any(char::is_control)
+        {
+            return Err("it needs a reason: one line of at most 300 characters".into());
+        }
+        Ok(())
+    }
 }
 
 /// One plugin: a release of its repository.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinnedPlugin {
     /// The program's name, without `.exe`: `spelaiondb-plugin-duckdb`.
@@ -83,7 +125,7 @@ pub struct PinnedPlugin {
 }
 
 /// One platform's build of a pinned plugin.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinnedBuild {
     /// The archive's file name in the release.
@@ -105,6 +147,12 @@ pub enum PinError {
     Version(u32),
     #[error("plugins.toml, plugin {plugin:?}: {problem}")]
     Plugin { plugin: String, problem: String },
+    #[error("plugins.toml, withdrawn {plugin} {version}: {problem}")]
+    Withdrawn {
+        plugin: String,
+        version: String,
+        problem: String,
+    },
 }
 
 impl Pins {
@@ -113,6 +161,7 @@ impl Pins {
         Self {
             schema_version: 1,
             plugins: Vec::new(),
+            withdrawn: Vec::new(),
         }
     }
 
@@ -130,59 +179,36 @@ impl Pins {
                 plugin: plugin.name.clone(),
                 problem,
             };
-            if !is_program_name(&plugin.name) {
-                return Err(wrong(
-                    "its name must be `spelaiondb-plugin-` and lowercase letters, digits or `-`"
-                        .into(),
-                ));
-            }
+            plugin.check().map_err(wrong)?;
             if !names.insert(plugin.name.as_str()) {
                 return Err(wrong("it is pinned twice".into()));
             }
-            if !is_our_repository(&plugin.repository, &plugin.name) {
-                return Err(wrong(format!(
-                    "its repository must be spelaion-dev/{}",
-                    plugin.name
-                )));
-            }
-            if !is_version(&plugin.version) || !is_version(&plugin.min_app) {
-                return Err(wrong(
-                    "`version` and `min_app` are three numbers, as in 0.1.0".into(),
-                ));
-            }
-            if protocol_of(&plugin.protocol).is_none() {
-                return Err(wrong("`protocol` is two numbers, as in 1.0".into()));
-            }
-            if plugin.engines.is_empty() {
-                return Err(wrong("it serves no engine".into()));
-            }
             for engine in &plugin.engines {
-                if !is_engine_name(engine) {
-                    return Err(wrong(format!("{engine:?} is not an engine's name")));
-                }
                 if !engines.insert(engine.clone()) {
                     return Err(wrong(format!("the engine {engine:?} is pinned twice")));
                 }
             }
-            if plugin.platforms.is_empty() {
-                return Err(wrong("it has no build".into()));
+        }
+        let mut withdrawn = HashSet::new();
+        for entry in &pins.withdrawn {
+            let wrong = |problem: String| PinError::Withdrawn {
+                plugin: entry.name.clone(),
+                version: entry.version.clone(),
+                problem,
+            };
+            entry.check().map_err(wrong)?;
+            if !withdrawn.insert((entry.name.as_str(), entry.version())) {
+                return Err(wrong("it is withdrawn twice".into()));
             }
-            for (platform, build) in &plugin.platforms {
-                if !PLATFORMS.contains(&platform.as_str()) {
-                    return Err(wrong(format!(
-                        "{platform:?} is not a platform we build for"
-                    )));
-                }
-                if !is_sha256(&build.archive_sha256) || !is_sha256(&build.program_sha256) {
-                    return Err(wrong(format!(
-                        "{platform}: a SHA-256 is 64 lowercase hexadecimal digits"
-                    )));
-                }
-                if build.archive_size == 0 || !is_file_name(&build.archive) {
-                    return Err(wrong(format!(
-                        "{platform}: the archive needs a file name and a size"
-                    )));
-                }
+            // A release must not carry a build we withdrew: the pin moves, or goes.
+            if pins
+                .plugins
+                .iter()
+                .any(|plugin| plugin.name == entry.name && plugin.version() == entry.version())
+            {
+                return Err(wrong(
+                    "it is the pinned build: pin another version, or none".into(),
+                ));
             }
         }
         Ok(pins)
@@ -203,6 +229,12 @@ impl Pins {
         &self.plugins
     }
 
+    /// The builds withdrawn here: each goes into the next catalogue, and stays in every one
+    /// after it.
+    pub fn withdrawn(&self) -> &[Withdrawn] {
+        &self.withdrawn
+    }
+
     /// The plugins that have a build for `platform`, each with that build.
     pub fn for_platform<'a>(
         &'a self,
@@ -221,6 +253,77 @@ impl PinnedPlugin {
     /// The protocol version it speaks.
     pub fn protocol(&self) -> (u32, u32) {
         protocol_of(&self.protocol).unwrap_or((0, 0))
+    }
+
+    /// Its release, as numbers: what "newer" is decided with.
+    pub fn version(&self) -> (u32, u32, u32) {
+        version_of(&self.version).unwrap_or((0, 0, 0))
+    }
+
+    /// The lowest SpelaionDB it works with, as numbers.
+    pub fn min_app(&self) -> (u32, u32, u32) {
+        version_of(&self.min_app).unwrap_or((0, 0, 0))
+    }
+
+    /// Where its archive for a platform is: a release of its own repository under
+    /// `spelaion-dev` on GitHub, over HTTPS. The address is written here from what was checked
+    /// ([`PinnedPlugin::check`]); no pin and no catalogue carries one, so none can name
+    /// another host or another repository.
+    pub fn archive_address(&self, build: &PinnedBuild) -> String {
+        format!(
+            "https://github.com/{}/releases/download/v{}/{}",
+            self.repository, self.version, build.archive
+        )
+    }
+
+    /// Whether this is a pin as one must be written: what `plugins.toml` asks of each plugin,
+    /// and the signed catalogue of each version it lists (ADR-055). The problem, if it is not.
+    pub(crate) fn check(&self) -> Result<(), String> {
+        if !is_program_name(&self.name) {
+            return Err(
+                "its name must be `spelaiondb-plugin-` and lowercase letters, digits or `-`".into(),
+            );
+        }
+        if !is_our_repository(&self.repository, &self.name) {
+            return Err(format!("its repository must be spelaion-dev/{}", self.name));
+        }
+        if !is_version(&self.version) || !is_version(&self.min_app) {
+            return Err("`version` and `min_app` are three numbers, as in 0.1.0".into());
+        }
+        if protocol_of(&self.protocol).is_none() {
+            return Err("`protocol` is two numbers, as in 1.0".into());
+        }
+        if self.engines.is_empty() {
+            return Err("it serves no engine".into());
+        }
+        let mut engines = HashSet::new();
+        for engine in &self.engines {
+            if !is_engine_name(engine) {
+                return Err(format!("{engine:?} is not an engine's name"));
+            }
+            if !engines.insert(engine.as_str()) {
+                return Err(format!("the engine {engine:?} is pinned twice"));
+            }
+        }
+        if self.platforms.is_empty() {
+            return Err("it has no build".into());
+        }
+        for (platform, build) in &self.platforms {
+            if !PLATFORMS.contains(&platform.as_str()) {
+                return Err(format!("{platform:?} is not a platform we build for"));
+            }
+            if !is_sha256(&build.archive_sha256) || !is_sha256(&build.program_sha256) {
+                return Err(format!(
+                    "{platform}: a SHA-256 is 64 lowercase hexadecimal digits"
+                ));
+            }
+            if build.archive_size == 0 || !is_file_name(&build.archive) {
+                return Err(format!(
+                    "{platform}: the archive needs a file name and a size"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -291,7 +394,7 @@ pub fn check_file(path: &Path, sha256: &str) -> Result<(), PluginRefused> {
     Ok(())
 }
 
-fn is_program_name(name: &str) -> bool {
+pub(crate) fn is_program_name(name: &str) -> bool {
     name.strip_prefix("spelaiondb-plugin-").is_some_and(|rest| {
         !rest.is_empty()
             && rest.len() <= 40
@@ -317,9 +420,21 @@ fn is_engine_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
-fn is_version(text: &str) -> bool {
+pub(crate) fn is_version(text: &str) -> bool {
+    version_of(text).is_some()
+}
+
+/// A version's three numbers: `0.10.2` is `(0, 10, 2)`.
+pub(crate) fn version_of(text: &str) -> Option<(u32, u32, u32)> {
     let parts: Vec<&str> = text.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| is_number(p))
+    if parts.len() != 3 || !parts.iter().all(|p| is_number(p)) {
+        return None;
+    }
+    Some((
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ))
 }
 
 fn protocol_of(text: &str) -> Option<(u32, u32)> {
@@ -515,6 +630,72 @@ program_sha256 = "{HASH_B}"
             ),
             "an engine pinned twice was accepted"
         );
+    }
+
+    #[test]
+    fn a_build_is_withdrawn_with_a_reason_and_is_not_the_pinned_one() {
+        let withdrawn = |version: &str, reason: &str| {
+            format!(
+                r#"
+[[withdrawn]]
+name = "spelaiondb-plugin-duckdb"
+version = "{version}"
+reason = "{reason}"
+"#
+            )
+        };
+        let good = format!(
+            "{}{}",
+            one_plugin(),
+            withdrawn("0.0.9", "It lost rows on import.")
+        );
+        let pins = Pins::parse(&good).expect("a pin and an older build withdrawn");
+        assert_eq!(pins.withdrawn().len(), 1);
+        assert_eq!(pins.withdrawn()[0].version(), (0, 0, 9));
+        assert_eq!(pins.withdrawn()[0].reason, "It lost rows on import.");
+        // Withdrawn builds with nothing pinned: the engine left the installer.
+        let only = format!("schema_version = 1{}", withdrawn("0.1.0", "Broken."));
+        Pins::parse(&only).expect("only withdrawn builds");
+
+        let cases: Vec<(&str, String)> = vec![
+            (
+                "the pinned build withdrawn",
+                format!("{}{}", one_plugin(), withdrawn("0.1.0", "Broken.")),
+            ),
+            (
+                "the pinned build withdrawn under another spelling",
+                format!("{}{}", one_plugin(), withdrawn("0.01.0", "Broken.")),
+            ),
+            ("no reason", good.replace("It lost rows on import.", "  ")),
+            (
+                "a reason with a line break",
+                good.replace("It lost rows on import.", r"It lost\nrows."),
+            ),
+            (
+                "a reason that is a page",
+                good.replace("It lost rows on import.", &"x".repeat(301)),
+            ),
+            ("a version that is not one", good.replace("0.0.9", "all")),
+            (
+                "a name that is not a plugin's",
+                format!(
+                    "{}{}",
+                    one_plugin(),
+                    withdrawn("0.0.9", "Broken.").replace("spelaiondb-plugin-duckdb", "../x")
+                ),
+            ),
+            (
+                "withdrawn twice",
+                format!("{good}{}", withdrawn("0.0.9", "Again.")),
+            ),
+            (
+                "an unknown key",
+                good.replace("reason = ", "url = \"https://x\"\nreason = "),
+            ),
+        ];
+        for (what, text) in cases {
+            assert!(Pins::parse(&text).is_err(), "{what} was accepted");
+        }
     }
 
     #[test]

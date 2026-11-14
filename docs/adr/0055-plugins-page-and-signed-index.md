@@ -1,7 +1,8 @@
 # ADR-055: A Plugins page fed by a signed catalogue of our plugins; other people's stay unsupported
 
-- **Status:** Accepted (not implemented: it changes how ADR-041's stages 3 and 4 are carried
-  out)
+- **Status:** Accepted (it changes how ADR-041's stages 3 and 4 are carried out; the core's
+  part is implemented, 2026-11-14: see "Implementation"; the page, the download and the
+  publishing workflow are not)
 - **Date:** 2026-11-13
 - **Supersedes:** in ADR-041, "No registry or marketplace" for our own plugins, and "from a
   file" as the only way to add someone else's (point 5); in ADR-042, "A plugin fix reaches
@@ -110,6 +111,44 @@ app says everywhere that it is not ours.**
 10. **When.** The page, the catalogue and its key come with ADR-041's stage 3, in place of
     "download on first use". Adding other people's plugins, from a file or an address, stays in
     stage 4.
+
+## Implementation (2026-11-14): the core's part
+What points 4, 6, 7 and 8 ask of the core is written and tested
+(`crates/spelaion-core/src/plugins/`: `catalogue.rs`, `installed.rs`, `choice.rs`; tests in
+`crates/spelaion-test-plugin/tests/catalogue.rs`). The page, the download and the workflow that
+writes, signs and publishes the catalogue are not. What was settled while writing it:
+
+- **The catalogue has the shape of `plugins.toml`**: `schema_version`, `serial`, a `[[plugin]]`
+  for every version ever pinned (the same keys, checked by the same code as a pin), and
+  `[[withdrawn]]` entries (`name`, `version`, `reason`: one line, shown to the user). A
+  withdrawn build need not stay listed. Its signature is a minisign signature file, over the
+  file's hash (never the legacy form).
+- **It carries no address** (point 2 said it would). The core writes an archive's address from
+  the plugin's name, its repository and the archive's file name, all checked: always
+  `https://github.com/spelaion-dev/<plugin>/releases/download/v<version>/<archive>`. A
+  catalogue therefore cannot name another host or repository, even one we signed by mistake.
+- **No key yet.** The public half is a constant of `catalogue.rs`, empty until an owner creates
+  the key: a build without it accepts no catalogue, and the only plugins are the pinned ones.
+- **The user's store is not trusted.** The accepted catalogue is kept with its signature and
+  checked again at every read; a build in the store is started only if the pins or that
+  catalogue name it, with the hash they give. Someone who can write in the personal folder and
+  also choose what the app downloads could put back an older catalogue of ours (the serial is
+  remembered only in that file); they still cannot have a program started that we did not build.
+- **A plugin's archive is a `.tar.gz` on every platform** (the releases made `.zip` for
+  Windows): one way to unpack, tested everywhere. Only the program is unpacked.
+- **What is started** is the newest build on the machine that passes every check; of one
+  version in both places, the one inside the installer. `min_app` is asked only of catalogue
+  entries: a pinned build was tested with the very app that carries the pin.
+- **The catalogue is written, never edited, and only grows.** A build is withdrawn with a
+  `[[withdrawn]]` entry in `plugins.toml` (it cannot be the pinned build). The next catalogue
+  is the published one plus what the pins add (`Catalogue::next`, run by
+  `spelaion-write-catalogue`): a published version never changes, a withdrawn build stays
+  withdrawn in every catalogue after it and cannot be pinned again, and the serial is spent
+  only when something is new. The tool must be told which catalogue is published, and reads it
+  only with our signature: a failed download cannot start the serial again.
+- **A build that may not be started is said, not skipped**: when a plugin has builds on the
+  machine and none passes, its engines answer with the reason (and the version that can be
+  installed), and do not fall back to anything else.
 
 ## Consequences
 - Our engines and their fixes reach users without an app release, and the installer can carry
