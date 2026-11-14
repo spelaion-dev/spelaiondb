@@ -1,0 +1,383 @@
+// Settings → Plugins (ADR-055): every plugin of ours, as the core sees it on this machine:
+// inside the installer, installed, offered by the signed catalogue, with an update, refused (and
+// why) or missing. Install, update and remove are one click each; removing a build that runs
+// asks first. Everything shown and every decision is the core's (`src-tauri/src/plugins.rs`):
+// no command here takes an address, a key or a catalogue, only a plugin's name, a version the
+// overview listed, an id this page chose, or a file the user picked.
+
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { call, commands, events, type EngineItem, type PluginItem } from "../api";
+import { chooseOpenFile } from "../dialogs";
+import { engineCatalog } from "../engines";
+import { byteSize, usePlugins } from "../plugins";
+import { useApp } from "../store";
+
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** The catalogue as this page last read it. */
+type CatalogueState =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "off" }
+  | { kind: "read" }
+  | { kind: "failed"; detail: string };
+
+/** An install running from this page, by plugin name. */
+interface Install {
+  id: number;
+  received: number;
+  total: number;
+}
+
+let nextInstall = 1;
+
+export function PluginsSettings() {
+  const { t } = useTranslation("settings");
+  const overview = usePlugins((s) => s.overview);
+  const setOverview = usePlugins((s) => s.set);
+  const [catalogue, setCatalogue] = useState<CatalogueState>({ kind: "idle" });
+  const [engines, setEngines] = useState<EngineItem[]>([]);
+  const [installs, setInstalls] = useState<Record<string, Install>>({});
+  /** The last error of an action on a plugin, shown under its row. */
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [fileBusy, setFileBusy] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [fileDone, setFileDone] = useState(false);
+  const [removing, setRemoving] = useState<{ plugin: PluginItem; version: string; openSessions: number } | null>(null);
+  const mounted = useRef(true);
+
+  async function checkCatalogue() {
+    setCatalogue({ kind: "checking" });
+    try {
+      const fresh = await call(commands.pluginsOverview());
+      if (!mounted.current) return;
+      setOverview(fresh);
+      if (!fresh.updatesAllowed) {
+        setCatalogue({ kind: "off" });
+        return;
+      }
+      setOverview(await call(commands.pluginsRefreshCatalogue()));
+      if (mounted.current) setCatalogue({ kind: "read" });
+    } catch (e) {
+      if (mounted.current) setCatalogue({ kind: "failed", detail: errorText(e) });
+    }
+  }
+
+  useEffect(() => {
+    mounted.current = true;
+    void engineCatalog().then((all) => mounted.current && setEngines(all)).catch(() => undefined);
+    void checkCatalogue();
+    const progress = events.pluginInstallProgress.listen((event) => {
+      const { install, received, total } = event.payload;
+      setInstalls((current) => {
+        const entry = Object.entries(current).find(([, running]) => running.id === install);
+        if (!entry) return current;
+        return { ...current, [entry[0]]: { id: install, received: received ?? 0, total: total ?? 0 } };
+      });
+    });
+    return () => {
+      mounted.current = false;
+      void progress.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  const engineName = (id: string) => engines.find((engine) => engine.id === id)?.name ?? id;
+
+  function rowError(name: string, message: string | null) {
+    setRowErrors((current) => {
+      const next = { ...current };
+      if (message === null) delete next[name];
+      else next[name] = message;
+      return next;
+    });
+  }
+
+  async function install(plugin: PluginItem) {
+    const id = nextInstall++;
+    rowError(plugin.name, null);
+    setInstalls((current) => ({ ...current, [plugin.name]: { id, received: 0, total: plugin.offered?.archiveSize ?? 0 } }));
+    try {
+      const fresh = await call(commands.pluginsInstall(id, plugin.name));
+      setOverview(fresh);
+    } catch (e) {
+      rowError(plugin.name, t("plugins.installError", { detail: errorText(e) }));
+    } finally {
+      setInstalls((current) => {
+        const next = { ...current };
+        delete next[plugin.name];
+        return next;
+      });
+    }
+  }
+
+  async function remove(plugin: PluginItem, version: string, confirmed: boolean) {
+    rowError(plugin.name, null);
+    try {
+      const outcome = await call(commands.pluginsRemove(plugin.name, version, confirmed));
+      switch (outcome.kind) {
+        case "needsConfirmation":
+          setRemoving({ plugin, version, openSessions: outcome.openSessions });
+          return;
+        case "removed":
+          setOverview(outcome.overview);
+          setRemoving(null);
+          return;
+      }
+    } catch (e) {
+      const message = t("plugins.removeError", { detail: errorText(e) });
+      if (confirmed) throw new Error(message);
+      rowError(plugin.name, message);
+    }
+  }
+
+  async function installFile() {
+    setFileError(null);
+    setFileDone(false);
+    const path = await chooseOpenFile(t("plugins.fileTitle"), [{ name: t("plugins.fileFilter"), extensions: ["gz", "tgz", "signed"] }]);
+    if (!path) return;
+    setFileBusy(true);
+    try {
+      setOverview(await call(commands.pluginsInstallFile(path)));
+      setFileDone(true);
+    } catch (e) {
+      setFileError(t("plugins.fileError", { detail: errorText(e) }));
+    } finally {
+      setFileBusy(false);
+    }
+  }
+
+  return (
+    <div className="plugins-settings">
+      <p className="muted small">{t("plugins.intro")}</p>
+      <div className="plugins-catalogue" role="status" aria-live="polite">
+        <span className="muted small">
+          {catalogue.kind === "checking" && t("plugins.checking")}
+          {catalogue.kind === "off" && t("plugins.off")}
+          {catalogue.kind === "read" &&
+            (overview?.catalogueSerial != null ? t("plugins.catalogueRead", { serial: overview.catalogueSerial }) : t("plugins.noCatalogue"))}
+          {catalogue.kind === "failed" && t("plugins.catalogueFailed", { detail: catalogue.detail })}
+        </span>
+        {catalogue.kind === "off" && (
+          <button className="ghost" onClick={() => useApp.setState({ settingsCategory: "updates" })}>
+            {t("plugins.openUpdates")}
+          </button>
+        )}
+        {(catalogue.kind === "read" || catalogue.kind === "failed") && (
+          <button className="ghost" onClick={() => void checkCatalogue()}>
+            {t("plugins.checkAgain")}
+          </button>
+        )}
+      </div>
+      {overview === null ? (
+        <p className="muted">{t("plugins.loading")}</p>
+      ) : overview.plugins.length === 0 ? (
+        <p className="muted">{t("plugins.none")}</p>
+      ) : (
+        <ul className="plugin-list" aria-label={t("plugins.listLabel")}>
+          {overview.plugins.map((plugin) => (
+            <PluginRow
+              key={plugin.name}
+              plugin={plugin}
+              engineName={engineName}
+              install={installs[plugin.name] ?? null}
+              error={rowErrors[plugin.name] ?? null}
+              onInstall={() => void install(plugin)}
+              onCancel={(id) => void commands.pluginsCancelInstall(id)}
+              onRemove={(version) => void remove(plugin, version, false)}
+            />
+          ))}
+        </ul>
+      )}
+      <h3>{t("plugins.fileHeading")}</h3>
+      <p className="muted small">{t("plugins.fileHint")}</p>
+      <div className="form-row">
+        <button onClick={() => void installFile()} disabled={fileBusy}>
+          {fileBusy ? t("plugins.installingFile") : t("plugins.installFile")}
+        </button>
+      </div>
+      {fileDone && <p className="muted small" role="status">{t("plugins.fileDone")}</p>}
+      {fileError && (
+        <p className="error small" role="alert">
+          {fileError}
+        </p>
+      )}
+      {removing && (
+        <RemoveDialog
+          plugin={removing.plugin}
+          version={removing.version}
+          openSessions={removing.openSessions}
+          engineName={engineName}
+          onCancel={() => setRemoving(null)}
+          onRemove={() => remove(removing.plugin, removing.version, true)}
+        />
+      )}
+    </div>
+  );
+}
+
+function PluginRow({
+  plugin,
+  engineName,
+  install,
+  error,
+  onInstall,
+  onCancel,
+  onRemove,
+}: {
+  plugin: PluginItem;
+  engineName(id: string): string;
+  install: Install | null;
+  error: string | null;
+  onInstall(): void;
+  onCancel(id: number): void;
+  onRemove(version: string): void;
+}) {
+  const { t, i18n } = useTranslation("settings");
+  const size = (bytes: number) => byteSize(bytes, i18n.language);
+  const title = plugin.engines.map(engineName).join(", ") || plugin.name;
+  const used = plugin.inUse;
+  // What clicking installs: the offered build, when it is new here or an update.
+  const installable = plugin.offered && (used === null || plugin.update !== null) ? plugin.offered : null;
+  return (
+    <li className="plugin-row" aria-label={title} data-plugin={plugin.name}>
+      <div className="plugin-main">
+        <div className="plugin-title">
+          <span className="plugin-name">{title}</span>
+          <span className="mono small muted">{plugin.name}</span>
+        </div>
+        <div className="small">
+          {used
+            ? t(used.source === "shipped" ? "plugins.shipped" : "plugins.installed", { version: used.version })
+            : t("plugins.notInstalled")}
+        </div>
+        {plugin.update && plugin.offered && (
+          <div className="small">{t("plugins.update", { version: plugin.update, size: size(plugin.offered.archiveSize ?? 0) })}</div>
+        )}
+        {used === null && plugin.offered && (
+          <div className="small">{t("plugins.offered", { version: plugin.offered.version, size: size(plugin.offered.archiveSize ?? 0) })}</div>
+        )}
+        {plugin.message ? (
+          <div className="small plugin-why">{plugin.message}</div>
+        ) : (
+          plugin.refused.map((refused) => (
+            <div key={`${refused.source}-${refused.version}`} className="small plugin-why">
+              {t(refused.source === "shipped" ? "plugins.refusedShipped" : "plugins.refusedInstalled", { version: refused.version, why: refused.why })}
+            </div>
+          ))
+        )}
+        {plugin.missing && !plugin.message && (
+          <div className="small plugin-why">{t("plugins.missing", { version: plugin.missing.version, program: plugin.missing.program })}</div>
+        )}
+        {plugin.openSessions > 0 && <div className="small muted">{t("plugins.sessions", { count: plugin.openSessions })}</div>}
+        {install && (
+          <div className="small plugin-progress" role="status">
+            {install.total > 0
+              ? t("plugins.downloading", { received: size(install.received), total: size(install.total) })
+              : t("plugins.installing")}
+          </div>
+        )}
+        {plugin.installed.length > 0 && (
+          <ul className="plugin-versions" aria-label={t("plugins.installedVersions")}>
+            {plugin.installed.map((version) => (
+              <li key={version} className="small">
+                <span>{t("plugins.installedVersion", { version })}</span>
+                <button className="ghost" onClick={() => onRemove(version)} disabled={install !== null}>
+                  {t("plugins.remove")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {error && (
+          <div className="error small" role="alert">
+            {error}
+          </div>
+        )}
+      </div>
+      <div className="plugin-actions">
+        {install ? (
+          <button onClick={() => onCancel(install.id)}>{t("plugins.cancelInstall")}</button>
+        ) : (
+          installable && (
+            <button onClick={onInstall} title={installable.address}>
+              {used ? t("plugins.updateTo", { version: installable.version }) : t("plugins.install")}
+            </button>
+          )
+        )}
+      </div>
+    </li>
+  );
+}
+
+function RemoveDialog({
+  plugin,
+  version,
+  openSessions,
+  engineName,
+  onCancel,
+  onRemove,
+}: {
+  plugin: PluginItem;
+  version: string;
+  openSessions: number;
+  engineName(id: string): string;
+  onCancel(): void;
+  onRemove(): Promise<void>;
+}) {
+  const { t } = useTranslation("settings");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  useEffect(() => cancel.current?.focus(), []);
+  const engines = plugin.engines.map(engineName).join(", ");
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onRemove();
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plugin-remove-title"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            if (!busy) onCancel();
+          }
+        }}
+      >
+        <h2 id="plugin-remove-title">{t("plugins.removeTitle", { name: plugin.name, version })}</h2>
+        <p>
+          {openSessions > 0
+            ? t("plugins.removeSessions", { count: openSessions, engines })
+            : t("plugins.removeRunning", { engines })}
+        </p>
+        <p className="muted small">{t("plugins.removeHint")}</p>
+        {error && (
+          <p className="error small" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <button ref={cancel} onClick={onCancel} disabled={busy}>
+            {t("plugins.cancel")}
+          </button>
+          <button className="danger" onClick={() => void confirm()} disabled={busy}>
+            {busy ? t("plugins.removing") : t("plugins.removeConfirm")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -31,6 +31,7 @@ import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./Connect
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
+import { openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -192,12 +193,17 @@ function EnginePicker({
   const [search, setSearch] = useState("");
   const [url, setUrl] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
+  // Which engines need a plugin that is not installed: the core's overview, only shown here.
+  const plugins = usePlugins((s) => s.overview);
+  useEffect(() => void usePlugins.getState().load(), []);
   async function applyUrl() {
     setUrlError(null);
     try {
       const fields = await call(commands.parseConnectionUrl(url));
       const engine = engines.find((e) => e.id === fields.engine && e.available);
-      if (engine) onPick(engine, fields);
+      const needed = engine ? pluginNeeded(plugins, engine.id) : null;
+      if (engine && needed) setUrlError(t("needsPluginNote", { engine: engine.name, plugin: needed.name }));
+      else if (engine) onPick(engine, fields);
       else setUrlError(t("url.unsupported"));
     } catch (e) {
       setUrlError(errorText(e));
@@ -260,19 +266,31 @@ function EnginePicker({
             <section key={category} aria-labelledby={`engines-${category}`}>
               <h3 id={`engines-${category}`}>{t(`categories.${category}`)}</h3>
               <div className="engine-grid">
-                {items.map((e) => (
-                  <button
-                    key={e.id}
-                    className="engine-card"
-                    disabled={!e.available}
-                    onClick={() => onPick(e)}
-                    title={e.available ? e.name : t("comingSoonHint", { engine: e.name })}
-                  >
-                    <EngineBadge engine={e} />
-                    <span className="engine-card-name">{e.name}</span>
-                    {!e.available && <span className="engine-card-soon">{t("comingSoon")}</span>}
-                  </button>
-                ))}
+                {items.map((e) => {
+                  const needed = e.available ? pluginNeeded(plugins, e.id) : null;
+                  return (
+                    <button
+                      key={e.id}
+                      className="engine-card"
+                      disabled={!e.available}
+                      // An engine whose plugin is not installed sends to Settings > Plugins.
+                      onClick={() => (needed ? openPluginsPage() : onPick(e))}
+                      title={
+                        !e.available
+                          ? t("comingSoonHint", { engine: e.name })
+                          : needed
+                            ? t("needsPluginHint", { engine: e.name, plugin: needed.name })
+                            : e.name
+                      }
+                      data-needs-plugin={needed ? needed.name : undefined}
+                    >
+                      <EngineBadge engine={e} />
+                      <span className="engine-card-name">{e.name}</span>
+                      {!e.available && <span className="engine-card-soon">{t("comingSoon")}</span>}
+                      {needed && <span className="engine-card-soon">{t("needsPlugin")}</span>}
+                    </button>
+                  );
+                })}
               </div>
             </section>
           );

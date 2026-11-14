@@ -353,7 +353,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, scripts: 10, editor: 11, map: 12 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, map: 13 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -495,6 +495,24 @@ try {
   await settingsDialog.getByText(/^Version \d+\.\d+\.\d+$/).waitFor();
   await settingsDialog.getByRole("status").filter({ hasText: "not available in this build" }).waitFor();
   assert.equal(await page.locator(".update-notice").count(), 0, "no update notice");
+  // Plugins (ADR-055): the four engines' plugins came inside the installer (next to the app);
+  // with SPELAION_NO_UPDATES the catalogue is not read, and the page says so.
+  await settingsDialog.getByRole("button", { name: "Plugins", exact: true }).click();
+  await settingsDialog.getByRole("heading", { name: "Plugins" }).waitFor();
+  const pluginList = settingsDialog.getByRole("list", { name: "Plugins" });
+  for (const [plugin, engines] of [
+    ["spelaiondb-plugin-sqlserver", "SQL Server"],
+    ["spelaiondb-plugin-mysql", "MariaDB, MySQL"],
+    ["spelaiondb-plugin-postgres", "PostgreSQL"],
+    ["spelaiondb-plugin-duckdb", "DuckDB"],
+  ]) {
+    const row = pluginList.locator(`[data-plugin="${plugin}"]`);
+    await row.getByText(engines, { exact: true }).waitFor();
+    await row.getByText(/^Version \d+\.\d+\.\d+, inside the installer$/).waitFor();
+    assert.equal(await row.getByRole("button").count(), 0, `${plugin}: nothing to install, update or remove`);
+  }
+  await settingsDialog.getByRole("status").filter({ hasText: "the plugin catalogue is not read" }).waitFor();
+  await shot("01c-settings-plugins");
   await page.keyboard.press("Escape");
   await settingsDialog.waitFor({ state: "detached" });
   await page.locator(".activity-bar .settings-button").click();

@@ -123,9 +123,16 @@ import {
   type RestoredTabsItem_Serialize,
   type SaveFileOutcome,
   type SqlFileItem,
+  type PluginsOverview_Serialize,
+  type PluginItem_Serialize,
+  type PluginRemoval_Serialize,
 } from "./bindings";
 
 export { commands, events };
+// The Plugins page (ADR-055): what the core says about each plugin of ours.
+export type PluginsOverview = PluginsOverview_Serialize;
+export type PluginItem = PluginItem_Serialize;
+export type PluginRemoval = PluginRemoval_Serialize;
 // Data search (ADR-043): its events arrive through a channel (the deserialization variant).
 export type DataSearchEventItem = DataSearchEventItem_Deserialize;
 export type SearchHitItem = SearchHitItem_Deserialize;
