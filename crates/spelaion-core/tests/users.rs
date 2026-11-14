@@ -272,9 +272,22 @@ async fn accounts_are_created_logged_in_given_a_new_password_locked_and_dropped(
             Err(ObjectError::NeedsConfirmation),
             "{label}"
         );
-        apply(&admin, &drop, None)
-            .await
-            .unwrap_or_else(|e| panic!("{label}: drop: {e}"));
+        // SQL Server ends a session a moment after its client closed the connection, and
+        // refuses to drop a login that still has one: the account's last login, a few lines
+        // above, may not be gone from the server yet (through a plugin it takes a little
+        // longer). The drop is tried again while that is the server's answer, for at most
+        // five seconds: a login that never leaves still fails the test, as any other error.
+        let mut tries = 0;
+        loop {
+            match apply(&admin, &drop, None).await {
+                Ok(_) => break,
+                Err(e) if tries < 100 && e.to_string().contains("currently logged in") => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(e) => panic!("{label}: drop: {e}"),
+            }
+        }
         assert!(!engine.logs_in(&name, SECOND).await, "{label}: dropped");
         assert!(
             matches!(
