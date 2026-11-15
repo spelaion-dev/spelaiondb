@@ -28,6 +28,7 @@ mod import;
 pub mod kube;
 mod locks;
 pub mod masking;
+mod mongodb_srv;
 mod objects;
 mod observe;
 mod open;

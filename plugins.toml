@@ -178,34 +178,34 @@ program_sha256 = "b49bb2af7677219af78ffd4fef32f9a768d8a7e487ed08c33cec2f690835a7
 [[plugin]]
 name = "spelaiondb-plugin-mongodb"
 repository = "spelaion-dev/spelaiondb-plugin-mongodb"
-version = "0.1.0"
+version = "0.1.1"
 protocol = "1.1"
 engines = ["mongodb"]
 min_app = "0.10.0"
 
 [plugin.platform.aarch64-apple-darwin]
-archive = "spelaiondb-plugin-mongodb-0.1.0-aarch64-apple-darwin.tar.gz"
-archive_sha256 = "06c2a077edf8bd542d0c9abf61171d7192c6d7c597770d856fc208321650742c"
-archive_size = 3643789
-program_sha256 = "fbfc8d7141585cfd111c1db4bc323feef6a94d2fe67d447e714daa8d88e67858"
+archive = "spelaiondb-plugin-mongodb-0.1.1-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "09d4b109d25b67fcd09aaf3728bdeb4c0e44857d8710546a47d3edfd7786451a"
+archive_size = 3755568
+program_sha256 = "dad0913f9c6333bf6ddfa660f435e810b23ff4f8b35b617d7205040db0802b97"
 
 [plugin.platform.x86_64-apple-darwin]
-archive = "spelaiondb-plugin-mongodb-0.1.0-x86_64-apple-darwin.tar.gz"
-archive_sha256 = "0d143cf210338bd76f21d9cc03a93786a57a25b26ece111b250f6f3dfab107a7"
-archive_size = 3904489
-program_sha256 = "07e72df9438ec6ab2e09672469dc5a6b20edb0d5cc642dcdeca8c42f823e0e7e"
+archive = "spelaiondb-plugin-mongodb-0.1.1-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "673decfea66f76f01a5e2452fa15663464acccae72bf1f17d61a952e6a9adf9a"
+archive_size = 4013154
+program_sha256 = "3768018e8f2ef579cf12964a95678e89932c2791225975a856f2511bfaa87268"
 
 [plugin.platform.x86_64-pc-windows-msvc]
-archive = "spelaiondb-plugin-mongodb-0.1.0-x86_64-pc-windows-msvc.tar.gz"
-archive_sha256 = "73254768d91ad12e5103ba3fbe73d5f76fe03e5fda9401dc29374cb5555dc0a8"
-archive_size = 4012809
-program_sha256 = "16539cd652b0ae55bf4d797db48e47981cf1094df36a522a0c97ae71b8779af9"
+archive = "spelaiondb-plugin-mongodb-0.1.1-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "3aea753ae57950e0962c1bbc12835e395c449aff1de26359c05ab79ade9c54d3"
+archive_size = 4121031
+program_sha256 = "975490813c7fe6aa39e6afdb11e303e8866b4f4c6f1e0b9310f6ce94e699d96f"
 
 [plugin.platform.x86_64-unknown-linux-gnu]
-archive = "spelaiondb-plugin-mongodb-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
-archive_sha256 = "9714fa1347fb2f406023a9f3191c21d0c02b2791d54a6962ba0b25a645c300b6"
-archive_size = 4244298
-program_sha256 = "12dbf132dd5f4e049f601ad296e0916a277a01eb16ee2771b90fdc46fb4fb91d"
+archive = "spelaiondb-plugin-mongodb-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "f05b126483ffde4953f4473b2029d0a9b200a63ae7850fa6b24ecfc880d32532"
+archive_size = 4355515
+program_sha256 = "fff838d1f4656bcad0243ee8e6ddba87b286ac8d1dc92a44f46bd494d412eef7"
 
 # ClickHouse: the first engine that is only a plugin (ADR-041, stage 3).
 [[plugin]]

@@ -44,6 +44,8 @@ minisign-verify = "0.3"
 # (plugins/installed.rs). No extended attributes: nothing of an archive's is kept but bytes.
 tar = { version = "0.4", default-features = false }
 flate2 = "1"
+# MongoDB Atlas seed hosts and its restricted TXT settings, resolved before opening a route.
+hickory-resolver = { version = "0.26.3", default-features = false, features = ["tokio", "system-config"] }
 # process + io-util: `kubectl port-forward` for Kubernetes tunnels (kube.rs) and the native
 # backup tools (backup/, ADR-049), whose files are written with fs.
 tokio = { workspace = true, features = ["sync", "time", "process", "io-util", "net", "macros", "fs"] }
