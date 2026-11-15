@@ -36,6 +36,7 @@ const BADGES: Record<string, string> = {
   redis: "RD",
   neo4j: "N4",
   databend: "DB",
+  spanner: "SP",
   cassandra: "CA",
 };
 

@@ -32,11 +32,12 @@ fn position(engine: Engine) -> usize {
         Engine::Kyuubi => 21,
         Engine::Impala => 22,
         Engine::Databend => 23,
+        Engine::Spanner => 24,
     }
 }
 
 /// The number of arms above: one more than the last position.
-const ENGINES: usize = 24;
+const ENGINES: usize = 25;
 
 #[test]
 fn every_engine_is_listed_once() {

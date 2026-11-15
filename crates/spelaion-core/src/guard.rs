@@ -16,8 +16,8 @@ use spelaion_config::Safeguards;
 use spelaion_driver_api::{Dialect, RequestClass, StatementSpan};
 use sqlparser::ast::{Statement, visit_statements};
 use sqlparser::dialect::{
-    ClickHouseDialect, Dialect as SqlDialect, DuckDbDialect, GenericDialect, HiveDialect,
-    MsSqlDialect, MySqlDialect, OracleDialect, PostgreSqlDialect, SQLiteDialect,
+    BigQueryDialect, ClickHouseDialect, Dialect as SqlDialect, DuckDbDialect, GenericDialect,
+    HiveDialect, MsSqlDialect, MySqlDialect, OracleDialect, PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -618,6 +618,8 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
         "oracle" => Box::new(OracleDialect {}),
         // libSQL reads SQL as SQLite does.
         "libsql" => Box::new(SQLiteDialect {}),
+        // GoogleSQL, which BigQuery shares.
+        "spanner" => Box::new(BigQueryDialect {}),
         // HiveServer2's engines: backquoted names, strings in both quotes.
         "hive" | "spark" | "kyuubi" | "impala" => Box::new(HiveDialect {}),
         _ => Box::new(GenericDialect {}),

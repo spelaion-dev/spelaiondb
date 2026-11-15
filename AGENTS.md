@@ -337,6 +337,20 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`has_read_barrier`). Its tests: `tests/databend.rs` with `SPELAION_TEST_DATABEND=127.0.0.1:18320`
   (and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS`); `SPELAION_DEV_PLUGIN_DATABEND` in a
   development build.
+- **Spanner only exists as a plugin** (SDB-352): `spelaion-dev/spelaiondb-plugin-spanner` (its
+  REST API, GoogleSQL: a session per connection, queries as single-use reads, `BEGIN`/`COMMIT`/
+  `ROLLBACK` driving a read-write transaction, DDL through the admin API), pinned in
+  `plugins.toml`. A connection's `database` is `projects/<p>/instances/<i>/databases/<d>` and its
+  password an OAuth access token (a core secret: a `cmd:` secret may run gcloud). What the core
+  has of it: `Engine::Spanner`, `spelaion-dialect`'s `spanner.rs` (GoogleSQL's lexer: backslash
+  escapes, triple-quoted strings, `#` comments, backtick names), the guard through sqlparser's
+  BigQuery dialect, and its default schema, which has no name, shown as `default` and left out of
+  the names the core writes (`objects::qualified_name`). **No read-only mode and no agents** yet
+  (`has_read_barrier`): Spanner enforces read-only transactions, but making them a barrier needs an
+  ADR. No cancel (the REST API cannot). Its tests: `tests/spanner.rs` with
+  `SPELAION_TEST_SPANNER=127.0.0.1:19021` (Google's emulator; the tests create its instance and
+  database), and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS`; `SPELAION_DEV_PLUGIN_SPANNER` in a
+  development build. Google itself is not tested.
 - **HiveServer2's engines are one plugin** (`spelaion-dev/spelaiondb-plugin-hive`, SDB-176):
   `hive`, `spark` (Spark's Thrift server), `kyuubi` and `impala`, over HiveServer2's Thrift
   service (SASL `PLAIN`, or no SASL for Impala without a password; no Kerberos yet), pinned in
@@ -806,7 +820,7 @@ outside the team.
   SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080
   SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521
   SPELAION_TEST_LIBSQL=127.0.0.1:18095 SPELAION_TEST_NEO4J=127.0.0.1:17474
-  SPELAION_TEST_DATABEND=127.0.0.1:18320
+  SPELAION_TEST_DATABEND=127.0.0.1:18320 SPELAION_TEST_SPANNER=127.0.0.1:19021
   SPELAION_TEST_GIZMOSQL=127.0.0.1:31337 SPELAION_TEST_HIVE=127.0.0.1:11010
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017

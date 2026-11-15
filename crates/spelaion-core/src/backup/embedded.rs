@@ -82,6 +82,7 @@ pub fn embedded_dump_path(
         | Engine::Gizmosql
         | Engine::Neo4j
         | Engine::Databend
+        | Engine::Spanner
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi
@@ -205,6 +206,7 @@ pub async fn embedded_dump(
         | Engine::Gizmosql
         | Engine::Neo4j
         | Engine::Databend
+        | Engine::Spanner
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi

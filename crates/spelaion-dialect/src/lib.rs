@@ -24,6 +24,7 @@ pub mod neo4j;
 pub mod oracle;
 pub mod postgres;
 pub mod redis;
+pub mod spanner;
 pub mod sqlite;
 pub mod sqlserver;
 pub mod standard;
@@ -41,6 +42,7 @@ pub use neo4j::Neo4jDialect;
 pub use oracle::OracleDialect;
 pub use postgres::PostgresDialect;
 pub use redis::RedisDialect;
+pub use spanner::SpannerDialect;
 pub use sqlite::SqliteDialect;
 pub use sqlserver::SqlServerDialect;
 pub use standard::StandardDialect;
@@ -69,6 +71,8 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         // Cypher, read by the core (ADR-056).
         "neo4j" => Some(Arc::new(Neo4jDialect)),
         "databend" => Some(Arc::new(DatabendDialect)),
+        // GoogleSQL, Spanner's default dialect.
+        "spanner" => Some(Arc::new(SpannerDialect)),
         // libSQL's server reads SQL as SQLite does (ADR-058).
         "libsql" => Some(Arc::new(SqliteDialect)),
         // Shaped like SQL, but its own: sent as text, read here (ADR-056).
@@ -114,6 +118,7 @@ mod tests {
             ("gizmosql", "gizmosql"),
             ("neo4j", "neo4j"),
             ("databend", "databend"),
+            ("spanner", "spanner"),
             ("hive", "hive"),
             ("spark", "spark"),
             ("kyuubi", "kyuubi"),

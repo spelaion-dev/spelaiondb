@@ -566,3 +566,36 @@ archive = "spelaiondb-plugin-databend-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "cf08d02d133a9f36149d0b4cc7c1bf31bf4adf225b134d11572ec688639197c5"
 archive_size = 2651891
 program_sha256 = "b249ea76cdce36974bc070e338e6d2488fd0083be5853d3b8b7a43aa7cd1962f"
+
+# Google Cloud Spanner: its REST API, GoogleSQL (SDB-352).
+[[plugin]]
+name = "spelaiondb-plugin-spanner"
+repository = "spelaion-dev/spelaiondb-plugin-spanner"
+version = "0.1.1"
+protocol = "1.1"
+engines = ["spanner"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-spanner-0.1.1-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "c35e168ca07b46cec0e640b5274ef022a5b34afffcfc0b921335d134492dba3d"
+archive_size = 2249020
+program_sha256 = "d590028604d38cf3e4b10674ee164aa009e2577c5c3e3951d580bd51928b01e2"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-spanner-0.1.1-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "d5ad1e19b456d7594c8986998d8dd2b3692596a4cb405e9d17bb770ed83c9242"
+archive_size = 2410057
+program_sha256 = "0365ee03d332848081136611b5f7d629c5d23152867c0a59f2ee4b1eedd0183f"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-spanner-0.1.1-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "c5d921d269a6aa092a55286777eb6a94305ee88c3d4a3d7e53993cab97a05a9e"
+archive_size = 2370547
+program_sha256 = "5b79113099cab05fa86aeb7240d11b085ca56c93f4d9d4791a07063f47d84785"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-spanner-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "f08a2fef847098f2600785ec31c23f7269dbdf57d24e1c6885bfe4f13581db87"
+archive_size = 2661309
+program_sha256 = "43fcc9c040952085cbf501c4b6e257d95b2c48fe7391a44e7e56bb9dcf31d728"

@@ -70,6 +70,7 @@ fn passwordless(engine: Engine) -> bool {
         | Engine::Gizmosql
         | Engine::Neo4j
         | Engine::Databend
+        | Engine::Spanner
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi

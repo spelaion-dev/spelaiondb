@@ -503,6 +503,17 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
+        // A Spanner database is named by its path; the access token is the password.
+        Engine::Spanner => [
+            (
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            ),
+            ("database", file.database.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
         // A libSQL server serves one database per address; its token is the password.
         Engine::Libsql => [(
             "host",
@@ -634,7 +645,8 @@ pub(crate) fn validate_connection(
             | Engine::Cassandra
             | Engine::Tdengine
             | Engine::Neo4j
-            | Engine::Databend => {}
+            | Engine::Databend
+            | Engine::Spanner => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,
@@ -959,6 +971,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Kyuubi => "Apache Kyuubi",
         Engine::Impala => "Apache Impala",
         Engine::Databend => "Databend",
+        Engine::Spanner => "Cloud Spanner",
     }
 }
 

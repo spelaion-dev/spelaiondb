@@ -515,6 +515,7 @@ try {
     ["spelaiondb-plugin-flightsql", "Dremio, Arrow Flight SQL, GizmoSQL"],
     ["spelaiondb-plugin-neo4j", "Neo4j"],
     ["spelaiondb-plugin-databend", "Databend"],
+    ["spelaiondb-plugin-spanner", "Google Cloud Spanner"],
     ["spelaiondb-plugin-hive", "Apache Hive, Apache Impala, Apache Kyuubi, Spark SQL (Thrift server)"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
