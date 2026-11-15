@@ -25,8 +25,13 @@
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
+# The hard limits total 11,360 MiB; check-memory.py enforces an 11.25 GiB ceiling and
+# 4 GiB left on the CI host for kind, the compiler/tests and the operating system.
+# Keep engine caches below their container limit: a cgroup cap alone just moves an OOM.
+
 services:
   bastion1:
+    mem_limit: 64m
     build: ./bastion
     ports:
       - "127.0.0.1:2221:22"
@@ -35,6 +40,7 @@ services:
     networks: [public, mid]
 
   bastion2:
+    mem_limit: 64m
     build: ./bastion
     volumes:
       - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
@@ -44,6 +50,7 @@ services:
   # init script is hidden by the mount below: only `spelaion_gis` has the extension, so the
   # `spelaion` database's catalog is the same as on plain PostgreSQL.
   postgres:
+    mem_limit: 384m
     image: postgis/postgis:17-3.5-alpine
     environment:
       POSTGRES_USER: spelaion
@@ -80,6 +87,7 @@ services:
   # MySQL 8.4 LTS and MariaDB 11.4 LTS with TLS (not required). Like PostgreSQL, the key is
   # copied inside with the owner and permissions the server accepts.
   mysql:
+    mem_limit: 384m
     image: mysql:8.4
     environment:
       MYSQL_ROOT_PASSWORD: spelaion-root
@@ -99,7 +107,7 @@ services:
         install -o mysql -g mysql -m 600 /certs/mysql.key /etc/mysql-tls/server.key
         install -o mysql -g mysql -m 644 /certs/mysql.crt /etc/mysql-tls/server.crt
         install -o mysql -g mysql -m 644 /certs/ca.crt /etc/mysql-tls/ca.crt
-        exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --log-bin-trust-function-creators=1
+        exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --log-bin-trust-function-creators=1 --innodb-buffer-pool-size=64M --performance-schema-max-table-instances=200 --performance-schema-max-table-handles=200 --performance-schema-max-thread-instances=100 --performance-schema-digests-size=100 --performance-schema-events-statements-history-long-size=100
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uspelaion -pspelaion --silent"]
       interval: 2s
@@ -107,6 +115,7 @@ services:
     networks: [data, direct]
 
   mariadb:
+    mem_limit: 384m
     image: mariadb:11.4
     environment:
       MARIADB_ROOT_PASSWORD: spelaion-root
@@ -126,7 +135,7 @@ services:
         install -o mysql -g mysql -m 600 /certs/mysql.key /etc/mysql-tls/server.key
         install -o mysql -g mysql -m 644 /certs/mysql.crt /etc/mysql-tls/server.crt
         install -o mysql -g mysql -m 644 /certs/ca.crt /etc/mysql-tls/ca.crt
-        exec docker-entrypoint.sh mariadbd --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key
+        exec docker-entrypoint.sh mariadbd --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --innodb-buffer-pool-size=64M
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s
@@ -136,6 +145,7 @@ services:
   # A server holding a SQLite file (ADR-018): it lets the client run commands and has
   # sqlite3, unlike the bastions. Only bastion1 reaches it: tests go through two hops.
   sqlitehost:
+    mem_limit: 64m
     build: ./sqlitehost
     volumes:
       - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
@@ -145,6 +155,7 @@ services:
   # databases, which the host does not: a tunnel can reach them through the proxy alone or
   # run its first SSH hop through it.
   proxy:
+    mem_limit: 64m
     build: ./proxy
     ports:
       - "127.0.0.1:11080:1080"
@@ -154,11 +165,14 @@ services:
   # SQL Server 2022 (Developer edition, free for development and testing). It encrypts with a
   # self-signed certificate of its own. Tests log in as `sa` and create the `spelaion` database.
   sqlserver:
+    mem_limit: 2g
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_PID: Developer
       MSSQL_SA_PASSWORD: Spelaion-test-1
+      # SQL Server needs a 2 GiB container; leave native allocations outside its pool.
+      MSSQL_MEMORY_LIMIT_MB: "1280"
     ports:
       - "127.0.0.1:11433:1433"
     healthcheck:
@@ -171,7 +185,9 @@ services:
   # MongoDB 8.0, reached through its plugin (SpelaionDB's ADR-056). The user `spelaion`
   # (password `spelaion`) is in `admin`. 127.0.0.1:27017 (SPELAION_TEST_MONGO).
   mongodb:
+    mem_limit: 512m
     image: mongo:8.0
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.25"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: spelaion
       MONGO_INITDB_ROOT_PASSWORD: spelaion
@@ -188,7 +204,10 @@ services:
   # HTTP interface is published on 127.0.0.1:18123; through the tunnels it is clickhouse:8123.
   # TLS is tested in its plugin's repository. User, password and database: `spelaion`.
   clickhouse:
+    mem_limit: 512m
     image: clickhouse/clickhouse-server:25.8
+    volumes:
+      - ./clickhouse/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
     environment:
       CLICKHOUSE_USER: spelaion
       CLICKHOUSE_PASSWORD: spelaion
@@ -207,6 +226,7 @@ services:
     networks: [data, direct]
 
   redis:
+    mem_limit: 64m
     image: redis:7.4
     command: ["redis-server", "--requirepass", "spelaion"]
     ports:
@@ -221,7 +241,10 @@ services:
   # (`memory`, `tpch`…). Published on 127.0.0.1:18080 and 18081; through the tunnels they are
   # trino:8080 and presto:8080. No password: they take one only over TLS.
   trino:
+    mem_limit: 1280m
     image: trinodb/trino:479
+    volumes:
+      - ./trino/jvm.config:/etc/trino/jvm.config:ro
     ports:
       - "127.0.0.1:18080:8080"
     healthcheck:
@@ -235,6 +258,7 @@ services:
   # gizmosql:31337. User `spelaion`, password `spelaion`. Dremio is tested in the plugin's own
   # repository.
   gizmosql:
+    mem_limit: 256m
     image: gizmodata/gizmosql@sha256:88e9d292d6cfe2f41e28d3baab24230691bf07af671b2329d226689fe5634150
     environment:
       GIZMOSQL_USERNAME: spelaion
@@ -267,7 +291,10 @@ services:
     networks: [data, direct]
 
   presto:
+    mem_limit: 1280m
     image: prestodb/presto:0.295
+    volumes:
+      - ./presto/jvm.config:/opt/presto-server/etc/jvm.config:ro
     ports:
       - "127.0.0.1:18081:8080"
     healthcheck:
@@ -280,6 +307,9 @@ services:
   # published on 127.0.0.1:11521; through the tunnels it is oracle:1521. User and password
   # `spelaion`, service FREEPDB1 (`oracle/startup` makes the user on every start).
   oracle:
+    # Oracle Database Free is a native database, not a JVM. Free's built-in 2 GiB
+    # database memory ceiling is not a container limit; account for it here too.
+    mem_limit: 2g
     image: container-registry.oracle.com/database/free:latest-lite
     environment:
       ORACLE_PWD: spelaion-test-Pw1
@@ -300,6 +330,7 @@ services:
   # "localhost" and "oracle-tls"). Published on 127.0.0.1:12484; through the tunnels it is
   # oracle-tls:2484.
   oracle-tls:
+    mem_limit: 32m
     image: haproxy:3.2-alpine
     depends_on:
       oracle:
@@ -315,6 +346,7 @@ services:
   # published on 127.0.0.1:18095 without authentication; through the tunnels and the proxies it
   # is libsql:8080. Tokens and TLS are tested in its plugin's repository.
   libsql:
+    mem_limit: 128m
     image: ghcr.io/tursodatabase/libsql-server:v0.24.33
     ports:
       - "127.0.0.1:18095:8080"
@@ -332,7 +364,7 @@ services:
       HEAP_NEWSIZE: 64M
       JVM_EXTRA_OPTS: >-
         -XX:MaxDirectMemorySize=128M -XX:-AlwaysPreTouch -XX:ParallelGCThreads=2
-        -XX:ConcGCThreads=1 -XX:CICompilerCount=2
+        -XX:ConcGCThreads=1 -XX:CICompilerCount=2 -XX:ActiveProcessorCount=2
     ports:
       - "127.0.0.1:19142:9042"
     healthcheck:
@@ -349,11 +381,12 @@ services:
     image: neo4j:5.26-community
     environment:
       NEO4J_AUTH: neo4j/spelaion-test
-      # Bounded for CI's runners (SDB-345): a 512 MB heap, a 128 MB page cache, 1 GB in all.
+      # Heap, page cache and direct buffers leave room for metaspace and native threads.
       NEO4J_server_memory_heap_initial__size: 256m
-      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_heap_max__size: 384m
       NEO4J_server_memory_pagecache_size: 128m
-    mem_limit: 1g
+      NEO4J_server_jvm_additional: -XX:MaxDirectMemorySize=64m -XX:ActiveProcessorCount=2
+    mem_limit: 768m
     ports:
       - "127.0.0.1:17474:7474"
     healthcheck:
