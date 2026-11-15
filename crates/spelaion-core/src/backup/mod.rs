@@ -107,7 +107,8 @@ impl ToolFamily {
             | Engine::Cassandra
             | Engine::Flightsql
             | Engine::Dremio
-            | Engine::Gizmosql => None,
+            | Engine::Gizmosql
+            | Engine::Neo4j => None,
         }
     }
 
@@ -148,7 +149,8 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Cassandra
         | Engine::Flightsql
         | Engine::Dremio
-        | Engine::Gizmosql => None,
+        | Engine::Gizmosql
+        | Engine::Neo4j => None,
     }
 }
 

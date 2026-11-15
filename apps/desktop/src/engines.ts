@@ -30,6 +30,7 @@ const BADGES: Record<string, string> = {
   bigquery: "BQ",
   mongodb: "MG",
   redis: "RD",
+  neo4j: "N4",
   cassandra: "CA",
 };
 

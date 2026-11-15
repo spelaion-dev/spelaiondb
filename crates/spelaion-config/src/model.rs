@@ -182,9 +182,44 @@ pub enum Engine {
     Flightsql,
     Dremio,
     Gizmosql,
+    /// Neo4j, a graph database served only by its plugin over its HTTP Query API. Its language,
+    /// Cypher, is not SQL: the core reads each statement and sends it as a request (ADR-056).
+    Neo4j,
 }
 
 impl Engine {
+    /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
+    /// with no `_`, so a new engine fails there until it is listed here.
+    pub const ALL: [Engine; 18] = [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mariadb,
+        Engine::Duckdb,
+        Engine::Sqlserver,
+        Engine::Mongodb,
+        Engine::Clickhouse,
+        Engine::Redis,
+        Engine::Trino,
+        Engine::Presto,
+        Engine::Oracle,
+        Engine::Libsql,
+        Engine::Cassandra,
+        Engine::Flightsql,
+        Engine::Dremio,
+        Engine::Gizmosql,
+        Engine::Neo4j,
+    ];
+
+    /// The engine a connection file names (`as_str`'s text). Read through the same names the
+    /// file format uses, so a new engine is named here as soon as it exists.
+    pub fn parse(name: &str) -> Option<Engine> {
+        use serde::de::IntoDeserializer;
+        let name: serde::de::value::StrDeserializer<'_, serde::de::value::Error> =
+            name.into_deserializer();
+        Engine::deserialize(name).ok()
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Engine::Postgres => "postgres",
@@ -204,6 +239,7 @@ impl Engine {
             Engine::Flightsql => "flightsql",
             Engine::Dremio => "dremio",
             Engine::Gizmosql => "gizmosql",
+            Engine::Neo4j => "neo4j",
         }
     }
 
@@ -225,7 +261,7 @@ impl Engine {
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql => true,
-            Engine::Mongodb | Engine::Redis | Engine::Cassandra => false,
+            Engine::Mongodb | Engine::Redis | Engine::Cassandra | Engine::Neo4j => false,
         }
     }
 
@@ -251,7 +287,8 @@ impl Engine {
             | Engine::Cassandra
             | Engine::Flightsql
             | Engine::Dremio
-            | Engine::Gizmosql => false,
+            | Engine::Gizmosql
+            | Engine::Neo4j => false,
         }
     }
 
@@ -273,7 +310,8 @@ impl Engine {
             | Engine::Cassandra
             | Engine::Flightsql
             | Engine::Dremio
-            | Engine::Gizmosql => false,
+            | Engine::Gizmosql
+            | Engine::Neo4j => false,
         }
     }
 
@@ -297,6 +335,8 @@ impl Engine {
             Engine::Flightsql => None,
             Engine::Dremio => Some(32010),
             Engine::Gizmosql => Some(31337),
+            // The HTTP port (the Query API); 7473 with TLS.
+            Engine::Neo4j => Some(7474),
         }
     }
 }
@@ -446,7 +486,8 @@ impl IsolationLevel {
             | Engine::Libsql
             | Engine::Flightsql
             | Engine::Dremio
-            | Engine::Gizmosql => false,
+            | Engine::Gizmosql
+            | Engine::Neo4j => false,
         }
     }
 
@@ -472,7 +513,8 @@ impl Engine {
             | Engine::Cassandra
             | Engine::Flightsql
             | Engine::Dremio
-            | Engine::Gizmosql => false,
+            | Engine::Gizmosql
+            | Engine::Neo4j => false,
         }
     }
 }

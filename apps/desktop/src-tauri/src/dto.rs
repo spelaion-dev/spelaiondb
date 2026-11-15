@@ -3441,19 +3441,7 @@ pub struct FindStepItem {
 
 /// The engine behind the id the UI uses (`postgres`, `mysql`…).
 pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
-    use spelaion_config::Engine;
-    Ok(match name {
-        "postgres" => Engine::Postgres,
-        "sqlite" => Engine::Sqlite,
-        "mysql" => Engine::Mysql,
-        "mariadb" => Engine::Mariadb,
-        "duckdb" => Engine::Duckdb,
-        "sqlserver" => Engine::Sqlserver,
-        "mongodb" => Engine::Mongodb,
-        "redis" => Engine::Redis,
-        "cassandra" => Engine::Cassandra,
-        other => return Err(format!("unsupported engine: {other}")),
-    })
+    spelaion_config::Engine::parse(name).ok_or_else(|| format!("unsupported engine: {name}"))
 }
 
 #[cfg(test)]
@@ -3470,6 +3458,17 @@ mod tests {
         {
             assert_eq!(engine_named(engine.as_str()), Ok(engine));
         }
+    }
+
+    /// Every engine of the configuration, picker or not, is named by its text, so a new
+    /// engine cannot be missing from the form's names (`Engine::ALL` is checked to be complete
+    /// in `spelaion-config`'s `tests/engine_names.rs`).
+    #[test]
+    fn every_engine_is_named_by_its_text() {
+        for engine in spelaion_config::Engine::ALL {
+            assert_eq!(engine_named(engine.as_str()), Ok(engine));
+        }
+        assert!(engine_named("snowflake").is_err());
     }
 }
 

@@ -66,7 +66,8 @@ fn passwordless(engine: Engine) -> bool {
         | Engine::Cassandra
         | Engine::Flightsql
         | Engine::Dremio
-        | Engine::Gizmosql => false,
+        | Engine::Gizmosql
+        | Engine::Neo4j => false,
     }
 }
 

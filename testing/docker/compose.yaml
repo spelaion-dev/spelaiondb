@@ -10,15 +10,15 @@
 #                                                                          oracle-tls:2484
 #                                                                          libsql:8080
 #                                                                          gizmosql:31337
+#                                                                          neo4j:7474
 #
 #   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
 #
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307, SQL
 # Server on 11433, ClickHouse on 18123, Trino on 18080, Presto on 18081, Oracle on 11521
-# (TCPS on 12484) and libSQL on 18095, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
-# Server on 11433, ClickHouse on 18123, Trino on 18080, Presto on 18081 and GizmoSQL on 31337,
-# for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# (TCPS on 12484), libSQL on 18095, GizmoSQL on 31337 and Neo4j on 17474, for tests without
+# SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
@@ -320,6 +320,25 @@ services:
       timeout: 10s
       retries: 60
       start_period: 30s
+
+  # Neo4j 5.26 (community), served only by its plugin over its HTTP Query API (ADR-056),
+  # published on 127.0.0.1:17474 (user neo4j, password spelaion-test); through the tunnels and
+  # the proxies it is neo4j:7474. TLS is tested in its plugin's repository.
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/spelaion-test
+      # Bounded for CI's runners (SDB-345): a 512 MB heap, a 128 MB page cache, 1 GB in all.
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:17474:7474"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7474 >/dev/null || exit 1"]
+      interval: 3s
+      retries: 60
     networks: [data, direct]
 
 networks:
