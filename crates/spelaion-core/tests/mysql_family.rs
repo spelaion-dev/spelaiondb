@@ -8,7 +8,7 @@
 //!   barriers; TiDB and SingleStore are recognised and get neither;
 //! - StarRocks (`SPELAION_TEST_STARROCKS`) does not say what it is: its read-only connection is
 //!   refused because the server says its session is still writable;
-//! - Databend (`SPELAION_TEST_DATABEND`) accepts MySQL's read-only transaction and session and
+//! - Databend (`SPELAION_TEST_DATABEND_MYSQL`) accepts MySQL's read-only transaction and session and
 //!   writes anyway: it is recognised by its version and gets neither (SDB-350).
 //!
 //! Each variable is `host:port`; a server without one is skipped, which does not count as
@@ -100,7 +100,7 @@ const GREPTIME: Server = Server {
 // Databend says it is MySQL 8.0.90; the rest of its version tells it apart.
 const DATABEND: Server = Server {
     label: "Databend",
-    var: "SPELAION_TEST_DATABEND",
+    var: "SPELAION_TEST_DATABEND_MYSQL",
     password: None,
     family: ServerFamily::Databend,
     table_options: "",

@@ -195,6 +195,8 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         supported(Engine::Clickhouse, "ClickHouse", Analytical, Network),
         supported(Engine::Trino, "Trino", Analytical, Network),
         supported(Engine::Presto, "Presto", Analytical, Network),
+        // Its HTTP query API, through its own plugin (SDB-351).
+        supported(Engine::Databend, "Databend", Analytical, Network),
         supported(Engine::Flightsql, "Arrow Flight SQL", Analytical, Network),
         supported(Engine::Dremio, "Dremio", Analytical, Network),
         supported(Engine::Gizmosql, "GizmoSQL", Analytical, Network),
@@ -271,6 +273,7 @@ mod tests {
             Engine::Cassandra,
             Engine::Tdengine,
             Engine::Neo4j,
+            Engine::Databend,
         ] {
             assert_eq!(
                 catalog

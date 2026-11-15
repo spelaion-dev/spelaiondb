@@ -359,6 +359,7 @@ const SETUP_EXAMPLES: Record<string, string> = {
   oracle: "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS';",
   libsql: "PRAGMA foreign_keys = ON;",
   presto: "SET SESSION query_max_run_time = '10m';",
+  databend: "SET timezone = 'UTC';",
   sqlite: "PRAGMA foreign_keys = ON;",
 };
 

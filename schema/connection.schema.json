@@ -228,6 +228,11 @@
           "description": "Neo4j, a graph database served only by its plugin over its HTTP Query API. Its language,\nCypher, is not SQL: the core reads each statement and sends it as a request (ADR-056).",
           "type": "string",
           "const": "neo4j"
+        },
+        {
+          "description": "Databend, served only by its plugin over its HTTP query API. It enforces no read-only\nmode (SDB-350): no read-only connection and no agents.",
+          "type": "string",
+          "const": "databend"
         }
       ]
     },

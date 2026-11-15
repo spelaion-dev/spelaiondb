@@ -7,7 +7,7 @@
 # Then, with the plugin variables of `spelaion-plugin-fetch`:
 #   SPELAION_TEST_TIDB=127.0.0.1:14000 SPELAION_TEST_OCEANBASE=127.0.0.1:12881
 #   SPELAION_TEST_SINGLESTORE=127.0.0.1:13308 SPELAION_TEST_STARROCKS=127.0.0.1:19030
-#   SPELAION_TEST_DATABEND=127.0.0.1:18300
+#   SPELAION_TEST_DATABEND_MYSQL=127.0.0.1:18300
 #   cargo test -p spelaion-core --test mysql_family
 #
 # Every server logs in as root: SingleStore with the password `spelaion` (a test value), the

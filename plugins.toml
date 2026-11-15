@@ -533,3 +533,36 @@ archive = "spelaiondb-plugin-hive-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "80bf690e2319736ad350542c1c9bb19e147b2ae1d80d405243f1f27014a41603"
 archive_size = 2538709
 program_sha256 = "597b242319d432f1a46d7570bb24e9ce89baa782c0a2b48ca3e1cd39d83a226e"
+
+# Databend: its HTTP query API (SDB-351).
+[[plugin]]
+name = "spelaiondb-plugin-databend"
+repository = "spelaion-dev/spelaiondb-plugin-databend"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["databend"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-databend-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "23a3ee2443b1bff8c87590b53af34aa5f3d6e5c60a371e7b5a37be4bad6f01e9"
+archive_size = 2245322
+program_sha256 = "0de35d139182e2680633383be963f74e58308ebb6e0fbe6d5a785d607fd237a4"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-databend-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "97f542ac058d831b5513fe8d19ffae64cfff3c1fa65e9a916c2244a9ccc63dda"
+archive_size = 2402205
+program_sha256 = "3ad7b01b3c8b03db3d049bdf5f5644334589179ee067ab9cc0bcaeca0220f9ce"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-databend-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "166cb75ea911ed10c336457fbe245b0b73a53b1c6a504ead39e719dfabb3dca7"
+archive_size = 2364551
+program_sha256 = "1cc9b6bd2846c24234171d88fe3733cfa3046a43dfc847a1baf0d00e508116cd"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-databend-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "cf08d02d133a9f36149d0b4cc7c1bf31bf4adf225b134d11572ec688639197c5"
+archive_size = 2651891
+program_sha256 = "b249ea76cdce36974bc070e338e6d2488fd0083be5853d3b8b7a43aa7cd1962f"

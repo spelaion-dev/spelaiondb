@@ -15,6 +15,7 @@ use spelaion_driver_api::Dialect;
 
 pub mod clickhouse;
 pub mod cql;
+pub mod databend;
 pub mod duckdb;
 pub mod hive;
 pub mod mongodb;
@@ -31,6 +32,7 @@ pub mod trino;
 
 pub use clickhouse::ClickhouseDialect;
 pub use cql::CqlDialect;
+pub use databend::DatabendDialect;
 pub use duckdb::DuckdbDialect;
 pub use hive::HiveDialect;
 pub use mongodb::MongodbDialect;
@@ -66,6 +68,7 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "oracle" => Some(Arc::new(OracleDialect)),
         // Cypher, read by the core (ADR-056).
         "neo4j" => Some(Arc::new(Neo4jDialect)),
+        "databend" => Some(Arc::new(DatabendDialect)),
         // libSQL's server reads SQL as SQLite does (ADR-058).
         "libsql" => Some(Arc::new(SqliteDialect)),
         // Shaped like SQL, but its own: sent as text, read here (ADR-056).
@@ -110,6 +113,7 @@ mod tests {
             ("dremio", "dremio"),
             ("gizmosql", "gizmosql"),
             ("neo4j", "neo4j"),
+            ("databend", "databend"),
             ("hive", "hive"),
             ("spark", "spark"),
             ("kyuubi", "kyuubi"),
