@@ -309,16 +309,19 @@ services:
   # published on 127.0.0.1:11521; through the tunnels it is oracle:1521. User and password
   # `spelaion`, service FREEPDB1 (`oracle/startup` makes the user on every start).
   oracle:
-    # Oracle Database Free is a native database, not a JVM. Free's built-in 2 GiB
-    # database memory ceiling is not a container limit; account for it here too.
+    # Oracle is native, not a JVM. Size its SGA/PGA before the very first startup,
+    # leaving native allocations and startup work room inside the container limit.
     mem_limit: 2g
-    image: container-registry.oracle.com/database/free:latest-lite
+    # 26ai lite. The pre-start hook uses this image's START_FILE interface and spfile layout.
+    image: container-registry.oracle.com/database/free@sha256:cf540c3fa190d7cffad08c491652ac07fc70314e510f6b87890449517d565e94
     environment:
       ORACLE_PWD: spelaion-test-Pw1
+      START_FILE: start-ci.sh
     ports:
       - "127.0.0.1:11521:1521"
     volumes:
       - ./oracle/startup:/opt/oracle/scripts/startup:ro
+      - ./oracle/start-ci.sh:/opt/oracle/start-ci.sh:ro
     healthcheck:
       test: ["CMD", "/opt/oracle/checkDBStatus.sh"]
       interval: 10s

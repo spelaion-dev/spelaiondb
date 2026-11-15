@@ -162,7 +162,7 @@ jobs:
             | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')"
           (
             status=failed
-            if docker compose -f testing/docker/compose.yaml up -d --build --wait \
+            if timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --build --wait \
               && kind create cluster --name spelaion-test --wait 60s \
               && kubectl apply -f testing/k8s/postgres.yaml \
               && kubectl -n spelaion-test rollout status deployment/postgres --timeout=180s
@@ -213,6 +213,7 @@ jobs:
         if: steps.scope.outputs.rust != 'false'
         run: cargo run -q --locked -p spelaion-plugin-fetch -- --into target/plugins >> "$GITHUB_ENV"
       - name: Wait for the test services
+        timeout-minutes: 12
         if: steps.scope.outputs.rust != 'false'
         run: |
           timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/services.status" ]; do sleep 1; done' || true
@@ -235,6 +236,7 @@ jobs:
         run: git diff --exit-code apps/desktop/src/bindings.ts
 
       - name: Diagnose test services after a failure
+        timeout-minutes: 2
         if: failure() && steps.scope.outputs.rust != 'false'
         run: bash testing/docker/diagnostics.sh
 
