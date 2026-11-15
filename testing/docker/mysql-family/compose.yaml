@@ -7,6 +7,7 @@
 # Then, with the plugin variables of `spelaion-plugin-fetch`:
 #   SPELAION_TEST_TIDB=127.0.0.1:14000 SPELAION_TEST_OCEANBASE=127.0.0.1:12881
 #   SPELAION_TEST_SINGLESTORE=127.0.0.1:13308 SPELAION_TEST_STARROCKS=127.0.0.1:19030
+#   SPELAION_TEST_DATABEND=127.0.0.1:18300
 #   cargo test -p spelaion-core --test mysql_family
 #
 # Every server logs in as root: SingleStore with the password `spelaion` (a test value), the
@@ -52,4 +53,17 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "mysql -h127.0.0.1 -P9030 -uroot -e 'select 1'"]
       interval: 5s
+      retries: 60
+
+  # Databend (SDB-350), its MySQL handler on 3307. It logs in as root without a password from
+  # anywhere, as its image starts. About 300 MB, a single process with local storage.
+  databend:
+    image: datafuselabs/databend:v1.2.881
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:18300:3307"
+    # No client in the image: the port answering is enough.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3307"]
+      interval: 2s
       retries: 60
