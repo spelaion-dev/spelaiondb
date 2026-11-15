@@ -35,6 +35,7 @@ const BADGES: Record<string, string> = {
   mongodb: "MG",
   redis: "RD",
   neo4j: "N4",
+  databend: "DB",
   cassandra: "CA",
 };
 

@@ -482,7 +482,8 @@ pub(crate) fn validate_connection(
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi
-        | Engine::Impala => [(
+        | Engine::Impala
+        | Engine::Databend => [(
             "host",
             file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
         )]
@@ -632,7 +633,8 @@ pub(crate) fn validate_connection(
             | Engine::Libsql
             | Engine::Cassandra
             | Engine::Tdengine
-            | Engine::Neo4j => {}
+            | Engine::Neo4j
+            | Engine::Databend => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,
@@ -956,6 +958,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Spark => "Spark's Thrift server",
         Engine::Kyuubi => "Apache Kyuubi",
         Engine::Impala => "Apache Impala",
+        Engine::Databend => "Databend",
     }
 }
 

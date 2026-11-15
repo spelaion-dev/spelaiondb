@@ -139,6 +139,7 @@ impl ExplainPolicy {
                 | Engine::Dremio
                 | Engine::Gizmosql
                 | Engine::Neo4j
+                | Engine::Databend
                 | Engine::Hive
                 | Engine::Spark
                 | Engine::Kyuubi

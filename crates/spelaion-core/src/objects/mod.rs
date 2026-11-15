@@ -174,7 +174,8 @@ pub async fn set_active_schema(session: &Session, schema: &str) -> Result<(), Ob
         message,
     };
     let statement = match dialect.name() {
-        "mysql" => {
+        // Databend's schemas are its databases, as MySQL's: the driver selects one.
+        "mysql" | "databend" => {
             return session
                 .connection()
                 .select_database(schema)
@@ -212,7 +213,8 @@ pub async fn active_schema(session: &Session) -> Result<Option<String>, String> 
         session.dialect().name()
     };
     let sql = match engine {
-        "mysql" => {
+        // Databend's databases are its schemas too, and the session (the driver's) holds which.
+        "mysql" | "databend" => {
             return session
                 .connection()
                 .current_database()

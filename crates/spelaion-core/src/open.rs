@@ -84,31 +84,9 @@ impl Engines {
     /// in place of anything else; a release build cannot (ADR-042).
     fn with_dev_plugins(self) -> Self {
         let mut engines = self;
-        for engine in [
-            Engine::Postgres,
-            Engine::Sqlite,
-            Engine::Mysql,
-            Engine::Mariadb,
-            Engine::Duckdb,
-            Engine::Sqlserver,
-            Engine::Mongodb,
-            Engine::Clickhouse,
-            Engine::Redis,
-            Engine::Trino,
-            Engine::Presto,
-            Engine::Oracle,
-            Engine::Libsql,
-            Engine::Cassandra,
-            Engine::Tdengine,
-            Engine::Flightsql,
-            Engine::Dremio,
-            Engine::Gizmosql,
-            Engine::Neo4j,
-            Engine::Hive,
-            Engine::Spark,
-            Engine::Kyuubi,
-            Engine::Impala,
-        ] {
+        // Every engine: one added to the configuration is pointed at here without a list to
+        // keep in step (`Engine::ALL` is checked to be complete in spelaion-config).
+        for engine in Engine::ALL {
             let variable = crate::plugins::dev_plugin_variable(engine.as_str());
             let pointed = std::env::var_os(variable);
             if let Some(program) =
@@ -230,6 +208,7 @@ impl Engines {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Databend
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi

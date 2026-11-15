@@ -817,6 +817,7 @@ fn tls_of(row: &Row, engine: Option<Engine>) -> Option<ImportedTls> {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Databend
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi

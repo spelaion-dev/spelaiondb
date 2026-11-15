@@ -194,12 +194,15 @@ pub enum Engine {
     Spark,
     Kyuubi,
     Impala,
+    /// Databend, served only by its plugin over its HTTP query API. It enforces no read-only
+    /// mode (SDB-350): no read-only connection and no agents.
+    Databend,
 }
 
 impl Engine {
     /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
     /// with no `_`, so a new engine fails there until it is listed here.
-    pub const ALL: [Engine; 23] = [
+    pub const ALL: [Engine; 24] = [
         Engine::Postgres,
         Engine::Sqlite,
         Engine::Mysql,
@@ -223,6 +226,7 @@ impl Engine {
         Engine::Spark,
         Engine::Kyuubi,
         Engine::Impala,
+        Engine::Databend,
     ];
 
     /// The engine a connection file names (`as_str`'s text). Read through the same names the
@@ -259,6 +263,7 @@ impl Engine {
             Engine::Spark => "spark",
             Engine::Kyuubi => "kyuubi",
             Engine::Impala => "impala",
+            Engine::Databend => "databend",
         }
     }
 
@@ -283,7 +288,8 @@ impl Engine {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => true,
+            | Engine::Impala
+            | Engine::Databend => true,
             Engine::Mongodb
             | Engine::Redis
             | Engine::Cassandra
@@ -317,6 +323,7 @@ impl Engine {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Databend
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
@@ -345,6 +352,7 @@ impl Engine {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Databend
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
@@ -379,6 +387,8 @@ impl Engine {
             Engine::Hive | Engine::Spark => Some(10000),
             Engine::Kyuubi => Some(10009),
             Engine::Impala => Some(21050),
+            // The HTTP query handler; 443 on Databend Cloud.
+            Engine::Databend => Some(8000),
         }
     }
 }
@@ -531,6 +541,7 @@ impl IsolationLevel {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Databend
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
@@ -563,6 +574,7 @@ impl Engine {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Databend
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi

@@ -83,6 +83,8 @@ const personal = {
   // Neo4j, only a plugin whose language is Cypher (ADR-056), behind the same two bastions: its
   // HTTP Query API without TLS.
   "neo4j.toml": `schema_version = 1\nname = "Neo4j through the tunnel"\nengine = "neo4j"\nhost = "neo4j"\nport = 7474\nuser = "neo4j"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // Databend, only a plugin (SDB-351), behind the same two bastions: its HTTP query API.
+  "databend.toml": `schema_version = 1\nname = "Databend through the tunnel"\nengine = "databend"\nhost = "databend"\nport = 8000\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
 };
 for (const [file, text] of Object.entries(personal)) writeFileSync(join(userDir, "connections", file), text);
 
@@ -401,6 +403,14 @@ try {
     await password("Neo4j through the tunnel", "spelaion-test");
     await statusline("1 row");
     await shot("10d-neo4j-tunnel");
+  });
+
+  await step("Databend (a plugin only) behind the same two bastions", async () => {
+    await newQuery("Databend through the tunnel", "select 'ñandú' as t, 1.5 as r, '2024-02-29'::date as d;");
+    await run();
+    await password("Databend through the tunnel", "spelaion-test");
+    await statusline("1 row");
+    await shot("10d-databend-tunnel");
   });
 
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {
