@@ -406,7 +406,8 @@ fn tls_mode(engine: Engine, mode: i64, unmapped: &mut Vec<String>) -> Option<Tls
         | Engine::Redis
         | Engine::Trino
         | Engine::Presto
-        | Engine::Oracle => None,
+        | Engine::Oracle
+        | Engine::Libsql => None,
     }
 }
 

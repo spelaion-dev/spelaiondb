@@ -171,6 +171,9 @@ pub enum Engine {
     Presto,
     /// Oracle Database, served only by its plugin, on Oracle's thin driver (ADR-059).
     Oracle,
+    /// libSQL (`sqld`, Turso): SQLite's SQL behind Hrana over HTTP, served only by its plugin
+    /// (ADR-058).
+    Libsql,
 }
 
 impl Engine {
@@ -188,6 +191,7 @@ impl Engine {
             Engine::Trino => "trino",
             Engine::Presto => "presto",
             Engine::Oracle => "oracle",
+            Engine::Libsql => "libsql",
         }
     }
 
@@ -204,7 +208,8 @@ impl Engine {
             | Engine::Clickhouse
             | Engine::Trino
             | Engine::Presto
-            | Engine::Oracle => true,
+            | Engine::Oracle
+            | Engine::Libsql => true,
             Engine::Mongodb | Engine::Redis => false,
         }
     }
@@ -222,7 +227,8 @@ impl Engine {
             | Engine::Redis
             | Engine::Trino
             | Engine::Presto
-            | Engine::Oracle => false,
+            | Engine::Oracle
+            | Engine::Libsql => false,
         }
     }
 
@@ -239,6 +245,8 @@ impl Engine {
             Engine::Trino | Engine::Presto => Some(8080),
             // The listener; TCPS is often on 2484.
             Engine::Oracle => Some(1521),
+            // sqld's HTTP port; Turso is HTTPS on 443.
+            Engine::Libsql => Some(8080),
         }
     }
 }
@@ -377,7 +385,11 @@ impl IsolationLevel {
             // has no session isolation level.
             Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis => false,
             // ClickHouse has no transactions to isolate; Trino and Presto set none per session.
-            Engine::Clickhouse | Engine::Trino | Engine::Presto | Engine::Oracle => false,
+            Engine::Clickhouse
+            | Engine::Trino
+            | Engine::Presto
+            | Engine::Oracle
+            | Engine::Libsql => false,
         }
     }
 
@@ -398,7 +410,8 @@ impl Engine {
             | Engine::Redis
             | Engine::Trino
             | Engine::Presto
-            | Engine::Oracle => false,
+            | Engine::Oracle
+            | Engine::Libsql => false,
         }
     }
 }

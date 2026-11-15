@@ -117,7 +117,7 @@ pub enum AgentView {
 /// function with an autonomous transaction writes from inside a `SELECT`). The configuration
 /// refuses `read_only` on the same engines.
 pub fn has_read_barrier(engine: Engine) -> bool {
-    engine.is_sql() && engine != Engine::Oracle
+    engine.is_sql() && !matches!(engine, Engine::Oracle | Engine::Libsql)
 }
 
 /// What agents see of `entry` (ADR-008, ADR-022) and may do on it (ADR-019, ADR-033).

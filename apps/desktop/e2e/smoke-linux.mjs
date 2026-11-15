@@ -78,6 +78,8 @@ const personal = {
   // Oracle, only a plugin (ADR-059), behind the same two bastions: its listener, without TLS
   // (TLS through the bastions is tested in tests/oracle.rs).
   "oracle.toml": `schema_version = 1\nname = "Oracle through the tunnel"\nengine = "oracle"\nhost = "oracle"\ndatabase = "FREEPDB1"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // libSQL, only a plugin (ADR-058), behind the same two bastions: Hrana over plain HTTP.
+  "libsql.toml": `schema_version = 1\nname = "libSQL through the tunnel"\nengine = "libsql"\nhost = "libsql"\nport = 8080\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
 };
 for (const [file, text] of Object.entries(personal)) writeFileSync(join(userDir, "connections", file), text);
 
@@ -381,6 +383,13 @@ try {
     await password("Oracle through the tunnel", "spelaion");
     await statusline("1 row");
     await shot("10d-oracle-tunnel");
+  });
+
+  await step("libSQL (a plugin only) behind the same two bastions", async () => {
+    await newQuery("libSQL through the tunnel", "select sqlite_version() as v, 'ñandú' as t, 1.5 as r;");
+    await run();
+    await statusline("1 row");
+    await shot("10d-libsql-tunnel");
   });
 
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {

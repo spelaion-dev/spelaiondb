@@ -510,6 +510,7 @@ try {
     ["spelaiondb-plugin-redis", "Redis"],
     ["spelaiondb-plugin-trino", "Presto, Trino"],
     ["spelaiondb-plugin-oracle", "Oracle"],
+    ["spelaiondb-plugin-libsql", "libSQL / Turso"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();

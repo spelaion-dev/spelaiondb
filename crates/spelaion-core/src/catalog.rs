@@ -149,6 +149,8 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         ),
         supported(Engine::Sqlserver, "SQL Server", Relational, Network),
         supported(Engine::Oracle, "Oracle", Relational, Network),
+        // SQLite's SQL over HTTP: libSQL's server and Turso (ADR-058).
+        supported(Engine::Libsql, "libSQL / Turso", Relational, Network),
         // PostgreSQL's protocol, checked with each server's image (`testing/docker/pg-family`).
         kind_of(
             Engine::Postgres,
@@ -286,6 +288,8 @@ mod tests {
             // bears its name.
             let expected = match engine {
                 Engine::Mariadb => "mysql",
+                // libSQL's server reads SQL as SQLite does (ADR-058).
+                Engine::Libsql => "sqlite",
                 Engine::Presto => "trino",
                 other => other.as_str(),
             };

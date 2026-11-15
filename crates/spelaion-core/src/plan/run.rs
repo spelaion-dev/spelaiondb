@@ -131,7 +131,8 @@ impl ExplainPolicy {
                 | Engine::Redis
                 | Engine::Trino
                 | Engine::Presto
-                | Engine::Oracle => None,
+                | Engine::Oracle
+                | Engine::Libsql => None,
             },
         }
     }

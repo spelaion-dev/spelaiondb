@@ -201,6 +201,11 @@
           "description": "Oracle Database, served only by its plugin, on Oracle's thin driver (ADR-059).",
           "type": "string",
           "const": "oracle"
+        },
+        {
+          "description": "libSQL (`sqld`, Turso): SQLite's SQL behind Hrana over HTTP, served only by its plugin\n(ADR-058).",
+          "type": "string",
+          "const": "libsql"
         }
       ]
     },

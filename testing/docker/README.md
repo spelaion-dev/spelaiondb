@@ -26,6 +26,9 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
   Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
   `127.0.0.1:12484` and `oracle-tls:2484`, with a certificate for `localhost` and
   `oracle-tls` signed by `keys/ca.crt` (`gen-keys.sh`).
+- libSQL's server (`sqld` 0.24.33) is on `127.0.0.1:18095` without authentication
+  (`SPELAION_TEST_LIBSQL`; behind the bastions and the proxies `libsql:8080`). Tokens and TLS
+  are tested in its plugin's repository.
 - SQL Server (Developer edition, Microsoft's image `mcr.microsoft.com/mssql/server:2022-latest`,
   about 1.5 GB): user `sa`, password `Spelaion-test-1`; the tests create the `spelaion`
   database. It encrypts with its own self-signed certificate.

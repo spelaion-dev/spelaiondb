@@ -18,6 +18,7 @@ const BADGES: Record<string, string> = {
   oceanbase: "OB",
   singlestore: "S2",
   duckdb: "DK",
+  libsql: "LS",
   "file-folder": "FF",
   clickhouse: "CH",
   snowflake: "SF",

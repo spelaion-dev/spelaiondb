@@ -273,6 +273,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   search either, which need that barrier. Its tests: `tests/oracle.rs` with
   `SPELAION_TEST_ORACLE=127.0.0.1:11521` (and `SPELAION_TEST_SSH` for TLS through the two
   bastions); `SPELAION_DEV_PLUGIN_ORACLE` in a development build.
+- **libSQL only exists as a plugin** (ADR-058): `spelaion-dev/spelaiondb-plugin-libsql` (Hrana
+  over HTTP, a stream as the session; the token is the password), pinned in `plugins.toml`. Its
+  results and explorer come from `spelaion-sqlite-schema` by the SDK's tag, so they are
+  SQLite's. What the core has of it: `Engine::Libsql` (no database: a server serves one per
+  address), SQLite's dialect and guard. Like Oracle, **no read-only mode and no agents**
+  (`has_read_barrier`; ADR-058, point 4: no session barrier, and a read-only token is the
+  server's), and no cancel. Its tests: `tests/libsql.rs` with `SPELAION_TEST_LIBSQL=127.0.0.1:18095`
+  (and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS` for the tunnel and the proxy);
+  `SPELAION_DEV_PLUGIN_LIBSQL` in a development build.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -727,6 +736,7 @@ outside the team.
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
   SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080
   SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521
+  SPELAION_TEST_LIBSQL=127.0.0.1:18095
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 cargo test --workspace`.
