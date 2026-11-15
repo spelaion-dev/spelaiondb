@@ -1,6 +1,6 @@
 # ADR-058: SQLite over the network: libSQL is a plugin that takes SQLite's catalog and typing from this repository's library
 
-- **Status:** Accepted (not implemented)
+- **Status:** Accepted (the library is implemented, SDB-314; the libSQL plugin is not yet)
 - **Date:** 2026-11-15
 - **Builds on:** ADR-005 (driver contract, capabilities), ADR-006 (SQLite's dynamic typing),
   ADR-018 (SQLite on a server), ADR-020 (each engine's barriers), ADR-041 (engines as plugins,
