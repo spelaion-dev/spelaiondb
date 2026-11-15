@@ -1572,6 +1572,8 @@ export type ConnectionDraftItem_Deserialize = {
 	host: string,
 	port?: number | null,
 	database: string,
+	/**  DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316). */
+	fileFolder: boolean,
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -1630,6 +1632,8 @@ export type ConnectionDraftItem_Serialize = {
 	host: string,
 	port: number | null,
 	database: string,
+	/**  DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316). */
+	fileFolder: boolean,
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -2279,7 +2283,7 @@ export type EngineItem_Deserialize = {
 	defaultDatabase?: string | null,
 	/**  `relational`, `analytical` or `nosql`. */
 	category: string,
-	/**  `network` or `file`. */
+	/**  `network`, `file` or `folder` (a folder of files read through DuckDB, SDB-316). */
 	access: string,
 	defaultPort?: number | null,
 	available: boolean,
@@ -2309,7 +2313,7 @@ export type EngineItem_Serialize = {
 	defaultDatabase: string | null,
 	/**  `relational`, `analytical` or `nosql`. */
 	category: string,
-	/**  `network` or `file`. */
+	/**  `network`, `file` or `folder` (a folder of files read through DuckDB, SDB-316). */
 	access: string,
 	defaultPort: number | null,
 	available: boolean,

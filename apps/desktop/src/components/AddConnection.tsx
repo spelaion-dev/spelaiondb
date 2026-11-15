@@ -21,7 +21,7 @@ import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./Connecti
 import { EngineIcon } from "./EngineIcon";
 import { TagInput } from "./TagInput";
 import { refreshConnections } from "./Sidebar";
-import { chooseOpenFile, chooseSavePath } from "../dialogs";
+import { chooseFolder, chooseOpenFile, chooseSavePath } from "../dialogs";
 import { confirmOpenTransactions, reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
@@ -88,6 +88,8 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         setInitial(draft);
         setSavedEngine(draft.engine);
         setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
+        // A folder of files (SDB-316) is shown as its catalog entry, like when it was added.
+        if (draft.fileFolder) setKind(catalog.find((e) => e.access === "folder") ?? null);
       } catch (e) {
         setLoadError(errorText(e));
       }
@@ -155,6 +157,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : engine ? (
           <ConnectionForm
             engine={engine}
+            fileFolder={kind?.access === "folder"}
             prefill={prefill ?? undefined}
             onBack={() => {
               setEngine(null);
@@ -415,6 +418,8 @@ function ConnectionForm(props: {
   passwordStored?: boolean;
   /** Values read from a pasted connection URL. */
   prefill?: UrlFields;
+  /** A new DuckDB connection to a folder of CSV, TSV and Parquet files (SDB-316). */
+  fileFolder?: boolean;
   /** A password typed before the engine was switched, kept in the new form. */
   initialPassword?: string;
   /** Editing: the engines it can switch to, the one on disk, and what the last switch did. */
@@ -440,6 +445,9 @@ function ConnectionForm(props: {
   const [tab, setTab] = useState<FormTab>("main");
   const [tunnels, setTunnels] = useState<TunnelItem[]>([]);
   const { initial, editing, prefill } = props;
+  // A folder of files is always read-only, never shown to agents and has no session setup:
+  // the core sets its session up to read that folder alone (SDB-316).
+  const fileFolder = initial ? initial.fileFolder : Boolean(props.fileFolder);
   const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network ? "password" : "none");
   const [cloudToken, setCloudToken] = useState<CloudToken>(
     initial && (CLOUD_TOKENS as string[]).includes(initial.passwordMode) ? (initial.passwordMode as CloudToken) : "awsRds",
@@ -481,6 +489,7 @@ function ConnectionForm(props: {
     host: prefill?.host || (network ? "localhost" : ""),
     port: prefill?.port ?? null,
     database: prefill?.database ?? "",
+    fileFolder,
     user: prefill?.user ?? "",
     passwordEnv: "",
     passwordOther: "",
@@ -488,7 +497,7 @@ function ConnectionForm(props: {
     tlsCa: "",
     tlsCert: "",
     tlsKey: "",
-    readOnly: false,
+    readOnly: fileFolder,
     mcpExposed: false,
     mcpWrites: false,
     sqlite3: "",
@@ -582,7 +591,11 @@ function ConnectionForm(props: {
               : "prompt";
   const request: ConnectionDraft = {
     ...draft,
-    mcpWrites: agentsWrite,
+    // The core makes a folder read-only and hides it from agents whatever the file says; the
+    // file says so too, so what is written is what happens.
+    readOnly: draft.readOnly || fileFolder,
+    mcpExposed: draft.mcpExposed && !fileFolder,
+    mcpWrites: agentsWrite && !fileFolder,
     passwordMode,
     tunnel: network && useKubernetes ? kubeProfile : tunnelsAllowed && useTunnel ? tunnel : "",
     sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
@@ -626,6 +639,11 @@ function ConnectionForm(props: {
   }
 
   async function browse(field: "database" | "tlsCa" | "tlsCert" | "tlsKey") {
+    if (field === "database" && fileFolder) {
+      const folder = await chooseFolder(t("fields.chooseFileFolder"), draft.database || null);
+      if (folder) update({ database: folder });
+      return;
+    }
     const path = await chooseOpenFile(
       undefined,
       field === "database"
@@ -743,7 +761,9 @@ function ConnectionForm(props: {
     ? ["main", "ssl", "ssh", "kubernetes", "session", "options"] as FormTab[]
     : remoteFile
       ? ["main", "ssh", "session", "options"] as FormTab[]
-      : ["main", "session", "options"] as FormTab[]).filter((t) => engine.sql || t !== "session");
+      : ["main", "session", "options"] as FormTab[])
+    // A folder of files has no session setup either: the core sets its session up (SDB-316).
+    .filter((t) => (engine.sql && !fileFolder) || t !== "session");
   // Where the session setup may only read and change settings (ADR-037), as the core decides
   // when the session opens: a read-only connection or a type that confirms data changes.
   const setupRestricted = draft.readOnly || Boolean(selectedType?.safeguards.confirmDataChanges);
@@ -905,6 +925,20 @@ function ConnectionForm(props: {
               </fieldset>
             </>
           ) : (
+            fileFolder ? (
+            <fieldset>
+              <legend>{t("sections.fileFolder")}</legend>
+              <div className="form-pair">
+                <Field label={t("fields.fileFolder")} className="grow">
+                  <input type="text" value={draft.database} onChange={(e) => update({ database: e.target.value })} />
+                </Field>
+                <button type="button" onClick={() => void browse("database")}>
+                  {t("browse")}
+                </button>
+              </div>
+              <p className="muted small">{t("fields.fileFolderHint")}</p>
+            </fieldset>
+            ) : (
             <fieldset>
               <legend>{t("sections.file")}</legend>
               <div className="form-pair">
@@ -929,6 +963,7 @@ function ConnectionForm(props: {
               )}
               <p className="muted small">{onServer ? t("fields.serverFileHint") : t("fields.fileHint")}</p>
             </fieldset>
+            )
           )}
         </div>
 
@@ -1262,18 +1297,19 @@ function ConnectionForm(props: {
           {engine.sql ? <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">
-              <input type="checkbox" checked={draft.readOnly} onChange={(e) => update({ readOnly: e.target.checked })} />
+              <input type="checkbox" checked={draft.readOnly || fileFolder} disabled={fileFolder} onChange={(e) => update({ readOnly: e.target.checked })} />
               {t("fields.readOnly")}
             </label>
             <label className="check">
-              <input type="checkbox" checked={draft.mcpExposed} onChange={(e) => update({ mcpExposed: e.target.checked })} />
+              <input type="checkbox" checked={draft.mcpExposed && !fileFolder} disabled={fileFolder} onChange={(e) => update({ mcpExposed: e.target.checked })} />
               {t("fields.mcpExposed")}
             </label>
+            {fileFolder && <p className="muted small">{t("fields.fileFolderSafety")}</p>}
             <Field label={t("fields.mcpAccess")}>
               <select
                 aria-label={t("fields.mcpAccess")}
                 value={agentsWrite ? "write" : "read"}
-                disabled={!draft.mcpExposed || draft.readOnly}
+                disabled={!draft.mcpExposed || draft.readOnly || fileFolder}
                 onChange={(e) => update({ mcpWrites: e.target.value === "write" })}
               >
                 <option value="read">{t("fields.mcpRead")}</option>

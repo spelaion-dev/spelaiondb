@@ -63,6 +63,10 @@
         "null"
       ]
     },
+    "file_folder": {
+      "description": "DuckDB only: `database` is a folder of CSV, TSV and Parquet files, opened as an\nin-memory database with one view per file, always read-only (SDB-316). Nothing outside\nthe folder can be read and nothing is written to it; agents never see it.",
+      "type": "boolean"
+    },
     "user": {
       "type": [
         "string",

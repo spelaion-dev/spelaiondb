@@ -40,6 +40,11 @@ pub struct ConnectionFile {
     /// Database; for SQLite and DuckDB, the file path (relative to the repository root).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
+    /// DuckDB only: `database` is a folder of CSV, TSV and Parquet files, opened as an
+    /// in-memory database with one view per file, always read-only (SDB-316). Nothing outside
+    /// the folder can be read and nothing is written to it; agents never see it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub file_folder: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     /// Reference to the secret, never the value: `{ secret = "keychain" }`.

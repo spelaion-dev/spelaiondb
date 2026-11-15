@@ -16,6 +16,7 @@ mod edit;
 mod er;
 mod export;
 mod export_stream;
+mod file_folder;
 mod filter;
 mod find;
 mod generate;
@@ -107,6 +108,7 @@ pub use export_stream::{
     StreamExport, TableSource, TablesError, export_query, export_table, export_tables, file_name,
     follow_session_context, rerun_check,
 };
+pub use file_folder::{FolderReport, FolderView, MAX_VIEWS as MAX_FOLDER_VIEWS, SkippedFile};
 pub use filter::{ColumnFilter, FilterOp};
 pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};

@@ -684,6 +684,15 @@ async fn connection_steps(
     {
         return Err((FailureKind::Other, reason));
     }
+    // A folder of files: set up as opening would, so a path that is not a folder, or one
+    // DuckDB cannot be limited to, fails here (SDB-316).
+    if let Some(folder) = &resolved.file_folder
+        && let Some(dialect) = crate::dialect_of(resolved.engine)
+    {
+        crate::file_folder::prepare(connection.as_ref(), dialect.as_ref(), folder)
+            .await
+            .map_err(|message| (FailureKind::Other, message))?;
+    }
     drop(connection);
     run.ok_running();
     Ok(Some(version))
@@ -880,7 +889,7 @@ fn open_failure(error: &OpenError) -> Failure {
         }
         OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
         // The test logs in without the session setup; only an opened session runs it.
-        OpenError::Setup(_) | OpenError::NoReadOnlyBarrier(_) => {
+        OpenError::Setup(_) | OpenError::NoReadOnlyBarrier(_) | OpenError::FileFolder(_) => {
             (FailureKind::Other, error.to_string())
         }
     }
