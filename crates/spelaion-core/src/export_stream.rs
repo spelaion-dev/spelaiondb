@@ -410,6 +410,7 @@ pub(crate) fn barrier(
         // No transactions: the session's `readonly` setting, for the rest of the export's own
         // session ([`enter`] sets it only where it is not set already).
         "clickhouse" => (crate::readonly::CLICKHOUSE_READ_ONLY, None),
+        "trino" => ("start transaction read only", Some("rollback")),
         other => {
             return Err(ExportError::Invalid(format!(
                 "streaming exports are not available for {other}"

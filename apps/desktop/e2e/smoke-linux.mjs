@@ -73,6 +73,8 @@ const personal = {
   "bastions.toml": `schema_version = 1\nname = "Postgres through the tunnel"\nengine = "postgres"\nhost = "postgres"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "verify-full"\nca = ${JSON.stringify(join(keys, "ca.crt"))}\n`,
   // ClickHouse, only a plugin (ADR-041), behind the same two bastions: its HTTP port has no TLS.
   "clickhouse.toml": `schema_version = 1\nname = "ClickHouse through the tunnel"\nengine = "clickhouse"\nhost = "clickhouse"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // Trino (one plugin with Presto) behind the same bastions: no password over plain HTTP.
+  "trino.toml": `schema_version = 1\nname = "Trino through the tunnel"\nengine = "trino"\nhost = "trino"\ndatabase = "tpch.tiny"\nuser = "spelaion"\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
 };
 for (const [file, text] of Object.entries(personal)) writeFileSync(join(userDir, "connections", file), text);
 
@@ -360,6 +362,13 @@ try {
     await password("ClickHouse through the tunnel", "spelaion");
     await statusline("1 row");
     await shot("10b-clickhouse-tunnel");
+  });
+
+  await step("Trino (a plugin only) behind the same two bastions, its pages followed there", async () => {
+    await newQuery("Trino through the tunnel", "select count(*) as lines, 'ñandú' as t from lineitem;");
+    await run();
+    await statusline("1 row");
+    await shot("10c-trino-tunnel");
   });
 
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {

@@ -94,6 +94,8 @@ impl Engines {
             Engine::Mongodb,
             Engine::Clickhouse,
             Engine::Redis,
+            Engine::Trino,
+            Engine::Presto,
         ] {
             let variable = crate::plugins::dev_plugin_variable(engine.as_str());
             let pointed = std::env::var_os(variable);
@@ -205,7 +207,9 @@ impl Engines {
             | Engine::Sqlserver
             | Engine::Mongodb
             | Engine::Clickhouse
-            | Engine::Redis => {
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto => {
                 return Err(not_a_file());
             }
         }

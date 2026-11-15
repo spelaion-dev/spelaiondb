@@ -21,6 +21,7 @@ pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 pub mod sqlserver;
+pub mod trino;
 
 pub use clickhouse::ClickhouseDialect;
 pub use duckdb::DuckdbDialect;
@@ -30,6 +31,7 @@ pub use postgres::PostgresDialect;
 pub use redis::RedisDialect;
 pub use sqlite::SqliteDialect;
 pub use sqlserver::SqlServerDialect;
+pub use trino::TrinoDialect;
 
 /// The dialect of an engine, by the name the configuration uses (`engine = "postgres"`).
 /// `None` for an engine the core has no dialect for: nothing is split, classified or guarded
@@ -47,6 +49,8 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "mongodb" => Some(Arc::new(MongodbDialect)),
         "clickhouse" => Some(Arc::new(ClickhouseDialect)),
         "redis" => Some(Arc::new(RedisDialect)),
+        // One dialect for both: Presto is where Trino came from, and their grammar is one.
+        "trino" | "presto" => Some(Arc::new(TrinoDialect)),
         _ => None,
     }
 }
@@ -67,6 +71,8 @@ mod tests {
             ("mongodb", "mongodb"),
             ("clickhouse", "clickhouse"),
             ("redis", "redis"),
+            ("trino", "trino"),
+            ("presto", "trino"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");

@@ -802,7 +802,13 @@ fn tls_of(row: &Row, engine: Option<Engine>) -> Option<ImportedTls> {
             (true, false) => Some(TlsModeConfig::Require),
         },
         Some(
-            Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Clickhouse | Engine::Redis,
+            Engine::Sqlite
+            | Engine::Duckdb
+            | Engine::Mongodb
+            | Engine::Clickhouse
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto,
         )
         | None => None,
     };

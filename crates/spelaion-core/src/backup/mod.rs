@@ -99,7 +99,9 @@ impl ToolFamily {
             | Engine::Sqlserver
             | Engine::Mongodb
             | Engine::Clickhouse
-            | Engine::Redis => None,
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto => None,
         }
     }
 
@@ -132,7 +134,9 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Sqlserver
         | Engine::Mongodb
         | Engine::Clickhouse
-        | Engine::Redis => None,
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto => None,
     }
 }
 

@@ -58,7 +58,9 @@ fn passwordless(engine: Engine) -> bool {
         | Engine::Duckdb
         | Engine::Mongodb
         | Engine::Clickhouse
-        | Engine::Redis => false,
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto => false,
     }
 }
 

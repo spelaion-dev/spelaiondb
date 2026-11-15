@@ -245,6 +245,19 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   and no data search, and agents' writes are refused (`run_write` needs a transaction). Its
   tests: `tests/clickhouse.rs` with `SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123` (and
   `SPELAION_TEST_SSH` for the tunnel); `SPELAION_DEV_PLUGIN_CLICKHOUSE` in a development build.
+- **Trino and Presto are one plugin** (`spelaion-dev/spelaiondb-plugin-trino`, engines `trino`
+  and `presto`: the same HTTP protocol, results polled page by page through `nextUri`, the
+  session kept in the client), pinned in `plugins.toml`. One dialect for both
+  (`spelaion-dialect`'s `trino.rs`, named `trino`, as MariaDB reads as `mysql`). Their read
+  barrier is `START TRANSACTION READ ONLY`, which the server enforces for every catalog
+  (`READ_ONLY_VIOLATION`), always rolled back (`readonly.rs`, the exports' `barrier`); the
+  classifier refuses the `query` and `raw_query` table functions, which send their text to the
+  database behind a catalog. The explorer's three levels are catalogs (its databases), schemas
+  and tables. Declared off: the app's transaction controls (writes depend on each catalog's
+  connector), editing, imports, plans and data search; agents' writes are refused; a read-only
+  connection relies on the core's check (no session-wide read-only mode). Tests:
+  `tests/trino.rs` with `SPELAION_TEST_TRINO=127.0.0.1:18080` and
+  `SPELAION_TEST_PRESTO=127.0.0.1:18081`.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -697,7 +710,8 @@ outside the team.
   `docker compose -f testing/docker/compose.yaml up -d --wait` and
   `SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
-  SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123
+  SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080
+  SPELAION_TEST_PRESTO=127.0.0.1:18081
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 cargo test --workspace`.

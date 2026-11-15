@@ -508,6 +508,7 @@ try {
     ["spelaiondb-plugin-mongodb", "MongoDB"],
     ["spelaiondb-plugin-clickhouse", "ClickHouse"],
     ["spelaiondb-plugin-redis", "Redis"],
+    ["spelaiondb-plugin-trino", "Presto, Trino"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();

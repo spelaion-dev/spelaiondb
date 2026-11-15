@@ -471,8 +471,9 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
-        // ClickHouse logs in as `default` when no user is given, into its default database.
-        Engine::Clickhouse => [(
+        // ClickHouse logs in as `default` when no user is given; Trino and Presto take any
+        // name (the plugin sends `spelaiondb`). The database is optional on all three.
+        Engine::Clickhouse | Engine::Trino | Engine::Presto => [(
             "host",
             file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
         )]
@@ -594,6 +595,12 @@ pub(crate) fn validate_connection(
                 return Err(ConfigError::new(
                     path,
                     "ClickHouse connections log in with a password: client certificates are not supported yet",
+                ));
+            }
+            Engine::Trino | Engine::Presto => {
+                return Err(ConfigError::new(
+                    path,
+                    "Trino and Presto connections log in with a user and, over TLS, a password: client certificates are not supported yet",
                 ));
             }
         }
@@ -863,6 +870,8 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Mongodb => "MongoDB",
         Engine::Clickhouse => "ClickHouse",
         Engine::Redis => "Redis",
+        Engine::Trino => "Trino",
+        Engine::Presto => "Presto",
     }
 }
 

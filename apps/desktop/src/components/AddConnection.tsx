@@ -355,6 +355,8 @@ const SETUP_EXAMPLES: Record<string, string> = {
   sqlserver: "SET DATEFORMAT ymd;\nSET LOCK_TIMEOUT 5000;",
   duckdb: "SET TimeZone = 'UTC';",
   clickhouse: "SET session_timezone = 'UTC';\nSET max_execution_time = 60;",
+  trino: "SET SESSION query_max_run_time = '10m';",
+  presto: "SET SESSION query_max_run_time = '10m';",
   sqlite: "PRAGMA foreign_keys = ON;",
 };
 
