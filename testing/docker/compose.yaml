@@ -26,6 +26,7 @@ name: spelaion-test
 services:
   bastion1:
     build: ./bastion
+    mem_limit: 64m
     ports:
       - "127.0.0.1:2221:22"
     volumes:
@@ -34,6 +35,7 @@ services:
 
   bastion2:
     build: ./bastion
+    mem_limit: 64m
     volumes:
       - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
     networks: [mid, data]
@@ -43,6 +45,7 @@ services:
   # `spelaion` database's catalog is the same as on plain PostgreSQL.
   postgres:
     image: postgis/postgis:17-3.5-alpine
+    mem_limit: 384m
     environment:
       POSTGRES_USER: spelaion
       POSTGRES_PASSWORD: spelaion
@@ -79,6 +82,7 @@ services:
   # copied inside with the owner and permissions the server accepts.
   mysql:
     image: mysql:8.4
+    mem_limit: 1g
     environment:
       MYSQL_ROOT_PASSWORD: spelaion-root
       MYSQL_DATABASE: spelaion
@@ -106,6 +110,7 @@ services:
 
   mariadb:
     image: mariadb:11.4
+    mem_limit: 512m
     environment:
       MARIADB_ROOT_PASSWORD: spelaion-root
       MARIADB_DATABASE: spelaion
@@ -135,6 +140,7 @@ services:
   # sqlite3, unlike the bastions. Only bastion1 reaches it: tests go through two hops.
   sqlitehost:
     build: ./sqlitehost
+    mem_limit: 64m
     volumes:
       - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
     networks: [mid]
@@ -144,6 +150,7 @@ services:
   # run its first SSH hop through it.
   proxy:
     build: ./proxy
+    mem_limit: 128m
     ports:
       - "127.0.0.1:11080:1080"
       - "127.0.0.1:13128:3128"
@@ -153,10 +160,13 @@ services:
   # self-signed certificate of its own. Tests log in as `sa` and create the `spelaion` database.
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
+    mem_limit: 2g
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_PID: Developer
       MSSQL_SA_PASSWORD: Spelaion-test-1
+      # What the server takes for itself, inside the container's 2 GB (its minimum).
+      MSSQL_MEMORY_LIMIT_MB: "1280"
     ports:
       - "127.0.0.1:11433:1433"
     healthcheck:
@@ -170,6 +180,9 @@ services:
   # (password `spelaion`) is in `admin`. 127.0.0.1:27017 (SPELAION_TEST_MONGO).
   mongodb:
     image: mongo:8.0
+    mem_limit: 512m
+    # WiredTiger's cache is half the memory by default: a quarter of a gigabyte here.
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.25"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: spelaion
       MONGO_INITDB_ROOT_PASSWORD: spelaion
@@ -187,6 +200,7 @@ services:
   # TLS is tested in its plugin's repository. User, password and database: `spelaion`.
   clickhouse:
     image: clickhouse/clickhouse-server:25.8
+    mem_limit: 1g
     environment:
       CLICKHOUSE_USER: spelaion
       CLICKHOUSE_PASSWORD: spelaion
@@ -206,6 +220,7 @@ services:
 
   redis:
     image: redis:7.4
+    mem_limit: 128m
     command: ["redis-server", "--requirepass", "spelaion"]
     ports:
       - "127.0.0.1:16379:6379"
@@ -220,6 +235,11 @@ services:
   # trino:8080 and presto:8080. No password: they take one only over TLS.
   trino:
     image: trinodb/trino:479
+    mem_limit: 1536m
+    # The image sizes the heap at 80 % of all the memory it sees: a bounded heap, direct memory
+    # and code cache of our own instead.
+    volumes:
+      - ./trino/jvm.config:/etc/trino/jvm.config:ro
     ports:
       - "127.0.0.1:18080:8080"
     healthcheck:
@@ -234,6 +254,7 @@ services:
   # repository.
   gizmosql:
     image: gizmodata/gizmosql@sha256:88e9d292d6cfe2f41e28d3baab24230691bf07af671b2329d226689fe5634150
+    mem_limit: 512m
     environment:
       GIZMOSQL_USERNAME: spelaion
       GIZMOSQL_PASSWORD: spelaion
@@ -266,6 +287,9 @@ services:
 
   presto:
     image: prestodb/presto:0.295
+    mem_limit: 1536m
+    volumes:
+      - ./presto/jvm.config:/opt/presto-server/etc/jvm.config:ro
     ports:
       - "127.0.0.1:18081:8080"
     healthcheck:
@@ -279,6 +303,7 @@ services:
   # `spelaion`, service FREEPDB1 (`oracle/startup` makes the user on every start).
   oracle:
     image: container-registry.oracle.com/database/free:latest-lite
+    mem_limit: 2560m
     environment:
       ORACLE_PWD: spelaion-test-Pw1
     ports:
@@ -299,6 +324,7 @@ services:
   # oracle-tls:2484.
   oracle-tls:
     image: haproxy:3.2-alpine
+    mem_limit: 128m
     depends_on:
       oracle:
         condition: service_healthy
@@ -314,6 +340,7 @@ services:
   # is libsql:8080. Tokens and TLS are tested in its plugin's repository.
   libsql:
     image: ghcr.io/tursodatabase/libsql-server:v0.24.33
+    mem_limit: 128m
     ports:
       - "127.0.0.1:18095:8080"
     networks: [data, direct]
@@ -365,7 +392,7 @@ services:
   # engine at once (SDB-345).
   tdengine:
     image: tdengine/tdengine:3.3.6.13
-    mem_limit: 1g
+    mem_limit: 512m
     ports:
       - "127.0.0.1:16141:6041"
     healthcheck:

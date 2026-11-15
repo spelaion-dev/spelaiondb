@@ -81,6 +81,29 @@ Manual check with OpenSSH:
 ssh -i testing/docker/keys/id_ed25519 -J spelaion@127.0.0.1:2221 -p 22 spelaion@bastion2 -N -L 15432:postgres:5432
 ```
 
+## Memory
+
+CI's Linux runner (4 CPUs, 16 GB) holds every service at once while it compiles and runs the
+tests, so every service is bounded (SDB-345): each has a `mem_limit`, and every JVM a bounded
+heap, direct memory and code cache (Trino and Presto through `trino/jvm.config` and
+`presto/jvm.config`: Trino's image would size its heap at 80 % of all the memory it sees).
+SQL Server's own limit sits inside its 2 GB (its minimum), MongoDB's cache is a quarter of a
+gigabyte, and ClickHouse sizes itself to its limit. Measured during a whole `cargo test
+--workspace` run with every service up (2026-11-15), the peaks add up to about 11 GB: Oracle
+2.3 GB, SQL Server 1.6 GB, Presto 1.3 GB, Trino 1.2 GB, then ClickHouse, Cassandra, MySQL,
+Hive and Neo4j under 0.8 GB each. A new service gets its `mem_limit` (and a JVM its heap)
+in the same pull request that adds it, measured the same way.
+
+When a service does not become healthy, CI runs `diagnose.sh`: the memory of every container
+against its limit, the runner's memory, each service's state (with whether the kernel killed it
+for memory) and the last lines of every unhealthy one. CI's Linux job also prints `docker stats`
+after the tests, whatever they did.
+
+These services are one Compose project (`spelaion-test`) whatever folder starts them: an `up`
+from another checkout or worktree recreates them for everyone using them at the time. And run
+`gen-keys.sh` before the first `up`: a key file that does not exist yet is created by Docker as
+an empty directory, which the service then cannot read.
+
 ## Servers that speak PostgreSQL's protocol
 
 `pg-family/compose.yaml` is a project of its own (`spelaion-test-pg-family`) with CockroachDB,

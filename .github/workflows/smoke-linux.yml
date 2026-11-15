@@ -121,7 +121,11 @@ jobs:
           echo "::group::docker compose output"
           cat "$RUNNER_TEMP/services.log"
           echo "::endgroup::"
-          test "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" = ready
+          if [ "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" != ready ]; then
+            # Which service, and whether memory was why (SDB-345).
+            bash testing/docker/diagnose.sh
+            exit 1
+          fi
       # An X server with a window manager (wmctrl asks it to close the window, as its close
       # button would); no Wayland, so the test takes its X11 paths (xclip, wmctrl).
       - name: Run the smoke test under Xvfb and Openbox

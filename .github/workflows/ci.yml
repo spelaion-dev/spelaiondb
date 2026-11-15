@@ -207,7 +207,11 @@ jobs:
         run: |
           timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/services.status" ]; do sleep 1; done' || true
           cat "$RUNNER_TEMP/services.log"
-          test "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" = ready
+          if [ "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" != ready ]; then
+            # Which service, and whether memory was why (SDB-345).
+            bash testing/docker/diagnose.sh
+            exit 1
+          fi
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --workspace --locked
       # The app's own unit tests: its library says `test = false` because the test executable of
@@ -215,6 +219,13 @@ jobs:
       # starts: named, they run.
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --locked -p spelaion-desktop --lib
+      # What each test service used, against its limit, once every test has run (SDB-345): the
+      # margin the runner has left, whether the tests passed or not.
+      - name: Memory of the test services
+        if: always() && steps.scope.outputs.rust != 'false'
+        run: |
+          docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
+          free -m
       # The app's TS types are generated from Rust: the file in the repo must be up to date.
       - if: steps.scope.outputs.rust != 'false'
         run: cargo run -q --locked -p spelaion-desktop --features bindings --bin export-bindings
