@@ -86,6 +86,25 @@ variables are at the top of the file.
 docker compose -f testing/docker/mysql-family/compose.yaml up -d --wait
 ```
 
+## GreptimeDB's ineffective read-only transactions
+
+`greptime/compose.yaml` runs GreptimeDB 1.3.1 for the barrier regression tests in
+`mysql_family.rs` and `postgres_family.rs` (SDB-343). Both protocols accept a read-only
+transaction and still commit an `INSERT`. The tests verify that the core refuses read-only
+connections, agents' reads and streaming reads on this server. They also send a write directly
+to each plugin to check why that refusal is necessary. This fixture does not enable general
+GreptimeDB support: its explorer still needs plugin changes.
+
+```bash
+docker compose -f testing/docker/greptime/compose.yaml up -d --wait
+SPELAION_TEST_GREPTIME_MYSQL=127.0.0.1:18402 SPELAION_TEST_GREPTIME_PG=127.0.0.1:18403 \
+  cargo test -p spelaion-core --test mysql_family --test postgres_family
+docker compose -f testing/docker/greptime/compose.yaml down
+```
+
+Use the pinned plugins, or set `SPELAION_DEV_PLUGIN_MYSQL` and `SPELAION_DEV_PLUGIN_POSTGRES`
+to the programs downloaded by `spelaion-plugin-fetch`.
+
 ## Clearing test leftovers
 
 Tests that create objects on these servers give them a per-run name (`<prefix>_<process id>`,
