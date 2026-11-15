@@ -178,6 +178,9 @@ pub enum Engine {
     /// CQL, is shaped like SQL but is not SQL: sent as text, read by the core's own lists
     /// (ADR-056).
     Cassandra,
+    /// TDengine, through taosAdapter's REST API. Its SQL is shaped like SQL but its own (super
+    /// tables, tags): sent as text, read by the core's own lists (ADR-056).
+    Tdengine,
     // Arrow Flight SQL, one plugin: any server that speaks it, and Dremio and GizmoSQL by name.
     Flightsql,
     Dremio,
@@ -190,7 +193,7 @@ pub enum Engine {
 impl Engine {
     /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
     /// with no `_`, so a new engine fails there until it is listed here.
-    pub const ALL: [Engine; 18] = [
+    pub const ALL: [Engine; 19] = [
         Engine::Postgres,
         Engine::Sqlite,
         Engine::Mysql,
@@ -205,6 +208,7 @@ impl Engine {
         Engine::Oracle,
         Engine::Libsql,
         Engine::Cassandra,
+        Engine::Tdengine,
         Engine::Flightsql,
         Engine::Dremio,
         Engine::Gizmosql,
@@ -236,6 +240,7 @@ impl Engine {
             Engine::Oracle => "oracle",
             Engine::Libsql => "libsql",
             Engine::Cassandra => "cassandra",
+            Engine::Tdengine => "tdengine",
             Engine::Flightsql => "flightsql",
             Engine::Dremio => "dremio",
             Engine::Gizmosql => "gizmosql",
@@ -261,7 +266,11 @@ impl Engine {
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql => true,
-            Engine::Mongodb | Engine::Redis | Engine::Cassandra | Engine::Neo4j => false,
+            Engine::Mongodb
+            | Engine::Redis
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Neo4j => false,
         }
     }
 
@@ -285,6 +294,7 @@ impl Engine {
             | Engine::Libsql
             | Engine::Redis
             | Engine::Cassandra
+            | Engine::Tdengine
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql
@@ -308,6 +318,7 @@ impl Engine {
             | Engine::Oracle
             | Engine::Libsql
             | Engine::Cassandra
+            | Engine::Tdengine
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql
@@ -331,6 +342,7 @@ impl Engine {
             // sqld's HTTP port; Turso is HTTPS on 443.
             Engine::Libsql => Some(8080),
             Engine::Cassandra => Some(9042),
+            Engine::Tdengine => Some(6041),
             // A generic Flight SQL server has no usual port.
             Engine::Flightsql => None,
             Engine::Dremio => Some(32010),
@@ -477,7 +489,8 @@ impl IsolationLevel {
             | Engine::Duckdb
             | Engine::Mongodb
             | Engine::Redis
-            | Engine::Cassandra => false,
+            | Engine::Cassandra
+            | Engine::Tdengine => false,
             // ClickHouse has no transactions to isolate; Trino and Presto set none per session.
             Engine::Clickhouse
             | Engine::Trino
@@ -511,6 +524,7 @@ impl Engine {
             | Engine::Oracle
             | Engine::Libsql
             | Engine::Cassandra
+            | Engine::Tdengine
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql

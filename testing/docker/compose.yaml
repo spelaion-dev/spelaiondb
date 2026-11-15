@@ -341,6 +341,21 @@ services:
       retries: 60
     networks: [data, direct]
 
+  # TDengine 3.3.6 (ADR-056), through its plugin over taosAdapter's REST API, on 127.0.0.1:16141
+  # with the image's own login (`root`, `taosdata`). Its memory is capped: CI's runner holds every
+  # engine at once (SDB-345).
+  tdengine:
+    image: tdengine/tdengine:3.3.6.13
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:16141:6041"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -u root:taosdata -d 'select server_version()' http://127.0.0.1:6041/rest/sql"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+    networks: [data, direct]
+
 networks:
   public: {}
   direct: {}

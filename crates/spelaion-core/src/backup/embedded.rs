@@ -76,6 +76,7 @@ pub fn embedded_dump_path(
         | Engine::Oracle
         | Engine::Libsql
         | Engine::Cassandra
+        | Engine::Tdengine
         | Engine::Flightsql
         | Engine::Dremio
         | Engine::Gizmosql
@@ -193,6 +194,7 @@ pub async fn embedded_dump(
         | Engine::Oracle
         | Engine::Libsql
         | Engine::Cassandra
+        | Engine::Tdengine
         | Engine::Flightsql
         | Engine::Dremio
         | Engine::Gizmosql

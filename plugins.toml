@@ -468,3 +468,35 @@ archive = "spelaiondb-plugin-neo4j-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "d479a5e6b6dd977031afa5536b5ba5c5db9ff2bf905a61cb58b9f6b43a575b35"
 archive_size = 2583189
 program_sha256 = "a725feb6709192bb528d5538d3b18b00dd9ccaf5cf6e12e8fcb4f5e1ba55111e"
+
+[[plugin]]
+name = "spelaiondb-plugin-tdengine"
+repository = "spelaion-dev/spelaiondb-plugin-tdengine"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["tdengine"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-tdengine-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "3e2b0d609902a2a9c7ad3a727c8e2de81866775a55bce9ea28d10b56555be3f4"
+archive_size = 2539448
+program_sha256 = "da90796aaed1e881697306f2de4294cbc4bb2168ab7d453cfd60fc3f3c2e982b"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-tdengine-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "d9604b43e1289f760ac3f32331ef2cf1bd1c3dc5f91e17f03bbc0a40d78edf42"
+archive_size = 2699215
+program_sha256 = "e43f385196376c7f2c88ebd169eda974833a7e41953d752e0241d332cdccd951"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-tdengine-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "7673421944eeeccb0b2148cf786780d8d560aaba47b7d6223107b209eddcccf8"
+archive_size = 2672191
+program_sha256 = "396e02944242cf6ab7488427d266396503d47854b517c2c4176b717ccb24f373"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-tdengine-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "cf8526f0223b151f99957372261784c4e53814de70a14d0b94c6d48bd8ad3826"
+archive_size = 2944876
+program_sha256 = "e76f9b8bd3e01097a6b8fff392a787fab01bdc63efc99d0557e1729577efc779"

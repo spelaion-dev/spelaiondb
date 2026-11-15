@@ -134,6 +134,7 @@ impl ExplainPolicy {
                 | Engine::Oracle
                 | Engine::Libsql
                 | Engine::Cassandra
+                | Engine::Tdengine
                 | Engine::Flightsql
                 | Engine::Dremio
                 | Engine::Gizmosql

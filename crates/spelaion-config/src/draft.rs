@@ -394,6 +394,7 @@ impl ConnectionDraft {
                     | Engine::Oracle
                     | Engine::Libsql
                     | Engine::Cassandra
+                    | Engine::Tdengine
                     | Engine::Flightsql
                     | Engine::Dremio
                     | Engine::Gizmosql
@@ -494,6 +495,7 @@ impl ConnectionDraft {
                 | Engine::Oracle
                 | Engine::Libsql
                 | Engine::Cassandra
+                | Engine::Tdengine
                 | Engine::Flightsql
                 | Engine::Dremio
                 | Engine::Gizmosql
