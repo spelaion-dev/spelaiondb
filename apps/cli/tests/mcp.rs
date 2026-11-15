@@ -483,9 +483,13 @@ fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
             ..Default::default()
         };
         // How DuckDB says the file is another process's: its own lock on Linux and macOS, the
-        // system's refusal to open the file on Windows.
+        // system's refusal to open the file on Windows. Windows words that refusal in the
+        // system's language ("being used by another process" only in English), so on Windows
+        // DuckDB's own prefix is what is matched; a file that stays unopenable still fails,
+        // after the ten seconds.
         let locked = |error: &str| {
-            error.contains("Could not set lock") || error.contains("being used by another process")
+            error.contains("Could not set lock")
+                || (cfg!(windows) && error.contains("Cannot open file"))
         };
         let mut tries = 0;
         let conn = loop {
