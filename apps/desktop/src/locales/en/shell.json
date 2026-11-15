@@ -136,6 +136,7 @@
   },
   "folders": {
     "collections": "Collections",
+    "keys": "Keys",
     "tables": "Tables",
     "foreignTables": "Foreign tables",
     "views": "Views",
@@ -312,6 +313,7 @@
   },
   "copyName": "Copy name",
   "openCollection": "Open (first 200 documents)",
+  "openKey": "Open",
   "copyNames": "Copy {{count}} names",
   "copyQualifiedName": "Copy qualified name",
   "copyQualifiedNames": "Copy {{count}} qualified names",

@@ -180,7 +180,9 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         planned("snowflake", "Snowflake", Analytical, Network, None),
         planned("bigquery", "BigQuery", Analytical, Network, None),
         supported(Engine::Mongodb, "MongoDB", NoSql, Network),
-        planned("redis", "Redis", NoSql, Network, Some(6379)),
+        supported(Engine::Redis, "Redis", NoSql, Network),
+        // Redis's protocol, checked with its image (`testing/docker`).
+        kind_of(Engine::Redis, "valkey", "Valkey", NoSql, 6379, None, None),
         planned("cassandra", "Cassandra", NoSql, Network, Some(9042)),
     ]
 }
@@ -219,6 +221,7 @@ mod tests {
             Engine::Sqlserver,
             Engine::Duckdb,
             Engine::Mongodb,
+            Engine::Redis,
         ] {
             assert_eq!(
                 catalog
@@ -249,6 +252,7 @@ mod tests {
                 ("cockroachdb", Some(Engine::Postgres), Some(26257)),
                 ("yugabytedb", Some(Engine::Postgres), Some(5433)),
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),
+                ("valkey", Some(Engine::Redis), Some(6379)),
             ]
         );
     }

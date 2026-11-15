@@ -213,6 +213,17 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   own barrier exists. Tests: `spelaion-core`'s `tests/mongodb.rs` with
   `SPELAION_TEST_MONGO=127.0.0.1:27017` (or `SPELAION_DEV_PLUGIN_MONGODB` in a development
   build).
+- **Redis is a plugin whose language is not SQL** (ADR-056), the same way: its driver lives in
+  `spelaion-dev/spelaiondb-plugin-redis` (Redis and Valkey), pinned in `plugins.toml`. Its
+  language is `spelaion-dialect`'s `redis.rs`: one command per line, quoted as `redis-cli`
+  quotes, sent as its argument list (`{"args": [...]}`). The core refuses what would change or
+  hold the connection (`AUTH`, `SELECT`, transactions, subscriptions, blocking commands); the
+  tab's database is chosen above the editor. The guard's lists name the reads and the writes;
+  `KEYS`, scripts and anything unlisted are unknown, never a read. The explorer shows each
+  database's keys (kind `collection`, the key's type as its comment), read with bounded `SCAN`
+  pages by the plugin, and opens one with a bounded command of its type
+  (`Dialect::browse_statement`). Tests: `spelaion-core`'s `tests/redis.rs` with
+  `SPELAION_TEST_REDIS=127.0.0.1:16379` (or `SPELAION_DEV_PLUGIN_REDIS`).
 - **DuckDB is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives in
   `spelaion-dev/spelaiondb-plugin-duckdb` with its type zoo, and this repository pins the
   release it ships (`plugins.toml`). The core does not compile DuckDB. Here, DuckDB's tests
@@ -681,7 +692,7 @@ outside the team.
   SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
-  cargo test --workspace`.
+  SPELAION_TEST_REDIS=127.0.0.1:16379 cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),

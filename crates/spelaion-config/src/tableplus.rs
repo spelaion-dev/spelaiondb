@@ -402,7 +402,8 @@ fn tls_mode(engine: Engine, mode: i64, unmapped: &mut Vec<String>) -> Option<Tls
         | Engine::Sqlite
         | Engine::Duckdb
         | Engine::Mongodb
-        | Engine::Clickhouse => None,
+        | Engine::Clickhouse
+        | Engine::Redis => None,
     }
 }
 

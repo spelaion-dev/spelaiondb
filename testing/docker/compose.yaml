@@ -196,6 +196,17 @@ services:
       retries: 60
     networks: [data, direct]
 
+  redis:
+    image: redis:7.4
+    command: ["redis-server", "--requirepass", "spelaion"]
+    ports:
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "spelaion", "--no-auth-warning", "ping"]
+      interval: 2s
+      retries: 60
+    networks: [data, direct]
+
 networks:
   public: {}
   direct: {}
