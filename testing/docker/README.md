@@ -105,7 +105,7 @@ them to this budget.
 | Trino, Presto (each) | 1536 | 1024 MiB heap, 128 MiB direct buffers, 64 MiB code cache |
 | Cassandra | 1024 | 256 MiB heap, 128 MiB direct buffers |
 | Neo4j | 768 | 384 MiB heap, 64 MiB direct buffers, 128 MiB page cache |
-| Oracle | 2048 | Native database, not a JVM; Free's database memory ceiling is 2 GiB |
+| Oracle | 2048 | Native database: 768 MiB SGA, 256 MiB PGA target; container cap includes native work |
 | SQL Server | 2048 | 1280 MiB memory manager limit |
 | MongoDB | 512 | 256 MiB WiredTiger cache |
 | ClickHouse | 512 | 384 MiB server memory limit; 64 MiB mark / 16 MiB uncompressed caches |
@@ -127,6 +127,20 @@ the parallel `trino.rs` integration tests, including the sorted export and cance
 native allocations, health checks and query execution when changing a limit.
 HAProxy also has two threads and 128 connections, so neither CPUs nor a high file-descriptor
 limit sizes its TLS pools.
+
+Oracle's lite image carries a pre-built database; its startup does not apply `INIT_SGA_SIZE`
+or `INIT_PGA_SIZE`. `oracle/start-ci.sh` uses the image's `START_FILE` hook, after extraction
+and before its first startup, to convert the vendor spfile through SQL*Plus, replace only
+memory settings (including saved automatic component sizes), and delegate to the vendor's
+normal startup. The image is pinned by digest because that hook depends on its layout.
+The SGA is 768 MiB and the PGA target is 256 MiB; Oracle's
+[minimum PGA hard limit](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/PGA_AGGREGATE_LIMIT.html) is 2 GiB,
+and the container cap bounds the complete process group. A cap alone can make its default
+working set thrash without being killed, so validate clean boots and effective parameters.
+
+CI bounds Compose's whole startup, including image pulls/builds, at 15 minutes (then 30
+seconds to force termination). The readiness step is bounded at 12 minutes, with a 10-minute
+wait for its status file; diagnostics after failure are bounded at two minutes.
 
 On startup failure both CI jobs capture `docker stats --no-stream --all`, container limits
 and state (including `OOMKilled`), and the tail of each service's log immediately in
