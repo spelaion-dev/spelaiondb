@@ -140,7 +140,11 @@ export class Session {
     return this.waitFor(fn, args, options);
   }
 
-  click(element) {
+  /** Clicks `element`, brought into view first: WebKitWebDriver does not scroll an element
+   *  inside a scrolled box of the page (the engine picker's grid) and calls it "not
+   *  interactable" instead. */
+  async click(element) {
+    await this.evaluate((e) => e.scrollIntoView({ block: "center", inline: "nearest" }), element);
     return this.#cmd("POST", `/element/${element[ELEMENT]}/click`, {});
   }
 
