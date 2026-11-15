@@ -519,6 +519,7 @@ pub async fn open_connection(
         });
     }
     let mut params = resolved.connect_params(options.password);
+    crate::mongodb_srv::resolve(&resolved, &mut params).await?;
     let tunnel = start_tunnel(
         &resolved,
         &mut params,
@@ -721,6 +722,7 @@ pub async fn open_route(
         )));
     }
     let mut params = resolved.params.clone();
+    crate::mongodb_srv::resolve(resolved, &mut params).await?;
     let tunnel = start_tunnel(
         resolved,
         &mut params,

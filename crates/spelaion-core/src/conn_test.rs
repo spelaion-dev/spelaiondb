@@ -598,8 +598,17 @@ async fn connection_steps(
     interaction: Arc<dyn Interaction>,
 ) -> Result<Option<String>, Failure> {
     run.start(0);
-    run.ok_running();
     let mut params = resolved.connect_params(options.password.clone());
+    crate::mongodb_srv::resolve(resolved, &mut params)
+        .await
+        .map_err(|error| open_failure(&error))?;
+    if let Some(step) = plan.target {
+        run.steps.lock().expect("lock poisoned")[step].kind = StepKind::Target {
+            host: params.host.clone(),
+            port: params.port,
+        };
+    }
+    run.ok_running();
     let timeout = params.connect_timeout();
     let mut tunnel = None;
     if let (Some(layout), Some(resolved_tunnel)) = (&plan.tunnel, &resolved.tunnel) {

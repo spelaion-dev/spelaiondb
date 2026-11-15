@@ -103,6 +103,40 @@ the password saved in the keychain, and leaves open tabs without a connection.
 To share connections and tunnels through a git repository, see
 [Sharing connections with a team](team.md).
 
+## MongoDB Atlas DNS seeds
+
+A MongoDB connection can name a DNS seed in its **Host** field, for example
+`mongodb+srv://cluster.example.mongodb.net`. Keep the port at its default and put the user,
+password and database in their own fields. A whole credential-bearing Atlas URL is not a host.
+In a connection file:
+
+```toml
+schema_version = 1
+engine = "mongodb"
+host = "mongodb+srv://cluster.example.mongodb.net"
+database = "shop"
+user = "shop-user"
+password = { secret = "keychain" }
+```
+
+The core queries `_mongodb._tcp.<host>` for SRV records and `<host>` for TXT, using this
+machine's DNS configuration before opening a route. Every SRV target must be within the
+seed's parent domain. One target and its DNS port are used for the session; the plugin does
+not discover other members, poll DNS or retry a query. Reconnect explicitly to resolve again.
+At most one TXT record is accepted; only `authSource` and `replicaSet` may come from it.
+Any other option, repeated option, invalid target or failed lookup stops the connection.
+
+SRV always requires TLS with a trusted certificate for the resolved server name, even when
+the connection's TLS setting asks for less. With an SSH network profile the resolved server
+and DNS port are the tunnel's target, and its real hostname is kept for TLS. The
+MongoDB plugin uses its fixed-route transport to verify that name while reaching only the
+socket supplied by the core. TLS is never weakened to make a route work. SRV with Kubernetes
+forwarding is not supported.
+
+MongoDB plugin 0.1.1 is pinned for this support. DNS discovery and its validation are tested
+against a local DNS stand-in, and the plugin is tested against a local TLS replica set,
+including through SSH. A real Atlas cluster has **not been tested**.
+
 ## Importing from other clients
 
 **Import from DBeaver…** (in the same window) reads DBeaver's workspace, or a folder you
