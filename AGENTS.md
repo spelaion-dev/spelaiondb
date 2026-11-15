@@ -1,4 +1,4 @@
-# SpelaionDB â€” rules for agents
+# SpelaionDB — rules for agents
 
 An open-source (Apache-2.0) desktop database client, with first-class SSH tunnels and an
 MCP server. **All the code is written by an agent and nobody reviews it line by line**:
@@ -56,7 +56,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   quotes as the session's `sql_mode` does (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`):
   `Dialect::with_sql_mode` gives the session's dialect, which `spelaion-core`'s `sql_mode.rs`
   reads when the session opens and after a statement that names `sql_mode`. T-SQL batches
-  (`GO`, `BEGIN â€¦ END`) are split in `sqlserver.rs`; a `DECLARE` keeps the rest of its batch,
+  (`GO`, `BEGIN … END`) are split in `sqlserver.rs`; a `DECLARE` keeps the rest of its batch,
   where its variables live (the guard still checks each statement in it). SQLite's
   `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
   dot-command away from the server's shell: any change to them needs its tests there too.
@@ -257,7 +257,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   replaced, results as the server's `TabSeparatedWithNamesAndTypes` text), pinned in
   `plugins.toml`. What the core has of it: `Engine::Clickhouse`, `spelaion-dialect`'s
   `clickhouse.rs`, its rules in `classify.rs` (table functions that reach outside: `url`,
-  `file`, `s3`, `remote`, `mysql`, `executable`â€¦), `guard.rs` (`ALTER TABLE â€¦ DROP | CLEAR`)
+  `file`, `s3`, `remote`, `mysql`, `executable`…), `guard.rs` (`ALTER TABLE … DROP | CLEAR`)
   and its read barrier: no transactions, so the session's `readonly` setting
   (`readonly.rs`'s `clickhouse_read_only`), set once for agents' reads, exports, column
   statistics and read-only connections, and never set twice (a user whose profile is
@@ -284,7 +284,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   nothing printed, no aws-lc), pinned in `plugins.toml`. What the core has of it:
   `Engine::Oracle` (`database` is the service name), `spelaion-dialect`'s `oracle.rs`
   (statements end at `;`, which is not sent; a PL/SQL unit keeps its `;`s until a line holding
-  only `/`; `q'[â€¦]'` strings), and `guard.rs`'s reading of a PL/SQL block it cannot parse
+  only `/`; `q'[…]'` strings), and `guard.rs`'s reading of a PL/SQL block it cannot parse
   (`oracle_unparsed_risk`: a risky word or dynamic SQL in an anonymous block asks; defining a
   unit asks nothing). It has **no read-only mode and no agents yet**: the configuration
   refuses `read_only` and `has_read_barrier` (`agent_view`, the form) leaves it out, because
@@ -331,8 +331,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - **Databend only exists as a plugin** (SDB-351): `spelaion-dev/spelaiondb-plugin-databend` (its
   HTTP query API: pages through `next_uri`, the session kept by the client, a cancel by
   `kill_uri`), pinned in `plugins.toml`. What the core has of it: `Engine::Databend`,
-  `spelaion-dialect`'s `databend.rs` (Databend's own lexer: backslash escapes in `'â€¦'` and
-  `"â€¦"`, backticks without escapes, block comments that do not nest, `$$` bodies, names quoted
+  `spelaion-dialect`'s `databend.rs` (Databend's own lexer: backslash escapes in `'…'` and
+  `"…"`, backticks without escapes, block comments that do not nest, `$$` bodies, names quoted
   in double quotes), the guard through sqlparser's generic dialect, and its databases as the
   explorer's schemas and the editor's schema, as MySQL's (`objects/mod.rs`). Reached through
   MySQL's protocol instead, it is recognised by its version (`server_family.rs`, SDB-350).
@@ -361,7 +361,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   under its own name (`spelaion-dialect`'s `hive.rs`: backquoted names, strings in both quotes
   with backslash escapes), and the guard parses them with sqlparser's Hive dialect and also asks
   before what replaces data without deleting it first (`guard.rs`'s `hive_risk`: `OVERWRITE`
-  anywhere, `ALTER TABLE â€¦ DROP`). **They have no read barrier of ours** (no read-only session
+  anywhere, `ALTER TABLE … DROP`). **They have no read barrier of ours** (no read-only session
   or transaction they enforce), as for the Flight SQL engines: no read-only mode, no agents.
   Tests: `tests/hive.rs` with `SPELAION_TEST_HIVE=127.0.0.1:11010` (Hive, and `SPELAION_TEST_SSH`
   for the tunnel); Spark, Kyuubi and Impala are tested in the plugin's repository.
@@ -419,7 +419,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no
-  `${env:â€¦}`, nothing that runs a program); `engine_change.rs` maps a connection to another
+  `${env:…}`, nothing that runs a program); `engine_change.rs` maps a connection to another
   engine (kept, changed, dropped, to fill in); `name_pattern.rs` renders the name of new
   connections from the personal pattern. Any change to `copy.rs` needs tests that try to get
   around it.
@@ -454,8 +454,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `spelaion-core::kube` runs `kubectl port-forward` and lists contexts, namespaces, names and
   ports for the form's Kubernetes tab; tests against a kind cluster with
   `SPELAION_TEST_K8S=<kubeconfig>` (see `testing/k8s`).
-- `crates/spelaion-core`: `open_connection` (resolved configuration â†’ tunnel from the
-  `TunnelPool` if any â†’ driver â†’ `Session`), `Session` (splits and runs scripts: stop,
+- `crates/spelaion-core`: `open_connection` (resolved configuration → tunnel from the
+  `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts: stop,
   continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
   ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
   IPC windows).
@@ -483,7 +483,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   asks and whatever was confirmed, the session refuses it again (`Session::with_read_only`, set
   by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's
   own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine.
-  A MySQL/MariaDB statement with executable comments (`/*!50001 â€¦ */`, `/*M! â€¦ */`) is
+  A MySQL/MariaDB statement with executable comments (`/*!50001 … */`, `/*M! … */`) is
   checked by the guard with their bodies both run and skipped, as the server's version decides.
   A MySQL/MariaDB session whose `sql_mode` reads quotes otherwise (`NO_BACKSLASH_ESCAPES`,
   `ANSI_QUOTES`) has each statement also read as that mode reads it (`sql_mode::as_default_mode`,
@@ -576,7 +576,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   column's precision as the grid shows it (UTC `+00` for a time zone, except SQL Server's
   `datetimeoffset`, written with its offset and up to seven digits like its `datetime2` and
   `time`; its `datetime` and `smalldatetime` rounded as the server does), the allowed values of an enum, a `SET` or a
-  `CHECK (â€¦ IN (â€¦))` read from the catalog (SQLite's from its `CREATE TABLE` text) only when
+  `CHECK (… IN (…))` read from the catalog (SQLite's from its `CREATE TABLE` text) only when
   exactly one list can be read reliably, and a foreign key's search: a checked page of the
   referenced table (never all of it), its filter written like "filter by this value". A pick is
   only a cell edit's text, applied by `edit.rs`; `tests/value_pickers.rs` reads every pick back
@@ -591,7 +591,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
   to get around it.
   `objects/` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
-  create, new indexâ€¦) and the structure forms (ADR-047): `alter.rs` turns a form's columns into
+  create, new index…) and the structure forms (ADR-047): `alter.rs` turns a form's columns into
   one script from the catalog read again each time, applied only as it was shown; `rebuild.rs`
   is SQLite's table rebuild; `create.rs` is the create table form; `source.rs` writes a view's or routine's
   definition as the statement that replaces it; `ddl.rs` edits the `CREATE TABLE` text SQLite and MySQL keep.
@@ -659,7 +659,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   page's commands are `apps/desktop/src-tauri/src/plugins.rs`: they take a name, a version or a
   picked file, never an address (`scripts/plugin-commands.test.mjs`), and swap `AppState.engines`
   after each change, so the next connection starts the new build without a restart. The page
-  itself is `src/components/PluginsSettings.tsx` (Settings â†’ Plugins) and only shows the core's
+  itself is `src/components/PluginsSettings.tsx` (Settings → Plugins) and only shows the core's
   overview; `src/plugins.ts` shares it with the "add connection" picker and a connection that
   could not open (`MissingPlugin.tsx`), which send to the page when an engine's plugin is not
   installed.
@@ -742,7 +742,7 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   only change through pull requests whose CI is green (the four jobs of `ci.yml`), and they
   cannot be force-pushed or deleted.
 - **One task, one short branch**, named after who works on it and what (`pablo/filters`,
-  `paco/sdb-11`, `claude/â€¦`, `codex/â€¦`), from an up-to-date `dev`. Never work on someone
+  `paco/sdb-11`, `claude/…`, `codex/…`), from an up-to-date `dev`. Never work on someone
   else's branch.
 - **Fetch before starting and before pushing** (`git fetch` and rebase on `origin/dev`):
   someone else may have merged in the meantime. Never force-push a branch someone else uses,
@@ -761,7 +761,7 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   patched TLS libraries, updates, CI itself) waits for an owner's approval. The author cannot
   approve their own: the other owner does.
 - A Plane work item is the unit of work (see "Work tracking" below).
-- To release, open a pull request `dev` â†’ `main` and merge nothing else into `dev` until it is
+- To release, open a pull request `dev` → `main` and merge nothing else into `dev` until it is
   tagged (fixes for the release only). Merge it when green, with a merge commit; a maintainer
   then fast-forwards `dev` to `main` (`git merge --ff-only origin/main`, the one push to `dev`
   that is not a pull request), so they stay in step, and tags `main` with `vX.Y.Z`. Never turn
@@ -771,7 +771,7 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
 The team's tracker is **Plane**: workspace `spelaion`, project `spelaiondb`, identifier `SDB`
 (agents reach it through the `plane` MCP server). GitHub issues are for reports from people
 outside the team.
-- Each release is a Plane module (`v0.7 â€” â€¦`). Labels give the type, the area and the size
+- Each release is a Plane module (`v0.7 — …`). Labels give the type, the area and the size
   (S / M / L); `adr-needed` marks a change of direction.
 - **Before starting:** take an item, assign it to yourself and move it to *In Progress*, so
   two people do not change the same thing. Read its description: its "Constraints" and "Done
@@ -782,7 +782,7 @@ outside the team.
 - **Merged:** move the item to *Done*. Dropped: *Cancelled*, with a comment saying why.
 - Work found along the way becomes a new item in *Backlog*, not part of the current pull
   request.
-- "Decide: â€¦" items end in an ADR. ADRs live in `docs/adr/`, never only in Plane: the item
+- "Decide: …" items end in an ADR. ADRs live in `docs/adr/`, never only in Plane: the item
   links to the ADR's pull request, and any work that follows gets its own items.
 - An external GitHub issue that we accept gets a Plane item that links to it. When its fix is
   merged into `dev`, close the issue by hand ("Fixed by #N"): closing keywords only act when
@@ -801,7 +801,7 @@ outside the team.
 ## Rust style
 - Concurrency with actors: tokio tasks that communicate through channels with owned data.
   Do not hold `Mutex` guards across `.await`.
-- No lifetimes in public APIs; use owned types (`String`, `Arc<â€¦>`).
+- No lifetimes in public APIs; use owned types (`String`, `Arc<…>`).
 - No `unsafe` except justified FFI with a comment.
 - Errors with `thiserror` in libraries and `anyhow` only in binaries.
 - Exhaustive `match` over our own enums: no `_ =>` that hides new variants.
