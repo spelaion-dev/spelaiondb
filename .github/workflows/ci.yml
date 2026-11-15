@@ -206,6 +206,11 @@ jobs:
           test "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" = ready
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --workspace --locked
+      # The app's own unit tests: its library says `test = false` because the test executable of
+      # a Tauri crate does not start on Windows, so `--workspace` skips them. Here, on Linux, it
+      # starts: named, they run.
+      - if: steps.scope.outputs.rust != 'false'
+        run: cargo test --locked -p spelaion-desktop --lib
       # The app's TS types are generated from Rust: the file in the repo must be up to date.
       - if: steps.scope.outputs.rust != 'false'
         run: cargo run -q --locked -p spelaion-desktop --features bindings --bin export-bindings
