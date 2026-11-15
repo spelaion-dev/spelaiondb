@@ -76,11 +76,13 @@ jobs:
           export COMPOSE_PROFILES=
           bash testing/docker/gen-keys.sh
           python3 testing/docker/check-memory-test.py
+          # Keep this aligned with smoke-linux.mjs's real server connections.
+          services=(postgres mysql mariadb sqlserver bastion1 bastion2 sqlitehost proxy clickhouse trino oracle oracle-tls libsql neo4j databend)
           docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
-            | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')"
+            | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')" "${services[@]}"
           (
             status=failed
-            if timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --build --wait; then
+            if timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --build --wait "${services[@]}"; then
               status=ready
             else
               bash testing/docker/diagnostics.sh

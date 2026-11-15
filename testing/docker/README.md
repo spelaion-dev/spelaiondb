@@ -90,16 +90,18 @@ ssh -i testing/docker/keys/id_ed25519 -J spelaion@127.0.0.1:2221 -p 22 spelaion@
 ## CI memory budget
 
 The main Compose project has a hard limit on every container. CI uses two phases: the default
-twenty services total **11,776 MiB (11.5 GiB)**; after they stop, Hive and the two bastions
-total **1,664 MiB (1.625 GiB)**. Running all twenty-one at once would total 13 GiB and leave
-too little room for compilation. Public GitHub `ubuntu-latest` runners have
+eighteen services total **9,344 MiB (9.125 GiB)**; after they stop, Hive, Trino, Presto and the
+two bastions total **4,736 MiB (4.625 GiB)**. The smoke job adds only Trino to the default
+phase, for **10,880 MiB (10.625 GiB)**. Running all twenty-one at once would total 13,952 MiB
+and leave too little room for compilation. Public GitHub `ubuntu-latest` runners have
 [16 GB of RAM](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories).
 Before starting either CI job's services, `check-memory.py` checks the resolved Compose JSON:
 no unbounded service (even inactive profiles), at most 11.5 GiB per active phase, and **at
 least 4 GB (3,815 MiB) of the Docker
 host's actual RAM left** for the operating system, the kind cluster and Rust compilation/tests.
 This uses the daemon's reported RAM: a real runner reported 15,700 MiB after kernel reservations,
-which leaves 3,924 MiB (4.11 GB) after the services, rather than assuming it has 16 GiB available.
+which leaves 6,356 MiB after the default phase or 4,820 MiB during smoke, rather than assuming
+it has 16 GiB available.
 The smaller protocol-family projects below are separate, opt-in projects; CI does not add
 them to this budget.
 
@@ -113,7 +115,7 @@ them to this budget.
 | MongoDB | 512 | 256 MiB WiredTiger cache |
 | ClickHouse | 512 | 384 MiB server memory limit; 64 MiB mark / 16 MiB uncompressed caches |
 | PostgreSQL | 256 | 64 MiB shared buffers, 1 MiB work memory, 16 MiB maintenance memory; no parallel query workers |
-| MySQL | 384 | 64 MiB InnoDB buffer pool; smaller performance schema tables |
+| MySQL | 1024 | 64 MiB InnoDB buffer pool; smaller performance schema tables; room for million-row imports |
 | MariaDB | 256 | 64 MiB InnoDB buffer pool |
 | GizmoSQL | 256 | Container limit |
 | libSQL, proxy, bastion1, bastion2, sqlitehost (each) | 64 | Container limit |
@@ -122,21 +124,23 @@ them to this budget.
 | TDengine | 256 | Container limit |
 | Hive (separate phase) | 1536 | 768 MiB heap, 128 MiB direct buffers, 64 MiB code cache |
 
-Hive has the opt-in Compose profile `hive`. The required Linux job runs the workspace with
-`SPELAION_TEST_HIVE` unset, then stops its default services, starts `hive bastion1 bastion2`
-and runs the complete `spelaion-core --test hive` suite with its real server and SSH variables.
-This is part of the same required check; a failure fails that check. Linux smoke does not use
-Hive and runs the default phase only. The budget checker reads `config --profile '*'` so
-every service must have a limit, and takes the exact service names for the second phase.
+Hive, Trino and Presto have the opt-in Compose profile `warehouse`. The required Linux job
+runs the workspace with `SPELAION_TEST_HIVE`, `SPELAION_TEST_TRINO` and `SPELAION_TEST_PRESTO`
+unset, then stops its default services, starts `hive trino presto bastion1 bastion2` and runs
+the complete `spelaion-core --test hive --test trino` suites with real servers and SSH variables.
+This is part of the same required check; a failure fails that check. Linux smoke uses the
+`smoke` profile to add Trino. The budget checker reads `config --profile '*'` so every service
+must have a limit, and takes the exact service names for warehouse and smoke.
 
 For local testing on a machine with the same memory, finish the default workspace tests first.
-On a Compose project used only by your test run, stop that phase and run Hive:
+On a Compose project used only by your test run, stop that phase and run the warehouse suites:
 
 ```bash
 docker compose -f testing/docker/compose.yaml stop
-docker compose -f testing/docker/compose.yaml up -d --build --wait hive bastion1 bastion2
-SPELAION_TEST_HIVE=127.0.0.1:11010 SPELAION_TEST_SSH=127.0.0.1:2221 \
-  cargo test -p spelaion-core --test hive
+docker compose -f testing/docker/compose.yaml up -d --build --wait hive trino presto bastion1 bastion2
+SPELAION_TEST_HIVE=127.0.0.1:11010 SPELAION_TEST_TRINO=127.0.0.1:18080 \
+  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_SSH=127.0.0.1:2221 \
+  cargo test -p spelaion-core --test hive --test trino
 ```
 
 The JVMs see two processors so thread pools do not grow with a developer machine's CPU count.

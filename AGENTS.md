@@ -820,8 +820,7 @@ outside the team.
   `docker compose -f testing/docker/compose.yaml up -d --wait` and
   `SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
-  SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080
-  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521
+  SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_ORACLE=127.0.0.1:11521
   SPELAION_TEST_LIBSQL=127.0.0.1:18095 SPELAION_TEST_NEO4J=127.0.0.1:17474
   SPELAION_TEST_DATABEND=127.0.0.1:18320 SPELAION_TEST_SPANNER=127.0.0.1:19021
   SPELAION_TEST_GIZMOSQL=127.0.0.1:31337
@@ -830,11 +829,12 @@ outside the team.
   SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142
   SPELAION_TEST_TDENGINE=127.0.0.1:16141 SPELAION_TEST_INFLUXDB=127.0.0.1:18181
   cargo test --workspace`.
-- Hive runs in a separate memory-bounded phase: on an isolated test Compose project, stop
-  the first phase, start `hive bastion1 bastion2`, then run
-  `SPELAION_TEST_HIVE=127.0.0.1:11010 SPELAION_TEST_SSH=127.0.0.1:2221
-  cargo test -p spelaion-core --test hive`. See `testing/docker/README.md`; the first
-  workspace pass alone does not count as testing Hive.
+- Hive, Trino and Presto run in a separate memory-bounded phase: on an isolated test Compose
+  project, stop the first phase, start `hive trino presto bastion1 bastion2`, then run
+  `SPELAION_TEST_HIVE=127.0.0.1:11010 SPELAION_TEST_TRINO=127.0.0.1:18080
+  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_SSH=127.0.0.1:2221
+  cargo test -p spelaion-core --test hive --test trino`. See `testing/docker/README.md`;
+  the first workspace pass alone does not count as testing these engines.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),
