@@ -59,6 +59,34 @@ class MemoryBudget(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 4 GB"):
             memory.check(config, memory.MAX_SERVICES + memory.HOST_RESERVE - 1)
 
+    def test_budgets_default_and_explicit_profile_phases(self):
+        config = {"services": {
+            "main": {"mem_limit": memory.MAX_SERVICES - 64 * memory.MIB},
+            "bastion": {"mem_limit": 64 * memory.MIB},
+            "hive": {"mem_limit": 1536 * memory.MIB, "profiles": ["hive"]},
+        }}
+        self.assertEqual(memory.check(config, 16 * 1024**3), memory.MAX_SERVICES)
+        self.assertEqual(
+            memory.check(config, 16 * 1024**3, ["hive", "bastion"]),
+            1600 * memory.MIB,
+        )
+        with self.assertRaisesRegex(ValueError, "above"):
+            memory.check(config, 16 * 1024**3, ["main", "bastion", "hive"])
+
+    def test_refuses_unbounded_inactive_service(self):
+        config = {"services": {
+            "main": {"mem_limit": memory.MIB},
+            "hive": {"profiles": ["hive"]},
+        }}
+        with self.assertRaisesRegex(ValueError, "positive mem_limit"):
+            memory.check(config, 16 * 1024**3)
+
+    def test_refuses_unknown_and_empty_phases(self):
+        config = {"services": {"main": {"mem_limit": memory.MIB}}}
+        for selected in ([], ["typo"]):
+            with self.subTest(selected=selected), self.assertRaises(ValueError):
+                memory.check(config, 16 * 1024**3, selected)
+
 
 if __name__ == "__main__":
     unittest.main()

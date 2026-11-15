@@ -11,10 +11,19 @@ MAX_SERVICES = 11776 * MIB
 HOST_RESERVE = 4_000_000_000
 
 
-def check(config, host_memory):
+def check(config, host_memory, selected=None):
     services = config["services"]
     if not services:
         raise ValueError("No test services were resolved")
+    if selected is None:
+        active = {name for name, service in services.items() if not service.get("profiles")}
+    else:
+        active = set(selected)
+        unknown = active.difference(services)
+        if unknown:
+            raise ValueError(f"Unknown test services: {', '.join(sorted(unknown))}")
+    if not active:
+        raise ValueError("No active test services were selected")
     total = 0
     for name, service in services.items():
         limit = service.get("mem_limit")
@@ -23,7 +32,10 @@ def check(config, host_memory):
             limit = int(limit)
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             raise ValueError(f"{name}: a positive mem_limit is required")
-        total += limit
+        # Even inactive/profiled services must declare a limit. Only the running phase
+        # contributes to its budget; the workflow stops the first phase before the next.
+        if name in active:
+            total += limit
     if total > MAX_SERVICES:
         raise ValueError(f"Services need {total / MIB:g} MiB, above the 11.5 GiB budget")
     if total + HOST_RESERVE > host_memory:
@@ -38,7 +50,7 @@ if __name__ == "__main__":
     # Docker reports the daemon's real RAM, not the client machine's or a label's promise.
     try:
         host_memory = int(sys.argv[1])
-        total = check(json.load(sys.stdin), host_memory)
+        total = check(json.load(sys.stdin), host_memory, sys.argv[2:] or None)
     except (ValueError, KeyError, IndexError) as error:
         sys.exit(str(error))
     print(

@@ -156,9 +156,10 @@ jobs:
       - name: Start the test services in the background
         if: steps.scope.outputs.rust != 'false'
         run: |
+          export COMPOSE_PROFILES=
           bash testing/docker/gen-keys.sh
           python3 testing/docker/check-memory-test.py
-          docker compose -f testing/docker/compose.yaml config --format json \
+          docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
             | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')"
           (
             status=failed
@@ -223,7 +224,21 @@ jobs:
             exit 1
           fi
       - if: steps.scope.outputs.rust != 'false'
-        run: cargo test --workspace --locked
+        # Hive is tested in the following phase, after the other servers release their RAM.
+        run: env -u SPELAION_TEST_HIVE cargo test --workspace --locked
+      - name: Hive services and integration tests
+        timeout-minutes: 20
+        if: steps.scope.outputs.rust != 'false'
+        run: |
+          docker compose -f testing/docker/compose.yaml stop
+          services=(hive bastion1 bastion2)
+          docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
+            | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')" "${services[@]}"
+          if ! timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --build --wait "${services[@]}"; then
+            bash testing/docker/diagnostics.sh
+            exit 1
+          fi
+          cargo test --locked -p spelaion-core --test hive
       # The app's own unit tests: its library says `test = false` because the test executable of
       # a Tauri crate does not start on Windows, so `--workspace` skips them. Here, on Linux, it
       # starts: named, they run.
