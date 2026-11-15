@@ -425,6 +425,7 @@ services:
   # as a `database` header; Flight SQL and its HTTP API share 127.0.0.1:18181. No authentication,
   # data in memory. Bounded for CI's runners (SDB-345): 1 GB.
   influxdb:
+    profiles: [warehouse]
     image: influxdb@sha256:f349b303abfc33e5be9ab67f475d544c4ef53ed5b3b68267842aedb112756b82
     command: [influxdb3, serve, --node-id, spelaion, --object-store, memory, --without-auth]
     mem_limit: 1g

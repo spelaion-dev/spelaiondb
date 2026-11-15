@@ -90,9 +90,9 @@ ssh -i testing/docker/keys/id_ed25519 -J spelaion@127.0.0.1:2221 -p 22 spelaion@
 ## CI memory budget
 
 The main Compose project has a hard limit on every container. CI uses two phases: the default
-twenty services total **11,392 MiB (11.125 GiB)**; after they stop, Hive, Trino, Presto and the
-two bastions total **4,736 MiB (4.625 GiB)**. The smoke job starts only the servers its app tests
-use, for **9,824 MiB (9.594 GiB)**. Running all twenty-three at once would total 16,000 MiB
+twenty services total **11,392 MiB (11.125 GiB)**; after they stop, Hive, Trino, Presto, InfluxDB and the
+two bastions total **5,760 MiB (5.625 GiB)**. The smoke job starts only the servers its app tests
+use, for **9,824 MiB (9.594 GiB)**. Running all twenty-four at once would total 17,024 MiB
 and leave too little room for compilation. Public GitHub `ubuntu-latest` runners have
 [16 GB of RAM](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories).
 Before starting either CI job's services, `check-memory.py` checks the resolved Compose JSON:
@@ -122,13 +122,14 @@ them to this budget.
 | Redis | 32 | Container limit |
 | oracle-tls | 32 | Container limit |
 | TDengine | 256 | Container limit |
-| Databend, Spanner emulator (each) | 1024 | Container limit |
+| Databend, Spanner emulator, InfluxDB (each) | 1024 | Container limit |
 | Hive (separate phase) | 1536 | 768 MiB heap, 128 MiB direct buffers, 64 MiB code cache |
 
-Hive, Trino and Presto have the opt-in Compose profile `warehouse`. The required Linux job
-runs the workspace with `SPELAION_TEST_HIVE`, `SPELAION_TEST_TRINO` and `SPELAION_TEST_PRESTO`
-unset, then stops its default services, starts `hive trino presto bastion1 bastion2` and runs
-the complete `spelaion-core --test hive --test trino` suites with real servers and SSH variables.
+Hive, Trino, Presto and InfluxDB have the opt-in Compose profile `warehouse`. The required Linux job
+runs the workspace with `SPELAION_TEST_HIVE`, `SPELAION_TEST_TRINO`, `SPELAION_TEST_PRESTO`
+and `SPELAION_TEST_INFLUXDB`
+unset, then stops its default services, starts `hive trino presto influxdb bastion1 bastion2` and runs
+the complete `spelaion-core --test hive --test trino --test influxdb` suites with real servers and SSH variables.
 This is part of the same required check; a failure fails that check. Linux smoke explicitly
 selects the servers named by its app connection fixtures, including Trino and Databend. The
 budget checker reads `config --profile '*'` so every service must have a limit, and takes the
@@ -139,10 +140,10 @@ On a Compose project used only by your test run, stop that phase and run the war
 
 ```bash
 docker compose -f testing/docker/compose.yaml stop
-docker compose -f testing/docker/compose.yaml up -d --build --wait hive trino presto bastion1 bastion2
+docker compose -f testing/docker/compose.yaml up -d --build --wait hive trino presto influxdb bastion1 bastion2
 SPELAION_TEST_HIVE=127.0.0.1:11010 SPELAION_TEST_TRINO=127.0.0.1:18080 \
-  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_SSH=127.0.0.1:2221 \
-  cargo test -p spelaion-core --test hive --test trino
+  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_INFLUXDB=127.0.0.1:18181 SPELAION_TEST_SSH=127.0.0.1:2221 \
+  cargo test -p spelaion-core --test hive --test trino --test influxdb
 ```
 
 The JVMs see two processors so thread pools do not grow with a developer machine's CPU count.
