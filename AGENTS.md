@@ -827,13 +827,13 @@ outside the team.
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142
-  SPELAION_TEST_TDENGINE=127.0.0.1:16141 SPELAION_TEST_INFLUXDB=127.0.0.1:18181
+  SPELAION_TEST_TDENGINE=127.0.0.1:16141
   cargo test --workspace`.
-- Hive, Trino and Presto run in a separate memory-bounded phase: on an isolated test Compose
-  project, stop the first phase, start `hive trino presto bastion1 bastion2`, then run
+- Hive, Trino, Presto and InfluxDB run in a separate memory-bounded phase: on an isolated test Compose
+  project, stop the first phase, start `hive trino presto influxdb bastion1 bastion2`, then run
   `SPELAION_TEST_HIVE=127.0.0.1:11010 SPELAION_TEST_TRINO=127.0.0.1:18080
-  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_SSH=127.0.0.1:2221
-  cargo test -p spelaion-core --test hive --test trino`. See `testing/docker/README.md`;
+  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_INFLUXDB=127.0.0.1:18181 SPELAION_TEST_SSH=127.0.0.1:2221
+  cargo test -p spelaion-core --test hive --test trino --test influxdb`. See `testing/docker/README.md`;
   the first workspace pass alone does not count as testing these engines.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
