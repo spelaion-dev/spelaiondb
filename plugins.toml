@@ -403,38 +403,39 @@ archive_sha256 = "22604a5107138718844a63d66a3c1b3606461ce53c1963827264e90c8c3c3c
 archive_size = 4145553
 program_sha256 = "b67d2d26d71b3eee9c8909b9d6f7f5af52a5020c9394601e082fdb34e49db63f"
 
-# Arrow Flight SQL: one plugin for any server that speaks it, Dremio and GizmoSQL.
+# Arrow Flight SQL: one plugin for any server that speaks it, Dremio and GizmoSQL; InfluxDB 3 is a
+# `flightsql` connection whose database the plugin sends as a header (0.1.1).
 [[plugin]]
 name = "spelaiondb-plugin-flightsql"
 repository = "spelaion-dev/spelaiondb-plugin-flightsql"
-version = "0.1.0"
+version = "0.1.1"
 protocol = "1.1"
 engines = ["flightsql", "dremio", "gizmosql"]
 min_app = "0.10.0"
 
 [plugin.platform.aarch64-apple-darwin]
-archive = "spelaiondb-plugin-flightsql-0.1.0-aarch64-apple-darwin.tar.gz"
-archive_sha256 = "1a5d006e27c20f6cc10ebec4f86ca0be7c36ae500e557f0f05be4630b0f324c5"
-archive_size = 4153539
-program_sha256 = "4eb947c2240f55cccf2ef99f24915f66b1e5888743379f0b130dafba5227e9ff"
+archive = "spelaiondb-plugin-flightsql-0.1.1-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "d045fb54c6146ab8cfad7a7581f0650e812e774e03ebd3191142f20e4c95522a"
+archive_size = 4155240
+program_sha256 = "9931d71d437bb1100a920a76a9a502059ac38cb516e6cc57c84f9f893b5480ba"
 
 [plugin.platform.x86_64-apple-darwin]
-archive = "spelaiondb-plugin-flightsql-0.1.0-x86_64-apple-darwin.tar.gz"
-archive_sha256 = "f0abb1e167713e33001325e36df137c24e50ede8f58bf05de047aced96a654bd"
-archive_size = 4518120
-program_sha256 = "c60425cb2f8fe0bcc2f19660e26640af0d265920f74eef5bf6fc6d58f534b315"
+archive = "spelaiondb-plugin-flightsql-0.1.1-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "605f0a942c834c3e3e56566b32b062ffb3c024917fe953806953e6fa2c8d57cc"
+archive_size = 4519627
+program_sha256 = "5b9a0d695bc51e3e75bbba5e4204ed99f5a981b51dbf2e89798c61969f302af2"
 
 [plugin.platform.x86_64-pc-windows-msvc]
-archive = "spelaiondb-plugin-flightsql-0.1.0-x86_64-pc-windows-msvc.tar.gz"
-archive_sha256 = "e746f1be0cfd9c37e5cfd094f74755c77d955c926a84a47f558c355f853e040c"
-archive_size = 4637056
-program_sha256 = "707ecd343ff0d9efb92647a68275301227462c6322cc71dfd07576b96f35361b"
+archive = "spelaiondb-plugin-flightsql-0.1.1-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "e319957a343bd6a899a52bf0c70e1b988379a7132fd3a29e01418ca30416ce88"
+archive_size = 4635472
+program_sha256 = "c448e6f02d13e00a7ab82696dc1cb69a7b8705129c8155eb17247194ca8641a5"
 
 [plugin.platform.x86_64-unknown-linux-gnu]
-archive = "spelaiondb-plugin-flightsql-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
-archive_sha256 = "61086ceb1aa981c23d370a6568710b57111a800181ce91fa4974ebf26f3e4fb6"
-archive_size = 4810092
-program_sha256 = "c1eb125324f9da1f69c110cffa2b9a9354df39d95a15e36374d4119fd04c076a"
+archive = "spelaiondb-plugin-flightsql-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "a5db5e50aeaee91fb623590268e732d6695222a86f0675c042311d17f64bf0cd"
+archive_size = 4811829
+program_sha256 = "9b69071f679ffa2832c4aed78c1e3651b38953ac7a4ab641b55aa9d9246b87c3"
 
 # Neo4j: Cypher over its HTTP Query API, a language that is not SQL (ADR-056).
 [[plugin]]

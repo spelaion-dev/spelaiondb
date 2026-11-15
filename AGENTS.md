@@ -311,7 +311,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   never see them (`AgentView::EngineWithoutBarrier`) and the form offers neither (the engine
   list's `read_barrier`). Tests: `tests/flightsql.rs` with
   `SPELAION_TEST_GIZMOSQL=127.0.0.1:31337` (GizmoSQL, as `gizmosql` and `flightsql`); Dremio is
-  tested in the plugin's repository.
+  tested in the plugin's repository. **InfluxDB 3** is a kind of `flightsql` connection in the
+  picker (`catalog.rs`): the plugin sends the connection's database as a `database` header on
+  every call, which InfluxDB chooses its database by; `tests/influxdb.rs` with
+  `SPELAION_TEST_INFLUXDB=127.0.0.1:18181` (no authentication: a token login is not done yet).
 - **Neo4j is a plugin whose language is not SQL** (ADR-056): `spelaion-dev/spelaiondb-plugin-neo4j`
   (its HTTP Query API, user and password in HTTP Basic; each statement its own transaction),
   pinned in `plugins.toml`. Its language is `spelaion-dialect`'s `neo4j.rs`: Cypher split at `;`
@@ -825,7 +828,7 @@ outside the team.
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142
-  SPELAION_TEST_TDENGINE=127.0.0.1:16141
+  SPELAION_TEST_TDENGINE=127.0.0.1:16141 SPELAION_TEST_INFLUXDB=127.0.0.1:18181
   cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,

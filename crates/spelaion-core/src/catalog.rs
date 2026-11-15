@@ -202,6 +202,17 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         supported(Engine::Flightsql, "Arrow Flight SQL", Analytical, Network),
         supported(Engine::Dremio, "Dremio", Analytical, Network),
         supported(Engine::Gizmosql, "GizmoSQL", Analytical, Network),
+        // Flight SQL with its database in a `database` header (the plugin's 0.1.1), checked with
+        // its image (`testing/docker`).
+        kind_of(
+            Engine::Flightsql,
+            "influxdb",
+            "InfluxDB 3",
+            Analytical,
+            8181,
+            None,
+            None,
+        ),
         // HiveServer2's protocol, one plugin. A Cloudera cluster's Hive and Impala are these.
         supported(Engine::Hive, "Apache Hive", Analytical, Network),
         supported(
@@ -288,8 +299,8 @@ mod tests {
         }
     }
 
-    /// SDB-169, SDB-170: the servers checked against PostgreSQL's and MySQL's protocols are
-    /// kinds of those engines' connections, starting from their own port.
+    /// SDB-169, SDB-170, SDB-184: the servers checked against another engine's protocol are
+    /// kinds of that engine's connections, starting from their own port.
     #[test]
     fn protocol_kinds_are_their_engines_connections() {
         let catalog = engine_catalog();
@@ -307,6 +318,7 @@ mod tests {
                 ("cockroachdb", Some(Engine::Postgres), Some(26257)),
                 ("yugabytedb", Some(Engine::Postgres), Some(5433)),
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),
+                ("influxdb", Some(Engine::Flightsql), Some(8181)),
                 ("valkey", Some(Engine::Redis), Some(6379)),
                 ("scylladb", Some(Engine::Cassandra), Some(9042)),
             ]

@@ -26,6 +26,7 @@ const BADGES: Record<string, string> = {
   flightsql: "FS",
   dremio: "DR",
   gizmosql: "GZ",
+  influxdb: "IX",
   hive: "HV",
   spark: "SP",
   kyuubi: "KY",
