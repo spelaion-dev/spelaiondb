@@ -68,7 +68,8 @@ pub fn embedded_dump_path(
         | Engine::Mysql
         | Engine::Mariadb
         | Engine::Sqlserver
-        | Engine::Mongodb => {
+        | Engine::Mongodb
+        | Engine::Clickhouse => {
             return Err(BackupError::Invalid(format!(
                 "{} databases are backed up with a client tool",
                 resolved.engine.as_str()
@@ -174,7 +175,8 @@ pub async fn embedded_dump(
         | Engine::Mysql
         | Engine::Mariadb
         | Engine::Sqlserver
-        | Engine::Mongodb => {
+        | Engine::Mongodb
+        | Engine::Clickhouse => {
             unreachable!("embedded_dump_path refused it")
         }
     };

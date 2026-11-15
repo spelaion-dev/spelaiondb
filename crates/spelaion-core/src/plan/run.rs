@@ -126,7 +126,8 @@ impl ExplainPolicy {
                 | Engine::Sqlite
                 | Engine::Duckdb
                 | Engine::Sqlserver
-                | Engine::Mongodb => None,
+                | Engine::Mongodb
+                | Engine::Clickhouse => None,
             },
         }
     }

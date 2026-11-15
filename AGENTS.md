@@ -221,6 +221,19 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   repository). Without either, a DuckDB connection fails saying which file is missing. One
   open per file shared by every session (ADR-016) holds because one plugin process serves
   them all.
+- **ClickHouse only exists as a plugin** (ADR-041, stage 3): `spelaion-dev/spelaiondb-plugin-clickhouse`
+  (its HTTP interface, one server-side session per connection that is never silently
+  replaced, results as the server's `TabSeparatedWithNamesAndTypes` text), pinned in
+  `plugins.toml`. What the core has of it: `Engine::Clickhouse`, `spelaion-dialect`'s
+  `clickhouse.rs`, its rules in `classify.rs` (table functions that reach outside: `url`,
+  `file`, `s3`, `remote`, `mysql`, `executable`…), `guard.rs` (`ALTER TABLE … DROP | CLEAR`)
+  and its read barrier: no transactions, so the session's `readonly` setting
+  (`readonly.rs`'s `clickhouse_read_only`), set once for agents' reads, exports, column
+  statistics and read-only connections, and never set twice (a user whose profile is
+  read-only cannot set it). It declares no transactions, no editing, no imports, no plans
+  and no data search, and agents' writes are refused (`run_write` needs a transaction). Its
+  tests: `tests/clickhouse.rs` with `SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123` (and
+  `SPELAION_TEST_SSH` for the tunnel); `SPELAION_DEV_PLUGIN_CLICKHOUSE` in a development build.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -665,6 +678,7 @@ outside the team.
   `docker compose -f testing/docker/compose.yaml up -d --wait` and
   `SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
+  SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   cargo test --workspace`.

@@ -4,12 +4,14 @@
 #                                                                          mysql:3306
 #                                                                          mariadb:3306
 #                                                                          sqlserver:1433
+#                                                                          clickhouse:8123
 #
 #   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
 #
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
-# Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307 and SQL
-# Server on 11433, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307, SQL
+# Server on 11433 and ClickHouse on 18123, for tests without SSH. The proxies are on 11080
+# (SOCKS5) and 13128 (HTTP).
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
@@ -170,6 +172,28 @@ services:
       interval: 2s
       retries: 60
       start_period: 5s
+    networks: [data, direct]
+
+  # ClickHouse 25.8 (an LTS release), the first engine that is only a plugin (ADR-041). Its
+  # HTTP interface is published on 127.0.0.1:18123; through the tunnels it is clickhouse:8123.
+  # TLS is tested in its plugin's repository. User, password and database: `spelaion`.
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_USER: spelaion
+      CLICKHOUSE_PASSWORD: spelaion
+      CLICKHOUSE_DB: spelaion
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:18123:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1"]
+      interval: 2s
+      retries: 60
     networks: [data, direct]
 
 networks:

@@ -16,7 +16,9 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
   `SPELAION_TEST_SOCKS=127.0.0.1:11080 SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128`.
 - `bastion2` and `postgres` only resolve from inside the chain.
 - Postgres is also published on `127.0.0.1:15432`, MySQL on `127.0.0.1:13306`, MariaDB
-  on `127.0.0.1:13307` and SQL Server on `127.0.0.1:11433`, for tests without SSH.
+  on `127.0.0.1:13307`, SQL Server on `127.0.0.1:11433` and ClickHouse (HTTP) on
+  `127.0.0.1:18123`, for tests without SSH (`SPELAION_TEST_CLICKHOUSE`; behind the bastions it
+  is `clickhouse:8123`).
 - SQL Server (Developer edition, Microsoft's image `mcr.microsoft.com/mssql/server:2022-latest`,
   about 1.5 GB): user `sa`, password `Spelaion-test-1`; the tests create the `spelaion`
   database. It encrypts with its own self-signed certificate.

@@ -530,6 +530,8 @@ pub fn bound_placeholder(engine: &str, n: usize) -> String {
         "sqlserver" => format!("@P{n}"),
         "sqlite" => format!("?{n}"),
         "mysql" | "mariadb" => format!("@spelaion_p{n}"),
+        // A query parameter of the HTTP request, read as text.
+        "clickhouse" => format!("{{p{n}:String}}"),
         _ => format!("${n}"),
     }
 }

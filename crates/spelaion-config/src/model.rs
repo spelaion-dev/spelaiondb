@@ -156,6 +156,8 @@ pub enum Engine {
     /// MongoDB, and the servers that speak its protocol (FerretDB). Its language is not SQL:
     /// the core reads it and sends requests (ADR-056).
     Mongodb,
+    // ClickHouse, served only by its plugin (ADR-041, stage 3).
+    Clickhouse,
 }
 
 impl Engine {
@@ -168,6 +170,7 @@ impl Engine {
             Engine::Duckdb => "duckdb",
             Engine::Sqlserver => "sqlserver",
             Engine::Mongodb => "mongodb",
+            Engine::Clickhouse => "clickhouse",
         }
     }
 
@@ -180,7 +183,8 @@ impl Engine {
             | Engine::Mysql
             | Engine::Mariadb
             | Engine::Duckdb
-            | Engine::Sqlserver => true,
+            | Engine::Sqlserver
+            | Engine::Clickhouse => true,
             Engine::Mongodb => false,
         }
     }
@@ -193,7 +197,8 @@ impl Engine {
             | Engine::Mysql
             | Engine::Mariadb
             | Engine::Sqlserver
-            | Engine::Mongodb => false,
+            | Engine::Mongodb
+            | Engine::Clickhouse => false,
         }
     }
 
@@ -204,6 +209,8 @@ impl Engine {
             Engine::Mysql | Engine::Mariadb => Some(3306),
             Engine::Sqlserver => Some(1433),
             Engine::Mongodb => Some(27017),
+            // The HTTP interface; 8443 with TLS.
+            Engine::Clickhouse => Some(8123),
         }
     }
 }
@@ -341,6 +348,8 @@ impl IsolationLevel {
             // A file engine has one level: SQLite serializes, DuckDB uses snapshots. MongoDB
             // has no session isolation level.
             Engine::Sqlite | Engine::Duckdb | Engine::Mongodb => false,
+            // ClickHouse has no transactions to isolate.
+            Engine::Clickhouse => false,
         }
     }
 
@@ -354,7 +363,7 @@ impl Engine {
     pub fn has_session_schema(self) -> bool {
         match self {
             Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Duckdb => true,
-            Engine::Sqlserver | Engine::Sqlite | Engine::Mongodb => false,
+            Engine::Sqlserver | Engine::Sqlite | Engine::Mongodb | Engine::Clickhouse => false,
         }
     }
 }

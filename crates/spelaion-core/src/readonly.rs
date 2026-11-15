@@ -14,6 +14,11 @@
 //!    - DuckDB: `enable_external_access = false` (no files, network nor extensions; it
 //!      cannot be turned back on) and `BEGIN TRANSACTION READ ONLY`, on a database opened
 //!      read-only unless the connection lets agents write.
+//!    - ClickHouse (no transactions): the session's `readonly` setting
+//!      ([`Session::clickhouse_read_only`]). Once set the server refuses every write and DDL,
+//!      and every way of setting it back (`SET`, a query's `SETTINGS`, a request's
+//!      parameters), for as long as the session lives; its plugin never lets a lost session be
+//!      replaced by a new one, which would not have it.
 //! 3. Limits: maximum time and maximum number of rows.
 //!
 //! None of them replaces a read-only database user, which is the only real guarantee
@@ -72,6 +77,23 @@ pub enum ReadError {
 /// while the database is open, so a statement cannot undo it.
 pub(crate) const DUCKDB_NO_EXTERNAL_ACCESS: &str = "set enable_external_access = false";
 
+/// ClickHouse's read barrier: reads only, for the rest of the session. `2` and not `1`: the
+/// session may still change other settings (a time limit), never `readonly` itself.
+pub(crate) const CLICKHOUSE_READ_ONLY: &str = "SET readonly = 2";
+
+/// What the session's `readonly` setting is now: `0` writable; `1` or `2` read-only already
+/// (the user's own profile may set it, and then it cannot be set again).
+const CLICKHOUSE_READ_ONLY_NOW: &str = "SELECT toString(getSetting('readonly'))";
+
+/// How read-only a ClickHouse session is once [`Session::clickhouse_read_only`] has run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClickhouseReadOnly {
+    /// `readonly = 2`: reads, and settings other than `readonly`.
+    SettingsAllowed,
+    /// `readonly = 1` (the user's own profile): reads, and no setting at all.
+    NoSettings,
+}
+
 /// Name of the server-side cursor used in PostgreSQL.
 const CURSOR: &str = "spelaion_readonly";
 
@@ -127,6 +149,16 @@ impl Session {
                     self.rolled_back("begin transaction read only", sql, limits)
                         .await
                 }
+                "clickhouse" => {
+                    // The server stops the statement too, at the same limit, where the session
+                    // may change settings (`readonly = 1` allows none: the client timer stops it).
+                    if self.clickhouse_read_only().await? == ClickhouseReadOnly::SettingsAllowed {
+                        let seconds = limits.timeout.as_secs().max(1);
+                        self.drain(&format!("SET max_execution_time = {seconds}"))
+                            .await?;
+                    }
+                    self.collect(sql, limits.max_rows).await
+                }
                 other => Err(ReadError::Unsupported(other.into())),
             }
         };
@@ -142,7 +174,8 @@ impl Session {
             Ok(result) => result?,
             Err(_) => {
                 let _ = self.cancel().await;
-                if engine != "sqlite" {
+                // SQLite's read has no transaction, nor has ClickHouse.
+                if !matches!(engine, "sqlite" | "clickhouse") {
                     self.rollback_until_clean().await;
                 }
                 return Err(ReadError::Timeout(limits.timeout));
@@ -317,6 +350,44 @@ impl Session {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Makes this ClickHouse session read-only for the rest of its life, unless it already is
+    /// (`readonly` cannot be set again once it is not `0`). Anything but a `0`, a `1` or a `2`
+    /// fails closed.
+    pub(crate) async fn clickhouse_read_only(&self) -> Result<ClickhouseReadOnly, DriverError> {
+        let mut events = self
+            .connection()
+            .execute(CLICKHOUSE_READ_ONLY_NOW, &ExecOptions::default())
+            .await?;
+        let mut value = None;
+        while let Some(event) = events.next().await {
+            if let ExecEvent::Batch(batch) = event?
+                && batch.num_rows() > 0
+                && batch.num_columns() == 1
+            {
+                value =
+                    Value::from_array(batch.column(0), 0, spelaion_driver_api::LogicalType::Text)
+                        .map(|v| v.to_string());
+            }
+        }
+        match value.as_deref() {
+            Some("0") => {
+                let mut events = self
+                    .connection()
+                    .execute(CLICKHOUSE_READ_ONLY, &ExecOptions::default())
+                    .await?;
+                while let Some(event) = events.next().await {
+                    event?;
+                }
+                Ok(ClickhouseReadOnly::SettingsAllowed)
+            }
+            Some("1") => Ok(ClickhouseReadOnly::NoSettings),
+            Some("2") => Ok(ClickhouseReadOnly::SettingsAllowed),
+            other => Err(DriverError::Other(format!(
+                "could not tell whether the session is read-only (readonly = {other:?})"
+            ))),
         }
     }
 

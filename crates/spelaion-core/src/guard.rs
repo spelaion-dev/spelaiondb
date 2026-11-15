@@ -16,8 +16,8 @@ use spelaion_config::Safeguards;
 use spelaion_driver_api::{Dialect, RequestClass, StatementSpan};
 use sqlparser::ast::{Statement, visit_statements};
 use sqlparser::dialect::{
-    Dialect as SqlDialect, DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect,
-    PostgreSqlDialect, SQLiteDialect,
+    ClickHouseDialect, Dialect as SqlDialect, DuckDbDialect, GenericDialect, MsSqlDialect,
+    MySqlDialect, PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -350,6 +350,12 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
     if first == "drop" {
         return Some(Risk::Drop);
     }
+    if engine == "clickhouse"
+        && first == "alter"
+        && let Some(risk) = clickhouse_alter_risk(sql)
+    {
+        return Some(risk);
+    }
     let parser = sql_dialect(engine);
     let Ok(statements) = Parser::parse_sql(parser.as_ref(), sql) else {
         let by_first_word = match first.as_str() {
@@ -403,6 +409,24 @@ fn tsql_unparsed_risk(sql: &str) -> Option<Risk> {
             .find_map(|statement| destructive("sqlserver", statement));
     }
     risky_words(&tokens)
+}
+
+/// The risk of a ClickHouse `ALTER TABLE`, which is also how it changes rows and wipes data:
+/// `… DROP COLUMN | PARTITION | INDEX …` drops, and `… CLEAR COLUMN | INDEX | PROJECTION …`
+/// empties a column in every row, like an `UPDATE` without `WHERE`. Its mutations `… DELETE
+/// WHERE …` and `… UPDATE … WHERE …` always have a `WHERE` (the server requires it), like a
+/// `DELETE … WHERE`, and ask nothing. Words are read with sqlparser's tokenizer, so a name or a
+/// string that says `drop` is not one; an open quote reads nothing.
+fn clickhouse_alter_risk(sql: &str) -> Option<Risk> {
+    let tokens = Tokenizer::new(&ClickHouseDialect {}, sql).tokenize().ok()?;
+    let words: Vec<String> = tokens.iter().filter_map(plain_word).collect();
+    if words.iter().any(|word| word == "drop") {
+        Some(Risk::Drop)
+    } else if words.iter().any(|word| word == "clear") {
+        Some(Risk::UpdateAll)
+    } else {
+        None
+    }
 }
 
 /// A word token outside quotes (`[drop]` and `"drop"` are names), in lower case.
@@ -535,6 +559,7 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
         "mysql" | "mariadb" => Box::new(MySqlDialect {}),
         "duckdb" => Box::new(DuckDbDialect {}),
         "sqlserver" => Box::new(MsSqlDialect {}),
+        "clickhouse" => Box::new(ClickHouseDialect {}),
         _ => Box::new(GenericDialect {}),
     }
 }
@@ -923,5 +948,24 @@ mod tests {
         );
         // Other engines keep their first-word fallback.
         assert_eq!(destructive("sqlite", "select 1 drop table t"), None);
+    }
+
+    /// ClickHouse drops columns and partitions, and wipes columns, with `ALTER TABLE`.
+    #[test]
+    fn clickhouse_alter_table_drops_and_clears_ask() {
+        let ch = |sql: &str| destructive("clickhouse", sql);
+        assert_eq!(ch("alter table t drop column c"), Some(Risk::Drop));
+        assert_eq!(ch("ALTER TABLE t DROP PARTITION 202401"), Some(Risk::Drop));
+        assert_eq!(ch("alter table t drop index i"), Some(Risk::Drop));
+        assert_eq!(ch("alter table t clear column c"), Some(Risk::UpdateAll));
+        assert_eq!(ch("drop table t"), Some(Risk::Drop));
+        assert_eq!(ch("truncate table t"), Some(Risk::Truncate));
+        // Mutations always have their WHERE.
+        assert_eq!(ch("alter table t delete where id = 1"), None);
+        assert_eq!(ch("alter table t update a = 1 where id = 1"), None);
+        assert_eq!(ch("alter table t add column c UInt8"), None);
+        // A name or a string that says drop is not a DROP.
+        assert_eq!(ch("alter table t comment column `drop` 'drop it'"), None);
+        assert_eq!(ch("select 1"), None);
     }
 }

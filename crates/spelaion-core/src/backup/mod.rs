@@ -94,7 +94,11 @@ impl ToolFamily {
             Engine::Postgres => Some(ToolFamily::Postgres),
             Engine::Mysql | Engine::Mariadb => Some(ToolFamily::Mysql),
             // MongoDB's tools (mongodump) are not offered yet (ADR-056).
-            Engine::Sqlite | Engine::Duckdb | Engine::Sqlserver | Engine::Mongodb => None,
+            Engine::Sqlite
+            | Engine::Duckdb
+            | Engine::Sqlserver
+            | Engine::Mongodb
+            | Engine::Clickhouse => None,
         }
     }
 
@@ -122,7 +126,11 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         Engine::Mariadb => Some(ToolFlavor::Mariadb),
         Engine::Mysql => Some(ToolFlavor::Mysql),
         Engine::Postgres => Some(ToolFlavor::Postgres),
-        Engine::Sqlite | Engine::Duckdb | Engine::Sqlserver | Engine::Mongodb => None,
+        Engine::Sqlite
+        | Engine::Duckdb
+        | Engine::Sqlserver
+        | Engine::Mongodb
+        | Engine::Clickhouse => None,
     }
 }
 

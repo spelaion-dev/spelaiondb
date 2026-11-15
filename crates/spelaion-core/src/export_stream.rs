@@ -407,12 +407,25 @@ pub(crate) fn barrier(
         "duckdb" => ("begin transaction read only", Some("rollback")),
         // The export's own connection, closed afterwards.
         "sqlite" => ("pragma query_only = on", None),
+        // No transactions: the session's `readonly` setting, for the rest of the export's own
+        // session ([`enter`] sets it only where it is not set already).
+        "clickhouse" => (crate::readonly::CLICKHOUSE_READ_ONLY, None),
         other => {
             return Err(ExportError::Invalid(format!(
                 "streaming exports are not available for {other}"
             )));
         }
     })
+}
+
+/// Runs the first statement of [`barrier`]: as it is, except ClickHouse's, which is set only
+/// where the session is not read-only already (a user whose profile is read-only cannot set it).
+pub(crate) async fn enter(session: &Session, begin: &str) -> Result<(), DriverError> {
+    if begin == crate::readonly::CLICKHOUSE_READ_ONLY {
+        session.clickhouse_read_only().await.map(|_| ())
+    } else {
+        drain(session, begin).await
+    }
 }
 
 async fn stream_read(
@@ -441,7 +454,7 @@ async fn stream_read(
         return Err(ExportError::Cancelled);
     }
     let (begin, end) = barrier(session)?;
-    drain(session, begin).await?;
+    enter(session, begin).await?;
     let result = write_stream(session, sql, path, export, cancel, progress).await;
     match (&result, end) {
         // A cancelled export's session is closed by its owner, which ends the transaction;

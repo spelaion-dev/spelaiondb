@@ -506,6 +506,7 @@ try {
     ["spelaiondb-plugin-postgres", "PostgreSQL"],
     ["spelaiondb-plugin-duckdb", "DuckDB"],
     ["spelaiondb-plugin-mongodb", "MongoDB"],
+    ["spelaiondb-plugin-clickhouse", "ClickHouse"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();
