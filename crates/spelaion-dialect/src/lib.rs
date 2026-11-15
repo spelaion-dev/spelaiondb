@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use spelaion_driver_api::Dialect;
 
+pub mod clickhouse;
 pub mod duckdb;
 pub mod mongodb;
 pub mod mysql;
@@ -20,6 +21,7 @@ pub mod postgres;
 pub mod sqlite;
 pub mod sqlserver;
 
+pub use clickhouse::ClickhouseDialect;
 pub use duckdb::DuckdbDialect;
 pub use mongodb::MongodbDialect;
 pub use mysql::MysqlDialect;
@@ -41,6 +43,7 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "duckdb" => Some(Arc::new(DuckdbDialect)),
         // Not SQL: the core reads it and sends requests (ADR-056).
         "mongodb" => Some(Arc::new(MongodbDialect)),
+        "clickhouse" => Some(Arc::new(ClickhouseDialect)),
         _ => None,
     }
 }
@@ -59,6 +62,7 @@ mod tests {
             ("sqlserver", "sqlserver"),
             ("duckdb", "duckdb"),
             ("mongodb", "mongodb"),
+            ("clickhouse", "clickhouse"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");

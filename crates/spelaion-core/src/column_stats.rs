@@ -20,7 +20,7 @@ use futures_util::StreamExt;
 use spelaion_driver_api::{Dialect, LogicalType, Value};
 
 use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comments};
-use crate::export_stream::{ExportCancel, barrier, drain};
+use crate::export_stream::{ExportCancel, barrier, drain, enter};
 use crate::filter::FilterOp;
 use crate::generate::qualified;
 use crate::masking::MASK;
@@ -226,7 +226,7 @@ async fn read_rows(
         return Err(ColumnStatsError::Cancelled);
     }
     let (begin, end) = barrier(session).map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
-    drain(session, begin)
+    enter(session, begin)
         .await
         .map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
     // Parsed here, and masked by `column_stats` for a masked column (ADR-051): the statements'

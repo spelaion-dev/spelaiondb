@@ -25,7 +25,7 @@ use spelaion_driver_api::{
 };
 
 use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comments};
-use crate::export_stream::{ExportCancel, barrier, drain};
+use crate::export_stream::{ExportCancel, barrier, drain, enter};
 use crate::filter::FilterOp;
 use crate::generate::qualified;
 use crate::masking::MaskPolicy;
@@ -700,7 +700,7 @@ async fn search_table(
         Ok(statements) => statements,
         Err(e) => return failed(e.to_string()),
     };
-    if let Err(e) = drain(session, begin).await {
+    if let Err(e) = enter(session, begin).await {
         return failed(e.to_string());
     }
     let outcome = async {

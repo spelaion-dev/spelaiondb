@@ -35,9 +35,9 @@
 # A withdrawn build stays withdrawn in every catalogue published after it, even if its entry is
 # deleted from this file later.
 #
-# Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL. None of their drivers
-# is compiled into the core any more: these builds, inside the installer, are what serves
-# those engines.
+# Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL, MongoDB and
+# ClickHouse. None of their drivers is compiled into the core: these builds, inside the installer,
+# are what serves those engines.
 
 schema_version = 1
 
@@ -204,3 +204,36 @@ archive = "spelaiondb-plugin-mongodb-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "9714fa1347fb2f406023a9f3191c21d0c02b2791d54a6962ba0b25a645c300b6"
 archive_size = 4244298
 program_sha256 = "12dbf132dd5f4e049f601ad296e0916a277a01eb16ee2771b90fdc46fb4fb91d"
+
+# ClickHouse: the first engine that is only a plugin (ADR-041, stage 3).
+[[plugin]]
+name = "spelaiondb-plugin-clickhouse"
+repository = "spelaion-dev/spelaiondb-plugin-clickhouse"
+version = "0.1.0"
+protocol = "1.0"
+engines = ["clickhouse"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-clickhouse-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "2d33a4332457b5abe68b2611198dd5d71a979fcd3d1c257b4ef3e0d70e2026e0"
+archive_size = 2208187
+program_sha256 = "10df14134fa5b9eca26010e1f649d9e212cb0260a438ac9f7e9c1340ceb7a89f"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "9f3d72e2dc1ab7bb4964bc48bea635d1c344a06ebac7dc0933767b809e7d3444"
+archive_size = 2366798
+program_sha256 = "5bb3cff30acbe072abb3bb57784e7946e3466c389117638c9420fd3eb9cbe716"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "1d4f6831dbbeb4f2cc5b8bcf8de0f87d2346a9a8fb22f7aa78f9d3b9b6481795"
+archive_size = 2334080
+program_sha256 = "7e8f7334bc352f18009402fa559e0348f3423f65734e2cd57b6bdfa79c4de35b"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "428b7477d4728c60c95ae7f5f44a9e6f9918b18c3fa5920ae27386a524982e20"
+archive_size = 2614187
+program_sha256 = "78608a52ae7ddd3a043b4a6008de4af1a18c01e55a8681cd23b436c30b929244"

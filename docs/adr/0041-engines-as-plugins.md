@@ -214,6 +214,23 @@ protocol is tried with a real engine without leaving this repository
 Revisit if the core stops linking SQLite for its store, or if a tunnel's channel can be handed
 to a plugin (then both halves could move together).
 
+## Stage 3: ClickHouse (2026-11-15)
+The first engine that never existed inside the core: `spelaion-dev/spelaiondb-plugin-clickhouse`,
+pinned in `plugins.toml`. **What it cost the core: about 420 lines of code**, plus about 190
+of unit tests and 540 of tests against the server through the plugin. Of those 420, 160 are
+its dialect's splitter (`spelaion-dialect`), 60 its classifier rules (the table functions that
+reach outside), 70 its read barrier, 30 the guard's `ALTER TABLE … DROP | CLEAR`, and 45 the
+`Engine::Clickhouse` arms the compiler asked for. Everything else (connecting, TLS, results,
+cancel, the catalog) is in its repository, which the core never compiles.
+
+- **The read barrier ADR-020 asks for, without transactions,** is the session's `readonly`
+  setting: once set, ClickHouse refuses every write and every way of setting it back, for the
+  rest of the session. It holds only while the session does, so the plugin never lets a lost
+  server-side session be replaced by a new one (which would not have it): a lost session loses
+  the connection, as ADR-028 wants anyway.
+- **What it cannot do is declared** (no transactions, editing, imports or plans) and the app
+  follows the capabilities; agents' writes are refused, since they run in a transaction.
+
 ## Alternatives
 - **Hybrid for good** (the five inside, the rest as plugins): the least work, and two classes
   of engine with a protocol nothing demanding ever tests. Kept only as the order of the stages.

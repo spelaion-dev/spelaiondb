@@ -177,7 +177,8 @@
             "mysql",
             "mariadb",
             "duckdb",
-            "sqlserver"
+            "sqlserver",
+            "clickhouse"
           ]
         },
         {

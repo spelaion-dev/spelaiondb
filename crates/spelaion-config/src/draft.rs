@@ -381,7 +381,11 @@ impl ConnectionDraft {
             PasswordChoice::CloudToken(token) => {
                 match self.engine {
                     Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
-                    Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb | Engine::Mongodb => {
+                    Engine::Sqlserver
+                    | Engine::Sqlite
+                    | Engine::Duckdb
+                    | Engine::Mongodb
+                    | Engine::Clickhouse => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -470,7 +474,8 @@ impl ConnectionDraft {
                 | Engine::Mysql
                 | Engine::Mariadb
                 | Engine::Sqlserver
-                | Engine::Mongodb => d,
+                | Engine::Mongodb
+                | Engine::Clickhouse => d,
             }),
             user: non_empty(&self.user).filter(|_| network),
             password: password

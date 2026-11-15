@@ -176,7 +176,7 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             Some("postgres"),
         ),
         supported(Engine::Duckdb, "DuckDB", Analytical, File),
-        planned("clickhouse", "ClickHouse", Analytical, Network, Some(8123)),
+        supported(Engine::Clickhouse, "ClickHouse", Analytical, Network),
         planned("snowflake", "Snowflake", Analytical, Network, None),
         planned("bigquery", "BigQuery", Analytical, Network, None),
         supported(Engine::Mongodb, "MongoDB", NoSql, Network),
