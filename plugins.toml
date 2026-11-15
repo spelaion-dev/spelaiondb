@@ -35,9 +35,9 @@
 # A withdrawn build stays withdrawn in every catalogue published after it, even if its entry is
 # deleted from this file later.
 #
-# Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL, MongoDB and
-# ClickHouse. None of their drivers is compiled into the core: these builds, inside the installer,
-# are what serves those engines.
+# Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL, MongoDB, ClickHouse,
+# Redis, Trino and Presto (one plugin). None of their drivers is compiled into the core: these
+# builds, inside the installer, are what serves those engines.
 
 schema_version = 1
 
@@ -268,3 +268,37 @@ archive = "spelaiondb-plugin-redis-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "5e775ebf41cd7845fb510f5aad7a27551e2d7cc925c267c1a6b6a92dea1b246c"
 archive_size = 2199102
 program_sha256 = "6c3025485556ed0ed164e4d3102556e8dfb6efedf7c73e4971492b42b083c2f0"
+
+
+# Trino and Presto, one plugin for both.
+[[plugin]]
+name = "spelaiondb-plugin-trino"
+repository = "spelaion-dev/spelaiondb-plugin-trino"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["trino", "presto"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-trino-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "4d1c45c14332ec56d2ca954710c803a12404859bd00886d17e1f7f0eac499f8c"
+archive_size = 2230716
+program_sha256 = "b6298f1fb0b055602f41e194964545a024d993bb91030714b12efd2b493ce6e2"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-trino-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "67c5fbdfe026d7307038ece9ecd6ddc0a2f1fadb534bf57978cf66f912264670"
+archive_size = 2394885
+program_sha256 = "c141fbd6656bad11919f2cf760e5044a728498533b57922a074f562ebb8f07f1"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-trino-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "3bb55ca788e1580864165d87ec0236ee3e708be69b65f288a91372153af48277"
+archive_size = 2360652
+program_sha256 = "c2619e8fd86b8993ede2e03ce61ba3836b0172885b24840b46357224bf802901"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-trino-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "e1fbe66d932609fbc89d8908797f90171342ccee9c12b765257b1d08978f29a8"
+archive_size = 2643857
+program_sha256 = "ecc90fc83f3308ebd26ca11e3773a8ab6a6b129aac1b9173cfc88b14e82dad88"

@@ -128,7 +128,9 @@ impl ExplainPolicy {
                 | Engine::Sqlserver
                 | Engine::Mongodb
                 | Engine::Clickhouse
-                | Engine::Redis => None,
+                | Engine::Redis
+                | Engine::Trino
+                | Engine::Presto => None,
             },
         }
     }

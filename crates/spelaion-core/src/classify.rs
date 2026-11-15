@@ -460,6 +460,9 @@ fn sql_text_functions(engine: &str) -> &'static [&'static str] {
             "connectby",
             "xpath_table",
         ],
+        // A catalog's `system.query(query => '…')` (and `raw_query` in some connectors) sends
+        // its text to the database behind the catalog, which may write.
+        "trino" => &["query", "raw_query"],
         _ => &[],
     }
 }
@@ -1709,6 +1712,24 @@ mod tests {
         // Scalar functions whose names begin like a refused one are not refused.
         assert!(classify_read_only("clickhouse", "select URLHierarchy('https://a/b')").is_ok());
         assert!(classify_read_only("clickhouse", "select filesystemAvailable()").is_ok());
+    }
+
+    /// Trino's and Presto's `query` table functions send their text to the database behind the
+    /// catalog, which nothing here reads.
+    #[test]
+    fn trino_pass_through_queries_are_refused() {
+        let trino = |sql: &str| classify_read_only("trino", sql);
+        assert!(trino("select * from tpch.tiny.nation").is_ok());
+        assert!(trino("select catalog_name from system.metadata.catalogs").is_ok());
+        for sql in [
+            "select * from table(pg.system.query(query => 'delete from t'))",
+            "select * from table(system.query(query => 'select 1'))",
+            "select * from table(es.system.raw_query(schema => 'x', index => 'i', query => '{}'))",
+            "insert into t values (1)",
+            "call system.runtime.kill_query(query_id => 'x')",
+        ] {
+            assert!(trino(sql).is_err(), "{sql}");
+        }
     }
 
     #[test]

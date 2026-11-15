@@ -19,6 +19,8 @@
 //!      and every way of setting it back (`SET`, a query's `SETTINGS`, a request's
 //!      parameters), for as long as the session lives; its plugin never lets a lost session be
 //!      replaced by a new one, which would not have it.
+//!    - Trino and Presto: `START TRANSACTION READ ONLY`, which the server enforces for every
+//!      catalog (`READ_ONLY_VIOLATION`), always rolled back.
 //! 3. Limits: maximum time and maximum number of rows.
 //!
 //! None of them replaces a read-only database user, which is the only real guarantee
@@ -158,6 +160,12 @@ impl Session {
                             .await?;
                     }
                     self.collect(sql, limits.max_rows).await
+                }
+                // Trino and Presto refuse every write in a read-only transaction
+                // (`READ_ONLY_VIOLATION`), whatever the catalog's connector.
+                "trino" => {
+                    self.rolled_back("start transaction read only", sql, limits)
+                        .await
                 }
                 other => Err(ReadError::Unsupported(other.into())),
             }

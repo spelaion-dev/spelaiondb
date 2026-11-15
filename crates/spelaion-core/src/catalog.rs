@@ -191,6 +191,8 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             default_database: None,
         },
         supported(Engine::Clickhouse, "ClickHouse", Analytical, Network),
+        supported(Engine::Trino, "Trino", Analytical, Network),
+        supported(Engine::Presto, "Presto", Analytical, Network),
         planned("snowflake", "Snowflake", Analytical, Network, None),
         planned("bigquery", "BigQuery", Analytical, Network, None),
         supported(Engine::Mongodb, "MongoDB", NoSql, Network),
@@ -280,9 +282,11 @@ mod tests {
             let Some(engine) = info.engine else { continue };
             let dialect =
                 crate::dialect_of(engine).unwrap_or_else(|| panic!("{} has no dialect", info.id));
-            // MariaDB reads SQL as MySQL does; every other engine's dialect bears its name.
+            // MariaDB reads SQL as MySQL does and Presto as Trino does; every other engine's dialect
+            // bears its name.
             let expected = match engine {
                 Engine::Mariadb => "mysql",
+                Engine::Presto => "trino",
                 other => other.as_str(),
             };
             assert_eq!(dialect.name(), expected, "{}", info.id);

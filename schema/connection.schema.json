@@ -182,7 +182,9 @@
             "mariadb",
             "duckdb",
             "sqlserver",
-            "clickhouse"
+            "clickhouse",
+            "trino",
+            "presto"
           ]
         },
         {

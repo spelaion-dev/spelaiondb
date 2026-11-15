@@ -388,7 +388,9 @@ impl ConnectionDraft {
                     | Engine::Duckdb
                     | Engine::Mongodb
                     | Engine::Clickhouse
-                    | Engine::Redis => {
+                    | Engine::Redis
+                    | Engine::Trino
+                    | Engine::Presto => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -479,7 +481,9 @@ impl ConnectionDraft {
                 | Engine::Sqlserver
                 | Engine::Mongodb
                 | Engine::Clickhouse
-                | Engine::Redis => d,
+                | Engine::Redis
+                | Engine::Trino
+                | Engine::Presto => d,
             }),
             file_folder: self.file_folder && self.engine == Engine::Duckdb,
             user: non_empty(&self.user).filter(|_| network),

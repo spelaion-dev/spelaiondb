@@ -70,7 +70,9 @@ pub fn embedded_dump_path(
         | Engine::Sqlserver
         | Engine::Mongodb
         | Engine::Clickhouse
-        | Engine::Redis => {
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto => {
             return Err(BackupError::Invalid(format!(
                 "{} databases are backed up with a client tool",
                 resolved.engine.as_str()
@@ -178,7 +180,9 @@ pub async fn embedded_dump(
         | Engine::Sqlserver
         | Engine::Mongodb
         | Engine::Clickhouse
-        | Engine::Redis => {
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto => {
             unreachable!("embedded_dump_path refused it")
         }
     };

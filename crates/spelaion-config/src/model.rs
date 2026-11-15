@@ -166,6 +166,9 @@ pub enum Engine {
     /// Redis, and the servers that speak its protocol (Valkey). Its language is not SQL: the
     /// core reads each command line and sends its arguments (ADR-056).
     Redis,
+    // Trino and Presto, one plugin for both (the same protocol).
+    Trino,
+    Presto,
 }
 
 impl Engine {
@@ -180,6 +183,8 @@ impl Engine {
             Engine::Mongodb => "mongodb",
             Engine::Clickhouse => "clickhouse",
             Engine::Redis => "redis",
+            Engine::Trino => "trino",
+            Engine::Presto => "presto",
         }
     }
 
@@ -193,7 +198,9 @@ impl Engine {
             | Engine::Mariadb
             | Engine::Duckdb
             | Engine::Sqlserver
-            | Engine::Clickhouse => true,
+            | Engine::Clickhouse
+            | Engine::Trino
+            | Engine::Presto => true,
             Engine::Mongodb | Engine::Redis => false,
         }
     }
@@ -208,7 +215,9 @@ impl Engine {
             | Engine::Sqlserver
             | Engine::Mongodb
             | Engine::Clickhouse
-            | Engine::Redis => false,
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto => false,
         }
     }
 
@@ -222,6 +231,7 @@ impl Engine {
             // The HTTP interface; 8443 with TLS.
             Engine::Clickhouse => Some(8123),
             Engine::Redis => Some(6379),
+            Engine::Trino | Engine::Presto => Some(8080),
         }
     }
 }
@@ -359,8 +369,8 @@ impl IsolationLevel {
             // A file engine has one level: SQLite serializes, DuckDB uses snapshots. MongoDB
             // has no session isolation level.
             Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis => false,
-            // ClickHouse has no transactions to isolate.
-            Engine::Clickhouse => false,
+            // ClickHouse has no transactions to isolate; Trino and Presto set none per session.
+            Engine::Clickhouse | Engine::Trino | Engine::Presto => false,
         }
     }
 
@@ -378,7 +388,9 @@ impl Engine {
             | Engine::Sqlite
             | Engine::Mongodb
             | Engine::Clickhouse
-            | Engine::Redis => false,
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto => false,
         }
     }
 }

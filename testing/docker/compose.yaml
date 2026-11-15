@@ -5,13 +5,14 @@
 #                                                                          mariadb:3306
 #                                                                          sqlserver:1433
 #                                                                          clickhouse:8123
+#                                                                          trino:8080, presto:8080
 #
 #   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
 #
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307, SQL
-# Server on 11433 and ClickHouse on 18123, for tests without SSH. The proxies are on 11080
-# (SOCKS5) and 13128 (HTTP).
+# Server on 11433, ClickHouse on 18123, Trino on 18080 and Presto on 18081, for tests without
+# SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
@@ -205,6 +206,29 @@ services:
       test: ["CMD", "redis-cli", "-a", "spelaion", "--no-auth-warning", "ping"]
       interval: 2s
       retries: 60
+    networks: [data, direct]
+
+  # Trino 479 and Presto 0.295, one plugin for both, with the catalogs their images ship
+  # (`memory`, `tpch`…). Published on 127.0.0.1:18080 and 18081; through the tunnels they are
+  # trino:8080 and presto:8080. No password: they take one only over TLS.
+  trino:
+    image: trinodb/trino:479
+    ports:
+      - "127.0.0.1:18080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/info | grep -q '\"starting\":false'"]
+      interval: 3s
+      retries: 80
+    networks: [data, direct]
+
+  presto:
+    image: prestodb/presto:0.295
+    ports:
+      - "127.0.0.1:18081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/info | grep -q '\"starting\":false'"]
+      interval: 3s
+      retries: 80
     networks: [data, direct]
 
 networks:

@@ -51,6 +51,14 @@ pub fn clickhouse() -> Arc<dyn Driver> {
     driver(Engine::Clickhouse)
 }
 
+pub fn trino() -> Arc<dyn Driver> {
+    driver(Engine::Trino)
+}
+
+pub fn presto() -> Arc<dyn Driver> {
+    driver(Engine::Presto)
+}
+
 /// Creates the empty database file of an embedded engine. The file must not exist.
 pub async fn create_database(engine: Engine, path: &Path) {
     spelaion_core::create_file_database(engine, path)
