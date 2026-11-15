@@ -709,6 +709,10 @@ mod tests {
             "flightsql",
             "dremio",
             "gizmosql",
+            "hive",
+            "spark",
+            "kyuubi",
+            "impala",
         ] {
             let connection = |extra: &str| {
                 ConnectionEntry {

@@ -80,7 +80,11 @@ pub fn embedded_dump_path(
         | Engine::Flightsql
         | Engine::Dremio
         | Engine::Gizmosql
-        | Engine::Neo4j => {
+        | Engine::Neo4j
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala => {
             return Err(BackupError::Invalid(format!(
                 "{} databases are backed up with a client tool",
                 resolved.engine.as_str()
@@ -198,7 +202,11 @@ pub async fn embedded_dump(
         | Engine::Flightsql
         | Engine::Dremio
         | Engine::Gizmosql
-        | Engine::Neo4j => {
+        | Engine::Neo4j
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala => {
             unreachable!("embedded_dump_path refused it")
         }
     };

@@ -325,6 +325,17 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   and no session setup, and no cancel. Tests: `spelaion-core`'s `tests/neo4j.rs` with
   `SPELAION_TEST_NEO4J=127.0.0.1:17474` (and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS`);
   `SPELAION_DEV_PLUGIN_NEO4J` in a development build.
+- **HiveServer2's engines are one plugin** (`spelaion-dev/spelaiondb-plugin-hive`, SDB-176):
+  `hive`, `spark` (Spark's Thrift server), `kyuubi` and `impala`, over HiveServer2's Thrift
+  service (SASL `PLAIN`, or no SASL for Impala without a password; no Kerberos yet), pinned in
+  `plugins.toml`. A Cloudera cluster's Hive and Impala are these engines. Each reads as HiveQL
+  under its own name (`spelaion-dialect`'s `hive.rs`: backquoted names, strings in both quotes
+  with backslash escapes), and the guard parses them with sqlparser's Hive dialect and also asks
+  before what replaces data without deleting it first (`guard.rs`'s `hive_risk`: `OVERWRITE`
+  anywhere, `ALTER TABLE … DROP`). **They have no read barrier of ours** (no read-only session
+  or transaction they enforce), as for the Flight SQL engines: no read-only mode, no agents.
+  Tests: `tests/hive.rs` with `SPELAION_TEST_HIVE=127.0.0.1:11010` (Hive, and `SPELAION_TEST_SSH`
+  for the tunnel); Spark, Kyuubi and Impala are tested in the plugin's repository.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -782,9 +793,8 @@ outside the team.
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
   SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080
   SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521
-  SPELAION_TEST_LIBSQL=127.0.0.1:18095
-  SPELAION_TEST_GIZMOSQL=127.0.0.1:31337
   SPELAION_TEST_LIBSQL=127.0.0.1:18095 SPELAION_TEST_NEO4J=127.0.0.1:17474
+  SPELAION_TEST_GIZMOSQL=127.0.0.1:31337 SPELAION_TEST_HIVE=127.0.0.1:11010
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142

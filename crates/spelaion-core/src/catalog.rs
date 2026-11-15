@@ -198,6 +198,16 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         supported(Engine::Flightsql, "Arrow Flight SQL", Analytical, Network),
         supported(Engine::Dremio, "Dremio", Analytical, Network),
         supported(Engine::Gizmosql, "GizmoSQL", Analytical, Network),
+        // HiveServer2's protocol, one plugin. A Cloudera cluster's Hive and Impala are these.
+        supported(Engine::Hive, "Apache Hive", Analytical, Network),
+        supported(
+            Engine::Spark,
+            "Spark SQL (Thrift server)",
+            Analytical,
+            Network,
+        ),
+        supported(Engine::Kyuubi, "Apache Kyuubi", Analytical, Network),
+        supported(Engine::Impala, "Apache Impala", Analytical, Network),
         planned("snowflake", "Snowflake", Analytical, Network, None),
         planned("bigquery", "BigQuery", Analytical, Network, None),
         supported(Engine::Mongodb, "MongoDB", NoSql, Network),

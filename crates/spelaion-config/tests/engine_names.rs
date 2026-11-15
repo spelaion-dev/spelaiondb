@@ -27,11 +27,15 @@ fn position(engine: Engine) -> usize {
         Engine::Dremio => 16,
         Engine::Gizmosql => 17,
         Engine::Neo4j => 18,
+        Engine::Hive => 19,
+        Engine::Spark => 20,
+        Engine::Kyuubi => 21,
+        Engine::Impala => 22,
     }
 }
 
 /// The number of arms above: one more than the last position.
-const ENGINES: usize = 19;
+const ENGINES: usize = 23;
 
 #[test]
 fn every_engine_is_listed_once() {

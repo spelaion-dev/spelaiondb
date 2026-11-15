@@ -83,6 +83,8 @@ jobs:
       # TDengine (ADR-056), through its pinned plugin.
       SPELAION_TEST_TDENGINE: 127.0.0.1:16141
       SPELAION_TEST_GIZMOSQL: 127.0.0.1:31337
+      # Apache Hive (SDB-176), through its pinned plugin.
+      SPELAION_TEST_HIVE: 127.0.0.1:11010
       SPELAION_TEST_SSH: 127.0.0.1:2221
       SPELAION_TEST_SSH_AGENT: "1"
       # The test proxies (ADR-027) from testing/docker/proxy.

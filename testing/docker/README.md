@@ -28,6 +28,10 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
   Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
   `127.0.0.1:12484` and `oracle-tls:2484`, with a certificate for `localhost` and
   `oracle-tls` signed by `keys/ca.crt` (`gen-keys.sh`).
+- Apache Hive 4.0.1's HiveServer2 (with its embedded metastore; about 3 GB, half a minute to
+  start) is on `127.0.0.1:11010` without authentication (`SPELAION_TEST_HIVE`; behind the
+  bastions `hive:10000`). Its JVM is bounded (`mem_limit`), like every new JVM service here.
+  Spark's Thrift server, Kyuubi and Impala are tested in the HiveServer2 plugin's repository.
 - libSQL's server (`sqld` 0.24.33) is on `127.0.0.1:18095` without authentication
   (`SPELAION_TEST_LIBSQL`; behind the bastions and the proxies `libsql:8080`). Tokens and TLS
   are tested in its plugin's repository.

@@ -109,7 +109,11 @@ impl ToolFamily {
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql
-            | Engine::Neo4j => None,
+            | Engine::Neo4j
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => None,
         }
     }
 
@@ -152,7 +156,11 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Flightsql
         | Engine::Dremio
         | Engine::Gizmosql
-        | Engine::Neo4j => None,
+        | Engine::Neo4j
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala => None,
     }
 }
 

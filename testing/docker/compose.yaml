@@ -11,14 +11,15 @@
 #                                                                          libsql:8080
 #                                                                          gizmosql:31337
 #                                                                          neo4j:7474
+#                                                                          hive:10000
 #
 #   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
 #
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307, SQL
 # Server on 11433, ClickHouse on 18123, Trino on 18080, Presto on 18081, Oracle on 11521
-# (TCPS on 12484), libSQL on 18095, GizmoSQL on 31337 and Neo4j on 17474, for tests without
-# SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# (TCPS on 12484), libSQL on 18095, GizmoSQL on 31337, Neo4j on 17474 and Hive on 11010, for
+# tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
@@ -243,6 +244,24 @@ services:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/31337' || exit 1"]
       interval: 2s
       retries: 60
+    networks: [data, direct]
+
+  # Apache Hive 4.0.1's HiveServer2 with its embedded metastore, served by the HiveServer2
+  # plugin as `hive`. 127.0.0.1:11010; through the tunnels hive:10000. No authentication (any
+  # user and password). Spark's Thrift server, Kyuubi and Impala are tested in the plugin's own
+  # repository. Its JVM is bounded: CI's runner is tight (SDB-345).
+  hive:
+    image: apache/hive@sha256:5194161ef50b80875f937dff04936df047cbe894e9727ab8f0606349345b1bd3
+    environment:
+      SERVICE_NAME: hiveserver2
+      SERVICE_OPTS: -Xmx768m
+    mem_limit: 1536m
+    ports:
+      - "127.0.0.1:11010:10000"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/10000' || exit 1"]
+      interval: 3s
+      retries: 100
     networks: [data, direct]
 
   presto:

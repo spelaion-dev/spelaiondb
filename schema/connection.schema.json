@@ -187,7 +187,11 @@
             "presto",
             "flightsql",
             "dremio",
-            "gizmosql"
+            "gizmosql",
+            "hive",
+            "spark",
+            "kyuubi",
+            "impala"
           ]
         },
         {

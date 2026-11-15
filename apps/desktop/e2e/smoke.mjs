@@ -514,6 +514,7 @@ try {
     ["spelaiondb-plugin-cassandra", "Cassandra"],
     ["spelaiondb-plugin-flightsql", "Dremio, Arrow Flight SQL, GizmoSQL"],
     ["spelaiondb-plugin-neo4j", "Neo4j"],
+    ["spelaiondb-plugin-hive", "Apache Hive, Apache Impala, Apache Kyuubi, Spark SQL (Thrift server)"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();

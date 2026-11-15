@@ -398,7 +398,11 @@ impl ConnectionDraft {
                     | Engine::Flightsql
                     | Engine::Dremio
                     | Engine::Gizmosql
-                    | Engine::Neo4j => {
+                    | Engine::Neo4j
+                    | Engine::Hive
+                    | Engine::Spark
+                    | Engine::Kyuubi
+                    | Engine::Impala => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -499,7 +503,11 @@ impl ConnectionDraft {
                 | Engine::Flightsql
                 | Engine::Dremio
                 | Engine::Gizmosql
-                | Engine::Neo4j => d,
+                | Engine::Neo4j
+                | Engine::Hive
+                | Engine::Spark
+                | Engine::Kyuubi
+                | Engine::Impala => d,
             }),
             file_folder: self.file_folder && self.engine == Engine::Duckdb,
             user: non_empty(&self.user).filter(|_| network),
