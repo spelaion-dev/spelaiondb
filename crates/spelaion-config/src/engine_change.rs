@@ -60,7 +60,8 @@ fn passwordless(engine: Engine) -> bool {
         | Engine::Clickhouse
         | Engine::Redis
         | Engine::Trino
-        | Engine::Presto => false,
+        | Engine::Presto
+        | Engine::Cassandra => false,
     }
 }
 

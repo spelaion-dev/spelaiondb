@@ -14,6 +14,7 @@ use std::sync::Arc;
 use spelaion_driver_api::Dialect;
 
 pub mod clickhouse;
+pub mod cql;
 pub mod duckdb;
 pub mod mongodb;
 pub mod mysql;
@@ -24,6 +25,7 @@ pub mod sqlserver;
 pub mod trino;
 
 pub use clickhouse::ClickhouseDialect;
+pub use cql::CqlDialect;
 pub use duckdb::DuckdbDialect;
 pub use mongodb::MongodbDialect;
 pub use mysql::MysqlDialect;
@@ -51,6 +53,8 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "redis" => Some(Arc::new(RedisDialect)),
         // One dialect for both: Presto is where Trino came from, and their grammar is one.
         "trino" | "presto" => Some(Arc::new(TrinoDialect)),
+        // Shaped like SQL, but its own: sent as text, read here (ADR-056).
+        "cassandra" => Some(Arc::new(CqlDialect)),
         _ => None,
     }
 }
@@ -73,6 +77,7 @@ mod tests {
             ("redis", "redis"),
             ("trino", "trino"),
             ("presto", "trino"),
+            ("cassandra", "cassandra"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");

@@ -390,7 +390,8 @@ impl ConnectionDraft {
                     | Engine::Clickhouse
                     | Engine::Redis
                     | Engine::Trino
-                    | Engine::Presto => {
+                    | Engine::Presto
+                    | Engine::Cassandra => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -483,7 +484,8 @@ impl ConnectionDraft {
                 | Engine::Clickhouse
                 | Engine::Redis
                 | Engine::Trino
-                | Engine::Presto => d,
+                | Engine::Presto
+                | Engine::Cassandra => d,
             }),
             file_folder: self.file_folder && self.engine == Engine::Duckdb,
             user: non_empty(&self.user).filter(|_| network),

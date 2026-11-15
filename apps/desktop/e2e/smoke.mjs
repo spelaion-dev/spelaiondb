@@ -509,6 +509,7 @@ try {
     ["spelaiondb-plugin-clickhouse", "ClickHouse"],
     ["spelaiondb-plugin-redis", "Redis"],
     ["spelaiondb-plugin-trino", "Presto, Trino"],
+    ["spelaiondb-plugin-cassandra", "Cassandra"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();
@@ -5928,6 +5929,59 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await keyPanel.locator(".cm-content", { hasText: "GET spelaion:smoke" }).waitFor();
   await keyPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await shot("12a6-redis");
+
+  step("Cassandra: a new connection, CQL split and guarded by the core, a table opened from the explorer");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "Cassandra" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("Cassandra (Docker)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("19142");
+  assert.equal(await wizard.getByRole("tab", { name: "Session" }).count(), 0);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByText(/^Read-only mode and agents are not available for this engine yet/).waitFor();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 5\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  assert.match(readFileSync(join(userDir, "connections", "cassandra-docker.toml"), "utf8"), /engine = "cassandra"/);
+  // A batch is one statement: its semicolons stay inside it.
+  panel = await newQuery("Cassandra (Docker)", [
+    "CREATE KEYSPACE IF NOT EXISTS spelaion_smoke WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};",
+    "CREATE TABLE IF NOT EXISTS spelaion_smoke.people (id int PRIMARY KEY, name text);",
+    "BEGIN BATCH",
+    "  INSERT INTO spelaion_smoke.people (id, name) VALUES (1, 'Ana; María');",
+    "APPLY BATCH;",
+    "SELECT name FROM spelaion_smoke.people WHERE id = 1;",
+  ].join("\n"));
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.equal(await panel.getByText(/^Could not load completion metadata/).count(), 0);
+  // The keyspace is chosen above the editor, never with USE.
+  await replaceQuery(panel, "USE system;");
+  await run(panel);
+  await panel.getByText(/choose the keyspace above the editor/).first().waitFor();
+  // The guard reads CQL with its own lists.
+  await replaceQuery(panel, "TRUNCATE spelaion_smoke.people;");
+  await run(panel);
+  risk = page.getByRole("dialog", { name: "Run these statements?" });
+  assert.equal(await risk.locator(".risk-list pre").innerText(), "TRUNCATE spelaion_smoke.people");
+  await page.keyboard.press("Enter");
+  await risk.waitFor({ state: "detached" });
+  // A table opens with the core's bounded statement, not the table data tab.
+  await page.locator('.connection-row:has-text("Cassandra (Docker)") .twisty').click();
+  const cassandraSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion_smoke", exact: true });
+  if ((await cassandraSchema.getAttribute("aria-expanded")) !== "true") await cassandraSchema.click();
+  const cassandraTables = cassandraSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Tables", exact: true });
+  if ((await cassandraTables.getAttribute("aria-expanded")) !== "true") await cassandraTables.click();
+  const tabsBeforeTable = await page.getByRole("tab").count();
+  await cassandraSchema.locator("xpath=..").locator(".leaf-row", { hasText: /^people/ }).dblclick();
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length > count, tabsBeforeTable);
+  const tablePanel = page.locator(".tab-panel:not([hidden])");
+  await tablePanel.locator(".cm-content", { hasText: "SELECT * FROM spelaion_smoke.people LIMIT 200" }).waitFor();
+  await tablePanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await shot("12a7-cassandra");
   // The query ends in a word, which may open the completion list as it is typed: the next
   // dialog must not find it on top (the editor closes it when it loses focus).
 

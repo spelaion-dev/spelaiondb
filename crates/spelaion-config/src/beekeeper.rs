@@ -808,7 +808,8 @@ fn tls_of(row: &Row, engine: Option<Engine>) -> Option<ImportedTls> {
             | Engine::Clickhouse
             | Engine::Redis
             | Engine::Trino
-            | Engine::Presto,
+            | Engine::Presto
+            | Engine::Cassandra,
         )
         | None => None,
     };

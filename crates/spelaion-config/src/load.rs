@@ -486,7 +486,7 @@ pub(crate) fn validate_connection(
             .collect(),
         // MongoDB and Redis may need no login, and the database can be chosen in the
         // explorer.
-        Engine::Mongodb | Engine::Redis => [(
+        Engine::Mongodb | Engine::Redis | Engine::Cassandra => [(
             "host",
             file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
         )]
@@ -578,7 +578,8 @@ pub(crate) fn validate_connection(
             | Engine::Mysql
             | Engine::Mariadb
             | Engine::Mongodb
-            | Engine::Redis => {}
+            | Engine::Redis
+            | Engine::Cassandra => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,
@@ -872,6 +873,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Redis => "Redis",
         Engine::Trino => "Trino",
         Engine::Presto => "Presto",
+        Engine::Cassandra => "Cassandra",
     }
 }
 

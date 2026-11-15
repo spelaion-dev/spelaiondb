@@ -224,6 +224,17 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   pages by the plugin, and opens one with a bounded command of its type
   (`Dialect::browse_statement`). Tests: `spelaion-core`'s `tests/redis.rs` with
   `SPELAION_TEST_REDIS=127.0.0.1:16379` (or `SPELAION_DEV_PLUGIN_REDIS`).
+- **Cassandra is a plugin whose language is shaped like SQL but is not SQL** (ADR-056): its
+  driver lives in `spelaion-dev/spelaiondb-plugin-cassandra` (Cassandra and ScyllaDB), pinned in
+  `plugins.toml`. CQL is sent as text, as SQL is, but `sqlparser` never reads it: its splitter
+  (batches whole), quoting and guard lists are `spelaion-dialect`'s `cql.rs`, through
+  `Dialect::statement_class` (what the guard makes of a statement of such a language) and
+  `Dialect::refuse_statement` (what the session never sends: `USE`, the keyspace being chosen
+  above the editor). `Engine::is_sql` is false for it, so read-only mode, session setup and
+  agents are not offered, and its tables open with the core's bounded statement
+  (`Dialect::browse_statement`), never the table data tab, which writes SQL. Tests:
+  `spelaion-core`'s `tests/cassandra.rs` with `SPELAION_TEST_CASSANDRA=127.0.0.1:19142` (or
+  `SPELAION_DEV_PLUGIN_CASSANDRA`).
 - **DuckDB is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives in
   `spelaion-dev/spelaiondb-plugin-duckdb` with its type zoo, and this repository pins the
   release it ships (`plugins.toml`). The core does not compile DuckDB. Here, DuckDB's tests
@@ -714,7 +725,8 @@ outside the team.
   SPELAION_TEST_PRESTO=127.0.0.1:18081
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
-  SPELAION_TEST_REDIS=127.0.0.1:16379 cargo test --workspace`.
+  SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142
+  cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),
