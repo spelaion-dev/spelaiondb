@@ -418,7 +418,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one that does not enforce its engine's read-only transaction or session mode gets no agents,
   streaming reads or read-only connections (unchecked PostgreSQL forks neither), and a
   read-only connection's session mode is read back from the server after it is set (a MySQL
-  fork that names itself as MySQL, StarRocks, is caught there). Like `readonly.rs`, any change
+  fork that names itself as MySQL, StarRocks, is caught there). A MySQL transaction's read-only
+  mode cannot be read back, so a fork that accepts it and writes anyway must be recognised by
+  its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350).
+  Like `readonly.rs`, any change
   there needs tests that try to get around it (`tests/postgres_family.rs` and
   `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change

@@ -7,7 +7,9 @@
 //! - OceanBase keeps read-only connections and agents' reads from writing with its own
 //!   barriers; TiDB and SingleStore are recognised and get neither;
 //! - StarRocks (`SPELAION_TEST_STARROCKS`) does not say what it is: its read-only connection is
-//!   refused because the server says its session is still writable.
+//!   refused because the server says its session is still writable;
+//! - Databend (`SPELAION_TEST_DATABEND`) accepts MySQL's read-only transaction and session and
+//!   writes anyway: it is recognised by its version and gets neither (SDB-350).
 //!
 //! Each variable is `host:port`; a server without one is skipped, which does not count as
 //! tested.
@@ -93,6 +95,16 @@ const GREPTIME: Server = Server {
     family: ServerFamily::GreptimeDb,
     table_options: "",
     database: Some("public"),
+};
+
+// Databend says it is MySQL 8.0.90; the rest of its version tells it apart.
+const DATABEND: Server = Server {
+    label: "Databend",
+    var: "SPELAION_TEST_DATABEND",
+    password: None,
+    family: ServerFamily::Databend,
+    table_options: "",
+    database: Some("default"),
 };
 
 /// The servers that connect and browse through the MySQL plugin.
@@ -434,12 +446,12 @@ async fn oceanbase_keeps_reads_from_writing() {
     owner.close().await;
 }
 
-/// TiDB and SingleStore are recognised and get no read-only connection, no agents' reads and
-/// no streaming reads; StarRocks, which says it is MySQL, has its read-only connection
+/// TiDB, SingleStore, GreptimeDB and Databend are recognised and get no read-only connection,
+/// no agents' reads and no streaming reads; StarRocks, which says it is MySQL, has its read-only connection
 /// refused because its session stays writable.
 #[tokio::test]
 async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
-    for server in [&TIDB, &SINGLESTORE, &GREPTIME] {
+    for server in [&TIDB, &SINGLESTORE, &GREPTIME, &DATABEND] {
         let ws = Workspace::new();
         let Some(read_only) = ws.open(server, true, false).await else {
             continue;
@@ -577,4 +589,59 @@ async fn greptime_read_only_transaction_does_not_stop_writes() {
         rows, 1,
         "GreptimeDB unexpectedly enforced its transaction barrier"
     );
+}
+
+/// Why Databend gets no barrier: its read-only transaction and session are accepted without an
+/// error, and the writes made inside them stay. If a release starts enforcing them, this test
+/// says so, and Databend's barriers can be checked again.
+#[tokio::test]
+async fn databend_read_only_modes_do_not_stop_writes() {
+    let ws = Workspace::new();
+    let Some(open) = ws.open(&DATABEND, false, false).await else {
+        return;
+    };
+    let open = open.unwrap();
+    let db = unique("sdb350");
+    run(
+        &open,
+        &format!("create database {db}; create table {db}.t (id int)"),
+    )
+    .await
+    .unwrap();
+    let rows = support::cleaning_up(
+        async {
+            for sql in [
+                "start transaction read only".to_string(),
+                format!("insert into {db}.t values (1)"),
+                "rollback".into(),
+                "set session transaction read only".into(),
+                format!("insert into {db}.t values (2)"),
+            ] {
+                assert_eq!(engine_error(&open, &sql).await, None, "{sql}");
+            }
+            let mut events = open
+                .session
+                .connection()
+                .execute(&format!("select id from {db}.t"), &ExecOptions::default())
+                .await
+                .unwrap();
+            let mut rows = 0;
+            while let Some(event) = events.next().await {
+                if let ExecEvent::Batch(batch) = event.unwrap() {
+                    rows += batch.num_rows();
+                }
+            }
+            rows
+        },
+        |panicked| {
+            let session = &open.session;
+            let drop_database = format!("drop database if exists {db}");
+            async move {
+                support::run_cleanup("Databend", session, &[drop_database], panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
+    assert_eq!(rows, 2, "Databend unexpectedly enforced a read-only mode");
 }

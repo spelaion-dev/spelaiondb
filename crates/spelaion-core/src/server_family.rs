@@ -55,6 +55,11 @@ pub enum ServerFamily {
     Doris,
     /// GreptimeDB through MySQL's protocol: transactions are accepted but ignored (1.3.1).
     GreptimeDb,
+    /// Databend through its MySQL handler: `START TRANSACTION READ ONLY` and `SET SESSION
+    /// TRANSACTION READ ONLY` are accepted and every write still goes through (checked with
+    /// 1.2.881). Its version says MySQL 8.0.90 and its comment is the variable's own name: it is
+    /// told apart by the rest of its version (`databend_version`).
+    Databend,
 }
 
 /// PostgreSQL forks that name themselves in their `version()` without verified barriers:
@@ -70,6 +75,19 @@ const UNCHECKED_FORKS: &[&str] = &[
     "Kingbase",
     "GreptimeDB",
 ];
+
+/// Databend's MySQL handler answers `version()` with MySQL's number, then its own release and
+/// commit, then the Rust toolchain it was built with:
+/// `8.0.90-v1.2.881-ca29960f5c(rust-1.94.0-nightly-2026-04-17T07:20:31.684496168Z)`.
+/// No MySQL, MariaDB or checked fork writes a toolchain there; one that did would lose its
+/// barriers, never gain them.
+fn databend_version(version: &str) -> bool {
+    contains(version, "databend")
+        || (version.contains("(rust-")
+            && version.split('-').nth(1).is_some_and(|release| {
+                release.starts_with('v') && release[1..].split('.').count() == 3
+            }))
+}
 
 fn contains(text: &str, name: &str) -> bool {
     text.to_ascii_lowercase()
@@ -110,6 +128,8 @@ impl ServerFamily {
     pub fn from_mysql_version(version: &str, comment: &str) -> Self {
         if contains(version, "GreptimeDB") || contains(comment, "GreptimeDB") {
             ServerFamily::GreptimeDb
+        } else if databend_version(version) || contains(comment, "Databend") {
+            ServerFamily::Databend
         } else if contains(version, "TiDB") {
             ServerFamily::TiDb
         } else if contains(version, "OceanBase") {
@@ -143,6 +163,7 @@ impl ServerFamily {
             ServerFamily::SingleStore => "SingleStore",
             ServerFamily::Doris => "Apache Doris",
             ServerFamily::GreptimeDb => "GreptimeDB",
+            ServerFamily::Databend => "Databend",
         }
     }
 
@@ -154,7 +175,8 @@ impl ServerFamily {
             | ServerFamily::TiDb
             | ServerFamily::SingleStore
             | ServerFamily::Doris
-            | ServerFamily::GreptimeDb => true,
+            | ServerFamily::GreptimeDb
+            | ServerFamily::Databend => true,
             ServerFamily::PostgreSql
             | ServerFamily::CockroachDb
             | ServerFamily::YugabyteDb
@@ -183,7 +205,8 @@ impl ServerFamily {
             | ServerFamily::TiDb
             | ServerFamily::SingleStore
             | ServerFamily::Doris
-            | ServerFamily::GreptimeDb => false,
+            | ServerFamily::GreptimeDb
+            | ServerFamily::Databend => false,
         }
     }
 
@@ -204,7 +227,8 @@ impl ServerFamily {
             | ServerFamily::TiDb
             | ServerFamily::SingleStore
             | ServerFamily::Doris
-            | ServerFamily::GreptimeDb => false,
+            | ServerFamily::GreptimeDb
+            | ServerFamily::Databend => false,
         }
     }
 
@@ -511,6 +535,21 @@ mod tests {
             ("5.7.99", "Doris version doris-3.0.5-rc01-e277cfb83f", Doris),
             ("8.4.2-GreptimeDB-1.3.1", "", GreptimeDb),
             ("8.4.2", "greptimedb 1.3.1", GreptimeDb),
+            // Databend 1.2.881: its comment comes back as the variable's own name.
+            (
+                "8.0.90-v1.2.881-ca29960f5c(rust-1.94.0-nightly-2026-04-17T07:20:31.684496168Z)",
+                "@version_comment",
+                Databend,
+            ),
+            (
+                "8.0.90-v1.2.881-ca29960f5c(rust-1.94.0-nightly)",
+                "",
+                Databend,
+            ),
+            ("8.0.90", "Databend Query", Databend),
+            // A toolchain alone, or a release alone, is not Databend's version.
+            ("8.0.36 (rust-1.80)", "", MySql),
+            ("8.0.36-v1.2.3", "", MySql),
             // StarRocks does not say what it is: its session mode is read back instead.
             ("8.0.33", "3.4.5-1207fa7", MySql),
             ("", "", MySql),
@@ -541,6 +580,7 @@ mod tests {
             (SingleStore, false, false),
             (Doris, false, false),
             (GreptimeDb, false, false),
+            (Databend, false, false),
             (Unchecked("GreptimeDB".into()), false, false),
         ] {
             assert_eq!(family.read_only_transactions(), transactions, "{family:?}");
