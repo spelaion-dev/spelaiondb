@@ -5,7 +5,7 @@ Thanks for wanting to help. Bug reports, ideas and pull requests are all welcome
 ## Before you start
 - **Read [`AGENTS.md`](AGENTS.md).** It holds the project's rules: where each piece lives, what
   must never happen (secrets in logs or files, security decided outside the core, a changed SSH
-  key accepted with one clickÃ¢â‚¬Â¦) and what "done" means. It is written for AI coding agents,
+  key accepted with one click…) and what "done" means. It is written for AI coding agents,
   which write most of this code, and it applies to people just the same.
 - **Decisions live in [`docs/adr/`](docs/adr/README.md).** If a change contradicts an ADR,
   propose a new ADR that supersedes it instead of working around it.
@@ -55,7 +55,7 @@ does not test these engines.
   UI changes, the smoke test (`node e2e/smoke.mjs` on Windows, `node e2e/smoke-linux.mjs` on
   Linux, after building the app and the CLI as [below](#release-build-the-app-and-the-cli); see
   [The smoke test](#the-smoke-test)).
-- If something could not be tested (an OS you do not have, PageantÃ¢â‚¬Â¦), say so in the pull
+- If something could not be tested (an OS you do not have, Pageant…), say so in the pull
   request.
 
 ### Memory and jobs
