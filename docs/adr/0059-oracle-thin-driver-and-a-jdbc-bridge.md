@@ -1,0 +1,101 @@
+# ADR-059: Oracle through Oracle's own pure-Rust thin driver; a JDBC bridge only for engines no open native driver reaches
+
+- **Status:** Accepted (not implemented)
+- **Date:** 2026-11-15
+- **Builds on:** ADR-005 (driver contract), ADR-020 (each engine's barriers), ADR-032 (the
+  connection test names what is missing), ADR-041 (engines as plugins; a plugin may be written
+  in any language and may link what the core cannot), ADR-042 (plugin repositories and pins),
+  ADR-055 (the Plugins page)
+
+## Context
+SDB-153 asks how an Oracle plugin talks to Oracle before any driver is written, and SDB-177
+(35 relational engines that DBeaver and DataGrip reach through JDBC) and SDB-178 (H2, HSQLDB,
+Derby, Access, DBF) wait on the same answer: whether there is a JDBC bridge. The options the
+card names, as they stand on 2026-11-15:
+
+- **A driver with no vendor library.** Oracle now maintains one for Rust: `oracledb`
+  (github.com/oracle/rust-oracledb), a pure-Rust implementation of Oracle's network protocol in
+  "thin" mode, ported from python-oracledb's thin mode, dual-licensed UPL-1.0 or Apache-2.0,
+  TLS through rustls, with an optional Arrow feature on the same Arrow version as ours (60). It
+  is a pre-release (26.0.0-beta.6 on crates.io). Thin mode's known limits, inherited from
+  python-oracledb: Oracle 12.1 and later only, no Native Network Encryption (TLS instead), no
+  operating-system or external authentication.
+- **Oracle's client library** (Instant Client, through the `oracle` crate and ODPI-C): the
+  most complete, but a native library per platform that the user installs or that we would
+  ship under Oracle's own terms, which are not ours to relicense and have changed over time.
+- **A JDBC bridge:** a plugin that runs a JVM and loads JDBC drivers. Oracle's JDBC driver is
+  one of them, and so are the only ways to open H2, HSQLDB and Derby files (they exist only as
+  Java code) and the practical way to reach the long tail of SDB-177.
+
+## Decision
+**Oracle is a native plugin (`spelaiondb-plugin-oracle`) built on Oracle's `oracledb` thin
+driver: nothing for the user to install, nothing we cannot redistribute. A JDBC bridge is a
+plugin of its own (`spelaiondb-plugin-jdbc`), for engines that no open, maintained native
+driver reaches; Oracle does not go through it.**
+
+1. **Oracle, native and thin.** The plugin is a Rust plugin like the others: the driver
+   contract over `oracledb`, its type zoo against Oracle Database Free in its repository's CI
+   (Oracle's own `container-registry.oracle.com/database/free` image). In this repository:
+   `engine = "oracle"`, its dialect (PL/SQL blocks and the `/` terminator in the splitter,
+   `"…"` names, `q'[…]'` strings, comments), its classification, the guard, the form (service
+   name or SID, TLS, wallets later) and the pin. The pre-release is pinned exactly and moved
+   deliberately; the plugin's tests are the gate for each move.
+2. **Oracle's barriers** are decided against the engine, as ADR-020 asks: `SET TRANSACTION
+   READ ONLY` makes Oracle refuse DML in that transaction, and DDL commits on its own, as on
+   MySQL, so the classifier refusing DDL before it is sent is the layer for it. Read-only
+   connections and agents are offered only once tests that try to get around both pass
+   against Oracle Free (`tests/agents_engines.rs`, `tests/read_only_connection.rs`).
+3. **What the thin driver cannot do is said, not worked around:** a server older than 12.1,
+   Native Network Encryption and operating-system authentication are refused by the
+   connection test with that reason (ADR-032). If users need them, Instant Client is an
+   optional second mode of the same plugin, found on the user's machine and never shipped
+   (its own ADR).
+4. **The JDBC bridge, when it is built,** follows these rules:
+   - A Java program speaking the plugin protocol from `docs/plugin-protocol.md` (rows as
+     Arrow, through Arrow's Java library), checked by the conformance set like any plugin.
+     What the core starts and pins is a small native launcher that checks the hash of the
+     bridge's own jar before it starts the JVM, so the pin still covers our code.
+   - **The Java runtime is the user's:** found like the backup tools are (ADR-049), named by
+     the connection test when it is missing. Shipping a runtime (a `jlink` image per
+     platform, tens of megabytes) is decided later, by how many users it would serve.
+   - **JDBC drivers are the user's, except those whose licence lets us ship them** (H2,
+     HSQLDB and Derby are permissively licensed); a driver the user must download is said in
+     the form, with where to get it.
+   - **The core builds every JDBC URL** from the form's fields; a user never types one, so no
+     driver option that runs code (H2's `INIT`, HSQLDB's and H2's Java functions and triggers
+     defined in a file someone sent) is ever passed. Each engine's dangerous settings are
+     listed and turned off by the bridge, with tests that try to get around them.
+   - **An engine through the bridge has what JDBC metadata gives,** and no read-only mode nor
+     agents unless the core has a dialect for it and the engine's own barrier is tested
+     (ADR-041, ADR-020). The form says it is reached through a JDBC driver.
+   - Sorting SDB-177's list into native plugin, bridge only, or not doing is SDB-177's work;
+     this decision only says the bridge exists for the second group.
+
+## Alternatives
+- **Oracle through Instant Client.** The most complete driver and the most mature, and a
+  native library per platform that every user installs, or that we ship under Oracle's terms
+  rather than ours. Kept as an optional mode if the thin driver's limits matter to users.
+- **Oracle through the JDBC bridge.** One plugin would serve Oracle and the long tail, and
+  Oracle users would need a Java runtime and the bridge's weaker metadata, for the engine most
+  asked for (SDB-37). Oracle deserves the native plugin; the bridge is for engines that have
+  no better way.
+- **Our own implementation of Oracle's protocol.** What `oracledb` now is, maintained by the
+  vendor; writing another would be the least maintainable choice.
+- **No bridge at all.** H2, HSQLDB and Derby would never open, and most of SDB-177 would stay
+  out of reach; DBeaver and DataGrip reach them through JDBC.
+
+## Consequences
+- An Oracle plugin needs no download besides itself, and its licence is compatible with ours.
+- We depend on a pre-release driver until it is stable; the exact pin and the type zoo bound
+  that risk, and Instant Client stays the way out.
+- A JVM-based plugin is a second toolchain in our plugin repositories (a JDK in CI, a
+  launcher per platform) and the first plugin not written in Rust; the protocol was written to
+  allow it (ADR-041), and this is where that is tested.
+- SDB-177 and SDB-178 can start their sorting with this answer; the bridge itself is an item
+  of its own.
+
+## Revisit if
+- `oracledb` stalls in pre-release or misses what users need: Instant Client as the plugin's
+  main mode.
+- A JDBC driver that matters cannot be loaded without running code from its configuration:
+  that engine stays out of the bridge.
