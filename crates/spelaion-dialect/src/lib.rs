@@ -54,6 +54,8 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         // One dialect for both: Presto is where Trino came from, and their grammar is one.
         "trino" | "presto" => Some(Arc::new(TrinoDialect)),
         "oracle" => Some(Arc::new(OracleDialect)),
+        // libSQL's server reads SQL as SQLite does (ADR-058).
+        "libsql" => Some(Arc::new(SqliteDialect)),
         _ => None,
     }
 }

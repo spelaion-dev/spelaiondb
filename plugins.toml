@@ -36,8 +36,8 @@
 # deleted from this file later.
 #
 # Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL, MongoDB, ClickHouse,
-# Redis, Trino and Presto (one plugin), and Oracle. None of their drivers is compiled into the
-# core: these builds, inside the installer, are what serves those engines.
+# Redis, Trino and Presto (one plugin), Oracle and libSQL. None of their drivers is compiled
+# into the core: these builds, inside the installer, are what serves those engines.
 
 schema_version = 1
 
@@ -335,3 +335,36 @@ archive = "spelaiondb-plugin-oracle-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "231629a6feafa1e878eecf0d3027f4ce22afeeaaa2c2c8661e21aa2e786973db"
 archive_size = 2876624
 program_sha256 = "31e45361023b6922ea2646e44c90da35e3d6cd933b0fa8f69bede4fdc9b4b872"
+
+# libSQL (sqld, Turso): Hrana over HTTP, typed by spelaion-sqlite-schema (ADR-058).
+[[plugin]]
+name = "spelaiondb-plugin-libsql"
+repository = "spelaion-dev/spelaiondb-plugin-libsql"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["libsql"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-libsql-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "269b9c814f9d6e63c77cc7f923fd30a0813132bc7ba2ccf8beb04d53ab4981d0"
+archive_size = 2236981
+program_sha256 = "7deaebc4a952f8cfeb53bea2611fe96dd46f47f1a622dbf88181457494d4053e"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-libsql-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "2a6a61de5c15197ea16686f603edb500741bb8832a46dcb4108fdba6dc4ebdf9"
+archive_size = 2396975
+program_sha256 = "b1e47368e5e93dde7b1159a352cb6d05acb1cc2678cb6aab58d407e478514f53"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-libsql-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "e2e848ee5b01eb14cb55c5bb5bd75bf83c02e5d6ac4f0f2f526909b9fc71daca"
+archive_size = 2356576
+program_sha256 = "79a5560f0fc16e3575033181a6c006dc11022dd6e832382fb39ef8b0be84e151"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-libsql-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "3dd4f38d10a4849f65ba3c299e9441279098bbb2895cb40ad9ef75ca21ab7b8f"
+archive_size = 2653191
+program_sha256 = "c78fb5ff6ceecbebbd9536b6a01acc237ce3e5310ceac892f249ffc4391bf864"

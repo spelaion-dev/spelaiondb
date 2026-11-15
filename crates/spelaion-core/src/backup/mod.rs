@@ -102,7 +102,8 @@ impl ToolFamily {
             | Engine::Redis
             | Engine::Trino
             | Engine::Presto
-            | Engine::Oracle => None,
+            | Engine::Oracle
+            | Engine::Libsql => None,
         }
     }
 
@@ -138,7 +139,8 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Redis
         | Engine::Trino
         | Engine::Presto
-        | Engine::Oracle => None,
+        | Engine::Oracle
+        | Engine::Libsql => None,
     }
 }
 

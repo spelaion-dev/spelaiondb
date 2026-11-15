@@ -73,7 +73,8 @@ pub fn embedded_dump_path(
         | Engine::Redis
         | Engine::Trino
         | Engine::Presto
-        | Engine::Oracle => {
+        | Engine::Oracle
+        | Engine::Libsql => {
             return Err(BackupError::Invalid(format!(
                 "{} databases are backed up with a client tool",
                 resolved.engine.as_str()
@@ -184,7 +185,8 @@ pub async fn embedded_dump(
         | Engine::Redis
         | Engine::Trino
         | Engine::Presto
-        | Engine::Oracle => {
+        | Engine::Oracle
+        | Engine::Libsql => {
             unreachable!("embedded_dump_path refused it")
         }
     };

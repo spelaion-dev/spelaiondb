@@ -493,6 +493,14 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
+        // A libSQL server serves one database per address; its token is the password.
+        Engine::Libsql => [(
+            "host",
+            file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+        )]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
         Engine::Sqlite | Engine::Duckdb => [("database", file.database.is_none())]
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
@@ -570,6 +578,13 @@ pub(crate) fn validate_connection(
             "Oracle has no read-only mode in SpelaionDB yet: remove `read_only`",
         ));
     }
+    // ADR-058, point 4: libSQL has no session barrier; a read-only token is the server's.
+    if file.engine == Engine::Libsql && file.read_only {
+        return Err(ConfigError::new(
+            path,
+            "libSQL has no read-only mode in SpelaionDB yet: use a read-only token, and remove `read_only`",
+        ));
+    }
     // ADR-056, point 6: an engine whose language is not SQL has no read-only mode yet, and
     // its sessions run no SQL. Opening it anyway would let writes through or fail later.
     if !file.engine.is_sql() {
@@ -600,7 +615,8 @@ pub(crate) fn validate_connection(
             | Engine::Mysql
             | Engine::Mariadb
             | Engine::Mongodb
-            | Engine::Redis => {}
+            | Engine::Redis
+            | Engine::Libsql => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,
@@ -901,6 +917,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Trino => "Trino",
         Engine::Presto => "Presto",
         Engine::Oracle => "Oracle",
+        Engine::Libsql => "libSQL",
     }
 }
 

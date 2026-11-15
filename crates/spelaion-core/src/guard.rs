@@ -588,6 +588,8 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
         "sqlserver" => Box::new(MsSqlDialect {}),
         "clickhouse" => Box::new(ClickHouseDialect {}),
         "oracle" => Box::new(OracleDialect {}),
+        // libSQL reads SQL as SQLite does.
+        "libsql" => Box::new(SQLiteDialect {}),
         _ => Box::new(GenericDialect {}),
     }
 }
