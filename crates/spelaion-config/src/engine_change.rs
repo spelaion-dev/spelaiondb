@@ -57,7 +57,8 @@ fn passwordless(engine: Engine) -> bool {
         | Engine::Sqlite
         | Engine::Duckdb
         | Engine::Mongodb
-        | Engine::Clickhouse => false,
+        | Engine::Clickhouse
+        | Engine::Redis => false,
     }
 }
 

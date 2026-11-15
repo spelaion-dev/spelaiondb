@@ -93,6 +93,7 @@ impl Engines {
             Engine::Sqlserver,
             Engine::Mongodb,
             Engine::Clickhouse,
+            Engine::Redis,
         ] {
             let variable = crate::plugins::dev_plugin_variable(engine.as_str());
             let pointed = std::env::var_os(variable);
@@ -203,7 +204,8 @@ impl Engines {
             | Engine::Mariadb
             | Engine::Sqlserver
             | Engine::Mongodb
-            | Engine::Clickhouse => {
+            | Engine::Clickhouse
+            | Engine::Redis => {
                 return Err(not_a_file());
             }
         }

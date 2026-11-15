@@ -185,6 +185,11 @@
           "description": "MongoDB, and the servers that speak its protocol (FerretDB). Its language is not SQL:\nthe core reads it and sends requests (ADR-056).",
           "type": "string",
           "const": "mongodb"
+        },
+        {
+          "description": "Redis, and the servers that speak its protocol (Valkey). Its language is not SQL: the\ncore reads each command line and sends its arguments (ADR-056).",
+          "type": "string",
+          "const": "redis"
         }
       ]
     },

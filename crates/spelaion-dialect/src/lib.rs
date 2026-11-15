@@ -18,6 +18,7 @@ pub mod duckdb;
 pub mod mongodb;
 pub mod mysql;
 pub mod postgres;
+pub mod redis;
 pub mod sqlite;
 pub mod sqlserver;
 
@@ -26,6 +27,7 @@ pub use duckdb::DuckdbDialect;
 pub use mongodb::MongodbDialect;
 pub use mysql::MysqlDialect;
 pub use postgres::PostgresDialect;
+pub use redis::RedisDialect;
 pub use sqlite::SqliteDialect;
 pub use sqlserver::SqlServerDialect;
 
@@ -44,6 +46,7 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         // Not SQL: the core reads it and sends requests (ADR-056).
         "mongodb" => Some(Arc::new(MongodbDialect)),
         "clickhouse" => Some(Arc::new(ClickhouseDialect)),
+        "redis" => Some(Arc::new(RedisDialect)),
         _ => None,
     }
 }
@@ -63,6 +66,7 @@ mod tests {
             ("duckdb", "duckdb"),
             ("mongodb", "mongodb"),
             ("clickhouse", "clickhouse"),
+            ("redis", "redis"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");
@@ -71,7 +75,7 @@ mod tests {
 
     #[test]
     fn only_a_language_that_is_not_sql_reads_requests() {
-        // ADR-056: a SQL engine's statements are sent as text; only MongoDB's become requests.
+        // ADR-056: a SQL engine's statements are sent as text; only MongoDB's and Redis's become requests.
         for engine in [
             "postgres",
             "mysql",
@@ -90,6 +94,9 @@ mod tests {
             mongodb.to_request("db.c.find()", "db"),
             Some(Ok(_))
         ));
+        let redis = for_engine("redis").unwrap();
+        assert!(redis.reads_requests());
+        assert!(matches!(redis.to_request("GET k", "0"), Some(Ok(_))));
     }
 
     #[test]

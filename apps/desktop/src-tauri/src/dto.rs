@@ -3441,6 +3441,7 @@ pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
         "duckdb" => Engine::Duckdb,
         "sqlserver" => Engine::Sqlserver,
         "mongodb" => Engine::Mongodb,
+        "redis" => Engine::Redis,
         other => return Err(format!("unsupported engine: {other}")),
     })
 }

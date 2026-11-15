@@ -458,6 +458,8 @@ function CollectionNode({ session, connectionId, object }: { session: string; co
   const { t } = useTranslation("shell");
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
+  /** A Redis key opens with a bounded command of its type, not a page of documents. */
+  const key = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine === "redis");
   const { row, revealed } = useRevealedRow(
     (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
   );
@@ -496,7 +498,7 @@ function CollectionNode({ session, connectionId, object }: { session: string; co
       {menu && (
         <ObjectMenu at={menu}>
           <button role="menuitem" onClick={() => void open()}>
-            {t("openCollection")}
+            {t(key ? "openKey" : "openCollection")}
           </button>
           <CopyMenuItems
             session={session}
@@ -2120,6 +2122,8 @@ function SchemaNode({
   /** Whether its engine is queried with SQL: importing and the ER diagram write and read SQL
    *  (ADR-056). */
   const sql = useApp((s) => s.connections.find((c) => c.id === connectionId)?.sql ?? true);
+  /** Redis's "collections" are its keys (ADR-056). */
+  const keys = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine === "redis");
   const [dropping, setDropping] = useState(false);
   /** The create table form (ADR-047); other kinds open their statement in a tab. */
   const [creatingTable, setCreatingTable] = useState(false);
@@ -2411,7 +2415,7 @@ function SchemaNode({
                 count > 0 && (
                   <Folder
                     key={folder}
-                    label={t(`folders.${folder}`)}
+                    label={folder === "collections" && keys ? t("folders.keys") : t(`folders.${folder}`)}
                     count={count}
                     forceOpen={inner !== ""}
                     filtered={!!objectFilter && (objectFilter.include.length > 0 || objectFilter.exclude.length > 0)}

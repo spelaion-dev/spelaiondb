@@ -507,6 +507,7 @@ try {
     ["spelaiondb-plugin-duckdb", "DuckDB"],
     ["spelaiondb-plugin-mongodb", "MongoDB"],
     ["spelaiondb-plugin-clickhouse", "ClickHouse"],
+    ["spelaiondb-plugin-redis", "Redis"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();
@@ -5872,6 +5873,60 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await collectionPanel.locator(".cm-content", { hasText: 'db.getSiblingDB("spelaion_smoke").getCollection("smoke").find({}).limit(200)' }).waitFor();
   await collectionPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await shot("12a5-mongodb");
+
+  step("Redis: a new connection, command lines sent as arguments, a key opened from the explorer");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "Redis" }).filter({ hasNotText: "Valkey" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("Redis (Docker)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("16379");
+  // Redis's default user: a password and no user name.
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+  assert.equal(await wizard.getByRole("tab", { name: "Session" }).count(), 0);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByText(/^Read-only mode and agents are not available for this engine yet/).waitFor();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 7\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  assert.match(readFileSync(join(userDir, "connections", "redis-docker.toml"), "utf8"), /engine = "redis"/);
+  panel = await newQuery("Redis (Docker)", 'SET spelaion:smoke "ñandú"\nGET spelaion:smoke');
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for Redis (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.equal(await panel.getByText(/^Could not load completion metadata/).count(), 0);
+  // The tab's database is chosen above the editor, never with SELECT.
+  await replaceQuery(panel, "SELECT 1");
+  await run(panel);
+  await panel.getByText(/choose the database above the editor/).first().waitFor();
+  // The guard asks from the command.
+  await replaceQuery(panel, "FLUSHDB");
+  await run(panel);
+  risk = page.getByRole("dialog", { name: "Run these statements?" });
+  assert.equal(await risk.locator(".risk-list pre").innerText(), "FLUSHDB");
+  await page.keyboard.press("Enter");
+  await risk.waitFor({ state: "detached" });
+  // The explorer lists database 0's keys; opening one runs a bounded command of its type.
+  await page.locator('.connection-row:has-text("Redis (Docker)") .twisty').click();
+  await page.getByRole("dialog").getByText("Password for Redis (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  const redisSchema = page.getByRole("button", { name: "Expand or collapse schema 0", exact: true });
+  if ((await redisSchema.getAttribute("aria-expanded")) !== "true") await redisSchema.click();
+  const keysFolder = redisSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Keys", exact: true });
+  if ((await keysFolder.getAttribute("aria-expanded")) !== "true") await keysFolder.click();
+  const tabsBeforeKey = await page.getByRole("tab").count();
+  await redisSchema.locator("xpath=..").locator(".leaf-row", { hasText: /^spelaion:smoke/ }).dblclick();
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length > count, tabsBeforeKey);
+  const keyPanel = page.locator(".tab-panel:not([hidden])");
+  await keyPanel.locator(".cm-content", { hasText: "GET spelaion:smoke" }).waitFor();
+  await keyPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await shot("12a6-redis");
   // The query ends in a word, which may open the completion list as it is typed: the next
   // dialog must not find it on top (the editor closes it when it loses focus).
 
