@@ -1990,18 +1990,55 @@ pub struct ObjectItem {
     pub comment: Option<String>,
 }
 
+/// The name the UI uses for a kind of object.
+pub fn object_kind_name(kind: ObjectKind) -> &'static str {
+    match kind {
+        ObjectKind::Table => "table",
+        ObjectKind::PartitionedTable => "partitioned_table",
+        ObjectKind::View => "view",
+        ObjectKind::MaterializedView => "materialized_view",
+        ObjectKind::ForeignTable => "foreign_table",
+        ObjectKind::Collection => "collection",
+        ObjectKind::NodeLabel => "node_label",
+        ObjectKind::RelationshipType => "relationship_type",
+    }
+}
+
+/// Every kind of object, for reading a name back ([`object_kind_named`]).
+const OBJECT_KINDS: [ObjectKind; 8] = [
+    ObjectKind::Table,
+    ObjectKind::PartitionedTable,
+    ObjectKind::View,
+    ObjectKind::MaterializedView,
+    ObjectKind::ForeignTable,
+    ObjectKind::Collection,
+    ObjectKind::NodeLabel,
+    ObjectKind::RelationshipType,
+];
+
+/// A new kind stops the build here until it is in [`OBJECT_KINDS`] too: no kind is dropped
+/// silently when the UI names it back.
+const _: fn(ObjectKind) = |kind| match kind {
+    ObjectKind::Table
+    | ObjectKind::PartitionedTable
+    | ObjectKind::View
+    | ObjectKind::MaterializedView
+    | ObjectKind::ForeignTable
+    | ObjectKind::Collection
+    | ObjectKind::NodeLabel
+    | ObjectKind::RelationshipType => {}
+};
+
+/// The kind of object the UI names `name`.
+pub fn object_kind_named(name: &str) -> Option<ObjectKind> {
+    OBJECT_KINDS
+        .into_iter()
+        .find(|kind| object_kind_name(*kind) == name)
+}
+
 impl From<ObjectInfo> for ObjectItem {
     fn from(o: ObjectInfo) -> Self {
-        let kind = match o.kind {
-            ObjectKind::Table => "table",
-            ObjectKind::PartitionedTable => "partitioned_table",
-            ObjectKind::View => "view",
-            ObjectKind::MaterializedView => "materialized_view",
-            ObjectKind::ForeignTable => "foreign_table",
-            ObjectKind::Collection => "collection",
-            ObjectKind::NodeLabel => "node_label",
-            ObjectKind::RelationshipType => "relationship_type",
-        };
+        let kind = object_kind_name(o.kind);
         Self {
             schema: o.schema,
             name: o.name,
@@ -3469,6 +3506,40 @@ mod tests {
             assert_eq!(engine_named(engine.as_str()), Ok(engine));
         }
         assert!(engine_named("snowflake").is_err());
+    }
+
+    /// Every kind of object the UI names comes back as itself: `browse_statement` reads it.
+    #[test]
+    fn every_kind_of_object_is_named_back() {
+        for kind in super::OBJECT_KINDS {
+            assert_eq!(
+                super::object_kind_named(super::object_kind_name(kind)),
+                Some(kind)
+            );
+        }
+        assert_eq!(super::object_kind_named("nosuch"), None);
+    }
+
+    /// A Cassandra table opens with its bounded statement (it once came back as nothing, so the
+    /// explorer's double-click did nothing).
+    #[test]
+    fn a_cassandra_table_is_browsed_with_its_bounded_statement() {
+        let dialect = spelaion_core::dialect_of(spelaion_config::Engine::Cassandra).expect("CQL");
+        let object = spelaion_driver_api::ObjectInfo {
+            schema: "shop".into(),
+            name: "Orders".into(),
+            kind: super::object_kind_named("table").expect("a table"),
+            estimated_rows: None,
+            comment: None,
+        };
+        assert_eq!(
+            dialect.browse_statement(&object).as_deref(),
+            Some("SELECT * FROM shop.\"Orders\" LIMIT 200")
+        );
+        // An engine queried with SQL browses nothing this way: its tables open in a table data
+        // tab.
+        let postgres = spelaion_core::dialect_of(spelaion_config::Engine::Postgres).expect("SQL");
+        assert_eq!(postgres.browse_statement(&object), None);
     }
 }
 
