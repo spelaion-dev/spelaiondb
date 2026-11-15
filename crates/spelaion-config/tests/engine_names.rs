@@ -22,15 +22,16 @@ fn position(engine: Engine) -> usize {
         Engine::Oracle => 11,
         Engine::Libsql => 12,
         Engine::Cassandra => 13,
-        Engine::Flightsql => 14,
-        Engine::Dremio => 15,
-        Engine::Gizmosql => 16,
-        Engine::Neo4j => 17,
+        Engine::Tdengine => 14,
+        Engine::Flightsql => 15,
+        Engine::Dremio => 16,
+        Engine::Gizmosql => 17,
+        Engine::Neo4j => 18,
     }
 }
 
 /// The number of arms above: one more than the last position.
-const ENGINES: usize = 18;
+const ENGINES: usize = 19;
 
 #[test]
 fn every_engine_is_listed_once() {

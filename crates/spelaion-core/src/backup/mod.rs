@@ -105,6 +105,7 @@ impl ToolFamily {
             | Engine::Oracle
             | Engine::Libsql
             | Engine::Cassandra
+            | Engine::Tdengine
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql
@@ -147,6 +148,7 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Oracle
         | Engine::Libsql
         | Engine::Cassandra
+        | Engine::Tdengine
         | Engine::Flightsql
         | Engine::Dremio
         | Engine::Gizmosql

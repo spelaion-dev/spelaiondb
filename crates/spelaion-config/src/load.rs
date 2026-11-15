@@ -512,13 +512,15 @@ pub(crate) fn validate_connection(
             .collect(),
         // MongoDB, Redis, Cassandra and Neo4j may need no login, and the database can be chosen
         // in the explorer.
-        Engine::Mongodb | Engine::Redis | Engine::Cassandra | Engine::Neo4j => [(
-            "host",
-            file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
-        )]
-        .into_iter()
-        .filter_map(|(k, m)| m.then_some(k))
-        .collect(),
+        Engine::Mongodb | Engine::Redis | Engine::Cassandra | Engine::Tdengine | Engine::Neo4j => {
+            [(
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            )]
+            .into_iter()
+            .filter_map(|(k, m)| m.then_some(k))
+            .collect()
+        }
     };
     if !missing.is_empty() {
         return Err(ConfigError::new(
@@ -625,6 +627,7 @@ pub(crate) fn validate_connection(
             | Engine::Redis
             | Engine::Libsql
             | Engine::Cassandra
+            | Engine::Tdengine
             | Engine::Neo4j => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
@@ -934,6 +937,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Oracle => "Oracle",
         Engine::Libsql => "libSQL",
         Engine::Cassandra => "Cassandra",
+        Engine::Tdengine => "TDengine",
         Engine::Flightsql => "Arrow Flight SQL",
         Engine::Dremio => "Dremio",
         Engine::Gizmosql => "GizmoSQL",

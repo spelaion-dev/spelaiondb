@@ -80,6 +80,8 @@ jobs:
       SPELAION_TEST_PRESTO: 127.0.0.1:18081
       # Cassandra (ADR-056), through its pinned plugin.
       SPELAION_TEST_CASSANDRA: 127.0.0.1:19142
+      # TDengine (ADR-056), through its pinned plugin.
+      SPELAION_TEST_TDENGINE: 127.0.0.1:16141
       SPELAION_TEST_GIZMOSQL: 127.0.0.1:31337
       SPELAION_TEST_SSH: 127.0.0.1:2221
       SPELAION_TEST_SSH_AGENT: "1"
