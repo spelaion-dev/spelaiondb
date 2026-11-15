@@ -26,11 +26,13 @@ impl EngineCategory {
     }
 }
 
-/// How a connection reaches the database: over the network, or opening a local file.
+/// How a connection reaches the database: over the network, opening a local file, or
+/// reading a local folder of files (SDB-316).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineAccess {
     Network,
     File,
+    Folder,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +178,18 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             Some("postgres"),
         ),
         supported(Engine::Duckdb, "DuckDB", Analytical, File),
+        // CSV, TSV and Parquet files read through DuckDB: a DuckDB connection whose target is a
+        // folder, saved with `file_folder = true` (SDB-316).
+        EngineInfo {
+            id: "file-folder",
+            name: "CSV / Parquet folder",
+            category: Analytical,
+            access: EngineAccess::Folder,
+            default_port: None,
+            engine: Some(Engine::Duckdb),
+            default_user: None,
+            default_database: None,
+        },
         supported(Engine::Clickhouse, "ClickHouse", Analytical, Network),
         planned("snowflake", "Snowflake", Analytical, Network, None),
         planned("bigquery", "BigQuery", Analytical, Network, None),
@@ -203,8 +217,10 @@ mod tests {
         for info in &catalog {
             if let Some(engine) = info.engine {
                 assert!(engines.get(engine).is_some(), "{} has no driver", info.id);
-                assert_eq!(info.access == EngineAccess::File, engine.is_file());
-                if info.is_kind() {
+                assert_eq!(info.access != EngineAccess::Network, engine.is_file());
+                if info.access == EngineAccess::Folder {
+                    assert_eq!((info.id, engine), ("file-folder", Engine::Duckdb));
+                } else if info.is_kind() {
                     assert!(info.default_port.is_some(), "{}", info.id);
                 } else {
                     assert_eq!(info.default_port, engine.default_port());
@@ -240,7 +256,7 @@ mod tests {
         let catalog = engine_catalog();
         let kinds: Vec<_> = catalog
             .iter()
-            .filter(|e| e.is_kind())
+            .filter(|e| e.is_kind() && e.access == EngineAccess::Network)
             .map(|e| (e.id, e.engine, e.default_port))
             .collect();
         assert_eq!(

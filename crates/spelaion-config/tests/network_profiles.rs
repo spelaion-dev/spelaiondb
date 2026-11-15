@@ -529,6 +529,7 @@ fn the_connection_form_keeps_the_profile_and_writes_only_its_own_fields() {
         host: String::new(),
         port: Some(5432),
         database: "app".into(),
+        file_folder: false,
         user: "app".into(),
         password: PasswordChoice::Prompt,
         tls_mode: spelaion_config::TlsModeConfig::Disable,

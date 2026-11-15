@@ -302,6 +302,10 @@ pub enum OpenError {
     /// the barrier that relies on (SDB-169); it was closed again.
     #[error("{0}")]
     NoReadOnlyBarrier(String),
+
+    /// A folder of files could not be set up to be read alone (SDB-316); it was closed again.
+    #[error("{0}")]
+    FileFolder(String),
 }
 
 /// Open tunnels, shared between connections (ADR-004): two tabs against the same database,
@@ -454,6 +458,8 @@ pub struct OpenConnection {
     pub resolved: ResolvedConnection,
     /// What the connection's session setup did (ADR-037).
     pub setup: SetupReport,
+    /// For a folder of files (SDB-316), the views made of it and the files left out.
+    pub folder: Option<crate::file_folder::FolderReport>,
     tunnel: Option<ActiveTunnel>,
 }
 
@@ -515,6 +521,22 @@ pub async fn open_connection(
     .await?;
 
     let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
+    // A folder of files: before anything else runs, its session is set up to read that folder
+    // alone, and locked (SDB-316). Only on the in-memory, read-only database the resolver made.
+    let folder = match &resolved.file_folder {
+        None => None,
+        Some(path) => {
+            if !(params.read_only && params.database == ":memory:") {
+                return Err(OpenError::FileFolder(
+                    "a folder of files is opened only as a read-only in-memory database".into(),
+                ));
+            }
+            let report = crate::file_folder::prepare(connection.as_ref(), dialect.as_ref(), path)
+                .await
+                .map_err(OpenError::FileFolder)?;
+            Some(report)
+        }
+    };
     // Which server of PostgreSQL's or MySQL's protocol this is decides which of its barriers
     // can be relied on (SDB-169, SDB-170): it is asked to the server, never taken from the file
     // or the plugin.
@@ -551,6 +573,7 @@ pub async fn open_connection(
         session,
         resolved,
         setup: SetupReport::default(),
+        folder,
         tunnel,
     };
     // A read-only connection, or a session that only reads, on a server that would not keep

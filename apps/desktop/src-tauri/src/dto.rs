@@ -2577,7 +2577,7 @@ pub struct EngineItem {
     pub default_database: Option<String>,
     /// `relational`, `analytical` or `nosql`.
     pub category: String,
-    /// `network` or `file`.
+    /// `network`, `file` or `folder` (a folder of files read through DuckDB, SDB-316).
     pub access: String,
     pub default_port: Option<u16>,
     pub available: bool,
@@ -2602,6 +2602,7 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
             access: match info.access {
                 spelaion_core::EngineAccess::Network => "network",
                 spelaion_core::EngineAccess::File => "file",
+                spelaion_core::EngineAccess::Folder => "folder",
             }
             .into(),
             default_port: info.default_port,
@@ -2758,6 +2759,8 @@ pub struct ConnectionDraftItem {
     pub host: String,
     pub port: Option<u16>,
     pub database: String,
+    /// DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316).
+    pub file_folder: bool,
     pub user: String,
     pub password_mode: PasswordMode,
     pub password_env: String,
@@ -2819,6 +2822,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             host: item.host,
             port: item.port,
             database: item.database,
+            file_folder: item.file_folder,
             user: item.user,
             password: match item.password_mode {
                 PasswordMode::None => PasswordChoice::None,
@@ -2901,6 +2905,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             host: draft.host,
             port: draft.port,
             database: draft.database,
+            file_folder: draft.file_folder,
             user: draft.user,
             password_mode,
             password_env,
@@ -4639,7 +4644,9 @@ impl McpAccessItem {
         let (visibility, access, reason) = match view {
             AgentView::NotExposed => (McpVisibilityItem::NotExposed, None, None),
             AgentView::UntrustedRepository => (McpVisibilityItem::Untrusted, None, None),
-            AgentView::EngineWithoutBarrier => (McpVisibilityItem::NoAgents, None, None),
+            AgentView::EngineWithoutBarrier | AgentView::FileFolder => {
+                (McpVisibilityItem::NoAgents, None, None)
+            }
             AgentView::Visible(AgentAccess::ReadWrite) => (
                 McpVisibilityItem::Visible,
                 Some(McpAccessKindItem::ReadWrite),

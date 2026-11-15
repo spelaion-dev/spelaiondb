@@ -117,6 +117,8 @@ pub struct ConnectionDraft {
     pub port: Option<u16>,
     /// Database name; for SQLite and DuckDB, the file path.
     pub database: String,
+    /// DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316).
+    pub file_folder: bool,
     pub user: String,
     pub password: PasswordChoice,
     pub tls_mode: TlsModeConfig,
@@ -479,6 +481,7 @@ impl ConnectionDraft {
                 | Engine::Clickhouse
                 | Engine::Redis => d,
             }),
+            file_folder: self.file_folder && self.engine == Engine::Duckdb,
             user: non_empty(&self.user).filter(|_| network),
             password: password
                 .filter(|_| network)
@@ -606,6 +609,7 @@ impl ConnectionDraft {
             host: file.host.clone().unwrap_or_default(),
             port: file.port,
             database: file.database.clone().unwrap_or_default(),
+            file_folder: file.file_folder,
             user: file.user.clone().unwrap_or_default(),
             password,
             tls_mode: file.tls.mode,
@@ -903,6 +907,13 @@ pub fn update_connection(
             &mut doc,
             &["read_only"],
             new.read_only.then(|| Value::from(true)),
+        );
+    }
+    if old.file_folder != new.file_folder {
+        put(
+            &mut doc,
+            &["file_folder"],
+            new.file_folder.then(|| Value::from(true)),
         );
     }
     if old.session.setup != new.session.setup {

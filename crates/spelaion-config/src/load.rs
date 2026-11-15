@@ -525,6 +525,28 @@ pub(crate) fn validate_connection(
             ),
         ));
     }
+    // A folder of files (SDB-316): read through DuckDB, whose session the core sets up so that
+    // only that folder can be read. Nothing of the connection may change that session.
+    if file.file_folder {
+        if file.engine != Engine::Duckdb {
+            return Err(ConfigError::new(
+                path,
+                "file_folder is for DuckDB: a folder of CSV, TSV and Parquet files read through DuckDB",
+            ));
+        }
+        if file.database.as_deref().map(str::trim) == Some(":memory:") {
+            return Err(ConfigError::new(
+                path,
+                "file_folder needs database to name a folder, not :memory:",
+            ));
+        }
+        if !file.session.is_default() {
+            return Err(ConfigError::new(
+                path,
+                "a folder of files takes no [session] table: its session is set up to read only that folder",
+            ));
+        }
+    }
     // ADR-056, point 6: an engine whose language is not SQL has no read-only mode yet, and
     // its sessions run no SQL. Opening it anyway would let writes through or fail later.
     if !file.engine.is_sql() {

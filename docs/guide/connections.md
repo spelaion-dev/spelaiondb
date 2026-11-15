@@ -25,6 +25,14 @@ port, database, user, SSL mode and the password field (which is saved like a typ
   connection cannot be deleted.
 - **SQLite and DuckDB:** pick an existing file with **Browse…**, or create an empty
   database with **New database…** (it never replaces an existing file).
+- **A folder of CSV and Parquet files:** pick **CSV / Parquet folder** and choose the folder.
+  Each `.csv`, `.tsv` (also gzipped) and `.parquet` file in it is shown as a table named after
+  the file, read by DuckDB with its own types; you can also query a file of the folder by
+  its path (`select * from 'orders.csv'` with the full path). The connection is always
+  read-only: nothing outside the folder can be read, nothing is written to it, and AI agents
+  never see it. The file says `engine = "duckdb"`, `database = "<folder>"` and
+  `file_folder = true`. A file DuckDB cannot read gets no table; files added later appear
+  when you reconnect.
 - **A SQLite file on a server:** in the SSH tab, choose a tunnel whose last hop holds the
   file, and write its path on that server. SpelaionDB runs that server's `sqlite3` (3.37 or
   later, in its safe mode, which refuses commands that touch the server's files) through

@@ -105,6 +105,9 @@ pub enum AgentView {
     /// An engine whose language is not SQL, which has no agents' barrier yet (ADR-056,
     /// point 6): never visible, whatever `[mcp]` says.
     EngineWithoutBarrier,
+    /// A DuckDB connection to a folder of files (SDB-316): agents' DuckDB barrier turns off the
+    /// file access reading it needs, so it is never visible, whatever `[mcp]` says.
+    FileFolder,
     Visible(AgentAccess),
 }
 
@@ -116,6 +119,9 @@ pub fn agent_view(
 ) -> AgentView {
     if !entry.file.engine.is_sql() {
         return AgentView::EngineWithoutBarrier;
+    }
+    if entry.file.file_folder {
+        return AgentView::FileFolder;
     }
     if !entry.file.mcp.exposed {
         return AgentView::NotExposed;
@@ -702,6 +708,38 @@ mod tests {
                 assert_eq!(
                     agent_view(&mongodb(extra), true, all_read_only),
                     AgentView::EngineWithoutBarrier,
+                    "{extra}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_folder_of_files_is_never_shown_to_agents() {
+        // SDB-316: reading the folder needs the file access agents' DuckDB barrier turns off,
+        // so neither `[mcp]` nor a trusted repository makes it visible.
+        let folder = |extra: &str| {
+            ConnectionEntry {
+            id: spelaion_config::ConnectionId {
+                source: Source::Workspace,
+                path: "exports".into(),
+            },
+            file_path: "exports.toml".into(),
+            file: toml::from_str(&format!(
+                "schema_version = 1\nname = \"Exports\"\nengine = \"duckdb\"\ndatabase = \"exports\"\nfile_folder = true\n{extra}"
+            ))
+            .unwrap(),
+        }
+        };
+        for extra in [
+            "",
+            "[mcp]\nexposed = true\n",
+            "[mcp]\nexposed = true\nwrites = \"allow\"\n",
+        ] {
+            for all_read_only in [false, true] {
+                assert_eq!(
+                    agent_view(&folder(extra), true, all_read_only),
+                    AgentView::FileFolder,
                     "{extra}"
                 );
             }

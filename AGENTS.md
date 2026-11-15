@@ -517,6 +517,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`OpenOptions::read_only_session`), every setup statement must first pass
   `classify_session_setup` in `classify.rs`: like `classify.rs`, any change there needs tests
   that try to get around it (`tests/session_setup.rs`).
+  `file_folder.rs` (SDB-316) is a folder of CSV, TSV and Parquet files as a DuckDB connection
+  (`file_folder = true`): the resolver makes it an in-memory database, always read-only, and
+  `open_connection` (and the connection test) set its session up before anything else runs:
+  `allowed_directories` is the folder alone, external access off, a view per file DuckDB's
+  `glob` lists (names quoted by the dialect, paths as literals), then `lock_configuration`.
+  Writing to the folder is refused by the read-only barrier, and agents never see it
+  (`AgentView::FileFolder`). Any change there needs tests that try to read outside the folder
+  or write to it (`tests/file_folder.rs`).
   `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like

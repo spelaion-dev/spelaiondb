@@ -51,6 +51,9 @@ pub struct ResolvedConnection {
     /// A SQLite file on the tunnel's last hop (ADR-018): the program that opens it there.
     /// `params.database` is then its path on that machine.
     pub sqlite3: Option<String>,
+    /// A DuckDB connection to a folder of CSV, TSV and Parquet files (SDB-316): the folder.
+    /// `params.database` is then `:memory:` and `params.read_only` is always set.
+    pub file_folder: Option<PathBuf>,
     /// Where the SSH tunnel's local end listens for this connection.
     pub local_port: LocalPort,
     /// Keep the session alive after this long idle (ADR-028); `None`: off.
@@ -465,7 +468,7 @@ impl<'a> Resolver<'a> {
             }
             None => String::new(),
         };
-        let params = ConnectParams {
+        let mut params = ConnectParams {
             // Set by the core from the tunnel (ADR-018).
             remote: None,
             host,
@@ -502,6 +505,14 @@ impl<'a> Resolver<'a> {
             // No engine of the configuration has settings of its own yet (ADR-056).
             options: Default::default(),
         };
+        // A folder of files is an in-memory DuckDB database that the core fills with a view of
+        // each file, and it only reads (SDB-316): whatever the file says, it is read-only.
+        let file_folder = file
+            .file_folder
+            .then(|| PathBuf::from(std::mem::replace(&mut params.database, ":memory:".into())));
+        if file_folder.is_some() {
+            params.read_only = true;
+        }
         let password = self.password(
             &entry.file_path,
             file.password.as_ref(),
@@ -549,6 +560,7 @@ impl<'a> Resolver<'a> {
                 Some(program) => Some(self.expand(&entry.file_path, program)?),
                 None => None,
             },
+            file_folder,
             local_port: match (file.local_port, self.config.user.tunnels.range()) {
                 (Some(port), _) => LocalPort::Fixed(port),
                 (None, Ok(Some((min, max)))) => LocalPort::Range { min, max },
