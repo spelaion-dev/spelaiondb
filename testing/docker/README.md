@@ -155,6 +155,14 @@ native allocations, health checks and query execution when changing a limit.
 HAProxy also has two threads and 128 connections, so neither CPUs nor a high file-descriptor
 limit sizes its TLS pools.
 
+Databend's vendor bootstrap sleeps one second after starting Meta, then starts Query once.
+On a busy runner Meta can still be upgrading its store and Query exits with a refused RPC
+connection. `databend/databend-query` is a PATH shim: it waits up to 120 seconds for Meta's
+9191 listener, then executes the original Query binary. The vendor still configures users,
+storage and process handling. The image is pinned by digest because the shim relies on its
+PATH and binary location; recheck those when updating it. Validate a clean startup with
+Meta deliberately delayed beyond one second as well as the real Databend integration suite.
+
 Oracle's lite image carries a pre-built database; its startup does not apply `INIT_SGA_SIZE`
 or `INIT_PGA_SIZE`. `oracle/start-ci.sh` uses the image's `START_FILE` hook, after extraction
 and before its first startup, to convert the vendor spfile through SQL*Plus, replace only
