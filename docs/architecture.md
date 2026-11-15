@@ -83,3 +83,7 @@ See [execution plans](execution-plans.md) for metric semantics, capabilities and
   automatic updates (prepared and signed, ADR-021; on once releases are public), and
   installer signing.
 - **v0.4+:** ERD, plan visualizer, more engines, external drivers and a JDBC bridge.
+
+The [Flight SQL investigation](flight-sql.md) records the prerequisites for a generic
+connection without a core dialect (SDB-175). It is an implementation plan, not implemented
+engine support or an accepted architecture decision.
