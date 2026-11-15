@@ -478,7 +478,11 @@ pub(crate) fn validate_connection(
         | Engine::Presto
         | Engine::Flightsql
         | Engine::Dremio
-        | Engine::Gizmosql => [(
+        | Engine::Gizmosql
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala => [(
             "host",
             file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
         )]
@@ -663,6 +667,12 @@ pub(crate) fn validate_connection(
                 return Err(ConfigError::new(
                     path,
                     "Flight SQL connections log in with a user and a password: client certificates are not supported yet",
+                ));
+            }
+            Engine::Hive | Engine::Spark | Engine::Kyuubi | Engine::Impala => {
+                return Err(ConfigError::new(
+                    path,
+                    "HiveServer2 connections log in with a user and a password: client certificates are not supported",
                 ));
             }
         }
@@ -942,6 +952,10 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Dremio => "Dremio",
         Engine::Gizmosql => "GizmoSQL",
         Engine::Neo4j => "Neo4j",
+        Engine::Hive => "Apache Hive",
+        Engine::Spark => "Spark's Thrift server",
+        Engine::Kyuubi => "Apache Kyuubi",
+        Engine::Impala => "Apache Impala",
     }
 }
 

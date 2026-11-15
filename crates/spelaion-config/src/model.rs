@@ -188,12 +188,18 @@ pub enum Engine {
     /// Neo4j, a graph database served only by its plugin over its HTTP Query API. Its language,
     /// Cypher, is not SQL: the core reads each statement and sends it as a request (ADR-056).
     Neo4j,
+    // HiveServer2's protocol, one plugin: Apache Hive, Spark's Thrift server, Apache Kyuubi and
+    // Apache Impala.
+    Hive,
+    Spark,
+    Kyuubi,
+    Impala,
 }
 
 impl Engine {
     /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
     /// with no `_`, so a new engine fails there until it is listed here.
-    pub const ALL: [Engine; 19] = [
+    pub const ALL: [Engine; 23] = [
         Engine::Postgres,
         Engine::Sqlite,
         Engine::Mysql,
@@ -213,6 +219,10 @@ impl Engine {
         Engine::Dremio,
         Engine::Gizmosql,
         Engine::Neo4j,
+        Engine::Hive,
+        Engine::Spark,
+        Engine::Kyuubi,
+        Engine::Impala,
     ];
 
     /// The engine a connection file names (`as_str`'s text). Read through the same names the
@@ -245,6 +255,10 @@ impl Engine {
             Engine::Dremio => "dremio",
             Engine::Gizmosql => "gizmosql",
             Engine::Neo4j => "neo4j",
+            Engine::Hive => "hive",
+            Engine::Spark => "spark",
+            Engine::Kyuubi => "kyuubi",
+            Engine::Impala => "impala",
         }
     }
 
@@ -265,7 +279,11 @@ impl Engine {
             | Engine::Libsql
             | Engine::Flightsql
             | Engine::Dremio
-            | Engine::Gizmosql => true,
+            | Engine::Gizmosql
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => true,
             Engine::Mongodb
             | Engine::Redis
             | Engine::Cassandra
@@ -298,7 +316,11 @@ impl Engine {
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql
-            | Engine::Neo4j => false,
+            | Engine::Neo4j
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => false,
         }
     }
 
@@ -322,7 +344,11 @@ impl Engine {
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql
-            | Engine::Neo4j => false,
+            | Engine::Neo4j
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => false,
         }
     }
 
@@ -349,6 +375,10 @@ impl Engine {
             Engine::Gizmosql => Some(31337),
             // The HTTP port (the Query API); 7473 with TLS.
             Engine::Neo4j => Some(7474),
+            // HiveServer2's binary port; Kyuubi's own; Impala's HiveServer2 port.
+            Engine::Hive | Engine::Spark => Some(10000),
+            Engine::Kyuubi => Some(10009),
+            Engine::Impala => Some(21050),
         }
     }
 }
@@ -500,7 +530,11 @@ impl IsolationLevel {
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql
-            | Engine::Neo4j => false,
+            | Engine::Neo4j
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => false,
         }
     }
 
@@ -528,7 +562,11 @@ impl Engine {
             | Engine::Flightsql
             | Engine::Dremio
             | Engine::Gizmosql
-            | Engine::Neo4j => false,
+            | Engine::Neo4j
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => false,
         }
     }
 }

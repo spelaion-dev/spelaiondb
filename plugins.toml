@@ -36,10 +36,10 @@
 # deleted from this file later.
 #
 # Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL, MongoDB, ClickHouse,
-# Redis, Trino and Presto (one plugin), Oracle and libSQL. None of their drivers is compiled
-# into the core: these builds, inside the installer, are what serves those engines.
-# Redis, Trino and Presto (one plugin), and Flight SQL (one plugin for its engines). None of their
-# drivers is compiled into the core: these builds, inside the installer, are what serves them.
+# Redis, Trino and Presto (one plugin), Oracle, libSQL, Cassandra, Flight SQL (one plugin for its
+# engines), Neo4j, TDengine and HiveServer2 (one plugin for Hive, Spark, Kyuubi and Impala). None
+# of their drivers is compiled into the core: these builds, inside the installer, are what serves
+# those engines.
 
 schema_version = 1
 
@@ -500,3 +500,36 @@ archive = "spelaiondb-plugin-tdengine-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "cf8526f0223b151f99957372261784c4e53814de70a14d0b94c6d48bd8ad3826"
 archive_size = 2944876
 program_sha256 = "e76f9b8bd3e01097a6b8fff392a787fab01bdc63efc99d0557e1729577efc779"
+
+# HiveServer2: one plugin for Apache Hive, Spark's Thrift server, Apache Kyuubi and Apache Impala.
+[[plugin]]
+name = "spelaiondb-plugin-hive"
+repository = "spelaion-dev/spelaiondb-plugin-hive"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["hive", "spark", "kyuubi", "impala"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-hive-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "e5eea4a61fdd65332f80453a45bd98ec43feefd50013c945711ee6294daccac7"
+archive_size = 2119412
+program_sha256 = "ac75fe831573058c48b1133ac7c47b3821bd37daf11109c9b068f91cb71f3004"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-hive-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "1bd55fa8474706bc5bcc1d84d5f001fce6199f9ccb25d5f41f5bb5b89253746e"
+archive_size = 2285867
+program_sha256 = "7bfc000db30a95ad1dd74389d486475e4bc2525f1d66fdcfa4bd09bb87b14448"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-hive-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "ef57e8da60e131792f68d2c611a431b0d5413a5e493e8ace9e1ce4bd3225922d"
+archive_size = 2242037
+program_sha256 = "baa9ad43d8431c8e0069136be90bac58730e89e6cff00c4d6035ce6eedc91790"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-hive-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "80bf690e2319736ad350542c1c9bb19e147b2ae1d80d405243f1f27014a41603"
+archive_size = 2538709
+program_sha256 = "597b242319d432f1a46d7570bb24e9ce89baa782c0a2b48ca3e1cd39d83a226e"

@@ -16,8 +16,8 @@ use spelaion_config::Safeguards;
 use spelaion_driver_api::{Dialect, RequestClass, StatementSpan};
 use sqlparser::ast::{Statement, visit_statements};
 use sqlparser::dialect::{
-    ClickHouseDialect, Dialect as SqlDialect, DuckDbDialect, GenericDialect, MsSqlDialect,
-    MySqlDialect, OracleDialect, PostgreSqlDialect, SQLiteDialect,
+    ClickHouseDialect, Dialect as SqlDialect, DuckDbDialect, GenericDialect, HiveDialect,
+    MsSqlDialect, MySqlDialect, OracleDialect, PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -358,6 +358,11 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
     {
         return Some(risk);
     }
+    if matches!(engine, "hive" | "spark" | "kyuubi" | "impala")
+        && let Some(risk) = hive_risk(sql)
+    {
+        return Some(risk);
+    }
     let parser = sql_dialect(engine);
     let Ok(statements) = Parser::parse_sql(parser.as_ref(), sql) else {
         let by_first_word = match first.as_str() {
@@ -453,6 +458,27 @@ fn clickhouse_alter_risk(sql: &str) -> Option<Risk> {
         Some(Risk::Drop)
     } else if words.iter().any(|word| word == "clear") {
         Some(Risk::UpdateAll)
+    } else {
+        None
+    }
+}
+
+/// The risk of a statement of HiveServer2's engines (Hive, Spark SQL, Impala) that replaces data
+/// without saying `DELETE`, `TRUNCATE` or `DROP` first: `OVERWRITE` anywhere (`INSERT OVERWRITE
+/// TABLE | DIRECTORY …`, `LOAD DATA … OVERWRITE INTO TABLE …`, Hive's `FROM … INSERT OVERWRITE`)
+/// empties the table, the partition or the directory before writing, like a `TRUNCATE`; and
+/// `ALTER TABLE … DROP` drops partitions (their rows) or columns. Words are read with sqlparser's
+/// tokenizer, so a name or a string that says `overwrite` is not one; an open quote reads
+/// nothing.
+fn hive_risk(sql: &str) -> Option<Risk> {
+    let tokens = Tokenizer::new(&HiveDialect {}, sql).tokenize().ok()?;
+    let words: Vec<String> = tokens.iter().filter_map(plain_word).collect();
+    if words.iter().any(|word| word == "overwrite") {
+        Some(Risk::Truncate)
+    } else if words.first().is_some_and(|word| word == "alter")
+        && words.iter().any(|word| word == "drop")
+    {
+        Some(Risk::Drop)
     } else {
         None
     }
@@ -592,6 +618,8 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
         "oracle" => Box::new(OracleDialect {}),
         // libSQL reads SQL as SQLite does.
         "libsql" => Box::new(SQLiteDialect {}),
+        // HiveServer2's engines: backquoted names, strings in both quotes.
+        "hive" | "spark" | "kyuubi" | "impala" => Box::new(HiveDialect {}),
         _ => Box::new(GenericDialect {}),
     }
 }
@@ -999,6 +1027,72 @@ mod tests {
         // A name or a string that says drop is not a DROP.
         assert_eq!(ch("alter table t comment column `drop` 'drop it'"), None);
         assert_eq!(ch("select 1"), None);
+    }
+
+    /// HiveServer2's engines replace data with `OVERWRITE` and drop partitions with `ALTER TABLE`;
+    /// the rest is read as for every engine, with Hive's quoting.
+    #[test]
+    fn hive_overwrites_and_partition_drops_ask() {
+        for engine in ["hive", "spark", "kyuubi", "impala"] {
+            let hive = |sql: &str| destructive(engine, sql);
+            assert_eq!(
+                hive("insert overwrite table t select * from s"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("INSERT OVERWRITE TABLE t PARTITION (dt = '2026-01-01') SELECT 1"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("insert overwrite directory '/tmp/out' select * from t"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("load data inpath '/x' overwrite into table t"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("from s insert overwrite table t select a"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("alter table t drop partition (dt = '2026-01-01')"),
+                Some(Risk::Drop),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("alter table t drop if exists partition (p = 1)"),
+                Some(Risk::Drop)
+            );
+            assert_eq!(
+                hive("drop database d cascade"),
+                Some(Risk::Drop),
+                "{engine}"
+            );
+            assert_eq!(hive("truncate table t"), Some(Risk::Truncate), "{engine}");
+            assert_eq!(hive("delete from t"), Some(Risk::DeleteAll), "{engine}");
+            assert_eq!(hive("delete from `t` where id = 1"), None, "{engine}");
+            // Appending, adding and reading ask nothing.
+            assert_eq!(hive("insert into t select * from s"), None, "{engine}");
+            assert_eq!(
+                hive("alter table t add partition (p = 1)"),
+                None,
+                "{engine}"
+            );
+            assert_eq!(hive("select * from t"), None, "{engine}");
+            // A name or a string that says overwrite or drop is not one.
+            assert_eq!(
+                hive("select `overwrite`, 'overwrite', \"drop\" from t"),
+                None,
+                "{engine}"
+            );
+            assert_eq!(hive("alter table t set tblproperties ('drop' = 'x')"), None);
+        }
     }
 
     /// Oracle (ADR-059): what sqlparser reads is checked as for every engine; a PL/SQL block

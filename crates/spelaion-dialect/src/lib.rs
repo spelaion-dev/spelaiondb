@@ -16,6 +16,7 @@ use spelaion_driver_api::Dialect;
 pub mod clickhouse;
 pub mod cql;
 pub mod duckdb;
+pub mod hive;
 pub mod mongodb;
 pub mod mysql;
 pub mod neo4j;
@@ -31,6 +32,7 @@ pub mod trino;
 pub use clickhouse::ClickhouseDialect;
 pub use cql::CqlDialect;
 pub use duckdb::DuckdbDialect;
+pub use hive::HiveDialect;
 pub use mongodb::MongodbDialect;
 pub use mysql::MysqlDialect;
 pub use neo4j::Neo4jDialect;
@@ -74,6 +76,11 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "flightsql" => Some(Arc::new(StandardDialect::named("flightsql"))),
         "dremio" => Some(Arc::new(StandardDialect::named("dremio"))),
         "gizmosql" => Some(Arc::new(StandardDialect::named("gizmosql"))),
+        // HiveServer2's engines: HiveQL's lexical rules under each engine's own name.
+        "hive" => Some(Arc::new(HiveDialect::named("hive"))),
+        "spark" => Some(Arc::new(HiveDialect::named("spark"))),
+        "kyuubi" => Some(Arc::new(HiveDialect::named("kyuubi"))),
+        "impala" => Some(Arc::new(HiveDialect::named("impala"))),
         _ => None,
     }
 }
@@ -103,6 +110,10 @@ mod tests {
             ("dremio", "dremio"),
             ("gizmosql", "gizmosql"),
             ("neo4j", "neo4j"),
+            ("hive", "hive"),
+            ("spark", "spark"),
+            ("kyuubi", "kyuubi"),
+            ("impala", "impala"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");
