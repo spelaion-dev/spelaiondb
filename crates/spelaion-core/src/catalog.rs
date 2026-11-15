@@ -215,6 +215,7 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             None,
             None,
         ),
+        supported(Engine::Tdengine, "TDengine", Analytical, Network),
         // Cypher over the HTTP Query API (ADR-056).
         supported(Engine::Neo4j, "Neo4j", NoSql, Network),
     ]
@@ -258,6 +259,7 @@ mod tests {
             Engine::Mongodb,
             Engine::Redis,
             Engine::Cassandra,
+            Engine::Tdengine,
             Engine::Neo4j,
         ] {
             assert_eq!(

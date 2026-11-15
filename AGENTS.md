@@ -235,6 +235,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`Dialect::browse_statement`), never the table data tab, which writes SQL. Tests:
   `spelaion-core`'s `tests/cassandra.rs` with `SPELAION_TEST_CASSANDRA=127.0.0.1:19142` (or
   `SPELAION_DEV_PLUGIN_CASSANDRA`).
+- **TDengine is a plugin whose SQL is its own** (ADR-056), the same way as CQL: its driver lives
+  in `spelaion-dev/spelaiondb-plugin-tdengine`, pinned in `plugins.toml`, and talks to
+  taosAdapter's REST API (TDengine's own Rust connector pulls an unmaintained TLS stack, and
+  nothing of TDengine's AGPL code is linked). Its splitter, quoting (backticks) and guard lists are
+  `spelaion-dialect`'s `tdengine.rs`: a `DELETE` without a `WHERE` deletes every row, `KILL` and
+  the cluster's commands drop, `USE` is refused. Through REST a result arrives whole and a cancel
+  only stops waiting. The explorer shows super tables as partitioned tables and at most 1,000
+  child tables per database. Tests: `spelaion-core`'s `tests/tdengine.rs` with
+  `SPELAION_TEST_TDENGINE=127.0.0.1:16141` (or `SPELAION_DEV_PLUGIN_TDENGINE`).
 - **DuckDB is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives in
   `spelaion-dev/spelaiondb-plugin-duckdb` with its type zoo, and this repository pins the
   release it ships (`plugins.toml`). The core does not compile DuckDB. Here, DuckDB's tests
@@ -779,6 +788,7 @@ outside the team.
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142
+  SPELAION_TEST_TDENGINE=127.0.0.1:16141
   cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,

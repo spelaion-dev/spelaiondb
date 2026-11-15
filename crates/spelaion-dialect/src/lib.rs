@@ -25,6 +25,7 @@ pub mod redis;
 pub mod sqlite;
 pub mod sqlserver;
 pub mod standard;
+pub mod tdengine;
 pub mod trino;
 
 pub use clickhouse::ClickhouseDialect;
@@ -39,6 +40,7 @@ pub use redis::RedisDialect;
 pub use sqlite::SqliteDialect;
 pub use sqlserver::SqlServerDialect;
 pub use standard::StandardDialect;
+pub use tdengine::TdengineDialect;
 pub use trino::TrinoDialect;
 
 /// The dialect of an engine, by the name the configuration uses (`engine = "postgres"`).
@@ -66,6 +68,8 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "libsql" => Some(Arc::new(SqliteDialect)),
         // Shaped like SQL, but its own: sent as text, read here (ADR-056).
         "cassandra" => Some(Arc::new(CqlDialect)),
+        // Shaped like SQL, but its own: sent as text, read here (ADR-056).
+        "tdengine" => Some(Arc::new(TdengineDialect)),
         // Flight SQL: standard SQL under each engine's own name, which no barrier answers to.
         "flightsql" => Some(Arc::new(StandardDialect::named("flightsql"))),
         "dremio" => Some(Arc::new(StandardDialect::named("dremio"))),
@@ -94,6 +98,7 @@ mod tests {
             ("presto", "trino"),
             ("oracle", "oracle"),
             ("cassandra", "cassandra"),
+            ("tdengine", "tdengine"),
             ("flightsql", "flightsql"),
             ("dremio", "dremio"),
             ("gizmosql", "gizmosql"),
