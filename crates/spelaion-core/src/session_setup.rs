@@ -132,8 +132,6 @@ pub fn read_only_statement(engine: &str) -> Option<&'static str> {
     match engine {
         "postgres" => Some("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"),
         "mysql" | "mariadb" => Some("SET SESSION TRANSACTION READ ONLY"),
-        // Set only where the session is not read-only already ([`Session::clickhouse_read_only`]).
-        "clickhouse" => Some(crate::readonly::CLICKHOUSE_READ_ONLY),
         _ => None,
     }
 }
@@ -200,18 +198,9 @@ async fn apply(
     if resolved.params.read_only
         && let Some(statement) = read_only_statement(engine)
     {
-        if statement == crate::readonly::CLICKHOUSE_READ_ONLY {
-            session
-                .clickhouse_read_only()
-                .await
-                .map_err(|e| SetupError::ReadOnly {
-                    message: e.to_string(),
-                })?;
-        } else {
-            run_statement(session, statement)
-                .await
-                .map_err(|message| SetupError::ReadOnly { message })?;
-        }
+        run_statement(session, statement)
+            .await
+            .map_err(|message| SetupError::ReadOnly { message })?;
         lost(session)?;
     }
 
@@ -347,7 +336,6 @@ mod tests {
             read_only_statement("mysql"),
             Some("SET SESSION TRANSACTION READ ONLY")
         );
-        assert_eq!(read_only_statement("clickhouse"), Some("SET readonly = 2"));
         assert_eq!(read_only_statement("sqlserver"), None);
         assert_eq!(read_only_statement("sqlite"), None);
         assert_eq!(read_only_statement("duckdb"), None);

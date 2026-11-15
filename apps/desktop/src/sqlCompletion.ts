@@ -18,8 +18,7 @@ export interface CompletionCatalog {
 export const EMPTY_CATALOG: CompletionCatalog = { tables: [], defaultSchema: null };
 export type KeywordCase = "upper" | "lower" | "preserve";
 export function sqlDialect(engine: string | null): SQLDialect {
-  // ClickHouse: MySQL's keywords and backticks are the closest CodeMirror has.
-  return ({ sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL, sqlserver: MSSQL, clickhouse: MySQL } as Record<string, SQLDialect>)[engine ?? ""] ?? PostgreSQL;
+  return ({ sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL, sqlserver: MSSQL } as Record<string, SQLDialect>)[engine ?? ""] ?? PostgreSQL;
 }
 
 interface Token { text: string; value: string; from: number; to: number; kind: "word" | "quoted" | "literal" | "comment" | "symbol"; closed: boolean; match: number }
@@ -33,15 +32,12 @@ const boundaries = new Set("SELECT FROM JOIN INNER LEFT RIGHT FULL CROSS OUTER N
 function tokenize(sql: string, engine: string | null): Token[] {
   const tokens: Token[] = [];
   const mysql = engine === "mysql" || engine === "mariadb";
-  // ClickHouse: backslash escapes in every quote, `# ` and `#!` comments, `$tag$` heredocs.
-  const clickhouse = engine === "clickhouse";
   const nestedComments = !mysql && engine !== "sqlite";
   for (let i = 0; i < sql.length;) {
     if (/\s/.test(sql[i]!)) { i++; continue; }
     const from = i;
     let kind: Token["kind"] = "symbol", value = "", closed = true;
-    if (sql.startsWith("--", i) && (!mysql || /[\s\x00-\x1f\x7f]/.test(sql[i + 2] ?? "")) || mysql && sql[i] === "#"
-      || clickhouse && sql[i] === "#" && (sql[i + 1] === " " || sql[i + 1] === "!")) {
+    if (sql.startsWith("--", i) && (!mysql || /[\s\x00-\x1f\x7f]/.test(sql[i + 2] ?? "")) || mysql && sql[i] === "#") {
       kind = "comment";
       while (i < sql.length && sql[i] !== "\n") i++;
       closed = i < sql.length;
@@ -54,7 +50,7 @@ function tokenize(sql: string, engine: string | null): Token[] {
         else i++;
       }
       closed = depth === 0;
-    } else if (sql[i] === "$" && (engine === null || engine === "postgres" || engine === "duckdb" || clickhouse) && /^\$(?:[A-Za-z_][\w]*)?\$/.test(sql.slice(i))) {
+    } else if (sql[i] === "$" && (engine === null || engine === "postgres" || engine === "duckdb") && /^\$(?:[A-Za-z_][\w]*)?\$/.test(sql.slice(i))) {
       kind = "literal";
       const tag = sql.slice(i).match(/^\$(?:[A-Za-z_][\w]*)?\$/)![0];
       const end = sql.indexOf(tag, i + tag.length); closed = end >= 0;
@@ -67,7 +63,7 @@ function tokenize(sql: string, engine: string | null): Token[] {
         if (sql[i] === end) {
           if (sql[i + 1] === end) { value += end; i += 2; }
           else { i++; closed = true; break; }
-        } else if (sql[i] === "\\" && (mysql || clickhouse || kind === "literal" && /[eE]/.test(sql[from - 1] ?? ""))) {
+        } else if (sql[i] === "\\" && (mysql || kind === "literal" && /[eE]/.test(sql[from - 1] ?? ""))) {
           i++; value += sql[i++] ?? "";
         } else value += sql[i++];
       }
@@ -245,7 +241,7 @@ export function completeSql(sql: string, pos: number, catalog: CompletionCatalog
   const reserved = new Set(keywords.map((k) => k.toUpperCase()));
   const quote = (name: string) => {
     if (/^[a-z_][a-z0-9_$]*$/.test(name) && !reserved.has(name.toUpperCase())) return name;
-    return engine === "mysql" || engine === "mariadb" || engine === "clickhouse" ? `\`${name.replaceAll("`", "``")}\`` : engine === "sqlserver" ? `[${name.replaceAll("]", "]]")}]` : `"${name.replaceAll('"', '""')}"`;
+    return engine === "mysql" || engine === "mariadb" ? `\`${name.replaceAll("`", "``")}\`` : engine === "sqlserver" ? `[${name.replaceAll("]", "]]")}]` : `"${name.replaceAll('"', '""')}"`;
   };
   const applyName = (name: string) => quote(name);
   const options: Completion[] = [];

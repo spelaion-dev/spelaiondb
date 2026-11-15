@@ -213,6 +213,17 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   own barrier exists. Tests: `spelaion-core`'s `tests/mongodb.rs` with
   `SPELAION_TEST_MONGO=127.0.0.1:27017` (or `SPELAION_DEV_PLUGIN_MONGODB` in a development
   build).
+- **Redis is a plugin whose language is not SQL** (ADR-056), the same way: its driver lives in
+  `spelaion-dev/spelaiondb-plugin-redis` (Redis and Valkey), pinned in `plugins.toml`. Its
+  language is `spelaion-dialect`'s `redis.rs`: one command per line, quoted as `redis-cli`
+  quotes, sent as its argument list (`{"args": [...]}`). The core refuses what would change or
+  hold the connection (`AUTH`, `SELECT`, transactions, subscriptions, blocking commands); the
+  tab's database is chosen above the editor. The guard's lists name the reads and the writes;
+  `KEYS`, scripts and anything unlisted are unknown, never a read. The explorer shows each
+  database's keys (kind `collection`, the key's type as its comment), read with bounded `SCAN`
+  pages by the plugin, and opens one with a bounded command of its type
+  (`Dialect::browse_statement`). Tests: `spelaion-core`'s `tests/redis.rs` with
+  `SPELAION_TEST_REDIS=127.0.0.1:16379` (or `SPELAION_DEV_PLUGIN_REDIS`).
 - **DuckDB is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives in
   `spelaion-dev/spelaiondb-plugin-duckdb` with its type zoo, and this repository pins the
   release it ships (`plugins.toml`). The core does not compile DuckDB. Here, DuckDB's tests
@@ -221,19 +232,6 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   repository). Without either, a DuckDB connection fails saying which file is missing. One
   open per file shared by every session (ADR-016) holds because one plugin process serves
   them all.
-- **ClickHouse only exists as a plugin** (ADR-041, stage 3): `spelaion-dev/spelaiondb-plugin-clickhouse`
-  (its HTTP interface, one server-side session per connection that is never silently
-  replaced, results as the server's `TabSeparatedWithNamesAndTypes` text), pinned in
-  `plugins.toml`. What the core has of it: `Engine::Clickhouse`, `spelaion-dialect`'s
-  `clickhouse.rs`, its rules in `classify.rs` (table functions that reach outside: `url`,
-  `file`, `s3`, `remote`, `mysql`, `executable`…), `guard.rs` (`ALTER TABLE … DROP | CLEAR`)
-  and its read barrier: no transactions, so the session's `readonly` setting
-  (`readonly.rs`'s `clickhouse_read_only`), set once for agents' reads, exports, column
-  statistics and read-only connections, and never set twice (a user whose profile is
-  read-only cannot set it). It declares no transactions, no editing, no imports, no plans
-  and no data search, and agents' writes are refused (`run_write` needs a transaction). Its
-  tests: `tests/clickhouse.rs` with `SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123` (and
-  `SPELAION_TEST_SSH` for the tunnel); `SPELAION_DEV_PLUGIN_CLICKHOUSE` in a development build.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -678,10 +676,9 @@ outside the team.
   `docker compose -f testing/docker/compose.yaml up -d --wait` and
   `SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
-  SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
-  cargo test --workspace`.
+  SPELAION_TEST_REDIS=127.0.0.1:16379 cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),

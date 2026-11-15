@@ -471,20 +471,13 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
-        // ClickHouse logs in as `default` when no user is given, into its default database.
-        Engine::Clickhouse => [(
-            "host",
-            file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
-        )]
-        .into_iter()
-        .filter_map(|(k, m)| m.then_some(k))
-        .collect(),
         Engine::Sqlite | Engine::Duckdb => [("database", file.database.is_none())]
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
             .collect(),
-        // MongoDB may need no login, and the database can be chosen in the explorer.
-        Engine::Mongodb => [(
+        // MongoDB and Redis may need no login, and the database can be chosen in the
+        // explorer.
+        Engine::Mongodb | Engine::Redis => [(
             "host",
             file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
         )]
@@ -550,7 +543,11 @@ pub(crate) fn validate_connection(
     if file.tls.cert.is_some() {
         match file.engine {
             // MongoDB reads both from one PEM file: the plugin says so if they differ.
-            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Mongodb => {}
+            Engine::Postgres
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Mongodb
+            | Engine::Redis => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,
@@ -561,12 +558,6 @@ pub(crate) fn validate_connection(
                 return Err(ConfigError::new(
                     path,
                     "a local file has no client certificate",
-                ));
-            }
-            Engine::Clickhouse => {
-                return Err(ConfigError::new(
-                    path,
-                    "ClickHouse connections log in with a password: client certificates are not supported yet",
                 ));
             }
         }
@@ -834,7 +825,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Sqlite => "SQLite",
         Engine::Duckdb => "DuckDB",
         Engine::Mongodb => "MongoDB",
-        Engine::Clickhouse => "ClickHouse",
+        Engine::Redis => "Redis",
     }
 }
 

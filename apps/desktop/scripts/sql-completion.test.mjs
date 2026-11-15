@@ -5,7 +5,7 @@ import { CompletionContext } from "@codemirror/autocomplete";
 import { completeSql, sqlCompletionSource, sqlDialect, mayChangeCompletionCatalog } from "../src/sqlCompletion.ts";
 import { CompletionCache, completionCacheKey } from "../src/completionCache.ts";
 
-const engines = ["postgres", "mysql", "mariadb", "sqlserver", "sqlite", "duckdb", "clickhouse"];
+const engines = ["postgres", "mysql", "mariadb", "sqlserver", "sqlite", "duckdb"];
 const table = (name, columns, foreignKeys = [], schema = "main") => ({ schema, name, columns, foreignKeys });
 const catalog = { defaultSchema: "main", tables: [
   table("orders", ["id", "customer_id", "total"], [{ name: "orders_customer_fk", columns: ["customer_id"], referencedSchema: "main", referencedTable: "customers", referencedColumns: ["id"] }]),
@@ -71,7 +71,7 @@ for (const engine of engines) {
 
 test("qualified schemas, escaped identifiers and exact quoted PostgreSQL names", () => {
   for (const engine of engines) {
-    const quote = (s) => engine === "mysql" || engine === "mariadb" || engine === "clickhouse" ? `\`${s.replaceAll("`", "``")}\`` : engine === "sqlserver" ? `[${s.replaceAll("]", "]]")}]` : `"${s.replaceAll('"', '""')}"`;
+    const quote = (s) => engine === "mysql" || engine === "mariadb" ? `\`${s.replaceAll("`", "``")}\`` : engine === "sqlserver" ? `[${s.replaceAll("]", "]]")}]` : `"${s.replaceAll('"', '""')}"`;
     const data = { defaultSchema: "main", tables: [table("Order Items", ["part name", "odd]`\"column"], [], "Sales Team")] };
     assert.deepEqual(result(`SELECT i.| FROM ${quote("Sales Team")}.${quote("Order Items")} i`, engine, data).options.map((option) => option.label), [quote("part name"), quote("odd]`\"column")]);
     assert.ok(labels(`SELECT * FROM ${quote("Sales Team")}.|`, engine, data).includes("Order Items"));
@@ -82,7 +82,7 @@ test("qualified schemas, escaped identifiers and exact quoted PostgreSQL names",
   assert.deepEqual(labels('SELECT o.| FROM orders "O"', "postgres"), []);
   assert.deepEqual(labels('SELECT "O".| FROM orders "O"', "postgres"), ["id", "customer_id", "total"]);
   for (const engine of engines) {
-    const open = engine === "mysql" || engine === "mariadb" || engine === "clickhouse" ? "`" : engine === "sqlserver" ? "[" : '"';
+    const open = engine === "mysql" || engine === "mariadb" ? "`" : engine === "sqlserver" ? "[" : '"';
     const end = open === "[" ? "]" : open;
     const completed = result(`SELECT * FROM orders o WHERE o.${open}cust|${end}`, engine);
     assert.equal(completed.filter, false);
@@ -103,16 +103,11 @@ test("dialect comment and dollar-quote rules match the engine", () => {
     assert.deepEqual(labels("SELECT * FROM orders WHERE # o.|", engine), []);
   }
   assert.deepEqual(labels("/* outer /* inner */ SELECT o.| FROM orders o", "sqlite"), ["id", "customer_id", "total"]);
-  for (const engine of ["postgres", "duckdb", "sqlserver", "clickhouse"]) {
+  for (const engine of ["postgres", "duckdb", "sqlserver"]) {
     assert.deepEqual(labels("/* outer /* inner */ SELECT o.| FROM orders o", engine), []);
     assert.deepEqual(labels("/* outer /* inner */ end */ SELECT o.| FROM orders o", engine), ["id", "customer_id", "total"]);
   }
-  for (const engine of ["postgres", "duckdb", "clickhouse"]) assert.deepEqual(labels("SELECT $tag$ SELECT o.| FROM orders o", engine), []);
-  // ClickHouse: `# ` and `#!` start a comment, `#x` does not; backslashes escape in every quote.
-  assert.deepEqual(labels("SELECT * FROM orders WHERE # o.|", "clickhouse"), []);
-  assert.deepEqual(labels("SELECT * FROM orders WHERE #! o.|", "clickhouse"), []);
-  assert.deepEqual(labels("SELECT * FROM orders o WHERE 'it\\'s o.|", "clickhouse"), []);
-  assert.deepEqual(labels("SELECT * FROM orders o WHERE #x o.|", "clickhouse"), ["id", "customer_id", "total"]);
+  for (const engine of ["postgres", "duckdb"]) assert.deepEqual(labels("SELECT $tag$ SELECT o.| FROM orders o", engine), []);
   assert.ok(labels("SELECT $tag$ SELECT o.| FROM orders o", "sqlite").includes("customer_id"));
 });
 

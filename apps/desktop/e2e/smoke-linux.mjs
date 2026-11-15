@@ -71,8 +71,6 @@ mkdirSync(join(userDir, "connections"), { recursive: true });
 const personal = {
   "sql-server-docker.toml": `schema_version = 1\nname = "SQL Server (Docker)"\nengine = "sqlserver"\nhost = "127.0.0.1"\nport = 11433\nuser = "sa"\npassword = { secret = "prompt" }\n`,
   "bastions.toml": `schema_version = 1\nname = "Postgres through the tunnel"\nengine = "postgres"\nhost = "postgres"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "verify-full"\nca = ${JSON.stringify(join(keys, "ca.crt"))}\n`,
-  // ClickHouse, only a plugin (ADR-041), behind the same two bastions: its HTTP port has no TLS.
-  "clickhouse.toml": `schema_version = 1\nname = "ClickHouse through the tunnel"\nengine = "clickhouse"\nhost = "clickhouse"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
 };
 for (const [file, text] of Object.entries(personal)) writeFileSync(join(userDir, "connections", file), text);
 
@@ -351,15 +349,6 @@ try {
     }
     await statusline("1 row");
     await shot("10-tunnel");
-  });
-
-  await step("ClickHouse (a plugin only) behind the same two bastions", async () => {
-    // The hosts were trusted by the step before: no fingerprint is asked again.
-    await newQuery("ClickHouse through the tunnel", "select currentDatabase() as db, 'ñandú' as t, toDate('2024-02-29') as d;");
-    await run();
-    await password("ClickHouse through the tunnel", "spelaion");
-    await statusline("1 row");
-    await shot("10b-clickhouse-tunnel");
   });
 
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {

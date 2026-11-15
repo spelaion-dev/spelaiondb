@@ -127,7 +127,7 @@ impl ExplainPolicy {
                 | Engine::Duckdb
                 | Engine::Sqlserver
                 | Engine::Mongodb
-                | Engine::Clickhouse => None,
+                | Engine::Redis => None,
             },
         }
     }

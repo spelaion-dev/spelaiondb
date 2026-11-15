@@ -351,7 +351,6 @@ const SETUP_EXAMPLES: Record<string, string> = {
   mariadb: "SET time_zone = '+00:00';",
   sqlserver: "SET DATEFORMAT ymd;\nSET LOCK_TIMEOUT 5000;",
   duckdb: "SET TimeZone = 'UTC';",
-  clickhouse: "SET session_timezone = 'UTC';\nSET max_execution_time = 60;",
   sqlite: "PRAGMA foreign_keys = ON;",
 };
 

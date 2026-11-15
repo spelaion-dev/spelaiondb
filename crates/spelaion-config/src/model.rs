@@ -156,8 +156,9 @@ pub enum Engine {
     /// MongoDB, and the servers that speak its protocol (FerretDB). Its language is not SQL:
     /// the core reads it and sends requests (ADR-056).
     Mongodb,
-    // ClickHouse, served only by its plugin (ADR-041, stage 3).
-    Clickhouse,
+    /// Redis, and the servers that speak its protocol (Valkey). Its language is not SQL: the
+    /// core reads each command line and sends its arguments (ADR-056).
+    Redis,
 }
 
 impl Engine {
@@ -170,7 +171,7 @@ impl Engine {
             Engine::Duckdb => "duckdb",
             Engine::Sqlserver => "sqlserver",
             Engine::Mongodb => "mongodb",
-            Engine::Clickhouse => "clickhouse",
+            Engine::Redis => "redis",
         }
     }
 
@@ -183,9 +184,8 @@ impl Engine {
             | Engine::Mysql
             | Engine::Mariadb
             | Engine::Duckdb
-            | Engine::Sqlserver
-            | Engine::Clickhouse => true,
-            Engine::Mongodb => false,
+            | Engine::Sqlserver => true,
+            Engine::Mongodb | Engine::Redis => false,
         }
     }
 
@@ -198,7 +198,7 @@ impl Engine {
             | Engine::Mariadb
             | Engine::Sqlserver
             | Engine::Mongodb
-            | Engine::Clickhouse => false,
+            | Engine::Redis => false,
         }
     }
 
@@ -209,8 +209,7 @@ impl Engine {
             Engine::Mysql | Engine::Mariadb => Some(3306),
             Engine::Sqlserver => Some(1433),
             Engine::Mongodb => Some(27017),
-            // The HTTP interface; 8443 with TLS.
-            Engine::Clickhouse => Some(8123),
+            Engine::Redis => Some(6379),
         }
     }
 }
@@ -346,10 +345,8 @@ impl IsolationLevel {
             Engine::Postgres | Engine::Mysql | Engine::Mariadb => self != IsolationLevel::Snapshot,
             Engine::Sqlserver => true,
             // A file engine has one level: SQLite serializes, DuckDB uses snapshots. MongoDB
-            // has no session isolation level.
-            Engine::Sqlite | Engine::Duckdb | Engine::Mongodb => false,
-            // ClickHouse has no transactions to isolate.
-            Engine::Clickhouse => false,
+            // and Redis have no session isolation level.
+            Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis => false,
         }
     }
 
@@ -363,7 +360,7 @@ impl Engine {
     pub fn has_session_schema(self) -> bool {
         match self {
             Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Duckdb => true,
-            Engine::Sqlserver | Engine::Sqlite | Engine::Mongodb | Engine::Clickhouse => false,
+            Engine::Sqlserver | Engine::Sqlite | Engine::Mongodb | Engine::Redis => false,
         }
     }
 }

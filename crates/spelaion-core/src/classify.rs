@@ -128,7 +128,7 @@ fn setup_statement(engine: &str, statement: &Statement) -> Result<(), String> {
         Statement::Set(set) => set,
         Statement::Use(_) => {
             return match engine {
-                "mysql" | "mariadb" | "sqlserver" | "duckdb" | "clickhouse" => Ok(()),
+                "mysql" | "mariadb" | "sqlserver" | "duckdb" => Ok(()),
                 _ => Err("USE is not a setting of this engine".into()),
             };
         }
@@ -348,21 +348,6 @@ fn setup_settings(engine: &str) -> &'static [&'static str] {
             "interactive_timeout",
         ],
         "duckdb" => &["schema", "search_path", "timezone", "calendar"],
-        // Never `readonly`: it is the barrier itself (ADR-020).
-        "clickhouse" => &[
-            "session_timezone",
-            "max_execution_time",
-            "max_threads",
-            "max_memory_usage",
-            "max_result_rows",
-            "max_result_bytes",
-            "result_overflow_mode",
-            "max_rows_to_read",
-            "max_bytes_to_read",
-            "read_overflow_mode",
-            "timeout_overflow_mode",
-            "join_use_nulls",
-        ],
         _ => &[],
     }
 }
@@ -476,31 +461,6 @@ fn outside_prefixes(engine: &str) -> &'static [&'static str] {
             "pg_replication_origin_",
             "pg_advisory_unlock",
         ],
-        // Families of table functions that read other servers, buckets and lakes, with the
-        // `…Cluster`, `…S3`, `…Local` variants a new release may add. No scalar function's name
-        // starts with these (`url` and `file` are matched exactly: `URLHierarchy` and
-        // `filesystemAvailable` are scalar functions).
-        "clickhouse" => &[
-            "s3",
-            "azureblobstorage",
-            "hdfs",
-            "hive",
-            "iceberg",
-            "deltalake",
-            "hudi",
-            "paimon",
-            "arrowflight",
-            "remote",
-            "mysql",
-            "postgresql",
-            "mongodb",
-            "redis",
-            "sqlite",
-            "odbc",
-            "jdbc",
-            "ytsaurus",
-            "prometheus",
-        ],
         _ => &[],
     }
 }
@@ -612,36 +572,6 @@ fn outside_functions(engine: &str) -> &'static [&'static str] {
             "mysql_scan",
             "iceberg_scan",
             "delta_scan",
-        ],
-        // The session's `readonly` setting is the engine's barrier (ADR-020): it stops writes,
-        // not reads that reach outside. These table functions read files on the server, other
-        // servers, URLs and buckets, or run programs; refused by name.
-        "clickhouse" => &[
-            "file",
-            "filecluster",
-            "url",
-            "urlcluster",
-            "remote",
-            "remotesecure",
-            "cluster",
-            "clusterallreplicas",
-            "mysql",
-            "postgresql",
-            "mongodb",
-            "redis",
-            "sqlite",
-            "odbc",
-            "jdbc",
-            "executable",
-            "gcs",
-            "oss",
-            "cosn",
-            "input",
-            "ytsaurus",
-            "prometheusquery",
-            "prometheusqueryrange",
-            // HDFS through a Hive metastore.
-            "hive",
         ],
         _ => &[],
     }
@@ -1553,188 +1483,5 @@ mod tests {
             Ok(ReadKind::Explain)
         );
         assert!(pg("explain analyse select 1").is_err());
-    }
-
-    /// ClickHouse's barrier is the session's `readonly` setting (ADR-020): it stops writes, not
-    /// reads that reach files, URLs, buckets, other servers or programs, so those are refused
-    /// here, by name, however they are spelled.
-    #[test]
-    fn clickhouse_reads_that_reach_outside_are_refused() {
-        let ch = |sql: &str| classify_read_only("clickhouse", sql);
-        for sql in [
-            "select 1",
-            "select number from system.numbers limit 10",
-            "select count() from numbers(10)",
-            "select * from `events` where id in (1, 2)",
-            "show tables",
-            "explain select 1",
-        ] {
-            assert!(ch(sql).is_ok(), "{sql}: {:?}", ch(sql));
-        }
-        for sql in [
-            "insert into t values (1)",
-            "alter table t delete where 1",
-            "truncate table t",
-            "drop table t",
-            "create table t (a UInt8) engine = Memory",
-            "select 1; select 2",
-            "select * from url('http://x/y.csv', CSV, 'a String')",
-            "select * from URL('http://x/y.csv', CSV, 'a String')",
-            "select * from urlCluster('c', 'http://x/y.csv')",
-            "select * from file('/etc/passwd', LineAsString)",
-            "select * from fileCluster('c', 'x')",
-            "select * from remote('h:9000', system.one)",
-            "select * from remoteSecure('h:9440', system.one)",
-            "select * from cluster('c', system.one)",
-            "select * from clusterAllReplicas('c', system.one)",
-            "select * from s3('https://b/x')",
-            "select * from s3Cluster('c', 'https://b/x')",
-            "select * from gcs('https://b/x')",
-            "select * from azureBlobStorage('x', 'c', 'b')",
-            "select * from hdfs('hdfs://h/x')",
-            "select * from icebergS3('https://b/t')",
-            "select * from deltaLake('https://b/t')",
-            "select * from hudi('https://b/t')",
-            "select * from mysql('h:3306', 'd', 't', 'u', 'p')",
-            "select * from postgresql('h:5432', 'd', 't', 'u', 'p')",
-            "select * from mongodb('h:27017', 'd', 'c', 'u', 'p', 'a String')",
-            "select * from sqlite('/x.db', 't')",
-            "select * from odbc('DSN=x', 't')",
-            "select * from jdbc('x', 't')",
-            "select * from executable('x.sh', CSV, 'a String')",
-            "select * from (select * from url('http://x/y.csv', CSV, 'a String'))",
-        ] {
-            assert!(ch(sql).is_err(), "{sql}");
-        }
-    }
-
-    /// Every table function of ClickHouse 25.8 (`SELECT name FROM system.table_functions`),
-    /// each either refused (it reads files, other servers, URLs, buckets or lakes, or runs a
-    /// program) or allowed (it reads only this server's own data, or makes rows up). A release
-    /// that adds one is checked against this list when its test server moves.
-    #[test]
-    fn clickhouse_every_table_function_is_decided() {
-        let refused = [
-            "arrowflight",
-            "azureBlobStorage",
-            "azureBlobStorageCluster",
-            "cluster",
-            "clusterAllReplicas",
-            "cosn",
-            "deltaLake",
-            "deltaLakeAzure",
-            "deltaLakeCluster",
-            "deltaLakeLocal",
-            "deltaLakeS3",
-            "executable",
-            "file",
-            "fileCluster",
-            "gcs",
-            "hdfs",
-            "hdfsCluster",
-            "hive",
-            "hudi",
-            "hudiCluster",
-            "iceberg",
-            "icebergAzure",
-            "icebergAzureCluster",
-            "icebergHDFS",
-            "icebergHDFSCluster",
-            "icebergLocal",
-            "icebergS3",
-            "icebergS3Cluster",
-            "input",
-            "jdbc",
-            "mongodb",
-            "mysql",
-            "odbc",
-            "oss",
-            "postgresql",
-            "prometheusQuery",
-            "prometheusQueryRange",
-            "redis",
-            "remote",
-            "remoteSecure",
-            "s3",
-            "s3Cluster",
-            "sqlite",
-            "url",
-            "urlCluster",
-            "ytsaurus",
-            // Cluster variants of the other-server families, should a release add them.
-            "mysqlCluster",
-            "postgresqlCluster",
-            "mongodbCluster",
-            "redisCluster",
-            "hiveCluster",
-        ];
-        for name in refused {
-            let sql = format!("select * from {name}('x')");
-            assert!(classify_read_only("clickhouse", &sql).is_err(), "{name}");
-        }
-        let allowed = [
-            "dictionary",
-            "format",
-            "fuzzJSON",
-            "fuzzQuery",
-            "generateRandom",
-            "generateSeries",
-            "generate_series",
-            "loop",
-            "merge",
-            "mergeTreeIndex",
-            "mergeTreeProjection",
-            "null",
-            "numbers",
-            "numbers_mt",
-            "timeSeriesData",
-            "timeSeriesMetrics",
-            "timeSeriesSelector",
-            "timeSeriesTags",
-            "values",
-            "view",
-            "viewExplain",
-            "viewIfPermitted",
-            "zeros",
-            "zeros_mt",
-        ];
-        for name in allowed {
-            let sql = format!("select * from {name}('x')");
-            assert!(
-                classify_read_only("clickhouse", &sql).is_ok(),
-                "{name}: {:?}",
-                classify_read_only("clickhouse", &sql)
-            );
-        }
-        // Scalar functions whose names begin like a refused one are not refused.
-        assert!(classify_read_only("clickhouse", "select URLHierarchy('https://a/b')").is_ok());
-        assert!(classify_read_only("clickhouse", "select filesystemAvailable()").is_ok());
-    }
-
-    #[test]
-    fn clickhouse_session_settings_never_include_readonly() {
-        for sql in [
-            "SET max_execution_time = 30",
-            "SET session_timezone = 'UTC'",
-            "USE analytics",
-        ] {
-            assert!(
-                classify_session_setup("clickhouse", sql).is_ok(),
-                "{sql}: {:?}",
-                classify_session_setup("clickhouse", sql)
-            );
-        }
-        for sql in [
-            "SET readonly = 0",
-            "SET readonly = 2",
-            "SET allow_ddl = 1",
-            "SET max_execution_time = (select 1)",
-        ] {
-            assert!(classify_session_setup("clickhouse", sql).is_err(), "{sql}");
-            assert!(
-                classify_read_only_connection("clickhouse", sql).is_err(),
-                "{sql}"
-            );
-        }
     }
 }

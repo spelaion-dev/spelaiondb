@@ -385,7 +385,7 @@ impl ConnectionDraft {
                     | Engine::Sqlite
                     | Engine::Duckdb
                     | Engine::Mongodb
-                    | Engine::Clickhouse => {
+                    | Engine::Redis => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -475,7 +475,7 @@ impl ConnectionDraft {
                 | Engine::Mariadb
                 | Engine::Sqlserver
                 | Engine::Mongodb
-                | Engine::Clickhouse => d,
+                | Engine::Redis => d,
             }),
             user: non_empty(&self.user).filter(|_| network),
             password: password

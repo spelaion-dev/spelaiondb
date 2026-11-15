@@ -35,9 +35,9 @@
 # A withdrawn build stays withdrawn in every catalogue published after it, even if its entry is
 # deleted from this file later.
 #
-# Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL, MongoDB and
-# ClickHouse. None of their drivers is compiled into the core: these builds, inside the installer,
-# are what serves those engines.
+# Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL. None of their drivers
+# is compiled into the core any more: these builds, inside the installer, are what serves
+# those engines.
 
 schema_version = 1
 
@@ -205,35 +205,34 @@ archive_sha256 = "9714fa1347fb2f406023a9f3191c21d0c02b2791d54a6962ba0b25a645c300
 archive_size = 4244298
 program_sha256 = "12dbf132dd5f4e049f601ad296e0916a277a01eb16ee2771b90fdc46fb4fb91d"
 
-# ClickHouse: the first engine that is only a plugin (ADR-041, stage 3).
 [[plugin]]
-name = "spelaiondb-plugin-clickhouse"
-repository = "spelaion-dev/spelaiondb-plugin-clickhouse"
+name = "spelaiondb-plugin-redis"
+repository = "spelaion-dev/spelaiondb-plugin-redis"
 version = "0.1.0"
-protocol = "1.0"
-engines = ["clickhouse"]
+protocol = "1.1"
+engines = ["redis"]
 min_app = "0.10.0"
 
 [plugin.platform.aarch64-apple-darwin]
-archive = "spelaiondb-plugin-clickhouse-0.1.0-aarch64-apple-darwin.tar.gz"
-archive_sha256 = "2d33a4332457b5abe68b2611198dd5d71a979fcd3d1c257b4ef3e0d70e2026e0"
-archive_size = 2208187
-program_sha256 = "10df14134fa5b9eca26010e1f649d9e212cb0260a438ac9f7e9c1340ceb7a89f"
+archive = "spelaiondb-plugin-redis-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "fbf55d3430d99648d9bc63dec2e754945c40735ee8fdb2492e142d16667a6696"
+archive_size = 1836139
+program_sha256 = "3cd5e4e7e4b7fcb711952cea5cd47d74665c14db53c1a08f2b3dd94db36da329"
 
 [plugin.platform.x86_64-apple-darwin]
-archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-apple-darwin.tar.gz"
-archive_sha256 = "9f3d72e2dc1ab7bb4964bc48bea635d1c344a06ebac7dc0933767b809e7d3444"
-archive_size = 2366798
-program_sha256 = "5bb3cff30acbe072abb3bb57784e7946e3466c389117638c9420fd3eb9cbe716"
+archive = "spelaiondb-plugin-redis-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "e12078360876c2186a7bac389897e9daec00431de7f1e33c489db6711c6fc4db"
+archive_size = 1963291
+program_sha256 = "a3da67b90a0ec3604cadd655e1a5d5c3abbec747167243cc73eedb86a5553dec"
 
 [plugin.platform.x86_64-pc-windows-msvc]
-archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-pc-windows-msvc.tar.gz"
-archive_sha256 = "1d4f6831dbbeb4f2cc5b8bcf8de0f87d2346a9a8fb22f7aa78f9d3b9b6481795"
-archive_size = 2334080
-program_sha256 = "7e8f7334bc352f18009402fa559e0348f3423f65734e2cd57b6bdfa79c4de35b"
+archive = "spelaiondb-plugin-redis-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "56bf855d8f4f72c8b5d1f7775afa2f281a384817f49ed5bf19f13799c7a10ccb"
+archive_size = 1944765
+program_sha256 = "52ca139bcddbbea4953e0e6ca71b65a63b0c21f4af294109bd17eba5eac29df0"
 
 [plugin.platform.x86_64-unknown-linux-gnu]
-archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
-archive_sha256 = "428b7477d4728c60c95ae7f5f44a9e6f9918b18c3fa5920ae27386a524982e20"
-archive_size = 2614187
-program_sha256 = "78608a52ae7ddd3a043b4a6008de4af1a18c01e55a8681cd23b436c30b929244"
+archive = "spelaiondb-plugin-redis-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "5e775ebf41cd7845fb510f5aad7a27551e2d7cc925c267c1a6b6a92dea1b246c"
+archive_size = 2199102
+program_sha256 = "6c3025485556ed0ed164e4d3102556e8dfb6efedf7c73e4971492b42b083c2f0"

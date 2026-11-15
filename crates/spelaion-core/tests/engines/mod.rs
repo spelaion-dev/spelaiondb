@@ -47,10 +47,6 @@ pub fn duckdb() -> Arc<dyn Driver> {
     driver(Engine::Duckdb)
 }
 
-pub fn clickhouse() -> Arc<dyn Driver> {
-    driver(Engine::Clickhouse)
-}
-
 /// Creates the empty database file of an embedded engine. The file must not exist.
 pub async fn create_database(engine: Engine, path: &Path) {
     spelaion_core::create_file_database(engine, path)
