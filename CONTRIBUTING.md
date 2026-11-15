@@ -5,7 +5,7 @@ Thanks for wanting to help. Bug reports, ideas and pull requests are all welcome
 ## Before you start
 - **Read [`AGENTS.md`](AGENTS.md).** It holds the project's rules: where each piece lives, what
   must never happen (secrets in logs or files, security decided outside the core, a changed SSH
-  key accepted with one click…) and what "done" means. It is written for AI coding agents,
+  key accepted with one clickâ€¦) and what "done" means. It is written for AI coding agents,
   which write most of this code, and it applies to people just the same.
 - **Decisions live in [`docs/adr/`](docs/adr/README.md).** If a change contradicts an ADR,
   propose a new ADR that supersedes it instead of working around it.
@@ -42,15 +42,19 @@ docker compose -f testing/docker/compose.yaml up -d --build --wait
 ```
 
 ```bash
-SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433 SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080 SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521 SPELAION_TEST_LIBSQL=127.0.0.1:18095 SPELAION_TEST_NEO4J=127.0.0.1:17474 SPELAION_TEST_DATABEND=127.0.0.1:18320 SPELAION_TEST_SPANNER=127.0.0.1:19021 SPELAION_TEST_GIZMOSQL=127.0.0.1:31337 SPELAION_TEST_HIVE=127.0.0.1:11010 SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_MONGO=127.0.0.1:27017 SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142 SPELAION_TEST_TDENGINE=127.0.0.1:16141 SPELAION_TEST_INFLUXDB=127.0.0.1:18181 cargo test --workspace
+SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433 SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080 SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521 SPELAION_TEST_LIBSQL=127.0.0.1:18095 SPELAION_TEST_NEO4J=127.0.0.1:17474 SPELAION_TEST_DATABEND=127.0.0.1:18320 SPELAION_TEST_SPANNER=127.0.0.1:19021 SPELAION_TEST_GIZMOSQL=127.0.0.1:31337 SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_MONGO=127.0.0.1:27017 SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142 SPELAION_TEST_TDENGINE=127.0.0.1:16141 SPELAION_TEST_INFLUXDB=127.0.0.1:18181 cargo test --workspace
 ```
+
+Hive runs in a separate phase to leave memory for the compiler. After the default workspace
+tests, follow the isolated Hive phase in [the test environment](testing/docker/README.md#ci-memory-budget);
+the workspace pass alone does not test Hive.
 
 - If dependencies change: `cargo deny check`.
 - If the desktop app changes: `npm run build` in `apps/desktop` with no type errors and, if the
   UI changes, the smoke test (`node e2e/smoke.mjs` on Windows, `node e2e/smoke-linux.mjs` on
   Linux, after building the app and the CLI as [below](#release-build-the-app-and-the-cli); see
   [The smoke test](#the-smoke-test)).
-- If something could not be tested (an OS you do not have, Pageant…), say so in the pull
+- If something could not be tested (an OS you do not have, Pageantâ€¦), say so in the pull
   request.
 
 ### Memory and jobs

@@ -2,7 +2,7 @@
 # Capture this immediately when startup fails: compilation may still be running, and
 # docker stats omits the container the kernel already killed. State includes OOMKilled.
 set -u
-compose=(docker compose -f testing/docker/compose.yaml)
+compose=(docker compose -f testing/docker/compose.yaml --profile '*')
 echo '::group::Test service memory and health'
 free -m || true
 docker stats --no-stream --all || true

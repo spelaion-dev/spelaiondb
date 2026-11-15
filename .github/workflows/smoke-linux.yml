@@ -73,9 +73,10 @@ jobs:
       # The database servers and the bastions, as in ci.yml's Linux job (no Kubernetes here).
       - name: Start the test services in the background
         run: |
+          export COMPOSE_PROFILES=
           bash testing/docker/gen-keys.sh
           python3 testing/docker/check-memory-test.py
-          docker compose -f testing/docker/compose.yaml config --format json \
+          docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
             | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')"
           (
             status=failed
