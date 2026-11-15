@@ -101,7 +101,8 @@ impl ToolFamily {
             | Engine::Clickhouse
             | Engine::Redis
             | Engine::Trino
-            | Engine::Presto => None,
+            | Engine::Presto
+            | Engine::Oracle => None,
         }
     }
 
@@ -136,7 +137,8 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Clickhouse
         | Engine::Redis
         | Engine::Trino
-        | Engine::Presto => None,
+        | Engine::Presto
+        | Engine::Oracle => None,
     }
 }
 

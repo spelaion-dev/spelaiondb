@@ -111,7 +111,15 @@ mod tests {
 
     #[test]
     fn an_unknown_engine_has_no_dialect() {
-        for engine in ["", "oracle", "Postgres", "postgres ", "mysql;", "sqlite\0"] {
+        for engine in [
+            "",
+            "snowflake",
+            "Oracle",
+            "Postgres",
+            "postgres ",
+            "mysql;",
+            "sqlite\0",
+        ] {
             assert!(for_engine(engine).is_none(), "{engine:?}");
         }
     }

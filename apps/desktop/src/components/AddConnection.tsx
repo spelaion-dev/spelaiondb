@@ -356,6 +356,7 @@ const SETUP_EXAMPLES: Record<string, string> = {
   duckdb: "SET TimeZone = 'UTC';",
   clickhouse: "SET session_timezone = 'UTC';\nSET max_execution_time = 60;",
   trino: "SET SESSION query_max_run_time = '10m';",
+  oracle: "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS';",
   presto: "SET SESSION query_max_run_time = '10m';",
   sqlite: "PRAGMA foreign_keys = ON;",
 };
@@ -608,6 +609,8 @@ function ConnectionForm(props: {
     ...(engine.sql
       ? {}
       : { readOnly: false, mcpExposed: false, mcpWrites: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }),
+    // Neither is offered where the core has no read barrier (Oracle, ADR-059).
+    ...(engine.readBarrier ? {} : { readOnly: false, mcpExposed: false, mcpWrites: false }),
   };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.running;
@@ -850,8 +853,8 @@ function ConnectionForm(props: {
                     />
                   </Field>
                 </div>
-                <Field label={t("fields.database")}>
-                  <input type="text" value={draft.database} onChange={(e) => update({ database: e.target.value })} />
+                <Field label={engine.id === "oracle" ? t("fields.serviceName") : t("fields.database")}>
+                  <input type="text" value={draft.database} placeholder={engine.id === "oracle" ? "FREEPDB1" : ""} onChange={(e) => update({ database: e.target.value })} />
                 </Field>
                 {useKubernetes && <p className="muted small">{t("kubernetes.mainHint")}</p>}
               </fieldset>
@@ -1296,7 +1299,7 @@ function ConnectionForm(props: {
             </Field>
             <p className="muted small">{t("fields.statementTimeoutHint")}</p>
           </fieldset>
-          {engine.sql ? <fieldset>
+          {engine.readBarrier ? <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">
               <input type="checkbox" checked={draft.readOnly || fileFolder} disabled={fileFolder} onChange={(e) => update({ readOnly: e.target.checked })} />
@@ -1326,7 +1329,7 @@ function ConnectionForm(props: {
             <fieldset>
               <legend>{t("sections.safety")}</legend>
               {/* ADR-056: neither has a barrier on this engine yet, so neither is offered. */}
-              <p className="muted small">{t("fields.noSqlSafety")}</p>
+              <p className="muted small">{engine.sql ? t("fields.noBarrierSafety") : t("fields.noSqlSafety")}</p>
             </fieldset>
           )}
           <fieldset>

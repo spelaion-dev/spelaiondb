@@ -256,7 +256,7 @@ fn broken_files_are_reported_with_position_and_do_not_hide_others() {
     );
     fx.write(
         "repo/.spelaion/connections/engine.toml",
-        "schema_version = 1\nengine = \"oracle\"\n",
+        "schema_version = 1\nengine = \"snowflake\"\n",
     );
 
     let config = load(Some(&fx.repo()), &fx.user());
@@ -278,7 +278,7 @@ fn broken_files_are_reported_with_position_and_do_not_hide_others() {
             .message
             .contains("database, user")
     );
-    assert!(problem("engine.toml").message.contains("oracle"));
+    assert!(problem("engine.toml").message.contains("snowflake"));
 }
 
 #[test]

@@ -169,6 +169,8 @@ pub enum Engine {
     // Trino and Presto, one plugin for both (the same protocol).
     Trino,
     Presto,
+    /// Oracle Database, served only by its plugin, on Oracle's thin driver (ADR-059).
+    Oracle,
 }
 
 impl Engine {
@@ -185,6 +187,7 @@ impl Engine {
             Engine::Redis => "redis",
             Engine::Trino => "trino",
             Engine::Presto => "presto",
+            Engine::Oracle => "oracle",
         }
     }
 
@@ -200,7 +203,8 @@ impl Engine {
             | Engine::Sqlserver
             | Engine::Clickhouse
             | Engine::Trino
-            | Engine::Presto => true,
+            | Engine::Presto
+            | Engine::Oracle => true,
             Engine::Mongodb | Engine::Redis => false,
         }
     }
@@ -217,7 +221,8 @@ impl Engine {
             | Engine::Clickhouse
             | Engine::Redis
             | Engine::Trino
-            | Engine::Presto => false,
+            | Engine::Presto
+            | Engine::Oracle => false,
         }
     }
 
@@ -232,6 +237,8 @@ impl Engine {
             Engine::Clickhouse => Some(8123),
             Engine::Redis => Some(6379),
             Engine::Trino | Engine::Presto => Some(8080),
+            // The listener; TCPS is often on 2484.
+            Engine::Oracle => Some(1521),
         }
     }
 }
@@ -370,7 +377,7 @@ impl IsolationLevel {
             // has no session isolation level.
             Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis => false,
             // ClickHouse has no transactions to isolate; Trino and Presto set none per session.
-            Engine::Clickhouse | Engine::Trino | Engine::Presto => false,
+            Engine::Clickhouse | Engine::Trino | Engine::Presto | Engine::Oracle => false,
         }
     }
 
@@ -390,7 +397,8 @@ impl Engine {
             | Engine::Clickhouse
             | Engine::Redis
             | Engine::Trino
-            | Engine::Presto => false,
+            | Engine::Presto
+            | Engine::Oracle => false,
         }
     }
 }

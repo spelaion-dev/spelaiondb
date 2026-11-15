@@ -130,7 +130,8 @@ impl ExplainPolicy {
                 | Engine::Clickhouse
                 | Engine::Redis
                 | Engine::Trino
-                | Engine::Presto => None,
+                | Engine::Presto
+                | Engine::Oracle => None,
             },
         }
     }

@@ -20,6 +20,12 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
   Trino on `127.0.0.1:18080` and Presto on `127.0.0.1:18081`, for tests without SSH
   (`SPELAION_TEST_CLICKHOUSE`, `SPELAION_TEST_TRINO`, `SPELAION_TEST_PRESTO`; behind the
   bastions they are `clickhouse:8123`, `trino:8080` and `presto:8080`).
+- Oracle Database Free (Oracle's lite image, about 2 GB; a minute or two to start the first
+  time) is on `127.0.0.1:11521` (`SPELAION_TEST_ORACLE`; behind the bastions `oracle:1521`):
+  user and password `spelaion`, service `FREEPDB1`, made by `oracle/startup` on every start.
+  Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
+  `127.0.0.1:12484` and `oracle-tls:2484`, with a certificate for `localhost` and
+  `oracle-tls` signed by `keys/ca.crt` (`gen-keys.sh`).
 - SQL Server (Developer edition, Microsoft's image `mcr.microsoft.com/mssql/server:2022-latest`,
   about 1.5 GB): user `sa`, password `Spelaion-test-1`; the tests create the `spelaion`
   database. It encrypts with its own self-signed certificate.

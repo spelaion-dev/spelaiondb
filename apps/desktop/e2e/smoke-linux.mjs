@@ -75,6 +75,9 @@ const personal = {
   "clickhouse.toml": `schema_version = 1\nname = "ClickHouse through the tunnel"\nengine = "clickhouse"\nhost = "clickhouse"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
   // Trino (one plugin with Presto) behind the same bastions: no password over plain HTTP.
   "trino.toml": `schema_version = 1\nname = "Trino through the tunnel"\nengine = "trino"\nhost = "trino"\ndatabase = "tpch.tiny"\nuser = "spelaion"\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // Oracle, only a plugin (ADR-059), behind the same two bastions: its listener, without TLS
+  // (TLS through the bastions is tested in tests/oracle.rs).
+  "oracle.toml": `schema_version = 1\nname = "Oracle through the tunnel"\nengine = "oracle"\nhost = "oracle"\ndatabase = "FREEPDB1"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
 };
 for (const [file, text] of Object.entries(personal)) writeFileSync(join(userDir, "connections", file), text);
 
@@ -369,6 +372,15 @@ try {
     await run();
     await statusline("1 row");
     await shot("10c-trino-tunnel");
+  });
+
+  await step("Oracle (a plugin only) behind the same two bastions", async () => {
+    // The hosts were trusted by an earlier step: no fingerprint is asked again.
+    await newQuery("Oracle through the tunnel", "select user as who, 'ñandú' as t, date '2024-02-29' as d from dual;");
+    await run();
+    await password("Oracle through the tunnel", "spelaion");
+    await statusline("1 row");
+    await shot("10d-oracle-tunnel");
   });
 
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {

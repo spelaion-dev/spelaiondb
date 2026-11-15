@@ -17,7 +17,7 @@ use spelaion_driver_api::{Dialect, RequestClass, StatementSpan};
 use sqlparser::ast::{Statement, visit_statements};
 use sqlparser::dialect::{
     ClickHouseDialect, Dialect as SqlDialect, DuckDbDialect, GenericDialect, MsSqlDialect,
-    MySqlDialect, PostgreSqlDialect, SQLiteDialect,
+    MySqlDialect, OracleDialect, PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -365,6 +365,7 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
         };
         return match engine {
             "sqlserver" => by_first_word.or_else(|| tsql_unparsed_risk(sql)),
+            "oracle" => by_first_word.or_else(|| oracle_unparsed_risk(sql)),
             _ => by_first_word,
         };
     };
@@ -409,6 +410,32 @@ fn tsql_unparsed_risk(sql: &str) -> Option<Risk> {
             .find_map(|statement| destructive("sqlserver", statement));
     }
     risky_words(&tokens)
+}
+
+/// The risk of an Oracle statement sqlparser cannot read, which is how a PL/SQL block reads
+/// (ADR-059). Defining a procedure, function, package, trigger or type runs nothing: it asks
+/// nothing. An anonymous block (`DECLARE`, `BEGIN`) runs what it holds: a `DROP`, `TRUNCATE`,
+/// `DELETE` or `UPDATE` word in it asks (its `WHERE` could not be checked), and so does dynamic
+/// SQL (`EXECUTE IMMEDIATE`, `DBMS_SQL`), whose statement is a string the guard cannot read. An
+/// anonymous block the tokenizer cannot read either asks too, rather than nothing.
+fn oracle_unparsed_risk(sql: &str) -> Option<Risk> {
+    if !spelaion_dialect::oracle::is_plsql(sql, 0) {
+        return None;
+    }
+    let first = first_word(sql);
+    if !matches!(first.as_str(), "declare" | "begin") {
+        // A unit's definition, or a query with `WITH FUNCTION`: nothing runs as it is made.
+        return None;
+    }
+    let Ok(tokens) = Tokenizer::new(&OracleDialect {}, sql).tokenize() else {
+        return Some(Risk::UncheckedWrite);
+    };
+    let words: Vec<String> = tokens.iter().filter_map(plain_word).collect();
+    let dynamic = words
+        .windows(2)
+        .any(|w| w[0] == "execute" && w[1] == "immediate")
+        || words.iter().any(|w| w == "dbms_sql");
+    risky_words(&tokens).or(dynamic.then_some(Risk::UncheckedWrite))
 }
 
 /// The risk of a ClickHouse `ALTER TABLE`, which is also how it changes rows and wipes data:
@@ -560,6 +587,7 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
         "duckdb" => Box::new(DuckDbDialect {}),
         "sqlserver" => Box::new(MsSqlDialect {}),
         "clickhouse" => Box::new(ClickHouseDialect {}),
+        "oracle" => Box::new(OracleDialect {}),
         _ => Box::new(GenericDialect {}),
     }
 }
@@ -967,5 +995,41 @@ mod tests {
         // A name or a string that says drop is not a DROP.
         assert_eq!(ch("alter table t comment column `drop` 'drop it'"), None);
         assert_eq!(ch("select 1"), None);
+    }
+
+    /// Oracle (ADR-059): what sqlparser reads is checked as for every engine; a PL/SQL block
+    /// it cannot read asks when it holds a risky word or dynamic SQL, and defining a unit asks
+    /// nothing, since nothing runs then.
+    #[test]
+    fn oracle_blocks_ask_for_what_they_run() {
+        let ora = |sql: &str| destructive("oracle", sql);
+        assert_eq!(ora("delete from t"), Some(Risk::DeleteAll));
+        assert_eq!(ora("update t set a = 1"), Some(Risk::UpdateAll));
+        assert_eq!(ora("truncate table t"), Some(Risk::Truncate));
+        assert_eq!(ora("drop table t purge"), Some(Risk::Drop));
+        assert_eq!(ora("delete from t where id = 1"), None);
+        assert_eq!(ora("select * from t"), None);
+        assert_eq!(
+            ora("begin delete from t; end;"),
+            Some(Risk::UncheckedWrite),
+            "a DELETE in a block"
+        );
+        assert!(ora("declare n number; begin update t set a = 1; end;").is_some());
+        assert_eq!(
+            ora("begin execute immediate 'dr' || 'op table t'; end;"),
+            Some(Risk::UncheckedWrite),
+            "dynamic SQL cannot be read"
+        );
+        assert_eq!(
+            ora("declare c integer := dbms_sql.open_cursor; begin null; end;"),
+            Some(Risk::UncheckedWrite)
+        );
+        assert_eq!(ora("begin dbms_output.put_line('drop it'); end;"), None);
+        assert_eq!(ora("begin null; end;"), None);
+        // Defining a unit runs nothing.
+        assert_eq!(
+            ora("create or replace procedure p as begin delete from t; end;"),
+            None
+        );
     }
 }

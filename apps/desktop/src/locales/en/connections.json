@@ -67,6 +67,8 @@
     "readOnly": "Read-only",
     "mcpExposed": "Expose to AI agents",
     "mcpHint": "Agents using spelaiondb mcp can only read, and every query is audited.",
+    "serviceName": "Service name",
+    "noBarrierSafety": "Read-only mode and agents are not available for this engine yet: SpelaionDB has no safeguard for them on it. The guard still asks before risky statements.",
     "noSqlSafety": "Read-only mode and agents are not available for this engine yet: SpelaionDB has no safeguard for them on it. The guard still asks before dropping or emptying a collection.",
     "mcpAccess": "Agents can",
     "mcpRead": "Only read",

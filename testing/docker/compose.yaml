@@ -6,13 +6,15 @@
 #                                                                          sqlserver:1433
 #                                                                          clickhouse:8123
 #                                                                          trino:8080, presto:8080
+#                                                                          oracle:1521
+#                                                                          oracle-tls:2484
 #
 #   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
 #
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307, SQL
-# Server on 11433, ClickHouse on 18123, Trino on 18080 and Presto on 18081, for tests without
-# SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# Server on 11433, ClickHouse on 18123, Trino on 18080, Presto on 18081 and Oracle on 11521
+# (TCPS on 12484), for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
@@ -229,6 +231,41 @@ services:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/info | grep -q '\"starting\":false'"]
       interval: 3s
       retries: 80
+    networks: [data, direct]
+
+  # Oracle Database Free (the lite image), served only by its plugin (ADR-059). Its listener is
+  # published on 127.0.0.1:11521; through the tunnels it is oracle:1521. User and password
+  # `spelaion`, service FREEPDB1 (`oracle/startup` makes the user on every start).
+  oracle:
+    image: container-registry.oracle.com/database/free:latest-lite
+    environment:
+      ORACLE_PWD: spelaion-test-Pw1
+    ports:
+      - "127.0.0.1:11521:1521"
+    volumes:
+      - ./oracle/startup:/opt/oracle/scripts/startup:ro
+    healthcheck:
+      test: ["CMD", "/opt/oracle/checkDBStatus.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 60s
+    networks: [data, direct]
+
+  # Oracle's TCPS: the lite image has no `orapki` to set TLS up in the database, so a TLS proxy
+  # in front of its listener carries the TCPS session (certificate `keys/oracle.pem`, for
+  # "localhost" and "oracle-tls"). Published on 127.0.0.1:12484; through the tunnels it is
+  # oracle-tls:2484.
+  oracle-tls:
+    image: haproxy:3.2-alpine
+    depends_on:
+      oracle:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:12484:2484"
+    volumes:
+      - ./oracle/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./keys/oracle.pem:/usr/local/etc/haproxy/server.pem:ro
     networks: [data, direct]
 
 networks:
