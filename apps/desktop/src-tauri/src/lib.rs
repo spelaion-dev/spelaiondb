@@ -4324,12 +4324,11 @@ async fn browse_statement(
     comment: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<Option<String>> {
-    // Only the kinds of engines whose language is not SQL are browsed this way.
-    let kind = match kind.as_str() {
-        "collection" => spelaion_driver_api::ObjectKind::Collection,
-        "node_label" => spelaion_driver_api::ObjectKind::NodeLabel,
-        "relationship_type" => spelaion_driver_api::ObjectKind::RelationshipType,
-        _ => return Ok(None),
+    // The dialect decides: an engine queried with SQL browses nothing this way (its objects
+    // open in a table data tab), one whose language is not SQL browses any of its objects (CQL's
+    // tables too).
+    let Some(kind) = dto::object_kind_named(&kind) else {
+        return Err(format!("unknown kind of object: {kind}"));
     };
     let object = spelaion_driver_api::ObjectInfo {
         schema,

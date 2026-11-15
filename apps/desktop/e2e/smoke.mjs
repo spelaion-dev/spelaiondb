@@ -5943,6 +5943,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("Name", { exact: true }).fill("Cassandra (Docker)");
   await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
   await wizard.getByLabel("Port", { exact: true }).fill("19142");
+  // The test Cassandra has no login: no password to store or ask for.
+  await wizard.getByLabel("Method", { exact: true }).selectOption("none");
   assert.equal(await wizard.getByRole("tab", { name: "Session" }).count(), 0);
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByText(/^Read-only mode and agents are not available for this engine yet/).waitFor();
@@ -5954,12 +5956,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.match(readFileSync(join(userDir, "connections", "cassandra-docker.toml"), "utf8"), /engine = "cassandra"/);
   // A batch is one statement: its semicolons stay inside it.
   panel = await newQuery("Cassandra (Docker)", [
-    "CREATE KEYSPACE IF NOT EXISTS spelaion_smoke WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};",
-    "CREATE TABLE IF NOT EXISTS spelaion_smoke.people (id int PRIMARY KEY, name text);",
+    "CREATE KEYSPACE IF NOT EXISTS spelaion_cql_smoke WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};",
+    "CREATE TABLE IF NOT EXISTS spelaion_cql_smoke.people (id int PRIMARY KEY, name text);",
     "BEGIN BATCH",
-    "  INSERT INTO spelaion_smoke.people (id, name) VALUES (1, 'Ana; María');",
+    "  INSERT INTO spelaion_cql_smoke.people (id, name) VALUES (1, 'Ana; María');",
     "APPLY BATCH;",
-    "SELECT name FROM spelaion_smoke.people WHERE id = 1;",
+    "SELECT name FROM spelaion_cql_smoke.people WHERE id = 1;",
   ].join("\n"));
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
@@ -5969,15 +5971,15 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await run(panel);
   await panel.getByText(/choose the keyspace above the editor/).first().waitFor();
   // The guard reads CQL with its own lists.
-  await replaceQuery(panel, "TRUNCATE spelaion_smoke.people;");
+  await replaceQuery(panel, "TRUNCATE spelaion_cql_smoke.people;");
   await run(panel);
   risk = page.getByRole("dialog", { name: "Run these statements?" });
-  assert.equal(await risk.locator(".risk-list pre").innerText(), "TRUNCATE spelaion_smoke.people");
+  assert.equal(await risk.locator(".risk-list pre").innerText(), "TRUNCATE spelaion_cql_smoke.people");
   await page.keyboard.press("Enter");
   await risk.waitFor({ state: "detached" });
   // A table opens with the core's bounded statement, not the table data tab.
   await page.locator('.connection-row:has-text("Cassandra (Docker)") .twisty').click();
-  const cassandraSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion_smoke", exact: true });
+  const cassandraSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion_cql_smoke", exact: true });
   if ((await cassandraSchema.getAttribute("aria-expanded")) !== "true") await cassandraSchema.click();
   const cassandraTables = cassandraSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Tables", exact: true });
   if ((await cassandraTables.getAttribute("aria-expanded")) !== "true") await cassandraTables.click();
@@ -5985,7 +5987,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await cassandraSchema.locator("xpath=..").locator(".leaf-row", { hasText: /^people/ }).dblclick();
   await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length > count, tabsBeforeTable);
   const tablePanel = page.locator(".tab-panel:not([hidden])");
-  await tablePanel.locator(".cm-content", { hasText: "SELECT * FROM spelaion_smoke.people LIMIT 200" }).waitFor();
+  await tablePanel.locator(".cm-content", { hasText: "SELECT * FROM spelaion_cql_smoke.people LIMIT 200" }).waitFor();
   await tablePanel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await shot("12a7-cassandra");
   // The query ends in a word, which may open the completion list as it is typed: the next
