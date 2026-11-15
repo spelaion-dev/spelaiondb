@@ -144,34 +144,34 @@ program_sha256 = "5c0f34b3af6350cea0530a9f2c29ba5366186685174d386ac70b13ae3fc085
 [[plugin]]
 name = "spelaiondb-plugin-duckdb"
 repository = "spelaion-dev/spelaiondb-plugin-duckdb"
-version = "0.1.0"
+version = "0.1.1"
 protocol = "1.0"
 engines = ["duckdb"]
 min_app = "0.10.0"
 
 [plugin.platform.aarch64-apple-darwin]
-archive = "spelaiondb-plugin-duckdb-0.1.0-aarch64-apple-darwin.tar.gz"
-archive_sha256 = "534cef2e33030f6e04665bf8694913fffa6d2a89c3a2bedc674ffd9803207f40"
-archive_size = 18224339
-program_sha256 = "74e1e72d3049cd0695bb511069e374853313f0d061cb39522dec696aea4a0c9c"
+archive = "spelaiondb-plugin-duckdb-0.1.1-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "b51bead11bb126bc5676e1ad758c18ddaa3e04563176d450459990c88b2597f9"
+archive_size = 19149544
+program_sha256 = "0470ca739a69095ada2742b4ecd9173ea62221855f8731f650bfba3845a38b25"
 
 [plugin.platform.x86_64-apple-darwin]
-archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-apple-darwin.tar.gz"
-archive_sha256 = "2890bb880426dc3da66a0ccd8466b8489ebcb8ff3172cf83179c1afcaa8de31a"
-archive_size = 19760434
-program_sha256 = "948bdf11746cb8611023c05c40f37d72ce17e783b9a42cb16a150d2453764ef2"
+archive = "spelaiondb-plugin-duckdb-0.1.1-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "e252e02dfe830faa5a8d60fa4fbe2cca0825f47dbb7897d2cb38cb1331a903cf"
+archive_size = 20747882
+program_sha256 = "e34c8169fb01a7a3e28803e514183164b4972a3369ec4cc5453e50ed7911d35a"
 
 [plugin.platform.x86_64-pc-windows-msvc]
-archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-pc-windows-msvc.tar.gz"
-archive_sha256 = "a53ced043b60a30dd57eb1134078445d8ad36cc5f74ce583b8a688b9433d17d8"
-archive_size = 15666533
-program_sha256 = "08752f79eba92e017c1672a643de109e37428389d1b574297d66d16d427b4d5d"
+archive = "spelaiondb-plugin-duckdb-0.1.1-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "e888c1cbb987ecc60390dec0b7e793a2ee5ec12086f157a0bd598b6d149121ed"
+archive_size = 16459201
+program_sha256 = "74dd896e700333afe703404456e0fdb73f6c9aad0ca11abb986d354a2dc3fdad"
 
 [plugin.platform.x86_64-unknown-linux-gnu]
-archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
-archive_sha256 = "ea4c3bce168de9e8ea7352856b2cb71cdc17616fcb7407cc710270b2949744e8"
-archive_size = 21548145
-program_sha256 = "db0dca9c90cf922a1a9e6ea06273217a84b28c065601bd810d8452863bdb8a96"
+archive = "spelaiondb-plugin-duckdb-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "4495dcf409723d0ff4cc5a08cba0efeb11351e0af26f47334eaea708c5b90557"
+archive_size = 22659000
+program_sha256 = "b49bb2af7677219af78ffd4fef32f9a768d8a7e487ed08c33cec2f690835a702"
 
 [[plugin]]
 name = "spelaiondb-plugin-mongodb"
