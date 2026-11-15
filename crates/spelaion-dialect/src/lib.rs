@@ -18,6 +18,7 @@ pub mod cql;
 pub mod duckdb;
 pub mod mongodb;
 pub mod mysql;
+pub mod neo4j;
 pub mod oracle;
 pub mod postgres;
 pub mod redis;
@@ -31,6 +32,7 @@ pub use cql::CqlDialect;
 pub use duckdb::DuckdbDialect;
 pub use mongodb::MongodbDialect;
 pub use mysql::MysqlDialect;
+pub use neo4j::Neo4jDialect;
 pub use oracle::OracleDialect;
 pub use postgres::PostgresDialect;
 pub use redis::RedisDialect;
@@ -58,6 +60,8 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         // One dialect for both: Presto is where Trino came from, and their grammar is one.
         "trino" | "presto" => Some(Arc::new(TrinoDialect)),
         "oracle" => Some(Arc::new(OracleDialect)),
+        // Cypher, read by the core (ADR-056).
+        "neo4j" => Some(Arc::new(Neo4jDialect)),
         // libSQL's server reads SQL as SQLite does (ADR-058).
         "libsql" => Some(Arc::new(SqliteDialect)),
         // Shaped like SQL, but its own: sent as text, read here (ADR-056).
@@ -93,6 +97,7 @@ mod tests {
             ("flightsql", "flightsql"),
             ("dremio", "dremio"),
             ("gizmosql", "gizmosql"),
+            ("neo4j", "neo4j"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");
