@@ -13,6 +13,7 @@
 //! tested.
 
 mod engines;
+mod support;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,6 +49,7 @@ struct Server {
     family: ServerFamily,
     /// What a table of its needs after its columns.
     table_options: &'static str,
+    database: Option<&'static str>,
 }
 
 const TIDB: Server = Server {
@@ -56,6 +58,7 @@ const TIDB: Server = Server {
     password: None,
     family: ServerFamily::TiDb,
     table_options: "",
+    database: None,
 };
 const OCEANBASE: Server = Server {
     label: "OceanBase",
@@ -63,6 +66,7 @@ const OCEANBASE: Server = Server {
     password: None,
     family: ServerFamily::OceanBase,
     table_options: "",
+    database: None,
 };
 const SINGLESTORE: Server = Server {
     label: "SingleStore",
@@ -70,6 +74,7 @@ const SINGLESTORE: Server = Server {
     password: Some("spelaion"),
     family: ServerFamily::SingleStore,
     table_options: "",
+    database: None,
 };
 // StarRocks says it is MySQL: only reading its session back tells it apart.
 const STARROCKS: Server = Server {
@@ -78,6 +83,16 @@ const STARROCKS: Server = Server {
     password: None,
     family: ServerFamily::MySql,
     table_options: " properties ('replication_num' = '1')",
+    database: None,
+};
+
+const GREPTIME: Server = Server {
+    label: "GreptimeDB",
+    var: "SPELAION_TEST_GREPTIME_MYSQL",
+    password: None,
+    family: ServerFamily::GreptimeDb,
+    table_options: "",
+    database: Some("public"),
 };
 
 /// The servers that connect and browse through the MySQL plugin.
@@ -104,9 +119,12 @@ impl Server {
             Some(_) => "password = { secret = \"prompt\" }\n",
             None => "",
         };
+        let database = self
+            .database
+            .map_or(String::new(), |name| format!("database = \"{name}\"\n"));
         Some(format!(
             "schema_version = 1\nengine = \"mysql\"\nhost = \"{host}\"\nport = {port}\n\
-             user = \"root\"\n{password}tls = {{ mode = \"disable\" }}\nread_only = {read_only}\n"
+             user = \"root\"\n{password}{database}tls = {{ mode = \"disable\" }}\nread_only = {read_only}\n"
         ))
     }
 }
@@ -421,7 +439,7 @@ async fn oceanbase_keeps_reads_from_writing() {
 /// refused because its session stays writable.
 #[tokio::test]
 async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
-    for server in [&TIDB, &SINGLESTORE] {
+    for server in [&TIDB, &SINGLESTORE, &GREPTIME] {
         let ws = Workspace::new();
         let Some(read_only) = ws.open(server, true, false).await else {
             continue;
@@ -494,4 +512,69 @@ async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
         assert!(export(&open, "select 1").await.is_err());
         open.close().await;
     }
+}
+
+/// The transaction's spelling is accepted, but a write reaches disk and rollback does not
+/// undo it. Protected reads must be refused by the core even on an ordinary writable tab.
+#[tokio::test]
+async fn greptime_read_only_transaction_does_not_stop_writes() {
+    let ws = Workspace::new();
+    let Some(open) = ws.open(&GREPTIME, false, false).await else {
+        return;
+    };
+    let open = open.unwrap();
+    let table = unique("sdb_greptime_barrier");
+    run(
+        &open,
+        &format!("create table public.{table} (ts timestamp time index, reading double)"),
+    )
+    .await
+    .unwrap();
+    let rows = support::cleaning_up(
+        async {
+            assert!(
+                engine_error(&open, "start transaction read only")
+                    .await
+                    .is_none()
+            );
+            assert!(
+                engine_error(
+                    &open,
+                    &format!("insert into public.{table} values ('2026-11-15 00:00:00', 1.5)")
+                )
+                .await
+                .is_none()
+            );
+            assert!(engine_error(&open, "rollback").await.is_none());
+            let mut events = open
+                .session
+                .connection()
+                .execute(
+                    &format!("select * from public.{table}"),
+                    &ExecOptions::default(),
+                )
+                .await
+                .unwrap();
+            let mut rows = 0;
+            while let Some(event) = events.next().await {
+                if let ExecEvent::Batch(batch) = event.unwrap() {
+                    rows += batch.num_rows();
+                }
+            }
+            rows
+        },
+        |panicked| {
+            let session = &open.session;
+            let drop_table = format!("drop table if exists public.{table}");
+            async move {
+                support::run_cleanup("GreptimeDB", session, &[drop_table], panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
+    assert_eq!(
+        rows, 1,
+        "GreptimeDB unexpectedly enforced its transaction barrier"
+    );
 }

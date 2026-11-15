@@ -11,10 +11,11 @@
 //! tested.
 
 mod engines;
+mod support;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -90,6 +91,14 @@ const CRATEDB: Server = Server {
     database: "doc",
     family: ServerFamily::CrateDb,
 };
+
+static GREPTIME: LazyLock<Server> = LazyLock::new(|| Server {
+    label: "GreptimeDB",
+    var: "SPELAION_TEST_GREPTIME_PG",
+    user: "root",
+    database: "public",
+    family: ServerFamily::Unchecked("GreptimeDB".into()),
+});
 
 /// The servers whose barriers are PostgreSQL's.
 const CHECKED: [&Server; 3] = [&COCKROACH, &YUGABYTE, &TIMESCALE];
@@ -465,7 +474,7 @@ async fn checked_servers_follow_transactions_and_cancel() {
 /// only what it enforces.
 #[tokio::test]
 async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
-    for server in [&RISINGWAVE, &MATERIALIZE, &CRATEDB] {
+    for server in [&RISINGWAVE, &MATERIALIZE, &CRATEDB, &GREPTIME] {
         let (Some(writable), Some(read_only)) = (server.file(false), server.file(true)) else {
             continue;
         };
@@ -545,4 +554,63 @@ async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
             (Ok(_), false) => panic!("{label}: a session that only reads opened"),
         }
     }
+}
+
+#[tokio::test]
+async fn greptime_read_only_transaction_does_not_stop_writes() {
+    let Some(file) = GREPTIME.file(false) else {
+        return;
+    };
+    let ws = Workspace::new();
+    let open = ws.open(&file, false).await.unwrap();
+    let table = unique("sdb_greptime_barrier");
+    run(
+        &open,
+        &format!("create table public.{table} (ts timestamp time index, reading double)"),
+    )
+    .await
+    .unwrap();
+    let rows = support::cleaning_up(
+        async {
+            assert!(engine_error(&open, "begin read only").await.is_none());
+            assert!(
+                engine_error(
+                    &open,
+                    &format!("insert into public.{table} values ('2026-11-15 00:00:00', 1.5)")
+                )
+                .await
+                .is_none()
+            );
+            assert!(engine_error(&open, "rollback").await.is_none());
+            let mut events = open
+                .session
+                .connection()
+                .execute(
+                    &format!("select * from public.{table}"),
+                    &ExecOptions::default(),
+                )
+                .await
+                .unwrap();
+            let mut rows = 0;
+            while let Some(event) = events.next().await {
+                if let ExecEvent::Batch(batch) = event.unwrap() {
+                    rows += batch.num_rows();
+                }
+            }
+            rows
+        },
+        |panicked| {
+            let session = &open.session;
+            let drop_table = format!("drop table if exists public.{table}");
+            async move {
+                support::run_cleanup("GreptimeDB", session, &[drop_table], panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
+    assert_eq!(
+        rows, 1,
+        "GreptimeDB unexpectedly enforced its transaction barrier"
+    );
 }

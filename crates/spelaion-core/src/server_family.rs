@@ -35,7 +35,7 @@ pub enum ServerFamily {
     /// No transactions: `BEGIN` is accepted and ignored, `ROLLBACK` is not even understood
     /// (checked with 6.5).
     CrateDb,
-    /// A PostgreSQL fork whose barriers were not checked here (its name), or a server whose
+    /// A PostgreSQL fork without a verified barrier here (its name), or a server whose
     /// version does not start with PostgreSQL's name.
     Unchecked(String),
     /// MySQL, and what does not name itself as one of the forks below (managed MySQL services,
@@ -53,10 +53,12 @@ pub enum ServerFamily {
     SingleStore,
     /// As SingleStore (checked with 3.0.5).
     Doris,
+    /// GreptimeDB through MySQL's protocol: transactions are accepted but ignored (1.3.1).
+    GreptimeDb,
 }
 
-/// PostgreSQL forks that name themselves in their `version()` and were not checked: their
-/// barriers are not assumed to be PostgreSQL's.
+/// PostgreSQL forks that name themselves in their `version()` without verified barriers:
+/// their barriers are not assumed to be PostgreSQL's.
 const UNCHECKED_FORKS: &[&str] = &[
     "Redshift",
     "Greenplum",
@@ -66,6 +68,7 @@ const UNCHECKED_FORKS: &[&str] = &[
     "openGauss",
     "GaussDB",
     "Kingbase",
+    "GreptimeDB",
 ];
 
 fn contains(text: &str, name: &str) -> bool {
@@ -105,7 +108,9 @@ impl ServerFamily {
 
     /// Reads a MySQL server's `select version(), @@version_comment`.
     pub fn from_mysql_version(version: &str, comment: &str) -> Self {
-        if contains(version, "TiDB") {
+        if contains(version, "GreptimeDB") || contains(comment, "GreptimeDB") {
+            ServerFamily::GreptimeDb
+        } else if contains(version, "TiDB") {
             ServerFamily::TiDb
         } else if contains(version, "OceanBase") {
             ServerFamily::OceanBase
@@ -137,6 +142,7 @@ impl ServerFamily {
             ServerFamily::TiDb => "TiDB",
             ServerFamily::SingleStore => "SingleStore",
             ServerFamily::Doris => "Apache Doris",
+            ServerFamily::GreptimeDb => "GreptimeDB",
         }
     }
 
@@ -147,7 +153,8 @@ impl ServerFamily {
             | ServerFamily::OceanBase
             | ServerFamily::TiDb
             | ServerFamily::SingleStore
-            | ServerFamily::Doris => true,
+            | ServerFamily::Doris
+            | ServerFamily::GreptimeDb => true,
             ServerFamily::PostgreSql
             | ServerFamily::CockroachDb
             | ServerFamily::YugabyteDb
@@ -175,7 +182,8 @@ impl ServerFamily {
             | ServerFamily::Unchecked(_)
             | ServerFamily::TiDb
             | ServerFamily::SingleStore
-            | ServerFamily::Doris => false,
+            | ServerFamily::Doris
+            | ServerFamily::GreptimeDb => false,
         }
     }
 
@@ -195,7 +203,8 @@ impl ServerFamily {
             | ServerFamily::Unchecked(_)
             | ServerFamily::TiDb
             | ServerFamily::SingleStore
-            | ServerFamily::Doris => false,
+            | ServerFamily::Doris
+            | ServerFamily::GreptimeDb => false,
         }
     }
 
@@ -254,9 +263,15 @@ pub(crate) async fn read_family(
             None => ServerFamily::Unchecked(String::new()),
         }),
         "mysql" => {
-            let row = first_row(connection, "select version(), @@version_comment")
-                .await
-                .unwrap_or_default();
+            // Some compatible servers implement version() but not @@version_comment.
+            // Losing both values would mistake GreptimeDB's ignored transactions for MySQL's
+            // barrier, so retain its identity through a version-only probe.
+            let row = match first_row(connection, "select version(), @@version_comment").await {
+                Some(row) => row,
+                None => first_row(connection, "select version()")
+                    .await
+                    .unwrap_or_default(),
+            };
             let column = |i: usize| row.get(i).map_or("", String::as_str);
             Some(ServerFamily::from_mysql_version(column(0), column(1)))
         }
@@ -322,6 +337,86 @@ async fn first_row(connection: &dyn Connection, sql: &str) -> Option<Vec<String>
 #[cfg(test)]
 mod tests {
     use super::ServerFamily::{self, *};
+    use super::*;
+    use spelaion_driver_api::{
+        CancelHandle, Capabilities, ConnectParams, DriverError, EventStream, ObjectInfo,
+        SchemaInfo, TableInfo,
+    };
+    use std::sync::Arc;
+
+    /// A server that implements version() but not MySQL's version_comment variable. The two
+    /// error forms cover a driver failing before the stream and an error arriving on it.
+    struct VersionOnly {
+        inner: Box<dyn Connection>,
+        stream_error: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Connection for VersionOnly {
+        fn capabilities(&self) -> &Capabilities {
+            self.inner.capabilities()
+        }
+        fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
+            self.inner.cancel_handle()
+        }
+        async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream, DriverError> {
+            match sql {
+                "select version(), @@version_comment" => {
+                    let error = DriverError::Other("unknown version_comment".into());
+                    if self.stream_error {
+                        Ok(Box::pin(futures_util::stream::iter([Err(error)])))
+                    } else {
+                        Err(error)
+                    }
+                }
+                "select version()" => {
+                    self.inner
+                        .execute("select '8.4.2-GreptimeDB-1.3.1'", opts)
+                        .await
+                }
+                other => panic!("unexpected identity probe: {other}"),
+            }
+        }
+        async fn server_version(&self) -> Result<String, DriverError> {
+            self.inner.server_version().await
+        }
+        async fn list_schemas(&self) -> Result<Vec<SchemaInfo>, DriverError> {
+            self.inner.list_schemas().await
+        }
+        async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>, DriverError> {
+            self.inner.list_objects(schema).await
+        }
+        async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo, DriverError> {
+            self.inner.describe_table(schema, name).await
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_mysql_version_comment_does_not_grant_greptime_a_barrier() {
+        for stream_error in [false, true] {
+            let inner = crate::open::test_driver(spelaion_config::Engine::Sqlite)
+                .connect(&ConnectParams {
+                    database: ":memory:".into(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let connection = VersionOnly {
+                inner,
+                stream_error,
+            };
+            let family = read_family(&connection, "mysql").await.unwrap();
+            assert_eq!(family, GreptimeDb);
+            assert!(!family.read_only_transactions());
+            assert!(!family.read_only_sessions());
+            assert!(
+                family
+                    .read_only_transactions_refusal()
+                    .unwrap()
+                    .contains("START TRANSACTION READ ONLY")
+            );
+        }
+    }
 
     /// `version()` as each server answered it.
     #[test]
@@ -351,6 +446,14 @@ mod tests {
             (
                 "PostgreSQL 9.5 on x86_64-unknown-linux-gnu (Materialize 26.50.1)",
                 Materialize,
+            ),
+            (
+                "PostgreSQL 16.3 GreptimeDB 1.3.1",
+                Unchecked("GreptimeDB".into()),
+            ),
+            (
+                "PostgreSQL 16.3 greptimedb 1.3.1",
+                Unchecked("GreptimeDB".into()),
             ),
             (
                 "CrateDB 6.5.1 (built 62722e3/NA, Linux 6.6.87.1-microsoft-standard-WSL2 amd64, OpenJDK 64-Bit Server VM 26.0.2.1+1)",
@@ -406,6 +509,8 @@ mod tests {
                 SingleStore,
             ),
             ("5.7.99", "Doris version doris-3.0.5-rc01-e277cfb83f", Doris),
+            ("8.4.2-GreptimeDB-1.3.1", "", GreptimeDb),
+            ("8.4.2", "greptimedb 1.3.1", GreptimeDb),
             // StarRocks does not say what it is: its session mode is read back instead.
             ("8.0.33", "3.4.5-1207fa7", MySql),
             ("", "", MySql),
@@ -435,6 +540,8 @@ mod tests {
             (TiDb, false, false),
             (SingleStore, false, false),
             (Doris, false, false),
+            (GreptimeDb, false, false),
+            (Unchecked("GreptimeDB".into()), false, false),
         ] {
             assert_eq!(family.read_only_transactions(), transactions, "{family:?}");
             assert_eq!(family.read_only_sessions(), sessions, "{family:?}");
