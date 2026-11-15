@@ -441,8 +441,11 @@ services:
   # through the tunnels and the proxies it is databend:8000. TLS is tested in its plugin's
   # repository. Bounded for CI's runners (SDB-345): 1 GB.
   databend:
-    image: datafuselabs/databend:v1.2.881
+    # The readiness shim relies on this image's PATH and /usr/bin/databend-query.
+    image: datafuselabs/databend@sha256:847b20b0cfbadaa8dd87fc5c023db1d07042e9be6231dfc8303e75feefd94bf8
     mem_limit: 1g
+    volumes:
+      - ./databend/databend-query:/usr/local/bin/databend-query:ro
     environment:
       QUERY_DEFAULT_USER: spelaion
       QUERY_DEFAULT_PASSWORD: spelaion-test
