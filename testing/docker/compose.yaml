@@ -25,7 +25,7 @@
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
-# The default phase's limits total 11,776 MiB; Hive runs separately with the bastions.
+# The default phase's limits total 9,344 MiB; Trino/Presto/Hive run separately with bastions.
 # check-memory.py enforces an 11.5 GiB ceiling for each active phase and
 # 4 GB left on the CI host for kind, the compiler/tests and the operating system.
 # Keep engine caches below their container limit: a cgroup cap alone just moves an OOM.
@@ -88,7 +88,7 @@ services:
   # MySQL 8.4 LTS and MariaDB 11.4 LTS with TLS (not required). Like PostgreSQL, the key is
   # copied inside with the owner and permissions the server accepts.
   mysql:
-    mem_limit: 384m
+    mem_limit: 1g
     image: mysql:8.4
     environment:
       MYSQL_ROOT_PASSWORD: spelaion-root
@@ -242,6 +242,7 @@ services:
   # (`memory`, `tpch`…). Published on 127.0.0.1:18080 and 18081; through the tunnels they are
   # trino:8080 and presto:8080. No password: they take one only over TLS.
   trino:
+    profiles: [warehouse]
     mem_limit: 1536m
     image: trinodb/trino:479
     volumes:
@@ -279,7 +280,7 @@ services:
   # user and password). Spark's Thrift server, Kyuubi and Impala are tested in the plugin's own
   # repository. Its JVM is bounded: CI's runner is tight (SDB-345).
   hive:
-    profiles: [hive]
+    profiles: [warehouse]
     image: apache/hive@sha256:5194161ef50b80875f937dff04936df047cbe894e9727ab8f0606349345b1bd3
     environment:
       SERVICE_NAME: hiveserver2
@@ -296,6 +297,7 @@ services:
     networks: [data, direct]
 
   presto:
+    profiles: [warehouse]
     mem_limit: 1536m
     image: prestodb/presto:0.295
     volumes:
