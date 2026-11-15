@@ -178,6 +178,10 @@ pub enum Engine {
     /// CQL, is shaped like SQL but is not SQL: sent as text, read by the core's own lists
     /// (ADR-056).
     Cassandra,
+    // Arrow Flight SQL, one plugin: any server that speaks it, and Dremio and GizmoSQL by name.
+    Flightsql,
+    Dremio,
+    Gizmosql,
 }
 
 impl Engine {
@@ -197,6 +201,9 @@ impl Engine {
             Engine::Oracle => "oracle",
             Engine::Libsql => "libsql",
             Engine::Cassandra => "cassandra",
+            Engine::Flightsql => "flightsql",
+            Engine::Dremio => "dremio",
+            Engine::Gizmosql => "gizmosql",
         }
     }
 
@@ -214,8 +221,37 @@ impl Engine {
             | Engine::Trino
             | Engine::Presto
             | Engine::Oracle
-            | Engine::Libsql => true,
+            | Engine::Libsql
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql => true,
             Engine::Mongodb | Engine::Redis | Engine::Cassandra => false,
+        }
+    }
+
+    /// Whether SpelaionDB has a read barrier of its own for the engine (ADR-020: its dialect,
+    /// and a barrier the engine enforces): only then is there a read-only mode and do agents
+    /// see it. An engine whose language is not SQL has none yet; nor have the Flight SQL ones,
+    /// which may be any server (ADR-041: an engine with no barrier of ours gets neither).
+    pub fn has_read_barrier(self) -> bool {
+        match self {
+            Engine::Postgres
+            | Engine::Sqlite
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Duckdb
+            | Engine::Sqlserver
+            | Engine::Clickhouse
+            | Engine::Trino
+            | Engine::Presto => true,
+            Engine::Mongodb
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Redis
+            | Engine::Cassandra
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql => false,
         }
     }
 
@@ -234,7 +270,10 @@ impl Engine {
             | Engine::Presto
             | Engine::Oracle
             | Engine::Libsql
-            | Engine::Cassandra => false,
+            | Engine::Cassandra
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql => false,
         }
     }
 
@@ -254,6 +293,10 @@ impl Engine {
             // sqld's HTTP port; Turso is HTTPS on 443.
             Engine::Libsql => Some(8080),
             Engine::Cassandra => Some(9042),
+            // A generic Flight SQL server has no usual port.
+            Engine::Flightsql => None,
+            Engine::Dremio => Some(32010),
+            Engine::Gizmosql => Some(31337),
         }
     }
 }
@@ -400,7 +443,10 @@ impl IsolationLevel {
             | Engine::Trino
             | Engine::Presto
             | Engine::Oracle
-            | Engine::Libsql => false,
+            | Engine::Libsql
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql => false,
         }
     }
 
@@ -423,7 +469,10 @@ impl Engine {
             | Engine::Presto
             | Engine::Oracle
             | Engine::Libsql
-            | Engine::Cassandra => false,
+            | Engine::Cassandra
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql => false,
         }
     }
 }

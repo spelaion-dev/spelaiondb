@@ -103,7 +103,8 @@ pub enum AgentView {
     /// A repository's connection while the repository is not trusted (ADR-022).
     UntrustedRepository,
     /// An engine with no agents' barrier yet: one whose language is not SQL (ADR-056, point
-    /// 6), and Oracle (ADR-059, point 2). Never visible, whatever `[mcp]` says.
+    /// 6), Oracle (ADR-059, point 2), libSQL (ADR-058) and the Flight SQL engines (ADR-041):
+    /// `has_read_barrier`. Never visible, whatever `[mcp]` says.
     EngineWithoutBarrier,
     /// A DuckDB connection to a folder of files (SDB-316): agents' DuckDB barrier turns off the
     /// file access reading it needs, so it is never visible, whatever `[mcp]` says.
@@ -114,10 +115,11 @@ pub enum AgentView {
 /// Whether the core has a read barrier for `engine`, so that it offers read-only connections
 /// and agents there. An engine whose language is not SQL waits for its own (ADR-056, point 6),
 /// and Oracle for one that stands up to tests that try to get around it (ADR-059, point 2: a
-/// function with an autonomous transaction writes from inside a `SELECT`). The configuration
-/// refuses `read_only` on the same engines.
+/// function with an autonomous transaction writes from inside a `SELECT`), libSQL (ADR-058) and
+/// the Flight SQL engines, which may be any server. The configuration refuses `read_only` on the
+/// same engines: both read `Engine::has_read_barrier`.
 pub fn has_read_barrier(engine: Engine) -> bool {
-    engine.is_sql() && !matches!(engine, Engine::Oracle | Engine::Libsql)
+    engine.has_read_barrier()
 }
 
 /// What agents see of `entry` (ADR-008, ADR-022) and may do on it (ADR-019, ADR-033).
@@ -696,29 +698,43 @@ mod tests {
 
     #[test]
     fn an_engine_without_its_barrier_is_never_shown_to_agents() {
-        // ADR-056, point 6: MongoDB has no agents' barrier yet, whatever `[mcp]` says.
-        let mongodb = |extra: &str| ConnectionEntry {
-            id: spelaion_config::ConnectionId {
-                source: Source::User,
-                path: "shop".into(),
-            },
-            file_path: "shop.toml".into(),
-            file: toml::from_str(&format!(
-                "schema_version = 1\nname = \"Shop\"\nengine = \"mongodb\"\nhost = \"db\"\n{extra}"
-            ))
-            .unwrap(),
-        };
-        for extra in [
-            "",
-            "[mcp]\nexposed = true\n",
-            "[mcp]\nexposed = true\nwrites = \"allow\"\n",
+        // ADR-056, point 6: MongoDB has no agents' barrier yet, whatever `[mcp]` says; nor have
+        // the Flight SQL engines, which run SQL on any server (ADR-041).
+        for engine in [
+            "mongodb",
+            "redis",
+            "oracle",
+            "libsql",
+            "cassandra",
+            "flightsql",
+            "dremio",
+            "gizmosql",
         ] {
-            for all_read_only in [false, true] {
-                assert_eq!(
-                    agent_view(&mongodb(extra), true, all_read_only),
-                    AgentView::EngineWithoutBarrier,
-                    "{extra}"
-                );
+            let connection = |extra: &str| {
+                ConnectionEntry {
+                id: spelaion_config::ConnectionId {
+                    source: Source::User,
+                    path: "shop".into(),
+                },
+                file_path: "shop.toml".into(),
+                file: toml::from_str(&format!(
+                    "schema_version = 1\nname = \"Shop\"\nengine = \"{engine}\"\nhost = \"db\"\n{extra}"
+                ))
+                .unwrap(),
+            }
+            };
+            for extra in [
+                "",
+                "[mcp]\nexposed = true\n",
+                "[mcp]\nexposed = true\nwrites = \"allow\"\n",
+            ] {
+                for all_read_only in [false, true] {
+                    assert_eq!(
+                        agent_view(&connection(extra), true, all_read_only),
+                        AgentView::EngineWithoutBarrier,
+                        "{engine}: {extra}"
+                    );
+                }
             }
         }
     }

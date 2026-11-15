@@ -26,7 +26,7 @@ impl Dialect for TrinoDialect {
     }
 }
 
-fn split(script: &str) -> Vec<StatementSpan> {
+pub(crate) fn split(script: &str) -> Vec<StatementSpan> {
     let b = script.as_bytes();
     let mut spans = Vec::new();
     let mut start = 0;
@@ -65,7 +65,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
 
 /// The byte after the string, quoted name or comment that starts at `i`; `None` when none
 /// starts there.
-fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+pub(crate) fn skip_non_code(script: &str, i: usize) -> Option<usize> {
     let b = script.as_bytes();
     match *b.get(i)? {
         q @ (b'\'' | b'"') => {

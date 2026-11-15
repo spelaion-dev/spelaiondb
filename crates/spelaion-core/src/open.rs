@@ -99,6 +99,9 @@ impl Engines {
             Engine::Oracle,
             Engine::Libsql,
             Engine::Cassandra,
+            Engine::Flightsql,
+            Engine::Dremio,
+            Engine::Gizmosql,
         ] {
             let variable = crate::plugins::dev_plugin_variable(engine.as_str());
             let pointed = std::env::var_os(variable);
@@ -215,7 +218,10 @@ impl Engines {
             | Engine::Presto
             | Engine::Oracle
             | Engine::Libsql
-            | Engine::Cassandra => {
+            | Engine::Cassandra
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql => {
                 return Err(not_a_file());
             }
         }

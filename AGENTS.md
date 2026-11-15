@@ -293,6 +293,16 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   server's), and no cancel. Its tests: `tests/libsql.rs` with `SPELAION_TEST_LIBSQL=127.0.0.1:18095`
   (and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS` for the tunnel and the proxy);
   `SPELAION_DEV_PLUGIN_LIBSQL` in a development build.
+- **Arrow Flight SQL is one plugin** (`spelaion-dev/spelaiondb-plugin-flightsql`): a generic
+  `flightsql` engine for any server that speaks it, and `dremio` and `gizmosql` by name, its
+  results Arrow straight from the server (results on another server are refused). Each reads as
+  standard SQL under its own name (`spelaion-dialect`'s `standard.rs`: Trino's splitter, a name
+  no barrier answers to). **They have no read barrier of ours** (`Engine::has_read_barrier`,
+  false for them as for MongoDB and Redis): `read_only` is refused when the file loads, agents
+  never see them (`AgentView::EngineWithoutBarrier`) and the form offers neither (the engine
+  list's `read_barrier`). Tests: `tests/flightsql.rs` with
+  `SPELAION_TEST_GIZMOSQL=127.0.0.1:31337` (GizmoSQL, as `gizmosql` and `flightsql`); Dremio is
+  tested in the plugin's repository.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -748,6 +758,7 @@ outside the team.
   SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080
   SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521
   SPELAION_TEST_LIBSQL=127.0.0.1:18095
+  SPELAION_TEST_GIZMOSQL=127.0.0.1:31337
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142

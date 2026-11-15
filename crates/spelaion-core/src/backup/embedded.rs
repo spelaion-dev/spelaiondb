@@ -75,7 +75,10 @@ pub fn embedded_dump_path(
         | Engine::Presto
         | Engine::Oracle
         | Engine::Libsql
-        | Engine::Cassandra => {
+        | Engine::Cassandra
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql => {
             return Err(BackupError::Invalid(format!(
                 "{} databases are backed up with a client tool",
                 resolved.engine.as_str()
@@ -188,7 +191,10 @@ pub async fn embedded_dump(
         | Engine::Presto
         | Engine::Oracle
         | Engine::Libsql
-        | Engine::Cassandra => {
+        | Engine::Cassandra
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql => {
             unreachable!("embedded_dump_path refused it")
         }
     };

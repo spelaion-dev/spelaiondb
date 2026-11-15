@@ -104,7 +104,10 @@ impl ToolFamily {
             | Engine::Presto
             | Engine::Oracle
             | Engine::Libsql
-            | Engine::Cassandra => None,
+            | Engine::Cassandra
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql => None,
         }
     }
 
@@ -142,7 +145,10 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Presto
         | Engine::Oracle
         | Engine::Libsql
-        | Engine::Cassandra => None,
+        | Engine::Cassandra
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql => None,
     }
 }
 
