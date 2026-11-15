@@ -21,13 +21,22 @@ struct FakeAws(PathBuf);
 
 impl FakeAws {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("spelaion-ssm-{name}-{}", std::process::id()));
+        // Next to the build, on its file system, so the stand-ins can be hard links.
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("spelaion-ssm-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let fake = PathBuf::from(env!("CARGO_BIN_EXE_spelaion-test-fake-aws"));
         let ext = if cfg!(windows) { ".exe" } else { "" };
         for name in ["aws", "session-manager-plugin"] {
-            std::fs::copy(&fake, dir.join(format!("{name}{ext}"))).unwrap();
+            let program = dir.join(format!("{name}{ext}"));
+            // A hard link, not a copy: a copy is a file open for writing, and while another
+            // test's thread forks to start a process, its child holds that file open too, so
+            // running the copy can fail with "Text file busy" on Linux. A link opens nothing.
+            // Each stand-in still sees its own folder (`current_exe` is the path it was run by).
+            if std::fs::hard_link(&fake, &program).is_err() {
+                std::fs::copy(&fake, &program).unwrap();
+            }
         }
         Self(dir)
     }
