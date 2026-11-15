@@ -368,3 +368,35 @@ archive = "spelaiondb-plugin-libsql-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "3dd4f38d10a4849f65ba3c299e9441279098bbb2895cb40ad9ef75ca21ab7b8f"
 archive_size = 2653191
 program_sha256 = "c78fb5ff6ceecbebbd9536b6a01acc237ce3e5310ceac892f249ffc4391bf864"
+
+[[plugin]]
+name = "spelaiondb-plugin-cassandra"
+repository = "spelaion-dev/spelaiondb-plugin-cassandra"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["cassandra"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-cassandra-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "c650cab7ad43c5c3422e5f61dba86afa057642ea502517958621f6a703039fb4"
+archive_size = 3966169
+program_sha256 = "c3ccbba9818191b21cc6f7ec41f63f2a9649863792f4e9b8f084f8c7cf78ebb7"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-cassandra-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "7cc4b34f11e7380a9a9a3d56a83d7f01e9d20271a1894ca1b15f7d6fc8fa1d02"
+archive_size = 4249431
+program_sha256 = "3075db2228ef3a057f4cde5ed145e646b8ed2876b6da5a11b1670069eac19b47"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-cassandra-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "6ed5d47fbcf2f9ba424cda98f07c5ad929401f4892d7d3db283fca50a4b1a082"
+archive_size = 4609872
+program_sha256 = "50db905241f58aec21d58f334f745ac27a43073354e3b0ae4b7a6f881b8d2459"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-cassandra-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "22604a5107138718844a63d66a3c1b3606461ce53c1963827264e90c8c3c3c12"
+archive_size = 4145553
+program_sha256 = "b67d2d26d71b3eee9c8909b9d6f7f5af52a5020c9394601e082fdb34e49db63f"

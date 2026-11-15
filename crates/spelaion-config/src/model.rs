@@ -174,6 +174,10 @@ pub enum Engine {
     /// libSQL (`sqld`, Turso): SQLite's SQL behind Hrana over HTTP, served only by its plugin
     /// (ADR-058).
     Libsql,
+    /// Apache Cassandra, and the servers that speak its protocol (ScyllaDB). Its language,
+    /// CQL, is shaped like SQL but is not SQL: sent as text, read by the core's own lists
+    /// (ADR-056).
+    Cassandra,
 }
 
 impl Engine {
@@ -192,6 +196,7 @@ impl Engine {
             Engine::Presto => "presto",
             Engine::Oracle => "oracle",
             Engine::Libsql => "libsql",
+            Engine::Cassandra => "cassandra",
         }
     }
 
@@ -210,7 +215,7 @@ impl Engine {
             | Engine::Presto
             | Engine::Oracle
             | Engine::Libsql => true,
-            Engine::Mongodb | Engine::Redis => false,
+            Engine::Mongodb | Engine::Redis | Engine::Cassandra => false,
         }
     }
 
@@ -228,7 +233,8 @@ impl Engine {
             | Engine::Trino
             | Engine::Presto
             | Engine::Oracle
-            | Engine::Libsql => false,
+            | Engine::Libsql
+            | Engine::Cassandra => false,
         }
     }
 
@@ -247,6 +253,7 @@ impl Engine {
             Engine::Oracle => Some(1521),
             // sqld's HTTP port; Turso is HTTPS on 443.
             Engine::Libsql => Some(8080),
+            Engine::Cassandra => Some(9042),
         }
     }
 }
@@ -381,9 +388,13 @@ impl IsolationLevel {
         match engine {
             Engine::Postgres | Engine::Mysql | Engine::Mariadb => self != IsolationLevel::Snapshot,
             Engine::Sqlserver => true,
-            // A file engine has one level: SQLite serializes, DuckDB uses snapshots. MongoDB
-            // has no session isolation level.
-            Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis => false,
+            // A file engine has one level: SQLite serializes, DuckDB uses snapshots. MongoDB,
+            // Redis and Cassandra have no session isolation level.
+            Engine::Sqlite
+            | Engine::Duckdb
+            | Engine::Mongodb
+            | Engine::Redis
+            | Engine::Cassandra => false,
             // ClickHouse has no transactions to isolate; Trino and Presto set none per session.
             Engine::Clickhouse
             | Engine::Trino
@@ -411,7 +422,8 @@ impl Engine {
             | Engine::Trino
             | Engine::Presto
             | Engine::Oracle
-            | Engine::Libsql => false,
+            | Engine::Libsql
+            | Engine::Cassandra => false,
         }
     }
 }

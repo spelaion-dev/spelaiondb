@@ -206,7 +206,7 @@ pub async fn set_active_schema(session: &Session, schema: &str) -> Result<(), Ob
 pub async fn active_schema(session: &Session) -> Result<Option<String>, String> {
     // An engine whose language is not SQL (ADR-056) cannot be asked in SQL: its schema is its
     // current database, as on MySQL.
-    let engine = if session.dialect().reads_requests() {
+    let engine = if !session.dialect().is_sql() {
         "mysql"
     } else {
         session.dialect().name()
@@ -610,7 +610,7 @@ pub struct ObjectActions {
 
 pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
     // The core writes no SQL for an engine whose language is not SQL (ADR-056): none of these.
-    if dialect.reads_requests() {
+    if !dialect.is_sql() {
         return ObjectActions {
             rename_views: false,
             drop_schemas: false,
@@ -1346,6 +1346,8 @@ mod tests {
     fn a_language_that_is_not_sql_is_offered_no_object_action() {
         let actions = object_actions(&spelaion_dialect::MongodbDialect);
         assert!(actions.create.is_empty() && actions.new_index.is_empty());
+        let cql = object_actions(&spelaion_dialect::CqlDialect);
+        assert!(cql.create.is_empty() && cql.new_index.is_empty() && !cql.drop_schemas);
         assert!(!actions.drop_schemas && !actions.rename_views && !actions.active_schema);
         assert!(!actions.add_triggers && !actions.add_constraints && !actions.routine_calls);
     }

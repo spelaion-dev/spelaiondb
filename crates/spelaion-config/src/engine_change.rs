@@ -62,7 +62,8 @@ fn passwordless(engine: Engine) -> bool {
         | Engine::Trino
         | Engine::Presto
         | Engine::Oracle
-        | Engine::Libsql => false,
+        | Engine::Libsql
+        | Engine::Cassandra => false,
     }
 }
 

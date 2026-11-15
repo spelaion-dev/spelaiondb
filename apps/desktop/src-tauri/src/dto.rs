@@ -3451,6 +3451,7 @@ pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
         "sqlserver" => Engine::Sqlserver,
         "mongodb" => Engine::Mongodb,
         "redis" => Engine::Redis,
+        "cassandra" => Engine::Cassandra,
         other => return Err(format!("unsupported engine: {other}")),
     })
 }

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use spelaion_driver_api::Dialect;
 
 pub mod clickhouse;
+pub mod cql;
 pub mod duckdb;
 pub mod mongodb;
 pub mod mysql;
@@ -25,6 +26,7 @@ pub mod sqlserver;
 pub mod trino;
 
 pub use clickhouse::ClickhouseDialect;
+pub use cql::CqlDialect;
 pub use duckdb::DuckdbDialect;
 pub use mongodb::MongodbDialect;
 pub use mysql::MysqlDialect;
@@ -56,6 +58,8 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "oracle" => Some(Arc::new(OracleDialect)),
         // libSQL's server reads SQL as SQLite does (ADR-058).
         "libsql" => Some(Arc::new(SqliteDialect)),
+        // Shaped like SQL, but its own: sent as text, read here (ADR-056).
+        "cassandra" => Some(Arc::new(CqlDialect)),
         _ => None,
     }
 }
@@ -79,6 +83,7 @@ mod tests {
             ("trino", "trino"),
             ("presto", "trino"),
             ("oracle", "oracle"),
+            ("cassandra", "cassandra"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");

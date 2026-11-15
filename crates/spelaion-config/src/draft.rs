@@ -392,7 +392,8 @@ impl ConnectionDraft {
                     | Engine::Trino
                     | Engine::Presto
                     | Engine::Oracle
-                    | Engine::Libsql => {
+                    | Engine::Libsql
+                    | Engine::Cassandra => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -487,7 +488,8 @@ impl ConnectionDraft {
                 | Engine::Trino
                 | Engine::Presto
                 | Engine::Oracle
-                | Engine::Libsql => d,
+                | Engine::Libsql
+                | Engine::Cassandra => d,
             }),
             file_folder: self.file_folder && self.engine == Engine::Duckdb,
             user: non_empty(&self.user).filter(|_| network),

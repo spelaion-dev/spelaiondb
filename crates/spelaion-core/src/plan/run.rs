@@ -132,7 +132,8 @@ impl ExplainPolicy {
                 | Engine::Trino
                 | Engine::Presto
                 | Engine::Oracle
-                | Engine::Libsql => None,
+                | Engine::Libsql
+                | Engine::Cassandra => None,
             },
         }
     }
