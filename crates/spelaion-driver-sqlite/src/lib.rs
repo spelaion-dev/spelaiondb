@@ -4,8 +4,8 @@
 //! of the program talks to it through channels. That way a long query never blocks the async
 //! runtime.
 
-mod catalog;
 use spelaion_dialect::sqlite as dialect;
+use spelaion_sqlite_schema::catalog;
 mod exec;
 mod introspect;
 mod remote;

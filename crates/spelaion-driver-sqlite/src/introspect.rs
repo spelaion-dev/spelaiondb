@@ -1,19 +1,20 @@
-//! SQLite catalog of a local file, through rusqlite (queries and rows in `catalog.rs`).
+//! SQLite catalog of a local file, through rusqlite (queries and rows in
+//! `spelaion-sqlite-schema`'s `catalog`, ADR-058).
 
-use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     DriverError, LikeFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, TableInfo,
 };
 
-use crate::catalog::{self, Row};
-use crate::exec::map_error;
+use spelaion_sqlite_schema::catalog::{self, Row};
+
+use crate::exec::{map_error, owned};
 
 pub(crate) fn query(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<Row>> {
     let mut stmt = conn.prepare(sql).map_err(map_error)?;
     let width = stmt.column_count();
     stmt.query_map([], |r| {
         (0..width)
-            .map(|i| r.get::<_, SqlValue>(i))
+            .map(|i| r.get_ref(i).map(owned))
             .collect::<rusqlite::Result<Row>>()
     })
     .map_err(map_error)?

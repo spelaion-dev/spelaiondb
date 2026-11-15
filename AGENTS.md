@@ -29,7 +29,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `spelaion.logical` / `spelaion.native_type` metadata per column; `Value` for single cells.
   The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
-  (SQLite's in `catalog.rs`); each driver's test file checks them against its engine.
+  (SQLite's in `spelaion-sqlite-schema`'s `catalog.rs`); each driver's test file checks them against its engine.
   `list_referencing_keys` is `describe_table`'s foreign keys seen from the other side: the keys
   of every table that point to one (in each driver's `introspect.rs`). `list_columns` is every
   column of a schema in one catalog query (metadata search, ADR-043), and `execute_bound` runs
@@ -175,8 +175,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   needs them as dates reads them by native type through `temporal.rs`. Here, their tests run
   through that plugin, unchanged: the pinned build next to the program, or, in a development
   build, the one `SPELAION_DEV_PLUGIN_MYSQL` and `SPELAION_DEV_PLUGIN_MARIADB` point at.
+- `crates/spelaion-sqlite-schema` (ADR-058): what every program that talks to SQLite shares,
+  with no `rusqlite`, network or runtime: the catalog queries and how their rows become the
+  contract's model (`catalog.rs`), and the dynamic typing (ADR-006, `typing.rs`: affinity,
+  what the first batch holds, the type decided, `ResultBuilder` from storage-class values to
+  Arrow batches). The SQLite driver's two transports and the libSQL plugin are built on it, so
+  they show the same explorer and types; plugins take it by the plugin SDK's tag.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
-  Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
+  Its catalog and typing are `spelaion-sqlite-schema`'s; `exec.rs` only reads rusqlite's
+  values into it. Its tests need nothing external.
   **It stays compiled into the core** (ADR-041, "SQLite stays compiled in"): the core links
   SQLite for its store anyway, and the driver for a file on a server (`remote.rs`) is built on
   the same catalog queries and typing. Its plugin program (`src/bin`) is never shipped: it is
@@ -184,7 +191,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `remote.rs` opens a file on a server (ADR-018) by running that server's `sqlite3 -safe`
   through `ConnectParams::remote` (an SSH exec channel on the tunnel's last hop,
   `spelaion-ssh::Tunnel::exec`): it must never let a dot-command or an incomplete statement
-  reach the shell. Catalog queries are shared in `catalog.rs`. Tests against
+  reach the shell. Catalog queries and typing are `spelaion-sqlite-schema`'s. Tests against
   `testing/docker/sqlitehost` with `SPELAION_TEST_SSH`.
 - **SQL Server is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives
   in `spelaion-dev/spelaiondb-plugin-sqlserver` with its tests and the patched `tiberius` it

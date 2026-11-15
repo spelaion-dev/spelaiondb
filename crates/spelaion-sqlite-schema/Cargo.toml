@@ -1,0 +1,18 @@
+[package]
+name = "spelaion-sqlite-schema"
+description = "SQLite's catalog queries and dynamic typing for SpelaionDB, shared by every program that talks to SQLite (ADR-058)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Only text and Arrow: no rusqlite, no network, no runtime. A transport (a local file, a
+# server's sqlite3, a libSQL server) hands it values and gets the contract's types back, so
+# every one of them shows the same explorer and the same types (ADR-006, ADR-058).
+[dependencies]
+spelaion-driver-api.workspace = true
+spelaion-dialect.workspace = true
+arrow.workspace = true
+
+[lints]
+workspace = true

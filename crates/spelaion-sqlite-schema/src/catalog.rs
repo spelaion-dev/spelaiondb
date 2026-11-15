@@ -1,18 +1,19 @@
 //! The SQLite catalog queries (`sqlite_schema` and the `pragma_*` table-valued functions)
-//! and how their rows become the common model. Shared by the local driver (rusqlite) and by
-//! SQLite on a server (`sqlite3` over SSH, ADR-018): names go into the SQL as literals, so
-//! the same text works for both.
+//! and how their rows become the common model. Names go into the SQL as literals, so the same
+//! text runs on a local file, through a server's `sqlite3` (ADR-018) and on a libSQL server
+//! (ADR-058): the transport runs each query and hands back its rows.
 
-use rusqlite::types::Value as SqlValue;
+use crate::SqlValue;
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, Dialect, DriverError, ForeignKeyInfo, IndexInfo,
     LikeFilter, ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaColumn, SchemaInfo,
     SchemaObject, SchemaObjectKind, TableInfo, terminated,
 };
 
-use crate::dialect::SqliteDialect;
+use spelaion_dialect::sqlite::SqliteDialect;
 
-pub(crate) type Row = Vec<SqlValue>;
+/// One row of a catalog query, as the transport read it.
+pub type Row = Vec<SqlValue>;
 
 /// A string literal (`'it''s'`).
 fn literal(text: &str) -> String {
@@ -50,14 +51,14 @@ fn schema_table(schema: &str) -> String {
 
 /// The schemas (main, temp, attached databases), narrowed by `like` (ADR-025). Patterns go
 /// in as literals: the same text runs locally and through a server's `sqlite3`.
-pub(crate) fn schemas_sql(like: &LikeFilter) -> String {
+pub fn schemas_sql(like: &LikeFilter) -> String {
     format!(
         "select name from pragma_database_list where true{} order by seq",
         like.sql("name", literal)
     )
 }
 
-pub(crate) fn schemas(rows: &[Row]) -> Vec<SchemaInfo> {
+pub fn schemas(rows: &[Row]) -> Vec<SchemaInfo> {
     rows.iter()
         .map(|row| SchemaInfo {
             name: text(row, 0),
@@ -66,7 +67,7 @@ pub(crate) fn schemas(rows: &[Row]) -> Vec<SchemaInfo> {
         .collect()
 }
 
-pub(crate) fn objects_sql(schema: &str, like: &LikeFilter) -> String {
+pub fn objects_sql(schema: &str, like: &LikeFilter) -> String {
     format!(
         r"select name, type from {} where type in ('table', 'view') and name not like 'sqlite\_%' escape '\'{} order by name",
         schema_table(schema),
@@ -74,7 +75,7 @@ pub(crate) fn objects_sql(schema: &str, like: &LikeFilter) -> String {
     )
 }
 
-pub(crate) fn objects(schema: &str, rows: &[Row]) -> Vec<ObjectInfo> {
+pub fn objects(schema: &str, rows: &[Row]) -> Vec<ObjectInfo> {
     rows.iter()
         .map(|row| ObjectInfo {
             schema: schema.to_string(),
@@ -92,7 +93,7 @@ pub(crate) fn objects(schema: &str, rows: &[Row]) -> Vec<ObjectInfo> {
 }
 
 /// Triggers are all a SQLite schema holds besides its tables and views (ADR-024).
-pub(crate) fn schema_objects_sql(schema: &str, like: &LikeFilter) -> String {
+pub fn schema_objects_sql(schema: &str, like: &LikeFilter) -> String {
     format!(
         "select name, tbl_name from {} where type = 'trigger'{} order by name",
         schema_table(schema),
@@ -100,7 +101,7 @@ pub(crate) fn schema_objects_sql(schema: &str, like: &LikeFilter) -> String {
     )
 }
 
-pub(crate) fn schema_objects(schema: &str, rows: &[Row]) -> Vec<SchemaObject> {
+pub fn schema_objects(schema: &str, rows: &[Row]) -> Vec<SchemaObject> {
     rows.iter()
         .map(|row| SchemaObject {
             schema: schema.to_string(),
@@ -114,7 +115,7 @@ pub(crate) fn schema_objects(schema: &str, rows: &[Row]) -> Vec<SchemaObject> {
 
 /// The `CREATE TABLE` or `CREATE VIEW` SQLite keeps, then the `CREATE INDEX` of the table's
 /// own indexes (automatic ones have no text: they come from its constraints).
-pub(crate) fn relation_definition_sql(schema: &str, name: &str) -> String {
+pub fn relation_definition_sql(schema: &str, name: &str) -> String {
     format!(
         "select sql from {table} where name = {name} and type in ('table', 'view') \
          union all \
@@ -125,7 +126,7 @@ pub(crate) fn relation_definition_sql(schema: &str, name: &str) -> String {
     )
 }
 
-pub(crate) fn relation_definition(schema: &str, name: &str, rows: &[Row]) -> Result<String> {
+pub fn relation_definition(schema: &str, name: &str, rows: &[Row]) -> Result<String> {
     if rows.is_empty() {
         return Err(DriverError::Other(format!(
             "{schema}.{name} does not exist"
@@ -140,7 +141,7 @@ pub(crate) fn relation_definition(schema: &str, name: &str, rows: &[Row]) -> Res
 }
 
 /// The `CREATE TRIGGER` SQLite keeps, or an error for kinds SQLite does not have.
-pub(crate) fn definition_sql(object: &SchemaObject) -> Result<String> {
+pub fn definition_sql(object: &SchemaObject) -> Result<String> {
     match object.kind {
         SchemaObjectKind::Trigger => Ok(format!(
             "select sql from {} where type = 'trigger' and name = {}",
@@ -162,7 +163,7 @@ pub(crate) fn definition_sql(object: &SchemaObject) -> Result<String> {
     }
 }
 
-pub(crate) fn definition(object: &SchemaObject, rows: &[Row]) -> Result<String> {
+pub fn definition(object: &SchemaObject, rows: &[Row]) -> Result<String> {
     rows.first()
         .and_then(|row| optional_text(row, 0))
         .map(|sql| terminated(&sql))
@@ -173,7 +174,7 @@ pub(crate) fn definition(object: &SchemaObject, rows: &[Row]) -> Result<String> 
 
 /// Every column of the schema's tables and views (those of `objects_sql`), with the same
 /// columns as `columns_sql` shows.
-pub(crate) fn schema_columns_sql(schema: &str) -> String {
+pub fn schema_columns_sql(schema: &str) -> String {
     format!(
         r"select m.name, c.name, c.type from {} m join pragma_table_xinfo(m.name, {}) c where m.type in ('table', 'view') and m.name not like 'sqlite\_%' escape '\' and c.hidden <> 1 order by m.name, c.cid",
         schema_table(schema),
@@ -181,7 +182,7 @@ pub(crate) fn schema_columns_sql(schema: &str) -> String {
     )
 }
 
-pub(crate) fn schema_columns(rows: &[Row]) -> Vec<SchemaColumn> {
+pub fn schema_columns(rows: &[Row]) -> Vec<SchemaColumn> {
     rows.iter()
         .map(|row| SchemaColumn {
             table: text(row, 0),
@@ -192,7 +193,7 @@ pub(crate) fn schema_columns(rows: &[Row]) -> Vec<SchemaColumn> {
 }
 
 /// hidden = 1: hidden columns of virtual tables; 2 and 3: generated (shown).
-pub(crate) fn columns_sql(schema: &str, name: &str) -> String {
+pub fn columns_sql(schema: &str, name: &str) -> String {
     format!(
         r#"select name, type, "notnull", dflt_value, pk from pragma_table_xinfo({}, {}) where hidden <> 1 order by cid"#,
         literal(name),
@@ -201,7 +202,7 @@ pub(crate) fn columns_sql(schema: &str, name: &str) -> String {
 }
 
 /// Automatic indexes (PRIMARY KEY, UNIQUE) have no SQL of their own: `sql` is NULL.
-pub(crate) fn indexes_sql(schema: &str, name: &str) -> String {
+pub fn indexes_sql(schema: &str, name: &str) -> String {
     format!(
         r#"select il.name, il."unique", il.origin, s.sql from pragma_index_list({}, {}) il left join {} s on s.type = 'index' and s.name = il.name order by il.name"#,
         literal(name),
@@ -211,7 +212,7 @@ pub(crate) fn indexes_sql(schema: &str, name: &str) -> String {
 }
 
 /// The columns of the indexes behind UNIQUE constraints (`origin = 'u'`), in order.
-pub(crate) fn unique_columns_sql(schema: &str, name: &str) -> String {
+pub fn unique_columns_sql(schema: &str, name: &str) -> String {
     format!(
         "select il.name, ii.name from pragma_index_list({table}, {schema}) il, \
          pragma_index_info(il.name, {schema}) ii where il.origin = 'u' order by il.name, ii.seqno",
@@ -220,7 +221,7 @@ pub(crate) fn unique_columns_sql(schema: &str, name: &str) -> String {
     )
 }
 
-pub(crate) fn foreign_keys_sql(schema: &str, name: &str) -> String {
+pub fn foreign_keys_sql(schema: &str, name: &str) -> String {
     format!(
         r#"select id, "table", "from", "to" from pragma_foreign_key_list({}, {}) order by id, seq"#,
         literal(name),
@@ -231,7 +232,7 @@ pub(crate) fn foreign_keys_sql(schema: &str, name: &str) -> String {
 /// The foreign keys of every table of `schema` that point to `name` (a key and the table it
 /// references always share a database file). The pragma keeps the referenced table's name as
 /// the key's DDL wrote it: compared ignoring case, as SQLite resolves names.
-pub(crate) fn referencing_keys_sql(schema: &str, name: &str) -> String {
+pub fn referencing_keys_sql(schema: &str, name: &str) -> String {
     format!(
         r#"select m.name, p.id, p."from", p."to"
            from {} m, pragma_foreign_key_list(m.name, {}) p
@@ -245,11 +246,7 @@ pub(crate) fn referencing_keys_sql(schema: &str, name: &str) -> String {
 
 /// One key per (table, id) of [`referencing_keys_sql`]'s rows. A key written without its
 /// referenced columns points to `primary_key`, the referenced table's.
-pub(crate) fn referencing_keys(
-    schema: &str,
-    rows: &[Row],
-    primary_key: &[String],
-) -> Vec<ReferencingKey> {
+pub fn referencing_keys(schema: &str, rows: &[Row], primary_key: &[String]) -> Vec<ReferencingKey> {
     let mut keys: Vec<ReferencingKey> = Vec::new();
     let mut implicit: Vec<bool> = Vec::new();
     for row in rows {
@@ -282,7 +279,7 @@ pub(crate) fn referencing_keys(
     keys
 }
 
-pub(crate) fn primary_key_sql(schema: &str, table: &str) -> String {
+pub fn primary_key_sql(schema: &str, table: &str) -> String {
     format!(
         "select name from pragma_table_info({}, {}) where pk > 0 order by pk",
         literal(table),
@@ -291,14 +288,14 @@ pub(crate) fn primary_key_sql(schema: &str, table: &str) -> String {
 }
 
 /// The first column of every row.
-pub(crate) fn names(rows: &[Row]) -> Vec<String> {
+pub fn names(rows: &[Row]) -> Vec<String> {
     rows.iter().map(|row| text(row, 0)).collect()
 }
 
 /// The table from its catalog rows. The returned positions are the foreign keys whose
 /// referenced columns are "the primary key of the referenced table" (an empty `to`): the
 /// caller fills them with [`primary_key_sql`].
-pub(crate) fn table(
+pub fn table(
     object: ObjectInfo,
     column_rows: &[Row],
     index_rows: &[Row],
