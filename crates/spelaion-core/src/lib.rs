@@ -35,7 +35,6 @@ mod params;
 mod pending;
 pub mod plan;
 pub mod plugins;
-mod postgres_family;
 mod processes;
 mod progress;
 mod query_page;
@@ -45,6 +44,7 @@ mod results;
 mod save_name;
 mod script;
 mod selection_stats;
+mod server_family;
 mod server_settings;
 mod session;
 mod session_setup;
@@ -154,7 +154,6 @@ pub use pending::{
     Block, BulkAction, CellEdit, EditOutcome, MAX_PASTE_BYTES, MAX_UNDO_STEPS, PendingEdit,
     PendingEdits, parse_block,
 };
-pub use postgres_family::ServerFamily;
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use progress::{ROWS_PROGRESS_INTERVAL, coalesce_rows};
 pub use query_page::{
@@ -171,6 +170,7 @@ pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
 };
+pub use server_family::ServerFamily;
 pub use server_settings::{ServerSetting, SettingKind, server_settings};
 pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,

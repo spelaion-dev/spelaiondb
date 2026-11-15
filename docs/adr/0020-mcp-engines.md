@@ -48,7 +48,7 @@ ADR-019's writes. What changes per engine is the second layer:
 ### Servers that speak PostgreSQL's protocol (2026-11-14, SDB-169)
 A PostgreSQL connection may reach a server that only speaks PostgreSQL's protocol, through the
 PostgreSQL plugin. Which one is read from the server (`select version()`) when a session opens,
-never from the connection's file or the plugin (`spelaion-core`'s `postgres_family.rs`), and
+never from the connection's file or the plugin (`spelaion-core`'s `server_family.rs`), and
 the PostgreSQL row of the table above applies only where the server enforces it, checked against
 each server's image (`testing/docker/pg-family`):
 
@@ -62,6 +62,22 @@ each server's image (`testing/docker/pg-family`):
 
 The refusal comes when the session opens (a read-only connection, agents' sessions) or before
 the read is sent (streaming exports, column statistics, the data search), with the reason.
+
+### Servers that speak MySQL's protocol (2026-11-15, SDB-170)
+The same for a MySQL connection, read from `select version(), @@version_comment`. A MySQL
+server's text names its distributor rather than MySQL (managed services say "Source
+distribution", Percona its own name), so what names none of the forks below is taken for MySQL,
+and after a read-only connection's session is made read-only the core reads
+`@@session.transaction_read_only` back (`current_setting('transaction_read_only')` on
+PostgreSQL): a server that accepted the statement and is still writable is refused there,
+whatever it calls itself.
+
+| Server | `START TRANSACTION READ ONLY` | Session's read-only mode | What it gets |
+|---|---|---|---|
+| MySQL, MariaDB, OceanBase 4.3 (MySQL mode) | every write but DDL refused (DDL commits first; the classifier refuses it, as above) | enforced, DDL too | everything |
+| TiDB 8.5 | refused as a no-op a setting can switch on | the same | no agents, read-only connections or streaming reads |
+| SingleStore 10.9, Apache Doris 3.0 | a syntax error | accepted, session stays writable | no agents, read-only connections or streaming reads |
+| StarRocks 3.4 (says it is MySQL) | a syntax error | accepted, session stays writable (caught by the read-back) | no agents nor read-only connections; a streaming read fails at the syntax error |
 
 ## Alternatives
 - **Only the classifier for the new engines:** it cannot see what a function does. The

@@ -1,0 +1,497 @@
+//! Servers that speak MySQL's protocol, through the MySQL connection and its plugin (SDB-170),
+//! each against its own image in `testing/docker/mysql-family`:
+//!
+//! - TiDB (`SPELAION_TEST_TIDB`), OceanBase (`SPELAION_TEST_OCEANBASE`) and SingleStore
+//!   (`SPELAION_TEST_SINGLESTORE`) connect, browse, follow transactions, cancel with
+//!   `KILL QUERY` and bind a read's values;
+//! - OceanBase keeps read-only connections and agents' reads from writing with its own
+//!   barriers; TiDB and SingleStore are recognised and get neither;
+//! - StarRocks (`SPELAION_TEST_STARROCKS`) does not say what it is: its read-only connection is
+//!   refused because the server says its session is still writable.
+//!
+//! Each variable is `host:port`; a server without one is skipped, which does not count as
+//! tested.
+
+mod engines;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
+
+use futures_util::StreamExt;
+use spelaion_config::{
+    ConnectionId, Resolver, Safeguards, Source, SystemBackend, TrustStore, load,
+};
+use spelaion_core::{
+    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportCancel, ExportError, ExportFormat,
+    OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits, ResultStore, ServerFamily,
+    StreamExport, TextEncoding, TunnelPool, export_query, open_connection,
+};
+use spelaion_driver_api::{ExecEvent, ExecOptions, Secret, TransactionState, bound_placeholder};
+use spelaion_ssh::{KnownHosts, NonInteractive};
+
+fn unique(prefix: &str) -> String {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    format!(
+        "{prefix}_{}_{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::SeqCst)
+    )
+}
+
+/// A server of the family, as its image starts.
+struct Server {
+    label: &'static str,
+    var: &'static str,
+    password: Option<&'static str>,
+    family: ServerFamily,
+    /// What a table of its needs after its columns.
+    table_options: &'static str,
+}
+
+const TIDB: Server = Server {
+    label: "TiDB",
+    var: "SPELAION_TEST_TIDB",
+    password: None,
+    family: ServerFamily::TiDb,
+    table_options: "",
+};
+const OCEANBASE: Server = Server {
+    label: "OceanBase",
+    var: "SPELAION_TEST_OCEANBASE",
+    password: None,
+    family: ServerFamily::OceanBase,
+    table_options: "",
+};
+const SINGLESTORE: Server = Server {
+    label: "SingleStore",
+    var: "SPELAION_TEST_SINGLESTORE",
+    password: Some("spelaion"),
+    family: ServerFamily::SingleStore,
+    table_options: "",
+};
+// StarRocks says it is MySQL: only reading its session back tells it apart.
+const STARROCKS: Server = Server {
+    label: "StarRocks",
+    var: "SPELAION_TEST_STARROCKS",
+    password: None,
+    family: ServerFamily::MySql,
+    table_options: " properties ('replication_num' = '1')",
+};
+
+/// The servers that connect and browse through the MySQL plugin.
+const CHECKED: [&Server; 3] = [&TIDB, &OCEANBASE, &SINGLESTORE];
+
+impl Server {
+    fn addr(&self) -> Option<(String, String)> {
+        match std::env::var(self.var) {
+            Ok(addr) => {
+                let (host, port) = addr.rsplit_once(':').expect("host:port");
+                Some((host.to_string(), port.to_string()))
+            }
+            Err(_) => {
+                eprintln!("{} not set: {} skipped", self.var, self.label);
+                None
+            }
+        }
+    }
+
+    /// The connection file as the picker's kind writes it: a MySQL connection.
+    fn file(&self, read_only: bool) -> Option<String> {
+        let (host, port) = self.addr()?;
+        let password = match self.password {
+            Some(_) => "password = { secret = \"prompt\" }\n",
+            None => "",
+        };
+        Some(format!(
+            "schema_version = 1\nengine = \"mysql\"\nhost = \"{host}\"\nport = {port}\n\
+             user = \"root\"\n{password}tls = {{ mode = \"disable\" }}\nread_only = {read_only}\n"
+        ))
+    }
+}
+
+/// A temporary, trusted repository whose connections the tests write.
+struct Workspace {
+    base: PathBuf,
+}
+
+impl Workspace {
+    fn new() -> Self {
+        let base = std::env::temp_dir().join(unique("spelaion-mysql-family"));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("repo/.spelaion/connections")).unwrap();
+        std::fs::create_dir_all(base.join("user")).unwrap();
+        Self { base }
+    }
+
+    async fn open(
+        &self,
+        server: &Server,
+        read_only: bool,
+        read_only_session: bool,
+    ) -> Option<Result<OpenConnection, OpenError>> {
+        let content = server.file(read_only)?;
+        let id = unique("conn");
+        std::fs::write(
+            self.base
+                .join(format!("repo/.spelaion/connections/{id}.toml")),
+            content,
+        )
+        .unwrap();
+        let config = load(Some(&self.base.join("repo")), &self.base.join("user"));
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        let mut trust = TrustStore::load(&self.base.join("user")).unwrap();
+        trust.trust(&config).unwrap();
+        let resolved = Resolver::new(&config, &trust, &SystemBackend)
+            .resolve(&ConnectionId {
+                source: Source::Workspace,
+                path: id,
+            })
+            .expect("resolving");
+        let options = OpenOptions {
+            tunnels: Arc::new(TunnelPool::new()),
+            known_hosts: KnownHosts {
+                team_file: None,
+                user_file: None,
+                app_file: self.base.join("user/known_hosts"),
+            },
+            interaction: Arc::new(NonInteractive),
+            password: server.password.map(Secret::new),
+            read_only_session,
+        };
+        Some(
+            open_connection(
+                resolved,
+                &Engines::builtin(),
+                options,
+                Arc::new(ResultStore::new()),
+            )
+            .await,
+        )
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+/// Runs `sql` as the user would; `Err` with the first error.
+async fn run(open: &OpenConnection, sql: &str) -> Result<(), String> {
+    let mut events = open.session.run_script(sql);
+    while let Some(event) = events.next().await {
+        if let CoreEvent::StatementFailed { error, .. } = event {
+            return Err(error.message);
+        }
+    }
+    Ok(())
+}
+
+/// The first error of `sql` sent straight to the driver, around the core's checks.
+async fn engine_error(open: &OpenConnection, sql: &str) -> Option<String> {
+    let mut events = match open
+        .session
+        .connection()
+        .execute(sql, &ExecOptions::default())
+        .await
+    {
+        Ok(events) => events,
+        Err(e) => return Some(e.to_string()),
+    };
+    while let Some(event) = events.next().await {
+        match event {
+            Ok(ExecEvent::Done { .. }) => break,
+            Ok(_) => {}
+            Err(e) => return Some(e.to_string()),
+        }
+    }
+    None
+}
+
+fn csv() -> StreamExport {
+    StreamExport {
+        format: ExportFormat::Csv,
+        header: true,
+        csv: CsvOptions {
+            delimiter: ';',
+            null_text: "NULL".into(),
+            escape_formulas: true,
+        },
+        encoding: TextEncoding::Utf8,
+        columns: None,
+        batch_size: DEFAULT_BATCH_ROWS,
+    }
+}
+
+async fn export(open: &OpenConnection, sql: &str) -> Result<u64, ExportError> {
+    let path = std::env::temp_dir().join(format!("{}.csv", unique("sdb-mysql-family")));
+    let result = export_query(
+        &open.session,
+        sql,
+        &Safeguards::default(),
+        false,
+        &path,
+        &csv(),
+        &ExportCancel::new(),
+        &|_| {},
+    )
+    .await;
+    let _ = std::fs::remove_file(&path);
+    result.map(|summary| summary.rows)
+}
+
+/// The explorer's calls, transactions, `KILL QUERY` and a bound read on each server.
+#[tokio::test]
+async fn checked_servers_connect_browse_and_cancel() {
+    for server in CHECKED {
+        let ws = Workspace::new();
+        let Some(open) = ws.open(server, false, false).await else {
+            continue;
+        };
+        let label = server.label;
+        let open = open.unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(
+            open.session.server_family(),
+            Some(&server.family),
+            "{label}"
+        );
+        let db = unique("sdb170");
+        let options = server.table_options;
+        run(
+            &open,
+            &format!(
+                "create database {db};
+                 create table {db}.parent (id int primary key, name varchar(20)){options};
+                 create table {db}.child (id int primary key, parent int){options};
+                 create view {db}.v as select id, name from {db}.parent;
+                 insert into {db}.parent values (1, 'one'), (2, 'two');"
+            ),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let checks = async {
+            let conn = open.session.connection();
+            assert!(
+                conn.list_databases().await.unwrap().contains(&db),
+                "{label}"
+            );
+            let objects = conn.list_objects(&db).await.unwrap();
+            for name in ["parent", "child", "v"] {
+                assert!(
+                    objects.iter().any(|o| o.name == name),
+                    "{label}: {name} in {objects:?}"
+                );
+            }
+            // SingleStore has no CHECK catalog: the table is read without one.
+            let child = conn.describe_table(&db, "child").await.unwrap();
+            let columns: Vec<_> = child.columns.iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(columns, ["id", "parent"], "{label}");
+            assert_eq!(child.primary_key, ["id"], "{label}");
+            let all = conn.list_columns(&db).await.unwrap();
+            assert!(
+                all.iter().any(|c| c.table == "parent" && c.name == "name"),
+                "{label}"
+            );
+            // SingleStore has no `mysql` database: it lists no accounts.
+            conn.list_server_objects().await.unwrap();
+            let view = conn.relation_definition(&db, "v").await.unwrap();
+            assert!(
+                view.to_ascii_uppercase().contains("VIEW"),
+                "{label}: {view}"
+            );
+
+            // A read with a bound value, as the data search runs it.
+            let mut events = conn
+                .execute_bound(
+                    &format!(
+                        "select id from {db}.parent where name = {}",
+                        bound_placeholder("mysql", 1)
+                    ),
+                    vec!["two".into()],
+                    &ExecOptions::default(),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+            let mut rows = 0;
+            while let Some(event) = events.next().await {
+                match event {
+                    Ok(ExecEvent::Batch(batch)) => rows += batch.num_rows(),
+                    Ok(_) => {}
+                    Err(e) => panic!("{label}: {e}"),
+                }
+            }
+            assert_eq!(rows, 1, "{label}");
+
+            run(&open, "start transaction").await.unwrap();
+            assert_eq!(
+                conn.transaction_state().await.unwrap(),
+                TransactionState::Open,
+                "{label}"
+            );
+            run(&open, "rollback").await.unwrap();
+            assert_eq!(
+                conn.transaction_state().await.unwrap(),
+                TransactionState::Idle,
+                "{label}"
+            );
+
+            // `KILL QUERY` from a second connection, sent again until the run ends.
+            let session = &open.session;
+            let started = Instant::now();
+            let sleep = session
+                .run_script("select sleep(30)")
+                .collect::<Vec<CoreEvent>>();
+            tokio::pin!(sleep);
+            tokio::time::timeout(Duration::from_secs(20), async {
+                loop {
+                    tokio::select! {
+                        events = &mut sleep => break events,
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                            session.cancel().await.unwrap_or_else(|e| panic!("{label}: {e}"));
+                        }
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{label}: the cancel did not stop the statement"));
+            assert!(started.elapsed() < Duration::from_secs(20), "{label}");
+        };
+        checks.await;
+        run(&open, &format!("drop database {db}"))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        open.close().await;
+    }
+}
+
+/// OceanBase enforces MySQL's read-only session and transaction: read-only connections,
+/// agents' reads and streaming exports run, and a write sent around the core's check fails.
+#[tokio::test]
+async fn oceanbase_keeps_reads_from_writing() {
+    let ws = Workspace::new();
+    let Some(owner) = ws.open(&OCEANBASE, false, false).await else {
+        return;
+    };
+    let owner = owner.unwrap();
+    let db = unique("sdb170_ro");
+    run(
+        &owner,
+        &format!("create database {db}; create table {db}.t (id int primary key)"),
+    )
+    .await
+    .unwrap();
+
+    let ro = ws.open(&OCEANBASE, true, false).await.unwrap().unwrap();
+    let error = engine_error(&ro, &format!("insert into {db}.t values (1)"))
+        .await
+        .expect("the read-only session wrote");
+    assert!(error.contains("READ ONLY"), "{error}");
+    ro.close().await;
+
+    let agent = ws.open(&OCEANBASE, true, true).await.unwrap().unwrap();
+    let read = agent
+        .session
+        .run_read_only(&format!("select id from {db}.t"), &ReadLimits::default())
+        .await
+        .unwrap();
+    assert!(read.rows.is_empty());
+    agent.close().await;
+
+    assert_eq!(
+        export(&owner, &format!("select id from {db}.t"))
+            .await
+            .unwrap(),
+        0
+    );
+    run(&owner, "start transaction read only").await.unwrap();
+    let error = engine_error(&owner, &format!("insert into {db}.t values (1)"))
+        .await
+        .expect("START TRANSACTION READ ONLY let an INSERT through");
+    assert!(error.contains("READ ONLY"), "{error}");
+    run(&owner, "rollback").await.unwrap();
+
+    run(&owner, &format!("drop database {db}")).await.unwrap();
+    owner.close().await;
+}
+
+/// TiDB and SingleStore are recognised and get no read-only connection, no agents' reads and
+/// no streaming reads; StarRocks, which says it is MySQL, has its read-only connection
+/// refused because its session stays writable.
+#[tokio::test]
+async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
+    for server in [&TIDB, &SINGLESTORE] {
+        let ws = Workspace::new();
+        let Some(read_only) = ws.open(server, true, false).await else {
+            continue;
+        };
+        let label = server.label;
+        match read_only {
+            Err(OpenError::NoReadOnlyBarrier(reason)) => {
+                assert!(reason.contains(label), "{label}: {reason}");
+                assert!(
+                    reason.contains("SET SESSION TRANSACTION READ ONLY"),
+                    "{label}: {reason}"
+                );
+            }
+            Err(other) => panic!("{label}: {other}"),
+            Ok(_) => panic!("{label}: a read-only connection opened"),
+        }
+        match ws.open(server, false, true).await.unwrap() {
+            Err(OpenError::NoReadOnlyBarrier(reason)) => {
+                assert!(
+                    reason.contains("START TRANSACTION READ ONLY"),
+                    "{label}: {reason}"
+                )
+            }
+            Err(other) => panic!("{label}: {other}"),
+            Ok(_) => panic!("{label}: a session that only reads opened"),
+        }
+        let open = ws.open(server, false, false).await.unwrap().unwrap();
+        assert_eq!(
+            open.session.server_family(),
+            Some(&server.family),
+            "{label}"
+        );
+        match open
+            .session
+            .run_read_only("select 1", &ReadLimits::default())
+            .await
+        {
+            Err(ReadError::Unsupported(reason)) => assert!(reason.contains(label), "{label}"),
+            other => panic!("{label}: {other:?}"),
+        }
+        match export(&open, "select 1").await {
+            Err(ExportError::Invalid(reason)) => {
+                assert!(
+                    reason.contains("does not enforce read-only transactions"),
+                    "{label}"
+                )
+            }
+            other => panic!("{label}: {other:?}"),
+        }
+        open.close().await;
+    }
+
+    let ws = Workspace::new();
+    if let Some(read_only) = ws.open(&STARROCKS, true, false).await {
+        match read_only {
+            Err(OpenError::NoReadOnlyBarrier(reason)) => {
+                assert!(reason.contains("its session is still writable"), "{reason}")
+            }
+            Err(other) => panic!("StarRocks: {other}"),
+            Ok(_) => panic!("StarRocks: a read-only connection opened"),
+        }
+        // Agents' reads open read-only connections: refused the same way.
+        assert!(matches!(
+            ws.open(&STARROCKS, true, true).await.unwrap(),
+            Err(OpenError::NoReadOnlyBarrier(_))
+        ));
+        let open = ws.open(&STARROCKS, false, false).await.unwrap().unwrap();
+        assert_eq!(open.session.server_family(), Some(&STARROCKS.family));
+        // StarRocks has no `START TRANSACTION READ ONLY`: the export fails before it reads.
+        assert!(export(&open, "select 1").await.is_err());
+        open.close().await;
+    }
+}

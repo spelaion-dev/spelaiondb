@@ -673,13 +673,14 @@ async fn connection_steps(
         .server_version()
         .await
         .map_err(|e| driver_failure(&e))?;
-    // A read-only connection to a server of PostgreSQL's protocol that would not keep it from
-    // writing cannot open (SDB-169): the test says so at the login, as opening would.
+    // A read-only connection to a server of PostgreSQL's or MySQL's protocol that would not
+    // keep it from writing cannot open (SDB-169, SDB-170): the test says so at the login, as
+    // opening would.
     if resolved.params.read_only
-        && crate::dialect_of(resolved.engine).is_some_and(|d| d.name() == "postgres")
-        && let Some(reason) = crate::postgres_family::read_family(connection.as_ref())
-            .await
-            .read_only_sessions_refusal()
+        && let Some(dialect) = crate::dialect_of(resolved.engine)
+        && let Some(family) =
+            crate::server_family::read_family(connection.as_ref(), dialect.name()).await
+        && let Some(reason) = family.read_only_sessions_refusal()
     {
         return Err((FailureKind::Other, reason));
     }
