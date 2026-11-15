@@ -157,6 +157,9 @@ jobs:
         if: steps.scope.outputs.rust != 'false'
         run: |
           bash testing/docker/gen-keys.sh
+          python3 testing/docker/check-memory-test.py
+          docker compose -f testing/docker/compose.yaml config --format json \
+            | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')"
           (
             status=failed
             if docker compose -f testing/docker/compose.yaml up -d --build --wait \
@@ -165,6 +168,8 @@ jobs:
               && kubectl -n spelaion-test rollout status deployment/postgres --timeout=180s
             then
               status=ready
+            else
+              bash testing/docker/diagnostics.sh
             fi
             echo "$status" > "$RUNNER_TEMP/services.status"
           ) > "$RUNNER_TEMP/services.log" 2>&1 &
@@ -212,7 +217,10 @@ jobs:
         run: |
           timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/services.status" ]; do sleep 1; done' || true
           cat "$RUNNER_TEMP/services.log"
-          test "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" = ready
+          if [ "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" != ready ]; then
+            bash testing/docker/diagnostics.sh
+            exit 1
+          fi
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --workspace --locked
       # The app's own unit tests: its library says `test = false` because the test executable of
