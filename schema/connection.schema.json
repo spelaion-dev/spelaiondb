@@ -196,6 +196,11 @@
           "description": "Redis, and the servers that speak its protocol (Valkey). Its language is not SQL: the\ncore reads each command line and sends its arguments (ADR-056).",
           "type": "string",
           "const": "redis"
+        },
+        {
+          "description": "Oracle Database, served only by its plugin, on Oracle's thin driver (ADR-059).",
+          "type": "string",
+          "const": "oracle"
         }
       ]
     },

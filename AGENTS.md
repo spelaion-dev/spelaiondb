@@ -258,6 +258,21 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   connection relies on the core's check (no session-wide read-only mode). Tests:
   `tests/trino.rs` with `SPELAION_TEST_TRINO=127.0.0.1:18080` and
   `SPELAION_TEST_PRESTO=127.0.0.1:18081`.
+- **Oracle only exists as a plugin** (ADR-059): `spelaion-dev/spelaiondb-plugin-oracle`, on
+  Oracle's pure-Rust thin driver `oracledb`, vendored and patched there (its
+  `vendor/oracledb/PATCHED.md`: cancel, TLS checked against the host through a tunnel,
+  nothing printed, no aws-lc), pinned in `plugins.toml`. What the core has of it:
+  `Engine::Oracle` (`database` is the service name), `spelaion-dialect`'s `oracle.rs`
+  (statements end at `;`, which is not sent; a PL/SQL unit keeps its `;`s until a line holding
+  only `/`; `q'[…]'` strings), and `guard.rs`'s reading of a PL/SQL block it cannot parse
+  (`oracle_unparsed_risk`: a risky word or dynamic SQL in an anonymous block asks; defining a
+  unit asks nothing). It has **no read-only mode and no agents yet**: the configuration
+  refuses `read_only` and `has_read_barrier` (`agent_view`, the form) leaves it out, because
+  a function with an autonomous transaction writes from inside a `SELECT`, even in a
+  read-only transaction (ADR-059's 2026-11-15 note); no exports, column statistics or data
+  search either, which need that barrier. Its tests: `tests/oracle.rs` with
+  `SPELAION_TEST_ORACLE=127.0.0.1:11521` (and `SPELAION_TEST_SSH` for TLS through the two
+  bastions); `SPELAION_DEV_PLUGIN_ORACLE` in a development build.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -711,7 +726,7 @@ outside the team.
   `SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
   SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_TRINO=127.0.0.1:18080
-  SPELAION_TEST_PRESTO=127.0.0.1:18081
+  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 cargo test --workspace`.

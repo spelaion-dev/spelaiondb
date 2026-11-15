@@ -68,6 +68,8 @@ jobs:
       # MongoDB (ADR-056), through its pinned plugin.
       SPELAION_TEST_MONGO: 127.0.0.1:27017
       SPELAION_TEST_CLICKHOUSE: 127.0.0.1:18123
+      # Oracle Database Free (ADR-059), through its pinned plugin.
+      SPELAION_TEST_ORACLE: 127.0.0.1:11521
       # Redis (ADR-056), through its pinned plugin.
       SPELAION_TEST_REDIS: 127.0.0.1:16379
       SPELAION_TEST_TRINO: 127.0.0.1:18080

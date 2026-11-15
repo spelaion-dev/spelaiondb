@@ -1,6 +1,6 @@
 # ADR-059: Oracle through Oracle's own pure-Rust thin driver; a JDBC bridge only for engines no open native driver reaches
 
-- **Status:** Accepted (not implemented)
+- **Status:** Accepted (the Oracle plugin is implemented, SDB-318; the JDBC bridge is not)
 - **Date:** 2026-11-15
 - **Builds on:** ADR-005 (driver contract), ADR-020 (each engine's barriers), ADR-032 (the
   connection test names what is missing), ADR-041 (engines as plugins; a plugin may be written
@@ -99,3 +99,27 @@ driver reaches; Oracle does not go through it.**
   main mode.
 - A JDBC driver that matters cannot be loaded without running code from its configuration:
   that engine stays out of the bridge.
+
+## Notes
+
+**2026-11-15: the plugin carries a patched fork of `oracledb`.** Reading the pre-release
+before writing the plugin showed four things it could not do, and SpelaionDB needs all of them:
+
+- It could not cancel a call from another thread.
+- It checked TLS against the address it connects to, so TLS failed through a tunnel.
+- It printed every packet to standard output when `RSO_DEBUG_PACKETS` was set.
+- It always built aws-lc.
+
+Like the PostgreSQL, MySQL and SQL Server plugins, the Oracle plugin vendors the release as
+published and patches it, each patch marked and tested there (`vendor/oracledb/PATCHED.md` in
+`spelaion-dev/spelaiondb-plugin-oracle`). The same needs go to the upstream project; the patches
+are dropped as upstream releases cover them.
+
+**2026-11-15: no read-only mode and no agents on Oracle yet.** Point 2's barrier does not stand
+up to a test that tries to get around it. A function declared `PRAGMA AUTONOMOUS_TRANSACTION`
+writes and commits from inside a `SELECT`, even in a `SET TRANSACTION READ ONLY` transaction,
+and the classifier cannot tell such a call from any other function call. So the configuration
+refuses `read_only` on Oracle and agents never see it, until a barrier passes those tests, for
+example `ALTER SESSION DISABLE COMMIT IN PROCEDURE`, which stops an autonomous transaction from
+committing. Exports, column statistics and the data search, which need the same barrier, are
+not available on Oracle either.

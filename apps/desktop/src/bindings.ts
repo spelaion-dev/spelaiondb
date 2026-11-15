@@ -2296,6 +2296,11 @@ export type EngineItem_Deserialize = {
 	 *  session setup yet: the form does not offer them.
 	 */
 	sql: boolean,
+	/**
+	 *  The core has a read barrier for this engine, so the form offers read-only connections and
+	 *  agents (`has_read_barrier`): not on an engine that is not SQL, nor on Oracle yet.
+	 */
+	readBarrier: boolean,
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
@@ -2326,6 +2331,11 @@ export type EngineItem_Serialize = {
 	 *  session setup yet: the form does not offer them.
 	 */
 	sql: boolean,
+	/**
+	 *  The core has a read barrier for this engine, so the form offers read-only connections and
+	 *  agents (`has_read_barrier`): not on an engine that is not SQL, nor on Oracle yet.
+	 */
+	readBarrier: boolean,
 };
 
 /**  The answer to a paused run. */

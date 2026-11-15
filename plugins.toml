@@ -36,8 +36,8 @@
 # deleted from this file later.
 #
 # Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL, MongoDB, ClickHouse,
-# Redis, Trino and Presto (one plugin). None of their drivers is compiled into the core: these
-# builds, inside the installer, are what serves those engines.
+# Redis, Trino and Presto (one plugin), and Oracle. None of their drivers is compiled into the
+# core: these builds, inside the installer, are what serves those engines.
 
 schema_version = 1
 
@@ -302,3 +302,36 @@ archive = "spelaiondb-plugin-trino-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "e1fbe66d932609fbc89d8908797f90171342ccee9c12b765257b1d08978f29a8"
 archive_size = 2643857
 program_sha256 = "ecc90fc83f3308ebd26ca11e3773a8ab6a6b129aac1b9173cfc88b14e82dad88"
+
+# Oracle Database, on Oracle's thin driver patched in the plugin's repository (ADR-059).
+[[plugin]]
+name = "spelaiondb-plugin-oracle"
+repository = "spelaion-dev/spelaiondb-plugin-oracle"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["oracle"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-oracle-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "5a73e65490d6e517e6a0f0ce593482ff8b56ff3eec16ef47a0803508cd7161a4"
+archive_size = 2391456
+program_sha256 = "8188ab532cb31dc5309e6a6d4839bb873f9661c185288128ff1929ff0f1d7465"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-oracle-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "2d4e39a5a9ba68fdcc8e9f45da74350e37d02ba89ab736d559a8ed1c3bacd301"
+archive_size = 2611375
+program_sha256 = "4c359b3206eed1290805699684fcf127e168f71eb8a71148350ed46ad0102893"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-oracle-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "2a22ba0d0a0fb125d6650eb53cc47150c6364f767976194d9f19d28bc5b9dd43"
+archive_size = 2561254
+program_sha256 = "71110b61c50850718281ae04f9ad22c27a26cbaf7f3e981151e4b3410fe55170"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-oracle-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "231629a6feafa1e878eecf0d3027f4ce22afeeaaa2c2c8661e21aa2e786973db"
+archive_size = 2876624
+program_sha256 = "31e45361023b6922ea2646e44c90da35e3d6cd933b0fa8f69bede4fdc9b4b872"

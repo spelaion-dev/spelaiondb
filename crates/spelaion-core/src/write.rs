@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use spelaion_config::{ConnectionEntry, ConnectionFile, Source, WritePolicy};
+use spelaion_config::{ConnectionEntry, ConnectionFile, Engine, Source, WritePolicy};
 use spelaion_driver_api::{Dialect, DriverError, ExecEvent, ExecOptions};
 use sqlparser::ast::{AlterTableOperation, Statement, visit_statements};
 use sqlparser::parser::Parser;
@@ -102,13 +102,22 @@ pub enum AgentView {
     NotExposed,
     /// A repository's connection while the repository is not trusted (ADR-022).
     UntrustedRepository,
-    /// An engine whose language is not SQL, which has no agents' barrier yet (ADR-056,
-    /// point 6): never visible, whatever `[mcp]` says.
+    /// An engine with no agents' barrier yet: one whose language is not SQL (ADR-056, point
+    /// 6), and Oracle (ADR-059, point 2). Never visible, whatever `[mcp]` says.
     EngineWithoutBarrier,
     /// A DuckDB connection to a folder of files (SDB-316): agents' DuckDB barrier turns off the
     /// file access reading it needs, so it is never visible, whatever `[mcp]` says.
     FileFolder,
     Visible(AgentAccess),
+}
+
+/// Whether the core has a read barrier for `engine`, so that it offers read-only connections
+/// and agents there. An engine whose language is not SQL waits for its own (ADR-056, point 6),
+/// and Oracle for one that stands up to tests that try to get around it (ADR-059, point 2: a
+/// function with an autonomous transaction writes from inside a `SELECT`). The configuration
+/// refuses `read_only` on the same engines.
+pub fn has_read_barrier(engine: Engine) -> bool {
+    engine.is_sql() && engine != Engine::Oracle
 }
 
 /// What agents see of `entry` (ADR-008, ADR-022) and may do on it (ADR-019, ADR-033).
@@ -117,7 +126,7 @@ pub fn agent_view(
     repository_trusted: bool,
     all_read_only: bool,
 ) -> AgentView {
-    if !entry.file.engine.is_sql() {
+    if !has_read_barrier(entry.file.engine) {
         return AgentView::EngineWithoutBarrier;
     }
     if entry.file.file_folder {

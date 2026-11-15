@@ -148,7 +148,7 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             None,
         ),
         supported(Engine::Sqlserver, "SQL Server", Relational, Network),
-        planned("oracle", "Oracle", Relational, Network, Some(1521)),
+        supported(Engine::Oracle, "Oracle", Relational, Network),
         // PostgreSQL's protocol, checked with each server's image (`testing/docker/pg-family`).
         kind_of(
             Engine::Postgres,

@@ -480,6 +480,19 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
+        // The service name is the database; the thin driver has no operating-system login,
+        // so a user is always needed (ADR-059).
+        Engine::Oracle => [
+            (
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            ),
+            ("database", file.database.is_none()),
+            ("user", file.user.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
         Engine::Sqlite | Engine::Duckdb => [("database", file.database.is_none())]
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
@@ -548,6 +561,15 @@ pub(crate) fn validate_connection(
             ));
         }
     }
+    // ADR-059, point 2: Oracle's read-only mode waits for a barrier that stands up to tests
+    // that try to get around it (a function with an autonomous transaction writes from inside
+    // a SELECT, even in a read-only transaction).
+    if file.engine == Engine::Oracle && file.read_only {
+        return Err(ConfigError::new(
+            path,
+            "Oracle has no read-only mode in SpelaionDB yet: remove `read_only`",
+        ));
+    }
     // ADR-056, point 6: an engine whose language is not SQL has no read-only mode yet, and
     // its sessions run no SQL. Opening it anyway would let writes through or fail later.
     if !file.engine.is_sql() {
@@ -601,6 +623,12 @@ pub(crate) fn validate_connection(
                 return Err(ConfigError::new(
                     path,
                     "Trino and Presto connections log in with a user and, over TLS, a password: client certificates are not supported yet",
+                ));
+            }
+            Engine::Oracle => {
+                return Err(ConfigError::new(
+                    path,
+                    "Oracle connections log in with a password: client certificates (wallets) are not supported yet",
                 ));
             }
         }
@@ -872,6 +900,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Redis => "Redis",
         Engine::Trino => "Trino",
         Engine::Presto => "Presto",
+        Engine::Oracle => "Oracle",
     }
 }
 

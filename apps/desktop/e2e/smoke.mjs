@@ -509,6 +509,7 @@ try {
     ["spelaiondb-plugin-clickhouse", "ClickHouse"],
     ["spelaiondb-plugin-redis", "Redis"],
     ["spelaiondb-plugin-trino", "Presto, Trino"],
+    ["spelaiondb-plugin-oracle", "Oracle"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();
@@ -5400,8 +5401,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "MariaDB" }).isDisabled()));
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled()));
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "DuckDB" }).isDisabled()));
-  assert.ok(await wizard.locator(".engine-card", { hasText: "Oracle" }).isDisabled());
-  await wizard.locator(".engine-card", { hasText: "Oracle" }).getByText("Coming soon").waitFor();
+  // Oracle is a plugin now (ADR-059); Snowflake is still planned.
+  assert.ok(!(await wizard.locator(".engine-card", { hasText: "Oracle" }).isDisabled()));
+  assert.ok(await wizard.locator(".engine-card", { hasText: "Snowflake" }).isDisabled());
+  await wizard.locator(".engine-card", { hasText: "Snowflake" }).getByText("Coming soon").waitFor();
   await shot("12a-add-connection-catalog");
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");

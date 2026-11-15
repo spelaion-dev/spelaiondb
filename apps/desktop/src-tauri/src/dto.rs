@@ -2588,6 +2588,9 @@ pub struct EngineItem {
     /// Queried with SQL. An engine that is not (ADR-056) has no read-only mode, no agents and no
     /// session setup yet: the form does not offer them.
     pub sql: bool,
+    /// The core has a read barrier for this engine, so the form offers read-only connections and
+    /// agents (`has_read_barrier`): not on an engine that is not SQL, nor on Oracle yet.
+    pub read_barrier: bool,
 }
 
 impl From<spelaion_core::EngineInfo> for EngineItem {
@@ -2609,6 +2612,7 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
             available: info.engine.is_some(),
             session_schema: info.engine.is_some_and(|e| e.has_session_schema()),
             sql: info.engine.is_none_or(|e| e.is_sql()),
+            read_barrier: info.engine.is_none_or(spelaion_core::has_read_barrier),
             isolation_levels: info
                 .engine
                 .map(|engine| {
