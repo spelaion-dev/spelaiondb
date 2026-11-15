@@ -140,6 +140,7 @@ impl ExplainPolicy {
                 | Engine::Gizmosql
                 | Engine::Neo4j
                 | Engine::Databend
+                | Engine::Spanner
                 | Engine::Hive
                 | Engine::Spark
                 | Engine::Kyuubi

@@ -233,6 +233,11 @@
           "description": "Databend, served only by its plugin over its HTTP query API. It enforces no read-only\nmode (SDB-350): no read-only connection and no agents.",
           "type": "string",
           "const": "databend"
+        },
+        {
+          "description": "Google Cloud Spanner (GoogleSQL), served only by its plugin over its REST API. The\naccess token is the password. No read-only mode and no agents yet.",
+          "type": "string",
+          "const": "spanner"
         }
       ]
     },

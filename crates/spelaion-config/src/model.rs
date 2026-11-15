@@ -197,12 +197,15 @@ pub enum Engine {
     /// Databend, served only by its plugin over its HTTP query API. It enforces no read-only
     /// mode (SDB-350): no read-only connection and no agents.
     Databend,
+    /// Google Cloud Spanner (GoogleSQL), served only by its plugin over its REST API. The
+    /// access token is the password. No read-only mode and no agents yet.
+    Spanner,
 }
 
 impl Engine {
     /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
     /// with no `_`, so a new engine fails there until it is listed here.
-    pub const ALL: [Engine; 24] = [
+    pub const ALL: [Engine; 25] = [
         Engine::Postgres,
         Engine::Sqlite,
         Engine::Mysql,
@@ -227,6 +230,7 @@ impl Engine {
         Engine::Kyuubi,
         Engine::Impala,
         Engine::Databend,
+        Engine::Spanner,
     ];
 
     /// The engine a connection file names (`as_str`'s text). Read through the same names the
@@ -264,6 +268,7 @@ impl Engine {
             Engine::Kyuubi => "kyuubi",
             Engine::Impala => "impala",
             Engine::Databend => "databend",
+            Engine::Spanner => "spanner",
         }
     }
 
@@ -289,7 +294,8 @@ impl Engine {
             | Engine::Spark
             | Engine::Kyuubi
             | Engine::Impala
-            | Engine::Databend => true,
+            | Engine::Databend
+            | Engine::Spanner => true,
             Engine::Mongodb
             | Engine::Redis
             | Engine::Cassandra
@@ -324,6 +330,7 @@ impl Engine {
             | Engine::Gizmosql
             | Engine::Neo4j
             | Engine::Databend
+            | Engine::Spanner
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
@@ -353,6 +360,7 @@ impl Engine {
             | Engine::Gizmosql
             | Engine::Neo4j
             | Engine::Databend
+            | Engine::Spanner
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
@@ -389,6 +397,8 @@ impl Engine {
             Engine::Impala => Some(21050),
             // The HTTP query handler; 443 on Databend Cloud.
             Engine::Databend => Some(8000),
+            // Google's REST endpoint; the emulator's is 9020.
+            Engine::Spanner => Some(443),
         }
     }
 }
@@ -542,6 +552,7 @@ impl IsolationLevel {
             | Engine::Gizmosql
             | Engine::Neo4j
             | Engine::Databend
+            | Engine::Spanner
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
@@ -575,6 +586,7 @@ impl Engine {
             | Engine::Gizmosql
             | Engine::Neo4j
             | Engine::Databend
+            | Engine::Spanner
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi

@@ -46,8 +46,10 @@ use crate::session::Session;
 /// in the SQL the explorer generates; an empty schema means a name outside every schema (a
 /// schema itself).
 pub fn qualified_name(dialect: &dyn Dialect, schema: &str, names: &[String]) -> String {
-    let main =
-        matches!(dialect.name(), "sqlite" | "duckdb") && schema == "main" && !names.is_empty();
+    // Spanner's default schema has no name: the explorer shows it as `default`.
+    let main = (matches!(dialect.name(), "sqlite" | "duckdb") && schema == "main"
+        || dialect.name() == "spanner" && schema == "default")
+        && !names.is_empty();
     let schema = (!schema.is_empty() && !main).then_some(schema);
     schema
         .into_iter()
@@ -222,6 +224,8 @@ pub async fn active_schema(session: &Session) -> Result<Option<String>, String> 
                 .map_err(|e| e.to_string());
         }
         "sqlite" => return Ok(Some("main".into())),
+        // Unqualified names are in Spanner's default schema, shown as `default`.
+        "spanner" => return Ok(Some("default".into())),
         "sqlserver" => "SELECT SCHEMA_NAME()",
         _ => "SELECT current_schema()",
     };
