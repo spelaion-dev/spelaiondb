@@ -25,8 +25,8 @@
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
-# The hard limits total 11,360 MiB; check-memory.py enforces an 11.25 GiB ceiling and
-# 4 GiB left on the CI host for kind, the compiler/tests and the operating system.
+# The hard limits total 11,776 MiB; check-memory.py enforces an 11.5 GiB ceiling and
+# 4 GB left on the CI host for kind, the compiler/tests and the operating system.
 # Keep engine caches below their container limit: a cgroup cap alone just moves an OOM.
 
 services:
@@ -50,7 +50,7 @@ services:
   # init script is hidden by the mount below: only `spelaion_gis` has the extension, so the
   # `spelaion` database's catalog is the same as on plain PostgreSQL.
   postgres:
-    mem_limit: 384m
+    mem_limit: 256m
     image: postgis/postgis:17-3.5-alpine
     environment:
       POSTGRES_USER: spelaion
@@ -75,7 +75,7 @@ services:
         install -o postgres -g postgres -m 644 /certs/server.crt /var/lib/postgresql/server.crt
         install -o postgres -g postgres -m 644 /certs/ca.crt /var/lib/postgresql/ca.crt
         install -o postgres -g postgres -m 644 /certs/pg_hba.conf /var/lib/postgresql/pg_hba.conf
-        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key -c ssl_ca_file=/var/lib/postgresql/ca.crt -c hba_file=/var/lib/postgresql/pg_hba.conf
+        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key -c ssl_ca_file=/var/lib/postgresql/ca.crt -c hba_file=/var/lib/postgresql/pg_hba.conf -c shared_buffers=64MB -c work_mem=1MB -c maintenance_work_mem=16MB -c max_parallel_workers_per_gather=0
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U spelaion -d spelaion"]
       interval: 2s
@@ -115,7 +115,7 @@ services:
     networks: [data, direct]
 
   mariadb:
-    mem_limit: 384m
+    mem_limit: 256m
     image: mariadb:11.4
     environment:
       MARIADB_ROOT_PASSWORD: spelaion-root
@@ -226,7 +226,7 @@ services:
     networks: [data, direct]
 
   redis:
-    mem_limit: 64m
+    mem_limit: 32m
     image: redis:7.4
     command: ["redis-server", "--requirepass", "spelaion"]
     ports:
@@ -241,10 +241,11 @@ services:
   # (`memory`, `tpch`…). Published on 127.0.0.1:18080 and 18081; through the tunnels they are
   # trino:8080 and presto:8080. No password: they take one only over TLS.
   trino:
-    mem_limit: 1280m
+    mem_limit: 1536m
     image: trinodb/trino:479
     volumes:
       - ./trino/jvm.config:/etc/trino/jvm.config:ro
+      - ./trino/config.properties:/etc/trino/config.properties:ro
     ports:
       - "127.0.0.1:18080:8080"
     healthcheck:
@@ -291,10 +292,11 @@ services:
     networks: [data, direct]
 
   presto:
-    mem_limit: 1280m
+    mem_limit: 1536m
     image: prestodb/presto:0.295
     volumes:
       - ./presto/jvm.config:/opt/presto-server/etc/jvm.config:ro
+      - ./presto/config.properties:/opt/presto-server/etc/config.properties:ro
     ports:
       - "127.0.0.1:18081:8080"
     healthcheck:
@@ -346,7 +348,7 @@ services:
   # published on 127.0.0.1:18095 without authentication; through the tunnels and the proxies it
   # is libsql:8080. Tokens and TLS are tested in its plugin's repository.
   libsql:
-    mem_limit: 128m
+    mem_limit: 64m
     image: ghcr.io/tursodatabase/libsql-server:v0.24.33
     ports:
       - "127.0.0.1:18095:8080"
@@ -400,7 +402,7 @@ services:
   # engine at once (SDB-345).
   tdengine:
     image: tdengine/tdengine:3.3.6.13
-    mem_limit: 1g
+    mem_limit: 256m
     ports:
       - "127.0.0.1:16141:6041"
     healthcheck:
