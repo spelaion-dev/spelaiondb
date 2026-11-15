@@ -149,6 +149,9 @@ jobs:
             echo "Linux smoke test failed at: ${step:-see the log}. Screenshots and log: artifact smoke-linux." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+      - name: Diagnose test services after a failure
+        if: failure()
+        run: bash testing/docker/diagnostics.sh
       - name: Upload the screenshots and the log
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

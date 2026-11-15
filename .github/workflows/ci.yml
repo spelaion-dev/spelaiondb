@@ -234,6 +234,10 @@ jobs:
       - if: steps.scope.outputs.rust != 'false'
         run: git diff --exit-code apps/desktop/src/bindings.ts
 
+      - name: Diagnose test services after a failure
+        if: failure() && steps.scope.outputs.rust != 'false'
+        run: bash testing/docker/diagnostics.sh
+
   frontend:
     name: App · strict TypeScript and build
     runs-on: ubuntu-latest

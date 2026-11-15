@@ -43,11 +43,21 @@ class MemoryBudget(unittest.TestCase):
         )
 
     def test_refuses_host_too_small_even_below_budget(self):
-        with self.assertRaisesRegex(ValueError, "less than 4 GiB"):
+        with self.assertRaisesRegex(ValueError, "at least 4 GB"):
             memory.check(
                 {"services": {"db": {"mem_limit": memory.MAX_SERVICES}}},
                 8 * 1024**3,
             )
+
+    def test_fits_the_measured_public_runner(self):
+        # A real ubuntu-latest runner's free -m reported 15,700 MiB, not 16 GiB.
+        config = {"services": {"db": {"mem_limit": memory.MAX_SERVICES}}}
+        self.assertEqual(memory.check(config, 15700 * memory.MIB), memory.MAX_SERVICES)
+
+    def test_refuses_one_byte_below_the_host_reserve(self):
+        config = {"services": {"db": {"mem_limit": memory.MAX_SERVICES}}}
+        with self.assertRaisesRegex(ValueError, "at least 4 GB"):
+            memory.check(config, memory.MAX_SERVICES + memory.HOST_RESERVE - 1)
 
 
 if __name__ == "__main__":

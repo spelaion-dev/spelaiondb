@@ -89,42 +89,50 @@ ssh -i testing/docker/keys/id_ed25519 -J spelaion@127.0.0.1:2221 -p 22 spelaion@
 
 ## CI memory budget
 
-The main Compose project has a hard limit on every container. Their sum is **11,360 MiB
-(11.09 GiB)**. Public GitHub `ubuntu-latest` runners have
+The main Compose project has a hard limit on every container. Their sum is **11,776 MiB
+(11.5 GiB)**. Public GitHub `ubuntu-latest` runners have
 [16 GB of RAM](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories).
 Before starting either CI job's services, `check-memory.py` checks the resolved Compose JSON:
-no unbounded service, at most 11.25 GiB in total, and **at least 4 GiB of the Docker host's
-actual RAM left** for the operating system, the kind cluster and Rust compilation/tests.
+no unbounded service, at most 11.5 GiB in total, and **at least 4 GB (3,815 MiB) of the Docker
+host's actual RAM left** for the operating system, the kind cluster and Rust compilation/tests.
+This uses the daemon's reported RAM: a real runner reported 15,700 MiB after kernel reservations,
+which leaves 3,924 MiB (4.11 GB) after the services, rather than assuming it has 16 GiB available.
 The smaller protocol-family projects below are separate, opt-in projects; CI does not add
 them to this budget.
 
 | Container | Limit (MiB) | Engine allocation below that limit |
 |---|---:|---|
-| Trino, Presto (each) | 1280 | 768 MiB heap, 128 MiB direct buffers, 64 MiB code cache |
+| Trino, Presto (each) | 1536 | 1024 MiB heap, 128 MiB direct buffers, 64 MiB code cache |
 | Cassandra | 1024 | 256 MiB heap, 128 MiB direct buffers |
 | Neo4j | 768 | 384 MiB heap, 64 MiB direct buffers, 128 MiB page cache |
 | Oracle | 2048 | Native database, not a JVM; Free's database memory ceiling is 2 GiB |
 | SQL Server | 2048 | 1280 MiB memory manager limit |
 | MongoDB | 512 | 256 MiB WiredTiger cache |
 | ClickHouse | 512 | 384 MiB server memory limit; 64 MiB mark / 16 MiB uncompressed caches |
-| PostgreSQL | 384 | Default 128 MiB shared buffers |
-| MySQL, MariaDB (each) | 384 | 64 MiB InnoDB buffer pool; smaller MySQL performance schema tables |
+| PostgreSQL | 256 | 64 MiB shared buffers, 1 MiB work memory, 16 MiB maintenance memory; no parallel query workers |
+| MySQL | 384 | 64 MiB InnoDB buffer pool; smaller performance schema tables |
+| MariaDB | 256 | 64 MiB InnoDB buffer pool |
 | GizmoSQL | 256 | Container limit |
-| libSQL | 128 | Container limit |
-| bastion1, bastion2, sqlitehost, proxy, Redis (each) | 64 | Container limit |
+| libSQL, proxy, bastion1, bastion2, sqlitehost (each) | 64 | Container limit |
+| Redis | 32 | Container limit |
 | oracle-tls | 32 | Container limit |
+| TDengine | 256 | Container limit |
 
 The JVMs see two processors so thread pools do not grow with a developer machine's CPU count.
 Trino and Presto use their pinned images' launch flags in the mounted `jvm.config` files,
 with heap/direct limits and a smaller code cache; changing an image means checking its flags
-again. Readiness alone is insufficient when tuning them: run a real query (for example
-`SELECT count(*) FROM tpch.tiny.nation`) as well. Keep space for native allocations, health
-checks and query execution when changing a limit.
+again. Their task concurrency is two, with four worker threads, and query history targets ten
+plans once they are 30 seconds old. Readiness alone is insufficient when tuning them: run
+the parallel `trino.rs` integration tests, including the sorted export and cancellation workload. Keep space for
+native allocations, health checks and query execution when changing a limit.
+HAProxy also has two threads and 128 connections, so neither CPUs nor a high file-descriptor
+limit sizes its TLS pools.
 
 On startup failure both CI jobs capture `docker stats --no-stream --all`, container limits
 and state (including `OOMKilled`), and the tail of each service's log immediately in
 `services.log`. The wait step prints it and captures fresh diagnostics if it fails or times
-out. To inspect a local failure, run `bash testing/docker/diagnostics.sh`.
+out. Both jobs also capture diagnostics if a later test fails, so a server that dies after
+readiness is visible. To inspect a local failure, run `bash testing/docker/diagnostics.sh`.
 
 ## Servers that speak PostgreSQL's protocol
 
