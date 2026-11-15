@@ -79,6 +79,27 @@ pub trait Dialect: Send + Sync {
     fn request_class(&self, _request: &serde_json::Value) -> RequestClass {
         RequestClass::Unknown
     }
+
+    /// Whether this is SQL, which the core writes statements in (catalog queries, object
+    /// actions, `SELECT current_schema()`). False for a language of requests and for one shaped
+    /// like SQL that is not (CQL), which say so.
+    fn is_sql(&self) -> bool {
+        !self.reads_requests()
+    }
+
+    /// For a language shaped like SQL that `sqlparser` does not read (ADR-056: CQL, PartiQL,
+    /// Cypher…), whose statements are sent as text: what the guard makes of `statement`, from
+    /// lists of its own. `None` for SQL, which the core's classifier reads, and for a language
+    /// of requests, which [`Dialect::request_class`] reads.
+    fn statement_class(&self, _statement: &str) -> Option<RequestClass> {
+        None
+    }
+
+    /// For such a language: why `statement` is not sent at all (it would change what the
+    /// session knows of itself, as CQL's `USE` does), or `None` to send it.
+    fn refuse_statement(&self, _statement: &str) -> Option<RequestError> {
+        None
+    }
 }
 
 /// Why a statement of a language that is not SQL could not be read (ADR-056): nothing is sent.

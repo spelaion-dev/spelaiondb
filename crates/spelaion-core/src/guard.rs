@@ -86,10 +86,12 @@ fn request_risk(
     text: &str,
     safeguards: &Safeguards,
 ) -> Option<Option<Risk>> {
-    // The database does not change what a command is.
-    let class = match dialect.to_request(text, "guard")? {
-        Ok(request) => dialect.request_class(&request),
-        Err(_) => RequestClass::Unknown,
+    // The database does not change what a command is. A language shaped like SQL that
+    // `sqlparser` does not read (CQL) has lists of its own, read from its text.
+    let class = match dialect.to_request(text, "guard") {
+        Some(Ok(request)) => dialect.request_class(&request),
+        Some(Err(_)) => RequestClass::Unknown,
+        None => dialect.statement_class(text)?,
     };
     let risk = match class {
         RequestClass::Drop => Some(Risk::Drop),

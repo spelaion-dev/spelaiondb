@@ -498,7 +498,7 @@ function CollectionNode({ session, connectionId, object }: { session: string; co
       {menu && (
         <ObjectMenu at={menu}>
           <button role="menuitem" onClick={() => void open()}>
-            {t(key ? "openKey" : "openCollection")}
+            {t(key ? "openKey" : object.kind === "collection" ? "openCollection" : "openRows")}
           </button>
           <CopyMenuItems
             session={session}
@@ -2431,10 +2431,12 @@ function SchemaNode({
                         : undefined;
                     })()}
                   >
-                    {relations.filter((o) => o.kind === "collection").map((o) => (
+                    {/* An engine whose language is not SQL opens its tables too with its own
+                        statement (ADR-056): the table data tab and the object actions write SQL. */}
+                    {relations.filter((o) => o.kind === "collection" || !sql).map((o) => (
                       <CollectionNode key={o.name} session={session} connectionId={connectionId} object={o} />
                     ))}
-                    {relations.filter((o) => o.kind !== "collection").map((o) => (
+                    {relations.filter((o) => o.kind !== "collection" && sql).map((o) => (
                       <ObjectNode
                         key={o.name}
                         session={session}

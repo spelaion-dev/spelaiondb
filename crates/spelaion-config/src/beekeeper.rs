@@ -810,7 +810,8 @@ fn tls_of(row: &Row, engine: Option<Engine>) -> Option<ImportedTls> {
             | Engine::Trino
             | Engine::Presto
             | Engine::Oracle
-            | Engine::Libsql,
+            | Engine::Libsql
+            | Engine::Cassandra,
         )
         | None => None,
     };

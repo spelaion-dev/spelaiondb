@@ -863,7 +863,12 @@ impl Session {
                         None => match request_of(&*language, &*connection, text).await {
                             Some(Ok(request)) => connection.execute_request(request, &options).await,
                             Some(Err(error)) => Err(error),
-                            None => connection.execute(text, &options).await,
+                            // A language sent as text may still refuse a statement (CQL's
+                            // `USE`): nothing is sent.
+                            None => match language.refuse_statement(text) {
+                                Some(error) => Err(request_error(text, error)),
+                                None => connection.execute(text, &options).await,
+                            },
                         },
                     }
                 };

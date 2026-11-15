@@ -314,6 +314,7 @@
   "copyName": "Copiar nombre",
   "openCollection": "Abrir (primeros 200 documentos)",
   "openKey": "Abrir",
+  "openRows": "Abrir (primeras 200 filas)",
   "copyNames": "Copiar {{count}} nombres",
   "copyQualifiedName": "Copiar nombre cualificado",
   "copyQualifiedNames": "Copiar {{count}} nombres cualificados",

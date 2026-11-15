@@ -278,6 +278,29 @@ services:
       - "127.0.0.1:18095:8080"
     networks: [data, direct]
 
+  # Cassandra 5 (ADR-056), through its plugin, on 127.0.0.1:19142 with no login. CI's runner
+  # holds every engine at once: a small heap, what the JVM may take off the heap bounded too
+  # (by default it may reserve gigabytes of direct memory, touches the whole heap at start and
+  # runs a GC thread per CPU), and a hard cap, so this container can never push another out.
+  cassandra:
+    image: cassandra:5
+    mem_limit: 1g
+    environment:
+      MAX_HEAP_SIZE: 256M
+      HEAP_NEWSIZE: 64M
+      JVM_EXTRA_OPTS: >-
+        -XX:MaxDirectMemorySize=128M -XX:-AlwaysPreTouch -XX:ParallelGCThreads=2
+        -XX:ConcGCThreads=1 -XX:CICompilerCount=2
+    ports:
+      - "127.0.0.1:19142:9042"
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "DESCRIBE KEYSPACES"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 30s
+    networks: [data, direct]
+
 networks:
   public: {}
   direct: {}

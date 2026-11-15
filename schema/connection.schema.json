@@ -206,6 +206,11 @@
           "description": "libSQL (`sqld`, Turso): SQLite's SQL behind Hrana over HTTP, served only by its plugin\n(ADR-058).",
           "type": "string",
           "const": "libsql"
+        },
+        {
+          "description": "Apache Cassandra, and the servers that speak its protocol (ScyllaDB). Its language,\nCQL, is shaped like SQL but is not SQL: sent as text, read by the core's own lists\n(ADR-056).",
+          "type": "string",
+          "const": "cassandra"
         }
       ]
     },
