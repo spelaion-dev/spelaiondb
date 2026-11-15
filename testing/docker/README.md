@@ -17,9 +17,11 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
 - `bastion2` and `postgres` only resolve from inside the chain.
 - Postgres is also published on `127.0.0.1:15432`, MySQL on `127.0.0.1:13306`, MariaDB
   on `127.0.0.1:13307`, SQL Server on `127.0.0.1:11433`, ClickHouse (HTTP) on `127.0.0.1:18123`,
-  Trino on `127.0.0.1:18080` and Presto on `127.0.0.1:18081`, for tests without SSH
-  (`SPELAION_TEST_CLICKHOUSE`, `SPELAION_TEST_TRINO`, `SPELAION_TEST_PRESTO`; behind the
-  bastions they are `clickhouse:8123`, `trino:8080` and `presto:8080`).
+  Trino on `127.0.0.1:18080`, Presto on `127.0.0.1:18081` and GizmoSQL (Flight SQL) on
+  `127.0.0.1:31337`, for tests without SSH
+  (`SPELAION_TEST_CLICKHOUSE`, `SPELAION_TEST_TRINO`, `SPELAION_TEST_PRESTO`,
+  `SPELAION_TEST_GIZMOSQL`; behind the
+  bastions they are `clickhouse:8123`, `trino:8080`, `presto:8080` and `gizmosql:31337`).
 - Oracle Database Free (Oracle's lite image, about 2 GB; a minute or two to start the first
   time) is on `127.0.0.1:11521` (`SPELAION_TEST_ORACLE`; behind the bastions `oracle:1521`):
   user and password `spelaion`, service `FREEPDB1`, made by `oracle/startup` on every start.

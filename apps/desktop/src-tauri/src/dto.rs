@@ -2589,7 +2589,7 @@ pub struct EngineItem {
     /// session setup yet: the form does not offer them.
     pub sql: bool,
     /// The core has a read barrier for this engine, so the form offers read-only connections and
-    /// agents (`has_read_barrier`): not on an engine that is not SQL, nor on Oracle yet.
+    /// agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
     pub read_barrier: bool,
 }
 

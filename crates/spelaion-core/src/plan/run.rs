@@ -133,7 +133,10 @@ impl ExplainPolicy {
                 | Engine::Presto
                 | Engine::Oracle
                 | Engine::Libsql
-                | Engine::Cassandra => None,
+                | Engine::Cassandra
+                | Engine::Flightsql
+                | Engine::Dremio
+                | Engine::Gizmosql => None,
             },
         }
     }

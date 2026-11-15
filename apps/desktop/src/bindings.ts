@@ -2298,7 +2298,7 @@ export type EngineItem_Deserialize = {
 	sql: boolean,
 	/**
 	 *  The core has a read barrier for this engine, so the form offers read-only connections and
-	 *  agents (`has_read_barrier`): not on an engine that is not SQL, nor on Oracle yet.
+	 *  agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
 	 */
 	readBarrier: boolean,
 };
@@ -2333,7 +2333,7 @@ export type EngineItem_Serialize = {
 	sql: boolean,
 	/**
 	 *  The core has a read barrier for this engine, so the form offers read-only connections and
-	 *  agents (`has_read_barrier`): not on an engine that is not SQL, nor on Oracle yet.
+	 *  agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
 	 */
 	readBarrier: boolean,
 };

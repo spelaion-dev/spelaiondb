@@ -184,7 +184,10 @@
             "sqlserver",
             "clickhouse",
             "trino",
-            "presto"
+            "presto",
+            "flightsql",
+            "dremio",
+            "gizmosql"
           ]
         },
         {

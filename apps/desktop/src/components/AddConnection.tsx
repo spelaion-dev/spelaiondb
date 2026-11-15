@@ -610,7 +610,7 @@ function ConnectionForm(props: {
     ...(engine.sql
       ? {}
       : { readOnly: false, mcpExposed: false, mcpWrites: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }),
-    // Neither is offered where the core has no read barrier (Oracle, ADR-059).
+    // Neither is offered where the core has no read barrier (Oracle, libSQL, Flight SQL).
     ...(engine.readBarrier ? {} : { readOnly: false, mcpExposed: false, mcpWrites: false }),
   };
   const typedPassword = auth === "password" ? password : "";

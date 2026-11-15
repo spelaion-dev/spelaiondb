@@ -23,6 +23,7 @@ pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 pub mod sqlserver;
+pub mod standard;
 pub mod trino;
 
 pub use clickhouse::ClickhouseDialect;
@@ -35,6 +36,7 @@ pub use postgres::PostgresDialect;
 pub use redis::RedisDialect;
 pub use sqlite::SqliteDialect;
 pub use sqlserver::SqlServerDialect;
+pub use standard::StandardDialect;
 pub use trino::TrinoDialect;
 
 /// The dialect of an engine, by the name the configuration uses (`engine = "postgres"`).
@@ -60,6 +62,10 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "libsql" => Some(Arc::new(SqliteDialect)),
         // Shaped like SQL, but its own: sent as text, read here (ADR-056).
         "cassandra" => Some(Arc::new(CqlDialect)),
+        // Flight SQL: standard SQL under each engine's own name, which no barrier answers to.
+        "flightsql" => Some(Arc::new(StandardDialect::named("flightsql"))),
+        "dremio" => Some(Arc::new(StandardDialect::named("dremio"))),
+        "gizmosql" => Some(Arc::new(StandardDialect::named("gizmosql"))),
         _ => None,
     }
 }
@@ -84,6 +90,9 @@ mod tests {
             ("presto", "trino"),
             ("oracle", "oracle"),
             ("cassandra", "cassandra"),
+            ("flightsql", "flightsql"),
+            ("dremio", "dremio"),
+            ("gizmosql", "gizmosql"),
         ] {
             let found = for_engine(engine).unwrap_or_else(|| panic!("{engine} has no dialect"));
             assert_eq!(found.name(), dialect, "{engine}");

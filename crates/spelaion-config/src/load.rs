@@ -473,7 +473,12 @@ pub(crate) fn validate_connection(
         .collect(),
         // ClickHouse logs in as `default` when no user is given; Trino and Presto take any
         // name (the plugin sends `spelaiondb`). The database is optional on all three.
-        Engine::Clickhouse | Engine::Trino | Engine::Presto => [(
+        Engine::Clickhouse
+        | Engine::Trino
+        | Engine::Presto
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql => [(
             "host",
             file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
         )]
@@ -587,14 +592,16 @@ pub(crate) fn validate_connection(
     }
     // ADR-056, point 6: an engine whose language is not SQL has no read-only mode yet, and
     // its sessions run no SQL. Opening it anyway would let writes through or fail later.
+    // ADR-020: no barrier of ours, no read-only mode (the Flight SQL engines too, ADR-041).
+    if !file.engine.has_read_barrier() && file.read_only {
+        let label = engine_label(file.engine);
+        return Err(ConfigError::new(
+            path,
+            format!("{label} has no read-only mode in SpelaionDB yet: remove `read_only`"),
+        ));
+    }
     if !file.engine.is_sql() {
         let label = engine_label(file.engine);
-        if file.read_only {
-            return Err(ConfigError::new(
-                path,
-                format!("{label} has no read-only mode in SpelaionDB yet: remove `read_only`"),
-            ));
-        }
         if !file.session.is_default() {
             return Err(ConfigError::new(
                 path,
@@ -646,6 +653,12 @@ pub(crate) fn validate_connection(
                 return Err(ConfigError::new(
                     path,
                     "Oracle connections log in with a password: client certificates (wallets) are not supported yet",
+                ));
+            }
+            Engine::Flightsql | Engine::Dremio | Engine::Gizmosql => {
+                return Err(ConfigError::new(
+                    path,
+                    "Flight SQL connections log in with a user and a password: client certificates are not supported yet",
                 ));
             }
         }
@@ -920,6 +933,9 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Oracle => "Oracle",
         Engine::Libsql => "libSQL",
         Engine::Cassandra => "Cassandra",
+        Engine::Flightsql => "Arrow Flight SQL",
+        Engine::Dremio => "Dremio",
+        Engine::Gizmosql => "GizmoSQL",
     }
 }
 

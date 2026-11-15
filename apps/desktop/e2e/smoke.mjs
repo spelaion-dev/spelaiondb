@@ -512,6 +512,7 @@ try {
     ["spelaiondb-plugin-oracle", "Oracle"],
     ["spelaiondb-plugin-libsql", "libSQL / Turso"],
     ["spelaiondb-plugin-cassandra", "Cassandra"],
+    ["spelaiondb-plugin-flightsql", "Dremio, Arrow Flight SQL, GizmoSQL"],
   ]) {
     const row = pluginList.locator(`[data-plugin="${plugin}"]`);
     await row.getByText(engines, { exact: true }).waitFor();

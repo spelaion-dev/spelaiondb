@@ -9,6 +9,7 @@
 #                                                                          oracle:1521
 #                                                                          oracle-tls:2484
 #                                                                          libsql:8080
+#                                                                          gizmosql:31337
 #
 #   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
 #
@@ -16,6 +17,8 @@
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307, SQL
 # Server on 11433, ClickHouse on 18123, Trino on 18080, Presto on 18081, Oracle on 11521
 # (TCPS on 12484) and libSQL on 18095, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# Server on 11433, ClickHouse on 18123, Trino on 18080, Presto on 18081 and GizmoSQL on 31337,
+# for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
@@ -222,6 +225,24 @@ services:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/info | grep -q '\"starting\":false'"]
       interval: 3s
       retries: 80
+    networks: [data, direct]
+
+  # GizmoSQL 1.42.3 (DuckDB behind Arrow Flight SQL), served by the Flight SQL plugin as
+  # `gizmosql` and as the generic `flightsql`. 127.0.0.1:31337; through the tunnels
+  # gizmosql:31337. User `spelaion`, password `spelaion`. Dremio is tested in the plugin's own
+  # repository.
+  gizmosql:
+    image: gizmodata/gizmosql@sha256:88e9d292d6cfe2f41e28d3baab24230691bf07af671b2329d226689fe5634150
+    environment:
+      GIZMOSQL_USERNAME: spelaion
+      GIZMOSQL_PASSWORD: spelaion
+      TLS_ENABLED: "0"
+    ports:
+      - "127.0.0.1:31337:31337"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/31337' || exit 1"]
+      interval: 2s
+      retries: 60
     networks: [data, direct]
 
   presto:
