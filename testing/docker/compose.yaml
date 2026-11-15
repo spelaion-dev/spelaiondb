@@ -25,7 +25,7 @@
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
-# The default phase's limits total 10,368 MiB; Trino/Presto/Hive run separately with bastions.
+# The default phase's limits total 11,392 MiB; Trino/Presto/Hive run separately with bastions.
 # check-memory.py enforces an 11.5 GiB ceiling for each active phase and
 # 4 GB left on the CI host for kind, the compiler/tests and the operating system.
 # Keep engine caches below their container limit: a cgroup cap alone just moves an OOM.
