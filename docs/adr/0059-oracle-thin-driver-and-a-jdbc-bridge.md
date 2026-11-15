@@ -112,8 +112,9 @@ before writing the plugin showed four things it could not do, and SpelaionDB nee
 
 Like the PostgreSQL, MySQL and SQL Server plugins, the Oracle plugin vendors the release as
 published and patches it, each patch marked and tested there (`vendor/oracledb/PATCHED.md` in
-`spelaion-dev/spelaiondb-plugin-oracle`). The same needs go to the upstream project; the patches
-are dropped as upstream releases cover them.
+`spelaion-dev/spelaiondb-plugin-oracle`). The fork is ours to keep: by the maintainers' decision
+no issues are opened upstream. At each move to a new release, a patch is dropped when that
+release does the same itself.
 
 **2026-11-15: no read-only mode and no agents on Oracle yet.** Point 2's barrier does not stand
 up to a test that tries to get around it. A function declared `PRAGMA AUTONOMOUS_TRANSACTION`
