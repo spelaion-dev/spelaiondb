@@ -506,12 +506,10 @@ pub async fn open_connection(
     .await?;
 
     let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
-    // Which server of PostgreSQL's protocol this is decides which of its barriers can be
-    // relied on (SDB-169): it is asked to the server, never taken from the file or the plugin.
-    let family = match dialect.name() {
-        "postgres" => Some(crate::postgres_family::read_family(connection.as_ref()).await),
-        _ => None,
-    };
+    // Which server of PostgreSQL's or MySQL's protocol this is decides which of its barriers
+    // can be relied on (SDB-169, SDB-170): it is asked to the server, never taken from the file
+    // or the plugin.
+    let family = crate::server_family::read_family(connection.as_ref(), dialect.name()).await;
     // Every result of the session is masked as its connection says (ADR-051).
     let mut session = Session::new(connection, dialect, results)
         .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
@@ -558,6 +556,22 @@ pub async fn open_connection(
             open.close().await;
             return Err(error.into());
         }
+    }
+    // The server must say the session is read-only now (SDB-170): one that accepted the
+    // statement and stayed writable gets no read-only connection, whatever it calls itself.
+    if open.resolved.params.read_only
+        && crate::session_setup::read_only_statement(open.session.dialect().name()).is_some()
+        && !crate::server_family::read_only_confirmed(
+            open.session.connection().as_ref(),
+            open.session.dialect().name(),
+        )
+        .await
+    {
+        open.close().await;
+        return Err(OpenError::NoReadOnlyBarrier(
+            "read-only mode is not available on this server: it accepted the session's              read-only mode and its session is still writable"
+                .into(),
+        ));
     }
     // Scripts split as the session reads text: its sql_mode, setup included (SDB-161).
     open.session.refresh_sql_mode().await;

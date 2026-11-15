@@ -298,12 +298,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   IPC windows).
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included); a
   server that speaks another engine's protocol is a kind of that engine's connection there
-  (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169), and
-  `postgres_family.rs` reads which server a PostgreSQL session reached from its `version()`:
-  one that does not enforce `BEGIN READ ONLY` or the session's read-only mode gets no agents,
-  streaming reads or read-only connections (unchecked forks neither). Like `readonly.rs`, any
-  change there needs tests that try to get around it (`tests/postgres_family.rs`, against
-  `testing/docker/pg-family`).
+  (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169; TiDB, OceanBase
+  and SingleStore are MySQL connections, SDB-170), and
+  `server_family.rs` reads which server a PostgreSQL or MySQL session reached from the server:
+  one that does not enforce its engine's read-only transaction or session mode gets no agents,
+  streaming reads or read-only connections (unchecked PostgreSQL forks neither), and a
+  read-only connection's session mode is read back from the server after it is set (a MySQL
+  fork that names itself as MySQL, StarRocks, is caught there). Like `readonly.rs`, any change
+  there needs tests that try to get around it (`tests/postgres_family.rs` and
+  `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the

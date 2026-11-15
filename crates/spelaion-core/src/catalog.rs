@@ -2,9 +2,9 @@
 //! the ones with a driver can be picked; the rest announce what is planned (ADR-005).
 //!
 //! A server that speaks another engine's protocol is a kind of that engine's connection, not
-//! an engine of its own (SDB-169, ADR-042): CockroachDB is a PostgreSQL connection with
+//! an engine of its own (SDB-169, SDB-170, ADR-042): CockroachDB is a PostgreSQL connection with
 //! CockroachDB's port, user and database to start from. What differs in it is read from the
-//! server when a session opens (`postgres_family.rs`), never from the entry it was added from.
+//! server when a session opens (`server_family.rs`), never from the entry it was added from.
 
 use spelaion_config::Engine;
 
@@ -117,6 +117,34 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         supported(Engine::Sqlite, "SQLite", Relational, File),
         supported(Engine::Mysql, "MySQL", Relational, Network),
         supported(Engine::Mariadb, "MariaDB", Relational, Network),
+        // MySQL's protocol, checked with each server's image (`testing/docker/mysql-family`).
+        kind_of(
+            Engine::Mysql,
+            "tidb",
+            "TiDB",
+            Relational,
+            4000,
+            Some("root"),
+            None,
+        ),
+        kind_of(
+            Engine::Mysql,
+            "oceanbase",
+            "OceanBase",
+            Relational,
+            2881,
+            Some("root"),
+            None,
+        ),
+        kind_of(
+            Engine::Mysql,
+            "singlestore",
+            "SingleStore",
+            Analytical,
+            3306,
+            Some("root"),
+            None,
+        ),
         supported(Engine::Sqlserver, "SQL Server", Relational, Network),
         planned("oracle", "Oracle", Relational, Network, Some(1521)),
         // PostgreSQL's protocol, checked with each server's image (`testing/docker/pg-family`).
@@ -201,10 +229,10 @@ mod tests {
         }
     }
 
-    /// SDB-169: the servers checked against PostgreSQL's protocol are kinds of its connection,
-    /// starting from their own port.
+    /// SDB-169, SDB-170: the servers checked against PostgreSQL's and MySQL's protocols are
+    /// kinds of those engines' connections, starting from their own port.
     #[test]
-    fn postgres_kinds_are_postgres_connections() {
+    fn protocol_kinds_are_their_engines_connections() {
         let catalog = engine_catalog();
         let kinds: Vec<_> = catalog
             .iter()
@@ -214,6 +242,9 @@ mod tests {
         assert_eq!(
             kinds,
             [
+                ("tidb", Some(Engine::Mysql), Some(4000)),
+                ("oceanbase", Some(Engine::Mysql), Some(2881)),
+                ("singlestore", Some(Engine::Mysql), Some(3306)),
                 ("cockroachdb", Some(Engine::Postgres), Some(26257)),
                 ("yugabytedb", Some(Engine::Postgres), Some(5433)),
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),

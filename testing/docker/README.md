@@ -72,6 +72,17 @@ The ports and variables are at the top of the file.
 docker compose -f testing/docker/pg-family/compose.yaml up -d --wait
 ```
 
+## Servers that speak MySQL's protocol
+
+`mysql-family/compose.yaml` (`spelaion-test-mysql-family`) has TiDB, OceanBase, SingleStore and
+StarRocks for `crates/spelaion-core/tests/mysql_family.rs` (SDB-170), apart from the main
+environment and CI for the same reason (StarRocks' image is about 8 GB). The ports and
+variables are at the top of the file.
+
+```bash
+docker compose -f testing/docker/mysql-family/compose.yaml up -d --wait
+```
+
 ## Clearing test leftovers
 
 Tests that create objects on these servers give them a per-run name (`<prefix>_<process id>`,
