@@ -214,6 +214,11 @@
           "description": "Apache Cassandra, and the servers that speak its protocol (ScyllaDB). Its language,\nCQL, is shaped like SQL but is not SQL: sent as text, read by the core's own lists\n(ADR-056).",
           "type": "string",
           "const": "cassandra"
+        },
+        {
+          "description": "Neo4j, a graph database served only by its plugin over its HTTP Query API. Its language,\nCypher, is not SQL: the core reads each statement and sends it as a request (ADR-056).",
+          "type": "string",
+          "const": "neo4j"
         }
       ]
     },

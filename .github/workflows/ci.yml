@@ -72,6 +72,8 @@ jobs:
       SPELAION_TEST_ORACLE: 127.0.0.1:11521
       # libSQL's server (ADR-058), through its pinned plugin.
       SPELAION_TEST_LIBSQL: 127.0.0.1:18095
+      # Neo4j (ADR-056), through its pinned plugin.
+      SPELAION_TEST_NEO4J: 127.0.0.1:17474
       # Redis (ADR-056), through its pinned plugin.
       SPELAION_TEST_REDIS: 127.0.0.1:16379
       SPELAION_TEST_TRINO: 127.0.0.1:18080

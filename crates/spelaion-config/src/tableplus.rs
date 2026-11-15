@@ -411,7 +411,8 @@ fn tls_mode(engine: Engine, mode: i64, unmapped: &mut Vec<String>) -> Option<Tls
         | Engine::Cassandra
         | Engine::Flightsql
         | Engine::Dremio
-        | Engine::Gizmosql => None,
+        | Engine::Gizmosql
+        | Engine::Neo4j => None,
     }
 }
 

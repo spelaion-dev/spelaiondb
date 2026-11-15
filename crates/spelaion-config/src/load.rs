@@ -510,9 +510,9 @@ pub(crate) fn validate_connection(
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
             .collect(),
-        // MongoDB and Redis may need no login, and the database can be chosen in the
-        // explorer.
-        Engine::Mongodb | Engine::Redis | Engine::Cassandra => [(
+        // MongoDB, Redis, Cassandra and Neo4j may need no login, and the database can be chosen
+        // in the explorer.
+        Engine::Mongodb | Engine::Redis | Engine::Cassandra | Engine::Neo4j => [(
             "host",
             file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
         )]
@@ -624,7 +624,8 @@ pub(crate) fn validate_connection(
             | Engine::Mongodb
             | Engine::Redis
             | Engine::Libsql
-            | Engine::Cassandra => {}
+            | Engine::Cassandra
+            | Engine::Neo4j => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,
@@ -936,6 +937,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Flightsql => "Arrow Flight SQL",
         Engine::Dremio => "Dremio",
         Engine::Gizmosql => "GizmoSQL",
+        Engine::Neo4j => "Neo4j",
     }
 }
 

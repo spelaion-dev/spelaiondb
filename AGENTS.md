@@ -303,6 +303,19 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   list's `read_barrier`). Tests: `tests/flightsql.rs` with
   `SPELAION_TEST_GIZMOSQL=127.0.0.1:31337` (GizmoSQL, as `gizmosql` and `flightsql`); Dremio is
   tested in the plugin's repository.
+- **Neo4j is a plugin whose language is not SQL** (ADR-056): `spelaion-dev/spelaiondb-plugin-neo4j`
+  (its HTTP Query API, user and password in HTTP Basic; each statement its own transaction),
+  pinned in `plugins.toml`. Its language is `spelaion-dialect`'s `neo4j.rs`: Cypher split at `;`
+  outside strings, backticked names and comments, each statement sent as
+  `{"database", "statement"}` in the session's database. The guard reads the clauses: any
+  `DELETE` asks as a delete, `DROP` as a drop; a write clause is a write, and a procedure
+  (`CALL x.y`) and anything unlisted are unknown, never a read. Nodes, relationships, paths,
+  lists and maps arrive as JSON cells. The explorer shows each database's node labels and
+  relationship types (`ObjectKind::NodeLabel`, `RelationshipType`), opened with a bounded
+  `MATCH` (`Dialect::browse_statement`). Like MongoDB and Redis, no read-only mode, no agents
+  and no session setup, and no cancel. Tests: `spelaion-core`'s `tests/neo4j.rs` with
+  `SPELAION_TEST_NEO4J=127.0.0.1:17474` (and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS`);
+  `SPELAION_DEV_PLUGIN_NEO4J` in a development build.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -759,6 +772,7 @@ outside the team.
   SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_ORACLE=127.0.0.1:11521
   SPELAION_TEST_LIBSQL=127.0.0.1:18095
   SPELAION_TEST_GIZMOSQL=127.0.0.1:31337
+  SPELAION_TEST_LIBSQL=127.0.0.1:18095 SPELAION_TEST_NEO4J=127.0.0.1:17474
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
   SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142

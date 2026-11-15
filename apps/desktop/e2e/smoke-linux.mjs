@@ -80,6 +80,9 @@ const personal = {
   "oracle.toml": `schema_version = 1\nname = "Oracle through the tunnel"\nengine = "oracle"\nhost = "oracle"\ndatabase = "FREEPDB1"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
   // libSQL, only a plugin (ADR-058), behind the same two bastions: Hrana over plain HTTP.
   "libsql.toml": `schema_version = 1\nname = "libSQL through the tunnel"\nengine = "libsql"\nhost = "libsql"\nport = 8080\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // Neo4j, only a plugin whose language is Cypher (ADR-056), behind the same two bastions: its
+  // HTTP Query API without TLS.
+  "neo4j.toml": `schema_version = 1\nname = "Neo4j through the tunnel"\nengine = "neo4j"\nhost = "neo4j"\nport = 7474\nuser = "neo4j"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
 };
 for (const [file, text] of Object.entries(personal)) writeFileSync(join(userDir, "connections", file), text);
 
@@ -390,6 +393,14 @@ try {
     await run();
     await statusline("1 row");
     await shot("10d-libsql-tunnel");
+  });
+
+  await step("Neo4j (a plugin only, Cypher) behind the same two bastions", async () => {
+    await newQuery("Neo4j through the tunnel", "RETURN 'ñandú' AS t, 1.5 AS r, date('2024-02-29') AS d;");
+    await run();
+    await password("Neo4j through the tunnel", "spelaion-test");
+    await statusline("1 row");
+    await shot("10d-neo4j-tunnel");
   });
 
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {

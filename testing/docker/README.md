@@ -31,6 +31,9 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
 - libSQL's server (`sqld` 0.24.33) is on `127.0.0.1:18095` without authentication
   (`SPELAION_TEST_LIBSQL`; behind the bastions and the proxies `libsql:8080`). Tokens and TLS
   are tested in its plugin's repository.
+- Neo4j 5.26 (community) is on `127.0.0.1:17474`, its HTTP Query API, user `neo4j`, password
+  `spelaion-test` (`SPELAION_TEST_NEO4J`; behind the bastions and the proxies `neo4j:7474`).
+  TLS is tested in its plugin's repository.
 - SQL Server (Developer edition, Microsoft's image `mcr.microsoft.com/mssql/server:2022-latest`,
   about 1.5 GB): user `sa`, password `Spelaion-test-1`; the tests create the `spelaion`
   database. It encrypts with its own self-signed certificate.

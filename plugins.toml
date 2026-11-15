@@ -435,3 +435,36 @@ archive = "spelaiondb-plugin-flightsql-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "61086ceb1aa981c23d370a6568710b57111a800181ce91fa4974ebf26f3e4fb6"
 archive_size = 4810092
 program_sha256 = "c1eb125324f9da1f69c110cffa2b9a9354df39d95a15e36374d4119fd04c076a"
+
+# Neo4j: Cypher over its HTTP Query API, a language that is not SQL (ADR-056).
+[[plugin]]
+name = "spelaiondb-plugin-neo4j"
+repository = "spelaion-dev/spelaiondb-plugin-neo4j"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["neo4j"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-neo4j-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "c4fb1466b03d4aa7a56c994a0b7b26882101f56a8f95a2f6a0b72cca5caaef2f"
+archive_size = 2179988
+program_sha256 = "f3b19417f8498ded1fdd1d6eeb33bc77195e54ea379db4591028ad4ece0eed2c"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-neo4j-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "2d360ceab08f763f45ea3f47f222925d4375707480ece7b7129133de921fe83f"
+archive_size = 2339498
+program_sha256 = "6612819956b6d8a166c818bf63ad647afe88866112b4c88df9958f02f504af7a"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-neo4j-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "d693b822819a424ee2015d645aa07a771ba7ba994b3bc58fed5624db43a6a134"
+archive_size = 2295646
+program_sha256 = "6ffe1e870f1919933d70f0790567db39c8144c049e8b48892ec662f8c319017c"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-neo4j-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "d479a5e6b6dd977031afa5536b5ba5c5db9ff2bf905a61cb58b9f6b43a575b35"
+archive_size = 2583189
+program_sha256 = "a725feb6709192bb528d5538d3b18b00dd9ccaf5cf6e12e8fcb4f5e1ba55111e"
