@@ -86,6 +86,7 @@ jobs:
       SPELAION_TEST_CASSANDRA: 127.0.0.1:19142
       # TDengine (ADR-056), through its pinned plugin.
       SPELAION_TEST_TDENGINE: 127.0.0.1:16141
+      SPELAION_TEST_INFLUXDB: 127.0.0.1:18181
       SPELAION_TEST_GIZMOSQL: 127.0.0.1:31337
       # Apache Hive (SDB-176), through its pinned plugin.
       SPELAION_TEST_HIVE: 127.0.0.1:11010

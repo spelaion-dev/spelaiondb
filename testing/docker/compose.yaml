@@ -21,7 +21,7 @@
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307, SQL
 # Server on 11433, ClickHouse on 18123, Trino on 18080, Presto on 18081, Oracle on 11521
 # (TCPS on 12484), libSQL on 18095, GizmoSQL on 31337, Neo4j on 17474, Hive on 11010, Databend
-# on 18320 and Spanner's emulator on 19021, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# on 18320, Spanner's emulator on 19021 and InfluxDB 3 on 18181, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
 
@@ -376,6 +376,21 @@ services:
       timeout: 5s
       retries: 60
     networks: [data, direct]
+
+  # InfluxDB 3 Core 3.12.2 (by digest), a `flightsql` connection whose database the plugin sends
+  # as a `database` header; Flight SQL and its HTTP API share 127.0.0.1:18181. No authentication,
+  # data in memory. Bounded for CI's runners (SDB-345): 1 GB.
+  influxdb:
+    image: influxdb@sha256:f349b303abfc33e5be9ab67f475d544c4ef53ed5b3b68267842aedb112756b82
+    command: [influxdb3, serve, --node-id, spelaion, --object-store, memory, --without-auth]
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:18181:8181"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8181/health > /dev/null || exit 1"]
+      interval: 2s
+      retries: 60
+    networks: [direct]
 
   # Databend 1.2.881, served only by its plugin over its HTTP query API (SDB-351), published on
   # 127.0.0.1:18320 (user spelaion, password spelaion-test, which replaces the image's root);
