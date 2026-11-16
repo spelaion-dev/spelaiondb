@@ -17,8 +17,8 @@ Solr currently support Basic authentication or an anonymous server. A password o
 come from the keychain, a prompt or any existing secret reference; it never goes into the
 connection file, a URL, a log or a command line.
 
-The plugin's first official release must be pinned before its cards become available in a
-shipped app. A development build can exercise the complete flow by pointing each
+Shipped apps use the official plugin release pinned and verified by SpelaionDB. A
+development build can exercise the complete flow by pointing each
 `SPELAION_DEV_PLUGIN_<ENGINE>` variable at its locally built executable. Release builds ignore
 those overrides.
 
@@ -68,7 +68,8 @@ request bounded to 200 hits in an editor tab. It does not open a relational tabl
 Index names that require escaped path segments cannot currently be opened this way.
 
 Elasticsearch and OpenSearch hits have `_index`, `_id`, `_score`, then source fields. Numbers,
-booleans and strings keep their types; nested values and aggregations are JSON. First-batch
+booleans and strings keep their types; nested values and aggregations are JSON. Colliding
+source and metadata names are prefixed until unique, preserving every value. First-batch
 column types remain fixed. The final `…` JSON column keeps late fields and values whose type
 changes, so they are not lost. Results use the ordinary grid, stored-result filters, find,
 copy, charts and cell viewer. Each response is bounded to 64 MiB; narrow a larger request.
