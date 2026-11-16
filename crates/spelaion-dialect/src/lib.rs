@@ -18,6 +18,7 @@ pub mod cql;
 pub mod databend;
 pub mod duckdb;
 pub mod hive;
+pub mod http;
 pub mod mongodb;
 pub mod mysql;
 pub mod neo4j;
@@ -36,6 +37,7 @@ pub use cql::CqlDialect;
 pub use databend::DatabendDialect;
 pub use duckdb::DuckdbDialect;
 pub use hive::HiveDialect;
+pub use http::HttpDialect;
 pub use mongodb::MongodbDialect;
 pub use mysql::MysqlDialect;
 pub use neo4j::Neo4jDialect;
@@ -88,6 +90,10 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "spark" => Some(Arc::new(HiveDialect::named("spark"))),
         "kyuubi" => Some(Arc::new(HiveDialect::named("kyuubi"))),
         "impala" => Some(Arc::new(HiveDialect::named("impala"))),
+        "elasticsearch" => Some(Arc::new(HttpDialect::named("elasticsearch"))),
+        "opensearch" => Some(Arc::new(HttpDialect::named("opensearch"))),
+        "solr" => Some(Arc::new(HttpDialect::named("solr"))),
+        "meilisearch" => Some(Arc::new(HttpDialect::named("meilisearch"))),
         _ => None,
     }
 }

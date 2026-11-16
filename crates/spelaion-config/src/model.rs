@@ -200,12 +200,16 @@ pub enum Engine {
     /// Google Cloud Spanner (GoogleSQL), served only by its plugin over its REST API. The
     /// access token is the password. No read-only mode and no agents yet.
     Spanner,
+    Elasticsearch,
+    Opensearch,
+    Solr,
+    Meilisearch,
 }
 
 impl Engine {
     /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
     /// with no `_`, so a new engine fails there until it is listed here.
-    pub const ALL: [Engine; 25] = [
+    pub const ALL: [Engine; 29] = [
         Engine::Postgres,
         Engine::Sqlite,
         Engine::Mysql,
@@ -231,6 +235,10 @@ impl Engine {
         Engine::Impala,
         Engine::Databend,
         Engine::Spanner,
+        Engine::Elasticsearch,
+        Engine::Opensearch,
+        Engine::Solr,
+        Engine::Meilisearch,
     ];
 
     /// The engine a connection file names (`as_str`'s text). Read through the same names the
@@ -269,6 +277,10 @@ impl Engine {
             Engine::Impala => "impala",
             Engine::Databend => "databend",
             Engine::Spanner => "spanner",
+            Engine::Elasticsearch => "elasticsearch",
+            Engine::Opensearch => "opensearch",
+            Engine::Solr => "solr",
+            Engine::Meilisearch => "meilisearch",
         }
     }
 
@@ -300,7 +312,11 @@ impl Engine {
             | Engine::Redis
             | Engine::Cassandra
             | Engine::Tdengine
-            | Engine::Neo4j => false,
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch => false,
         }
     }
 
@@ -329,6 +345,10 @@ impl Engine {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
             | Engine::Databend
             | Engine::Spanner
             | Engine::Hive
@@ -359,6 +379,10 @@ impl Engine {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
             | Engine::Databend
             | Engine::Spanner
             | Engine::Hive
@@ -399,6 +423,9 @@ impl Engine {
             Engine::Databend => Some(8000),
             // Google's REST endpoint; the emulator's is 9020.
             Engine::Spanner => Some(443),
+            Engine::Elasticsearch | Engine::Opensearch => Some(9200),
+            Engine::Solr => Some(8983),
+            Engine::Meilisearch => Some(7700),
         }
     }
 }
@@ -551,6 +578,10 @@ impl IsolationLevel {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
             | Engine::Databend
             | Engine::Spanner
             | Engine::Hive
@@ -585,6 +616,10 @@ impl Engine {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
             | Engine::Databend
             | Engine::Spanner
             | Engine::Hive

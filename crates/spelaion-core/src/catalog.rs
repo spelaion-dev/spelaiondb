@@ -254,6 +254,12 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         supported(Engine::Tdengine, "TDengine", Analytical, Network),
         // Cypher over the HTTP Query API (ADR-056).
         supported(Engine::Neo4j, "Neo4j", NoSql, Network),
+        // HTTP request consoles, read and guarded by the core (ADR-056).
+        // Open Distro is retired and is not a planned connection.
+        supported(Engine::Elasticsearch, "Elasticsearch", NoSql, Network),
+        supported(Engine::Opensearch, "OpenSearch", NoSql, Network),
+        supported(Engine::Solr, "Solr", NoSql, Network),
+        supported(Engine::Meilisearch, "Meilisearch", NoSql, Network),
     ]
 }
 
@@ -263,6 +269,30 @@ mod tests {
 
     use super::*;
     use crate::Engines;
+
+    #[test]
+    fn search_cards_are_available_only_when_the_core_has_their_plugin() {
+        let catalog = engine_catalog();
+        let engines = Engines::builtin();
+        for engine in [
+            Engine::Elasticsearch,
+            Engine::Opensearch,
+            Engine::Solr,
+            Engine::Meilisearch,
+        ] {
+            let info = catalog
+                .iter()
+                .find(|info| info.id == engine.as_str())
+                .unwrap();
+            assert_eq!(
+                info.engine.is_some(),
+                engines.get(engine).is_some(),
+                "{}",
+                engine.as_str()
+            );
+        }
+        assert!(!catalog.iter().any(|info| info.id == "opendistro"));
+    }
 
     #[test]
     fn every_supported_engine_has_a_driver_and_ids_are_unique() {

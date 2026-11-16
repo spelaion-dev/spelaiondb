@@ -600,3 +600,36 @@ archive = "spelaiondb-plugin-spanner-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
 archive_sha256 = "f08a2fef847098f2600785ec31c23f7269dbdf57d24e1c6885bfe4f13581db87"
 archive_size = 2661309
 program_sha256 = "43fcc9c040952085cbf501c4b6e257d95b2c48fe7391a44e7e56bb9dcf31d728"
+
+# HTTP search engines, one plugin (SDB-183).
+[[plugin]]
+name = "spelaiondb-plugin-search"
+repository = "spelaion-dev/spelaiondb-plugin-search"
+version = "0.1.0"
+protocol = "1.1"
+engines = ["elasticsearch", "opensearch", "solr", "meilisearch"]
+min_app = "0.10.0"
+
+[plugin.platform.aarch64-apple-darwin]
+archive = "spelaiondb-plugin-search-0.1.0-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "3ea45eac2fbe0f28b58708d37d9fcdb229baa0cc981186ab2169bd69da14d87d"
+archive_size = 2137329
+program_sha256 = "ff363760ca281782618a85ee7ef1b8da7bcb22bf5dfbdb44dd50b689b683c523"
+
+[plugin.platform.x86_64-apple-darwin]
+archive = "spelaiondb-plugin-search-0.1.0-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "3933053d587e69e05dfdd42363369e2451caa1749d8bedd003f1f72d0479483e"
+archive_size = 2289826
+program_sha256 = "8a7f22ab6ceee5f2ed683b667d366aab1d445d041ced4acceb9e537f0bd16d0a"
+
+[plugin.platform.x86_64-pc-windows-msvc]
+archive = "spelaiondb-plugin-search-0.1.0-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "8dfb41d78da8aa9654011ebadc1908b60f0ea00257329458f507d5d8c5651081"
+archive_size = 2254023
+program_sha256 = "2844e2fd050ef80a12e124ea003567cf2806c521c5cf0d17d9aee45d4d350d19"
+
+[plugin.platform.x86_64-unknown-linux-gnu]
+archive = "spelaiondb-plugin-search-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "c2832c0c34c886ce9a8c57796a85ecc64b471c9533aa94291d9f0df3575bfb89"
+archive_size = 2446194
+program_sha256 = "6e955bd976184c89e3fef32a7672c89471eb8220c5a59fa8a841494f81235f62"

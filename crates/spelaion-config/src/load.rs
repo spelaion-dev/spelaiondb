@@ -528,15 +528,21 @@ pub(crate) fn validate_connection(
             .collect(),
         // MongoDB, Redis, Cassandra and Neo4j may need no login, and the database can be chosen
         // in the explorer.
-        Engine::Mongodb | Engine::Redis | Engine::Cassandra | Engine::Tdengine | Engine::Neo4j => {
-            [(
-                "host",
-                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
-            )]
-            .into_iter()
-            .filter_map(|(k, m)| m.then_some(k))
-            .collect()
-        }
+        Engine::Mongodb
+        | Engine::Redis
+        | Engine::Cassandra
+        | Engine::Tdengine
+        | Engine::Neo4j
+        | Engine::Elasticsearch
+        | Engine::Opensearch
+        | Engine::Solr
+        | Engine::Meilisearch => [(
+            "host",
+            file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+        )]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
     };
     if !missing.is_empty() {
         return Err(ConfigError::new(
@@ -645,6 +651,10 @@ pub(crate) fn validate_connection(
             | Engine::Cassandra
             | Engine::Tdengine
             | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
             | Engine::Databend
             | Engine::Spanner => {}
             Engine::Sqlserver => {
@@ -972,6 +982,10 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Impala => "Apache Impala",
         Engine::Databend => "Databend",
         Engine::Spanner => "Cloud Spanner",
+        Engine::Elasticsearch => "Elasticsearch",
+        Engine::Opensearch => "OpenSearch",
+        Engine::Solr => "Solr",
+        Engine::Meilisearch => "Meilisearch",
     }
 }
 

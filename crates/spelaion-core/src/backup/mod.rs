@@ -110,6 +110,10 @@ impl ToolFamily {
             | Engine::Dremio
             | Engine::Gizmosql
             | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
             | Engine::Databend
             | Engine::Spanner
             | Engine::Hive
@@ -159,6 +163,10 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Dremio
         | Engine::Gizmosql
         | Engine::Neo4j
+        | Engine::Elasticsearch
+        | Engine::Opensearch
+        | Engine::Solr
+        | Engine::Meilisearch
         | Engine::Databend
         | Engine::Spanner
         | Engine::Hive
