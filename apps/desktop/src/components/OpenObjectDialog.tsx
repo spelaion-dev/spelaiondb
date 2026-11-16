@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type FoundObjectItem } from "../api";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
 import { usePreferences } from "../preferences";
+import { topDialog } from "../modalFocus";
 import { useApp } from "../store";
 
 function errorText(e: unknown): string {
@@ -107,7 +108,7 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
         aria-modal="true"
         aria-label={t("openByName.title")}
         onKeyDown={(e) => {
-          if (e.key === "Escape") {
+          if (e.key === "Escape" && topDialog() === e.currentTarget) {
             e.preventDefault();
             e.stopPropagation();
             onClose();
@@ -125,7 +126,12 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
       >
         <h2>{t("openByName.title")}</h2>
         {choices.length === 0 ? (
-          <p className="muted small">{t("openByName.noneConnected")}</p>
+          <>
+            <p className="muted small">{t("openByName.noneConnected")}</p>
+            <div className="modal-actions">
+              <button autoFocus onClick={onClose}>{t("app:tabs.close")}</button>
+            </div>
+          </>
         ) : (
           <>
             <div className="open-object-search">
