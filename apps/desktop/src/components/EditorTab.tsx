@@ -10,6 +10,7 @@ import { PlanViewer } from "./PlanViewer";
 import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { connectionTooltip } from "../connectionInfo";
+import { endStatementResults } from "../runResults";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
@@ -961,7 +962,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           : { key: "messages.statementRows", values: { index: event.index + 1, count: event.rowsAffected, ...timing } };
         updateRun(tab.id, (r) => ({
           ...r,
-          results: r.results.map((x) => (x.statement === event.index ? { ...x, complete: true, ...(x.paging ? { paging: { ...x.paging, hasMore: x.rows === x.paging.pageSize } } : {}) } : x)),
+          results: endStatementResults(r.results, event.index, "finished"),
           messages: [...r.messages, { kind: "info", text: "", translation }],
         }));
         break;
@@ -974,6 +975,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
         const key = event.cancelled ? "messages.statementCancelled" : event.timedOut ? "messages.statementTimedOut" : "messages.statementFailed";
         updateRun(tab.id, (r) => ({
           ...r,
+          // A result it had started keeps its rows and is not "(loading)" any more (SDB-275).
+          results: endStatementResults(r.results, event.index, "failed"),
           error: { message: event.message, offset, diagnostic },
           messages: [...r.messages, { kind: "error", text: event.message, translation: { key, values: { index: event.index + 1, reason: event.message } } }],
         }));
