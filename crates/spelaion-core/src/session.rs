@@ -739,8 +739,11 @@ impl Session {
         let cancels = self.cancels.clone();
         let cancel_gate = self.cancel_gate.clone();
         let mut health = self.health.subscribe();
+        let losing = self.health.clone();
+        let losing_in_run = self.health.clone();
+        let total_statements = spans.len();
 
-        Box::pin(async_stream::stream! {
+        let run = Box::pin(async_stream::stream! {
             if let Some(refusal) = refusal {
                 let index = refusal.index;
                 let total = spans.len();
@@ -889,6 +892,11 @@ impl Session {
                     }
                     Ok(mut events) => {
                         let mut current: Option<ResultId> = None;
+                        // Every statement the engine finishes ends with `Done` or an error. A
+                        // stream that ends without either was cut off: the driver's actor
+                        // stopped halfway (a panic in its thread, SDB-163). Its rows are not
+                        // the whole result, and the connection cannot be trusted any more.
+                        let mut finished = false;
                         loop {
                             let event = match until(events.next(), deadline, timed_out).await {
                                 Waited::Ready(event) => event,
@@ -898,7 +906,29 @@ impl Session {
                                     continue;
                                 }
                             };
-                            let Some(event) = event else { break };
+                            let Some(event) = event else {
+                                if !finished {
+                                    if let Some(result) = current.take() {
+                                        results.complete(result);
+                                    }
+                                    if cancelled() || timed_out {
+                                        failure = Some(StatementError::from_driver(
+                                            DriverError::Cancelled,
+                                            &script,
+                                            span,
+                                        ));
+                                    } else {
+                                        losing_in_run.lose(format!(
+                                            "the connection stopped in the middle of a statement: {}",
+                                            crate::panics::INTERNAL_ERROR
+                                        ));
+                                        failure = Some(internal_statement_error(
+                                            "the connection stopped in the middle of the statement",
+                                        ));
+                                    }
+                                }
+                                break;
+                            };
                             answered.get_or_insert_with(Instant::now);
                             match event {
                                 Ok(ExecEvent::Columns(schema)) => {
@@ -932,6 +962,7 @@ impl Session {
                                         results.complete(result);
                                     }
                                     rows_affected = rows;
+                                    finished = true;
                                 }
                                 Err(e) => {
                                     if let Some(result) = current.take() {
@@ -1092,8 +1123,85 @@ impl Session {
                 failed: summary.failed > 0,
                 summary,
             };
-        })
+        });
+        end_on_panic(run, losing, total_statements)
     }
+}
+
+/// The error of a statement that an internal error stopped (SDB-163).
+fn internal_statement_error(what: &str) -> StatementError {
+    StatementError {
+        message: format!(
+            "{what}: {}. Reconnect to go on: nothing is re-run on its own.",
+            crate::panics::INTERNAL_ERROR
+        ),
+        code: None,
+        detail: None,
+        hint: None,
+        script_offset: None,
+        cancelled: false,
+        timed_out: false,
+    }
+}
+
+/// `run`, ending as a failed run if it panics (SDB-163): the statement that was running fails
+/// with an internal error, the run finishes, and the session is lost (ADR-028: what state the
+/// connection was left in is unknown, so it is never used again; nothing is re-run). Without
+/// this the app would wait for the end of the run forever.
+fn end_on_panic(
+    run: BoxStream<'static, CoreEvent>,
+    health: Health,
+    statements: usize,
+) -> BoxStream<'static, CoreEvent> {
+    Box::pin(async_stream::stream! {
+        let mut run = std::panic::AssertUnwindSafe(run).catch_unwind();
+        let mut summary = ScriptSummary { statements, ..Default::default() };
+        let mut running = None;
+        while let Some(event) = run.next().await {
+            match event {
+                Ok(event) => {
+                    match &event {
+                        CoreEvent::StatementStarted { index, .. } => {
+                            summary.executed += 1;
+                            running = Some(*index);
+                        }
+                        CoreEvent::StatementFinished { .. } => {
+                            summary.succeeded += 1;
+                            running = None;
+                        }
+                        CoreEvent::StatementFailed { .. } => {
+                            summary.failed += 1;
+                            running = None;
+                        }
+                        CoreEvent::ScriptFinished { .. } => running = None,
+                        CoreEvent::ResultStarted { .. }
+                        | CoreEvent::Rows { .. }
+                        | CoreEvent::Notice { .. }
+                        | CoreEvent::ErrorPaused { .. }
+                        | CoreEvent::HistoryWarning { .. } => {}
+                    }
+                    yield event;
+                }
+                Err(_) => {
+                    health.lose(format!("a run was stopped by {}", crate::panics::INTERNAL_ERROR));
+                    if let Some(index) = running {
+                        summary.failed += 1;
+                        summary.stop = Some(ScriptStop::Failed { index });
+                        yield CoreEvent::StatementFailed {
+                            index,
+                            error: internal_statement_error("the statement did not finish"),
+                        };
+                    }
+                    yield CoreEvent::ScriptFinished {
+                        executed: summary.executed,
+                        failed: true,
+                        summary,
+                    };
+                    break;
+                }
+            }
+        }
+    })
 }
 
 /// What [`until`] got.

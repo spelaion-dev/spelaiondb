@@ -1,4 +1,5 @@
 //! Execution-plan commands: typed projections over the core, never engine parsing in Tauri.
+use spelaion_desktop_macros::command;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -20,8 +21,7 @@ pub struct ExplainCheck {
     executes_query: bool,
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn plan_capabilities(
     session: String,
     state: State<'_, AppState>,
@@ -33,8 +33,7 @@ pub async fn plan_capabilities(
     ))
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn explain_preflight(
     session: String,
     sql: String,
@@ -56,8 +55,7 @@ pub async fn explain_preflight(
     })
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn explain_query(
     session: String,
     sql: String,
@@ -98,8 +96,7 @@ pub async fn explain_query(
     })
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn open_plan_file(path: String, state: State<'_, AppState>) -> CmdResult<PlanSummary> {
     let document = tokio::task::spawn_blocking(move || plan::read_plan(Path::new(&path)))
         .await
@@ -108,8 +105,7 @@ pub async fn open_plan_file(path: String, state: State<'_, AppState>) -> CmdResu
     state.plans.insert(document).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub fn startup_plan_path(state: State<'_, AppState>) -> Option<String> {
     state
         .startup_plan
@@ -118,8 +114,7 @@ pub fn startup_plan_path(state: State<'_, AppState>) -> Option<String> {
         .take()
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub fn plan_page(
     plan: u32,
     view: PlanView,
@@ -133,8 +128,7 @@ pub fn plan_page(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub fn plan_statistics(
     plan: u32,
     kind: PlanStatKind,
@@ -148,8 +142,7 @@ pub fn plan_statistics(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub fn plan_raw_window(plan: u32, offset: u32, state: State<'_, AppState>) -> CmdResult<RawWindow> {
     state
         .plans
@@ -157,14 +150,12 @@ pub fn plan_raw_window(plan: u32, offset: u32, state: State<'_, AppState>) -> Cm
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub fn release_plan(plan: u32, state: State<'_, AppState>) {
     state.plans.release(plan);
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn export_plan(
     export_id: u32,
     plan: u32,

@@ -1,0 +1,19 @@
+[package]
+name = "spelaion-desktop-macros"
+description = "The desktop app's #[command] attribute: a Tauri command that answers even when it panics (SDB-163)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+# The versions Tauri's own macros already use.
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[lints]
+workspace = true

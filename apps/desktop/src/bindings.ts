@@ -231,7 +231,7 @@ export const commands = {
 	 *  Whether there is a system keychain. Without one (Linux with no Secret Service running) the
 	 *  forms cannot offer to save a password: it is asked when connecting.
 	 */
-	keychainAvailable: () => __TAURI_INVOKE<boolean>("keychain_available"),
+	keychainAvailable: () => typedError<boolean, string>(__TAURI_INVOKE("keychain_available")),
 	/**  Tunnels a new connection can use (from the repository and the personal directory). */
 	listTunnels: () => typedError<TunnelItem_Serialize[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**

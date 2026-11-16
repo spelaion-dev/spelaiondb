@@ -628,6 +628,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
   `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
   `open.rs`); a tunnel file's is per SSH hop.
+  `panics.rs` (SDB-163): a panic is a bug, never swallowed. `install_panic_log` (the app and
+  `spelaiondb mcp`) writes where each one happened to the app log, its message redacted and cut
+  short; `catch_panic` turns one into an error for whoever waited. A run whose stream panics,
+  or whose driver's stream ends without `Done` (an actor that died halfway), ends as a failed
+  statement and the session is lost (ADR-028), never as a finished one (`tests/panics.rs`); an
+  import whose reader panicked commits nothing more; an MCP tool call that panics answers an
+  error and is audited as failed.
   `startup.rs` is what the desktop app says when it cannot start (SDB-283): no personal folder,
   a local store it cannot open (a newer version's is never started over: it says to update) or
   no window; the app shows it in a native dialog (`apps/desktop/src-tauri/src/startup.rs`, never
@@ -704,7 +711,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
-  text). Our own canvas grid (`ResultGrid.tsx`): past the browsers' 33,554,428 px height cap
+  text). Every other command is `#[command]` (`crates/spelaion-desktop-macros`), never
+  `#[tauri::command]` by hand: it adds `#[specta::specta]` and runs an async command's body
+  through `src-tauri/src/panics.rs`'s `guard`, so a command that panics answers the page with an
+  error instead of leaving it waiting (SDB-163); an async command therefore returns `CmdResult`.
+  Sync commands are caught by the invoke handler (`panics::catch_sync`). Our own canvas grid (`ResultGrid.tsx`): past the browsers' 33,554,428 px height cap
   its spacer stops at `MAX_SPACER_H` and the scroll is scaled to the rows (`src/grid/scroll.ts`),
   so a row position is always read with `contentTop` and set with `scrollToContent`, never with
   the container's `scrollTop`. App commands (name, shortcut, menus) are

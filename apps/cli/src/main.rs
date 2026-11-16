@@ -182,7 +182,9 @@ async fn main() -> Result<()> {
             timeout,
             read_only,
         } => {
-            // stdout is the protocol channel: notices go to stderr.
+            // stdout is the protocol channel: notices go to stderr. Where a panic happens goes
+            // there and to the app log (SDB-163); the tool call that panicked answers an error.
+            spelaion_core::install_panic_log(Some(spelaion_core::AppLog::in_user_dir(&user_dir)));
             let options = spelaion_mcp::ServerOptions {
                 workspace: Some(workspace_or_cwd(workspace)?),
                 user_dir,

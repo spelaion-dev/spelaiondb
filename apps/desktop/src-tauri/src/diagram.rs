@@ -2,6 +2,7 @@
 //! writes its text exports; the model stays here, by the id the UI gave it, between the layouts
 //! of one diagram tab, so changing a display option never reads the catalog again.
 
+use spelaion_desktop_macros::command;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -249,8 +250,7 @@ fn model(state: &AppState, diagram: u32) -> CmdResult<Arc<ErModel>> {
 /// Reads a diagram's tables from the catalog on the tab's session, one table at a time
 /// (`on_progress` hears each one), and keeps the model as `diagram` for its layouts and
 /// exports.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn read_diagram(
     session: String,
     diagram: u32,
@@ -287,8 +287,7 @@ pub async fn read_diagram(
 
 /// Where each table of the diagram goes and how its relations are drawn, for these display
 /// options and font measures. Panning and zooming never ask for it again.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn diagram_layout(
     diagram: u32,
     options: DiagramOptionsItem,
@@ -390,8 +389,7 @@ pub async fn diagram_layout(
 }
 
 /// Writes the diagram's whole model as Mermaid or DBML (written by the core) to `path`.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn save_diagram_text(
     diagram: u32,
     format: DiagramTextFormatItem,
@@ -411,8 +409,7 @@ pub async fn save_diagram_text(
 }
 
 /// Forgets a diagram's model (its tab closed or read it again under another id).
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn close_diagram(diagram: u32, state: State<'_, AppState>) -> CmdResult<()> {
     state
         .diagrams
