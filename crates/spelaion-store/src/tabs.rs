@@ -134,7 +134,7 @@ impl Store {
     /// previous set or this one, never a mix.
     pub fn save_open_tabs(&mut self, workspace: &str, saved: &SavedTabs) -> Result<(), StoreError> {
         if saved.tabs.len() > MAX_SAVED_TABS {
-            return Err(StoreError(format!(
+            return Err(StoreError::new(format!(
                 "too many open tabs to keep ({}; at most {MAX_SAVED_TABS})",
                 saved.tabs.len()
             )));
@@ -243,7 +243,7 @@ impl Store {
     /// Puts `path` first in the recent files, keeping the newest [`MAX_RECENT_FILES`].
     pub fn add_recent_file(&mut self, path: &str) -> Result<(), StoreError> {
         if path.is_empty() {
-            return Err(StoreError("a recent file needs a path".into()));
+            return Err(StoreError::new("a recent file needs a path".into()));
         }
         let tx = self
             .conn

@@ -116,7 +116,10 @@ every run, since the run changes that database) and the Docker services up
   mouse and keyboard cannot reach it. A real pointer crossing the window used to cancel hover
   delays and clicks mid-run. The test keeps the hidden window drawing with Chromium's occlusion
   flags, and tells the page it has the focus. Set `SPELAION_E2E_SHOW_WINDOW=1` to open the window
-  on screen and watch a run. Like the Linux pass, it replaces your clipboard while it runs.
+  on screen and watch a run. Like the Linux pass, it replaces your clipboard while it runs. Its
+  first start meets a local store the app cannot open, and answers the startup error dialog with
+  `SPELAION_E2E_STARTUP_CHOICE=start-over` instead of a click, so that dialog never appears on
+  your screen either (SDB-283).
 - **Linux**: `node e2e/smoke-linux.mjs` (from `apps/desktop`). WebKitGTK has no debugging port,
   so this pass speaks WebDriver to `tauri-driver` (which it starts itself), in front of
   WebKitWebDriver. It is shorter: start, repository trust, a query on SQLite, DuckDB, PostgreSQL,

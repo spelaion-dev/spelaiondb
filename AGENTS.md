@@ -626,6 +626,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
   `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
   `open.rs`); a tunnel file's is per SSH hop.
+  `startup.rs` is what the desktop app says when it cannot start (SDB-283): no personal folder,
+  a local store it cannot open (a newer version's is never started over: it says to update) or
+  no window; the app shows it in a native dialog (`apps/desktop/src-tauri/src/startup.rs`, never
+  a panic on the way to the window) and writes it to `app_log.rs`'s log
+  (`<personal folder>/logs/spelaion.log`). "Start with a new local store" is
+  `spelaion-store::set_aside`: the store and its `-wal`/`-shm` renamed to
+  `state.db.broken-<date>`, never deleted or overwritten.
   `save_name.rs` keeps a save dialog's file name in step with the chosen file type (Linux's
   GTK dialogs, `apps/desktop/src-tauri/src/file_dialog.rs`).
   `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a

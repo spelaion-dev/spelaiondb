@@ -60,9 +60,14 @@ tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 tokio = { workspace = true, features = ["sync", "time"] }
 
 # Linux's file dialogs get the app's window as their parent (src/file_dialog.rs); the version
-# Tauri itself uses.
+# Tauri itself uses. The startup error dialog uses it too (src/startup.rs).
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+
+# The startup error dialog on Windows and macOS (src/startup.rs), shown before Tauri starts:
+# the version and features tauri-plugin-dialog already uses (custom buttons need comctl v6).
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = { version = "0.17", default-features = false, features = ["common-controls-v6"] }
 
 [lints]
 workspace = true

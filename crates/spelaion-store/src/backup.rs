@@ -27,7 +27,7 @@ impl BackupPreferences {
             ("file name pattern", &self.name_pattern),
         ] {
             if value.len() > BACKUP_TEXT_MAX || value.chars().any(char::is_control) {
-                return Err(StoreError(format!(
+                return Err(StoreError::new(format!(
                     "the {what} is at most {BACKUP_TEXT_MAX} characters, on one line"
                 )));
             }

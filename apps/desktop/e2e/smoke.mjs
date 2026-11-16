@@ -101,10 +101,11 @@ async function freePort() {
   return port;
 }
 
-function startApp() {
+function startApp(extraEnv = {}) {
   return spawn(exe, [demo], {
     env: {
       ...process.env,
+      ...extraEnv,
       SPELAION_USER_DIR: userDir,
       // Its window is kept out of the user's way (SDB-274, CONTRIBUTING.md): it opens without
       // taking the foreground and is moved left of every monitor at once, at its usual size, so the user's real
@@ -171,7 +172,23 @@ restoreDemoConnections();
 // The run changes the demo's shop.db (the column editor rebuilds product, among others), so
 // every run starts from a fresh one: a later run would otherwise find nothing to change.
 execFileSync(process.platform === "win32" ? "python" : "python3", [join(demo, "make-shop-db.py")], { stdio: "inherit" });
-let app = startApp();
+// The first start meets a local store it cannot open (SDB-283): the one 0.8.0 met, schema 10 by
+// its version with a development build's history table, without `cancelled`. The startup
+// dialog is answered "Start with a new local store" by SPELAION_E2E_STARTUP_CHOICE, so no
+// window reaches the user's screen; the first step checks the old file was kept beside the new
+// one and the log says why.
+mkdirSync(join(userDir, "db"), { recursive: true });
+execFileSync(process.platform === "win32" ? "python" : "python3", [
+  "-c",
+  [
+    "import sqlite3, sys",
+    "c = sqlite3.connect(sys.argv[1])",
+    "c.executescript('create table history (id integer primary key, at_ms integer not null, workspace text not null, connection text not null, statement text not null, duration_ms integer not null, rows integer not null, error text); create table personal_settings (key text primary key, value text not null); pragma user_version = 10;')",
+    "c.close()",
+  ].join("\n"),
+  join(userDir, "db", "state.db"),
+]);
+let app = startApp({ SPELAION_E2E_STARTUP_CHOICE: "start-over" });
 
 /** Runs `spelaiondb mcp` as an AI client would (stdio, JSON-RPC): `list_connections`, then each
  *  call, as the client "smoke-agent". Needs the CLI, built with the app (see the top). */
@@ -392,6 +409,14 @@ try {
 
   step("startup and untrusted repository");
   await page.locator(".activity-bar .settings-button").waitFor();
+  // The broken local store was moved aside, never deleted, and the app opened with a new one.
+  const movedStores = readdirSync(join(userDir, "db")).filter((name) => /^state\.db\.broken-\d{4}-\d{2}-\d{2}$/.test(name));
+  assert.equal(movedStores.length, 1, `the broken store is kept beside the new one: ${readdirSync(join(userDir, "db"))}`);
+  assert.ok(existsSync(join(userDir, "db", "state.db")), "a new local store was created");
+  const startupLog = readFileSync(join(userDir, "logs", "spelaion.log"), "utf8");
+  assert.match(startupLog, /could not open the local store .*state\.db: could not update the local database to schema 11: .*cancelled/);
+  assert.match(startupLog, /answered by SPELAION_E2E_STARTUP_CHOICE: Start with a new local store/);
+  assert.match(startupLog, /moved the local store to .*state\.db\.broken-/);
   assert.equal(await page.locator(".language-setting").count(), 0, "the language selector left the tab bar");
   assert.equal(await savedLanguage(), "system");
   await page.evaluate(() => {

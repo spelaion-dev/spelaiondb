@@ -3,6 +3,7 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+mod app_log;
 pub mod audit;
 pub mod backup;
 mod catalog;
@@ -53,6 +54,7 @@ mod session_setup;
 mod sort;
 mod sql_file;
 mod sql_mode;
+mod startup;
 mod table_data;
 mod table_stats;
 mod temporal;
@@ -63,6 +65,7 @@ mod value_pick;
 mod value_view;
 mod write;
 
+pub use app_log::{AppLog, MAX_LOG_BYTES};
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use chart::{
     ChartAggregate, ChartData, ChartError, ChartImageFormat, ChartKind, ChartLabel, ChartReduction,
@@ -198,6 +201,7 @@ pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
     content_hash, read_sql_file, write_sql_file,
 };
+pub use startup::{StartOverError, StartupAction, StartupDialog, StartupFailure, start_over};
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, cell_filter_value,
     count_table_rows, key_filter, order_with_key, table_count_sql, table_export_sql,
