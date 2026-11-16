@@ -1073,13 +1073,15 @@ impl From<spelaion_core::ColumnMap> for ColumnMapItem {
     }
 }
 
-/// How the result grid draws its cells; personal, like the theme.
+/// How the result grid draws its cells and how many result tabs an editor tab keeps;
+/// personal, like the theme.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GridPreferencesItem {
     pub zebra: bool,
     pub null_text: bool,
     pub bool_checkboxes: bool,
+    pub result_tabs: u32,
 }
 
 impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
@@ -1088,11 +1090,13 @@ impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
         } = p;
         Self {
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
         }
     }
 }
@@ -1103,11 +1107,13 @@ impl From<GridPreferencesItem> for spelaion_core::GridPreferences {
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
         } = p;
         Self {
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
         }
     }
 }
@@ -1653,16 +1659,28 @@ pub struct ColumnItem {
     rename_all_fields = "camelCase"
 )]
 pub enum ScriptEvent {
+    /// The run was accepted, before any of its statements: the result tabs it replaced,
+    /// already freed by the core (SDB-378).
+    RunStarted {
+        closed: Vec<u32>,
+    },
     /// Byte range of the statement within the script.
     StatementStarted {
         index: u32,
         start: u32,
         end: u32,
     },
+    /// A result started, and where the core put its tab (SDB-378): its name, whether it is
+    /// pinned, the result whose place it took (a re-run) and the ones closed to stay within
+    /// the limit, all freed already.
     ResultStarted {
         index: u32,
         result: u32,
         columns: Vec<ColumnItem>,
+        name: Option<String>,
+        pinned: bool,
+        replaces: Option<u32>,
+        closed: Vec<u32>,
     },
     Rows {
         index: u32,
@@ -1884,6 +1902,105 @@ impl From<ScriptPreferencesItem> for spelaion_core::ScriptPreferences {
     }
 }
 
+/// Where a run's results go (SDB-378).
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ResultPlacementItem {
+    /// In place of every result that is not pinned.
+    Replace,
+    /// Next to the results already there.
+    NewTab,
+    /// In place of this result: a re-run of its query.
+    Into { result: u32 },
+}
+
+impl From<ResultPlacementItem> for spelaion_core::Placement {
+    fn from(placement: ResultPlacementItem) -> Self {
+        match placement {
+            ResultPlacementItem::Replace => Self::Replace,
+            ResultPlacementItem::NewTab => Self::NewTab,
+            ResultPlacementItem::Into { result } => {
+                Self::Into(spelaion_core::ResultId(result.into()))
+            }
+        }
+    }
+}
+
+/// A result tab as the core keeps it (SDB-378).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultTabItem {
+    pub result: u32,
+    pub name: Option<String>,
+    pub pinned: bool,
+}
+
+impl From<spelaion_core::ResultTab> for ResultTabItem {
+    fn from(tab: spelaion_core::ResultTab) -> Self {
+        Self {
+            result: result_number(tab.result),
+            name: tab.name,
+            pinned: tab.pinned,
+        }
+    }
+}
+
+fn result_number(result: spelaion_core::ResultId) -> u32 {
+    u32::try_from(result.0).unwrap_or(u32::MAX)
+}
+
+/// Follows a run's events for the UI: each one as the UI reads it, a result that starts with
+/// where the core put its tab. A result nobody shows any more (its editor tab was closed) is
+/// freed by the core and still announced, so the events stay in step.
+pub struct RunEvents {
+    results: spelaion_core::RunResults,
+}
+
+impl RunEvents {
+    pub fn new(results: spelaion_core::RunResults) -> Self {
+        Self { results }
+    }
+
+    /// The first event of the run: what it replaced.
+    pub fn started(&self) -> ScriptEvent {
+        ScriptEvent::RunStarted {
+            closed: self
+                .results
+                .closed()
+                .iter()
+                .copied()
+                .map(result_number)
+                .collect(),
+        }
+    }
+
+    pub fn event(&mut self, event: CoreEvent) -> ScriptEvent {
+        let placed = self.results.observe(&event);
+        let mut event = ScriptEvent::from(event);
+        if let (
+            ScriptEvent::ResultStarted {
+                name,
+                pinned,
+                replaces,
+                closed,
+                ..
+            },
+            Some(placed),
+        ) = (&mut event, placed)
+        {
+            *name = placed.tab.name;
+            *pinned = placed.tab.pinned;
+            *replaces = placed.replaced.map(result_number);
+            *closed = placed.closed.into_iter().map(result_number).collect();
+        }
+        event
+    }
+}
+
 impl From<CoreEvent> for ScriptEvent {
     fn from(event: CoreEvent) -> Self {
         match event {
@@ -1910,6 +2027,10 @@ impl From<CoreEvent> for ScriptEvent {
                         masked: spelaion_core::masking::is_masked_field(schema.arrow.field(i)),
                     })
                     .collect(),
+                name: None,
+                pinned: false,
+                replaces: None,
+                closed: Vec::new(),
             },
             CoreEvent::Rows {
                 index,

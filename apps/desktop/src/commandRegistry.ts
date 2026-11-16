@@ -13,7 +13,7 @@
 // (`PaletteObjectAction` in `commands.ts`).
 
 /** Where else a command appears, besides the palette. */
-export type CommandMenu = "tab" | "file" | "activity" | "welcome" | "editor";
+export type CommandMenu = "tab" | "file" | "activity" | "welcome" | "editor" | "result";
 
 /**
  * Who handles the shortcut: `global` ones `App.tsx`'s handler (they do nothing while a modal is
@@ -66,6 +66,12 @@ export const COMMANDS = [
   { id: "editor.explain", category: "editor", label: "editor:plan.explain", menus: ["editor"] },
   { id: "editor.runScript", category: "editor", label: "editor:runScript", shortcut: "Ctrl+Shift+Enter", scope: "editor" },
   { id: "editor.runFromCursor", category: "editor", label: "editor:actions.runFromCursor", shortcut: "Ctrl+Alt+Enter", scope: "editor", menus: ["editor"] },
+  { id: "editor.runNewTab", category: "editor", label: "editor:actions.runNewTab", shortcut: "Alt+Enter", scope: "editor", menus: ["editor"] },
+  // A result tab's menu (SDB-378): they act on the tab's active result.
+  { id: "results.rerun", category: "data", label: "editor:resultTabs.rerun", menus: ["result"] },
+  { id: "results.pin", category: "data", label: "editor:resultTabs.pin", menus: ["result"] },
+  { id: "results.rename", category: "data", label: "editor:resultTabs.rename", menus: ["result"] },
+  { id: "results.close", category: "data", label: "editor:resultTabs.close", menus: ["result"] },
   { id: "editor.cancel", category: "editor", label: "app:commands.cancelQuery" },
   { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor" },
   { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", menus: ["editor"] },

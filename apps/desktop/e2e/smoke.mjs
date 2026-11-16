@@ -1752,7 +1752,9 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("End");
-  let previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+  // The last run's statement started with the comment "-- the third": the core named its
+  // result tab from it (SDB-378).
+  let previousResult = await panel.getByRole("button", { name: "the third", exact: true }).elementHandle();
   await actions.locator(".editor-action-run[data-run-target]").click();
   await page.waitForFunction((button) => !button.isConnected, previousResult);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
@@ -1780,10 +1782,135 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Shift+End");
   await actions.getByRole("button", { name: "Run script", exact: true }).click();
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await panel.locator(".result-tabs button", { hasText: "the third" }).waitFor();
   await sqlEditor.click();
+  // The results of the run before stay until the core says this run replaced them (its
+  // first event): wait for that tab to go, then for the new one.
+  const thirdBefore = await panel.locator(".result-tabs button", { hasText: "the third" }).elementHandle();
   await page.keyboard.press("Control+Shift+Enter");
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await page.waitForFunction((tab) => !tab.isConnected, thirdBefore);
+  await panel.locator(".result-tabs button", { hasText: "the third" }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
+
+  step("kept results: run into a new result tab, pin one, run again, rename and re-run (SDB-378)");
+  {
+    const threeStatements = await sqlEditor.innerText();
+    const tabNames = () => panel.locator(".result-tab-name").allInnerTexts();
+    const resultTab = (name) => panel.locator(".result-tab-item").filter({ has: page.locator(".result-tab-name", { hasText: new RegExp(`^${name}$`) }) });
+    // The grid of the result shown, once it shows this value in its first cell.
+    const cellIs = async (expected) => {
+      let cell = "";
+      for (let i = 0; i < 20 && cell !== expected; i++) {
+        cell = await firstCell();
+        if (cell !== expected) await page.waitForTimeout(250);
+      }
+      assert.equal(cell, expected);
+    };
+    const tabMenu = (name) => page.getByRole("menu", { name: `Actions of ${name}`, exact: true });
+    // The run has ended (Run is back in place of Cancel). Wait for the run's result tab first:
+    // the button is also there before the run starts.
+    const ran = () => panel.locator(".editor-action-run[data-run-target]").waitFor();
+    // A statement that starts with a comment line names its result tab (the core reads it).
+    await replaceQuery(panel, "create temp table kept_probe (n integer);\ninsert into kept_probe values (1);\n-- Before\nselect n from kept_probe");
+    await run(panel);
+    await resultTab("Before").waitFor();
+    await ran();
+    assert.deepEqual(await tabNames(), ["Before"]);
+    await cellIs("1");
+    // Alt+Enter runs the statement into a new result tab, next to the one already there.
+    await replaceQuery(panel, "select n * 100 as n from kept_probe");
+    await page.keyboard.press("Alt+Enter");
+    await resultTab("Result 2").waitFor();
+    await ran();
+    assert.deepEqual(await tabNames(), ["Before", "Result 2"]);
+    await cellIs("100");
+    // Pin the first one from its menu: every item is a command of the registry.
+    await resultTab("Before").locator(".result-tab").click({ button: "right" });
+    assert.deepEqual(
+      await tabMenu("Before").getByRole("menuitem").evaluateAll((items) => items.map((item) => item.firstElementChild.textContent)),
+      ["Run this result's query again", "Pin result", "Rename result…", "Close result"],
+    );
+    await tabMenu("Before").getByRole("menuitem", { name: "Pin result" }).click();
+    await panel.locator('.result-tab-item[data-pinned="true"]', { hasText: "Before" }).waitFor();
+    assert.match(await resultTab("Before").locator(".result-tab").getAttribute("title"), /pinned/);
+    await shot("05d-kept-results-light");
+    await setTheme("dark", "dark");
+    await shot("05d-kept-results-dark");
+    await setTheme("light", "light");
+    // The data changes and a run replaces the results: the pinned one stays, unchanged.
+    await replaceQuery(panel, "update kept_probe set n = 2 where n = 1;\nselect n from kept_probe");
+    const replaced = await resultTab("Result 2").elementHandle();
+    await run(panel);
+    await page.waitForFunction((tab) => !tab.isConnected, replaced);
+    await resultTab("Result 2").waitFor();
+    await ran();
+    await cellIs("2");
+    assert.deepEqual(await tabNames(), ["Before", "Result 2"]);
+    await resultTab("Before").locator(".result-tab").click();
+    await cellIs("1");
+    assert.equal(await panel.locator('.result-tab-item[data-pinned="true"]').count(), 1);
+    // F2 renames the focused result tab; the core keeps the name.
+    await resultTab("Result 2").locator(".result-tab").focus();
+    await page.keyboard.press("F2");
+    const renameResult = page.getByRole("dialog", { name: "Rename result", exact: true });
+    await renameResult.getByLabel("Name").fill("  After the update ");
+    await renameResult.getByRole("button", { name: "Rename", exact: true }).click();
+    await renameResult.waitFor({ state: "detached" });
+    await resultTab("After the update").waitFor();
+    assert.deepEqual(await tabNames(), ["Before", "After the update"]);
+    // The pinned result's query again, from its menu (Shift+F10), into that same tab: it reads
+    // the new value and keeps its place, its name and its pin.
+    await resultTab("Before").locator(".result-tab").focus();
+    await page.keyboard.press("Shift+F10");
+    await tabMenu("Before").getByRole("menuitem", { name: "Unpin result" }).waitFor();
+    const beforeRerun = await resultTab("Before").getAttribute("data-result");
+    await tabMenu("Before").getByRole("menuitem", { name: "Run this result's query again" }).click();
+    // The old rows stay until the new result starts: wait for the tab to hold the new one.
+    await page.waitForFunction((old) => {
+      const tab = [...document.querySelectorAll(".tab-panel:not([hidden]) .result-tab-item")].find((item) => item.querySelector(".result-tab-name")?.textContent === "Before");
+      return tab && tab.getAttribute("data-result") !== old;
+    }, beforeRerun);
+    await panel.locator(".editor-action-run[data-run-target]").waitFor();
+    await cellIs("2");
+    assert.deepEqual(await tabNames(), ["Before", "After the update"]);
+    assert.equal(await panel.locator('.result-tab-item[data-pinned="true"]', { hasText: "Before" }).count(), 1);
+    assert.equal(await panel.locator(".result-tab-item.active .result-tab-name").innerText(), "Before");
+    // Closing a pinned result frees it; the next run then replaces what is left.
+    await panel.getByRole("button", { name: "Close Before", exact: true }).click();
+    await resultTab("Before").waitFor({ state: "detached" });
+    assert.deepEqual(await tabNames(), ["After the update"]);
+    // The number of result tabs an editor tab keeps is a setting: past it, the oldest one
+    // that is not pinned is closed.
+    const keepResultTabs = async (count) => {
+      await withSettings("appearance", async (settings) => {
+        const kept = settings.locator('input[name="resultTabs"]');
+        await kept.fill(String(count));
+        await kept.press("Enter");
+        await page.waitForFunction((value) => {
+          const input = document.querySelector('input[name="resultTabs"]');
+          return input?.value === value && !input.matches(":disabled");
+        }, String(count));
+      });
+    };
+    await keepResultTabs(2);
+    await replaceQuery(panel, "select 'one' as kept");
+    await page.keyboard.press("Alt+Enter");
+    await resultTab("Result 2").waitFor();
+    await ran();
+    await cellIs("one");
+    assert.deepEqual(await tabNames(), ["After the update", "Result 2"]);
+    await replaceQuery(panel, "select 'two' as kept");
+    await page.keyboard.press("Alt+Enter");
+    await resultTab("After the update").waitFor({ state: "detached" });
+    await ran();
+    await cellIs("two");
+    assert.deepEqual(await tabNames(), ["Result 1", "Result 2"]);
+    await keepResultTabs(20);
+    await replaceQuery(panel, threeStatements);
+    await run(panel);
+    await panel.locator(".result-tabs button", { hasText: "the third" }).waitFor();
+    assert.deepEqual(await tabNames(), ["Result 1", "Result 2", "the third"]);
+  }
 
   step("run says what it will run: a statement, the selection or the script (SDB-379)");
   // The name and the tooltip come from the core's answer for the cursor and the selection.
@@ -1803,7 +1930,9 @@ try {
   await runIsNamed("Run selection…", "selection", "Run selection: choose among its 3 statements (Ctrl+Enter)");
 
   step("statement picker: one of three selected statements by its number, some of them, all, or none");
-  const resultTabs = panel.locator(".result-tabs button", { hasText: /^Result/ });
+  // Result tabs by position: the third statement starts with the comment "-- the third",
+  // which names its tab (SDB-378), so a tab is not always called "Result N".
+  const resultTabs = panel.locator(".result-tabs .result-tab");
   const firstCellIs = async (value) => {
     let cell = "";
     for (let i = 0; i < 20 && cell !== value; i++) {
@@ -1827,7 +1956,7 @@ try {
   // 2 runs the second statement alone.
   await page.keyboard.press("2");
   await picker.waitFor({ state: "detached" });
-  await panel.locator(".result-tabs button", { hasText: "Result 2" }).waitFor({ state: "detached" });
+  await resultTabs.nth(1).waitFor({ state: "detached" });
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await firstCellIs("second;");
   assert.equal(await resultTabs.count(), 1);
@@ -1840,11 +1969,11 @@ try {
   await picker.getByRole("checkbox").nth(2).check();
   await picker.getByRole("button", { name: "Run 2 statements", exact: true }).click();
   await picker.waitFor({ state: "detached" });
-  await panel.locator(".result-tabs button", { hasText: "Result 2" }).waitFor();
+  await resultTabs.nth(1).waitFor();
   await panel.locator(".statusline", { hasText: "2 OK, 0 failed, 0 not run" }).waitFor();
   assert.equal(await resultTabs.count(), 2);
   await firstCellIs("first");
-  await panel.locator(".result-tabs button", { hasText: "Result 2" }).click();
+  await resultTabs.nth(1).click();
   await firstCellIs("third");
   // Escape runs nothing; Enter runs the three.
   await sqlEditor.click();
@@ -1860,14 +1989,15 @@ try {
   await picker.waitFor();
   await page.keyboard.press("Enter");
   await picker.waitFor({ state: "detached" });
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await resultTabs.nth(2).waitFor();
+  assert.equal(await resultTabs.nth(2).innerText(), "the third");
 
   step("run from the cursor to the end: the second and third statements, by its shortcut and from the menu");
   await sqlEditor.click();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Control+Alt+Enter");
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor({ state: "detached" });
+  await resultTabs.nth(2).waitFor({ state: "detached" });
   await panel.locator(".statusline", { hasText: "2 OK, 0 failed, 0 not run" }).waitFor();
   assert.equal(await resultTabs.count(), 2);
   await firstCellIs("second;");
@@ -1877,7 +2007,7 @@ try {
   const fromCursor = page.getByRole("menuitem", { name: "Run from the cursor to the end", exact: true });
   assert.equal(await fromCursor.locator(".menu-shortcut").innerText(), "Ctrl+Alt+Enter");
   await fromCursor.click();
-  await panel.locator(".result-tabs button", { hasText: "Result 2" }).waitFor({ state: "detached" });
+  await resultTabs.nth(1).waitFor({ state: "detached" });
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await firstCellIs("third");
 
@@ -1894,7 +2024,8 @@ try {
   assert.match(await panel.locator(".cm-content").innerText(), /select 'second;' as which/);
   // The whole script again: the next step starts from its three results.
   await run(panel);
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await resultTabs.nth(2).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
 
   step("risky statements: the core asks before a DELETE without WHERE runs");
   await replaceQuery(panel, "create temp table scratch (x);\ninsert into scratch values (1), (2);\ndelete from scratch;");
@@ -1906,7 +2037,7 @@ try {
   // Cancel has the focus, so a reflex Enter does not run it.
   await page.keyboard.press("Enter");
   await risk.waitFor({ state: "detached" });
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await panel.locator(".result-tabs button", { hasText: "the third" }).waitFor();
   // A personal pause before "Run anyway" (Settings → Scripts): the button counts down first.
   await withSettings("scripts", async (settings) => {
     const delay = settings.locator('input[name="scriptConfirmDelay"]');

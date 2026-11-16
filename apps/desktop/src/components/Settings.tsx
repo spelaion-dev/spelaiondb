@@ -342,12 +342,26 @@ function MapSettings() {
   );
 }
 
-/** How the result grid draws its cells: zebra rows, NULL and booleans. */
+/** The most result tabs an editor tab may be set to keep (the core refuses more). */
+const MAX_RESULT_TABS = 100;
+
+/** How the result grid draws its cells (zebra rows, NULL and booleans) and how many result
+ *  tabs an editor tab keeps. */
 function GridSettings() {
   const { t } = useTranslation("settings");
   const grid = usePreferences((s) => s.grid);
   const busy = usePreferences((s) => s.loading);
   const setGrid = usePreferences((s) => s.setGrid);
+  const [tabs, setTabs] = useState(String(grid.resultTabs));
+  useEffect(() => setTabs(String(grid.resultTabs)), [grid.resultTabs]);
+  const saveTabs = () => {
+    const count = Math.trunc(Number(tabs));
+    if (tabs.trim() !== "" && Number.isFinite(count) && count >= 1 && count <= MAX_RESULT_TABS) {
+      if (count !== grid.resultTabs) void setGrid({ ...grid, resultTabs: count });
+    } else {
+      setTabs(String(grid.resultTabs));
+    }
+  };
   return (
     <>
       <fieldset className="settings-choice" disabled={busy}>
@@ -366,6 +380,21 @@ function GridSettings() {
         </label>
       </fieldset>
       <p className="muted small">{t("appearance.gridHint")}</p>
+      <label className="field port">
+        <span>{t("appearance.resultTabs")}</span>
+        <input
+          type="number"
+          name="resultTabs"
+          min={1}
+          max={MAX_RESULT_TABS}
+          value={tabs}
+          disabled={busy}
+          onChange={(e) => setTabs(e.target.value)}
+          onBlur={saveTabs}
+          onKeyDown={(e) => e.key === "Enter" && saveTabs()}
+        />
+      </label>
+      <p className="muted small">{t("appearance.resultTabsHint", { max: MAX_RESULT_TABS })}</p>
       <SaveError setting="grid" />
     </>
   );

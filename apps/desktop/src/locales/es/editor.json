@@ -807,9 +807,24 @@
     "fileChangedOnDisk": "El archivo cambió en el disco mientras la app estaba cerrada: estos son tus cambios sin guardar, y guardar pregunta antes de sobrescribirlo.",
     "dismiss": "Descartar"
   },
+  "resultTabs": {
+    "rerun": "Volver a ejecutar la consulta de este resultado",
+    "pin": "Fijar resultado",
+    "unpin": "Soltar resultado",
+    "rename": "Renombrar resultado…",
+    "close": "Cerrar resultado",
+    "closeNamed": "Cerrar {{name}}",
+    "menu": "Acciones de {{name}}",
+    "pinned": "(fijado)",
+    "pinnedTitle": "{{name}} (fijado: una ejecución no lo reemplaza)",
+    "renameTitle": "Renombrar resultado",
+    "name": "Nombre",
+    "renameConfirm": "Renombrar"
+  },
   "actions": {
     "menu": "Acciones del editor",
     "runFromCursor": "Ejecutar desde el cursor hasta el final",
+    "runNewTab": "Ejecutar en una pestaña de resultado nueva",
     "lineComment": "Alternar comentario de línea",
     "blockComment": "Alternar comentario de bloque",
     "wordWrap": "Alternar ajuste de línea",

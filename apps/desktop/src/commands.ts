@@ -12,7 +12,7 @@ import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
 import { openDiagram } from "./diagramTabs";
-import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type Tab } from "./store";
+import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type ResultMeta, type Tab } from "./store";
 import {
   closable,
   closeAllTabs,
@@ -53,6 +53,12 @@ function tabOf(context: CommandContext): Tab | undefined {
 function editorTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
   return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram ? tab : undefined;
+}
+
+/** The result a SQL editor tab shows now, whose tab the result commands act on. */
+function activeResult(context: CommandContext): ResultMeta | undefined {
+  const run = editorTab(context)?.run;
+  return run?.results.find((result) => result.id === run.activeResult);
 }
 
 function editorCommand(command: EditorCommand): CommandBinding["run"] {
@@ -223,6 +229,20 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "editor.run": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runCurrent") },
   "editor.runScript": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runScript") },
   "editor.runFromCursor": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runFromCursor") },
+  "editor.runNewTab": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runNewTab") },
+  // The active result's tab (SDB-378). What a run replaces, the pin and the name are the
+  // core's; a re-run is a new run, through the guard like any other.
+  "results.rerun": {
+    enabled: (c) => Boolean(activeResult(c)?.complete && (activeResult(c)?.paging?.sql ?? activeResult(c)?.sql)) && !editorTab(c)?.run?.running,
+    run: editorCommand("resultRerun"),
+  },
+  "results.pin": {
+    enabled: (c) => activeResult(c) !== undefined,
+    label: (c) => (activeResult(c)?.pinned ? "editor:resultTabs.unpin" : "editor:resultTabs.pin"),
+    run: editorCommand("resultPin"),
+  },
+  "results.rename": { enabled: (c) => activeResult(c) !== undefined, run: editorCommand("resultRename") },
+  "results.close": { enabled: (c) => Boolean(activeResult(c)?.complete), run: editorCommand("resultClose") },
   "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
   "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },
   "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },

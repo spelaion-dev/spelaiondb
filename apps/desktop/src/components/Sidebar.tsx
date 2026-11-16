@@ -1371,11 +1371,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         sessions.map((session) => call(commands.disconnect(session))),
       );
       await Promise.all(
-        now.tabs.flatMap((tab) =>
-          (tab.run?.results ?? []).map((r) =>
-            call(commands.releaseResult(r.id)),
-          ),
-        ),
+        now.tabs.map((tab) => call(commands.releaseResults(tab.id))),
       );
       app.setWorkspace(await call(commands.openWorkspace(path)));
       await refreshConnections();

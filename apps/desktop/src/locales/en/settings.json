@@ -16,7 +16,9 @@
     "zebra": "Zebra rows",
     "nullText": "Show NULL as text (off: an empty cell)",
     "boolCheckboxes": "Show booleans as checkboxes",
-    "gridHint": "Only changes how cells are drawn: copies and exports keep the values."
+    "gridHint": "Only changes how cells are drawn: copies and exports keep the values.",
+    "resultTabs": "Result tabs kept per editor tab",
+    "resultTabsHint": "From 1 to {{max}}. Past it, the oldest result that is not pinned is closed; a run always shows every result it returns."
   },
   "language": {
     "title": "Language",

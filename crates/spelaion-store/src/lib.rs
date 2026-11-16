@@ -624,7 +624,13 @@ impl EditorPreferences {
     }
 }
 
-/// How the result grid draws its cells, shared by every workspace in this user directory.
+/// The result tabs an editor tab keeps until the user chooses another number.
+pub const DEFAULT_RESULT_TABS: u32 = 20;
+/// The most result tabs an editor tab may be set to keep.
+pub const MAX_RESULT_TABS: u32 = 100;
+
+/// How the result grid draws its cells and how many result tabs an editor tab keeps, shared
+/// by every workspace in this user directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridPreferences {
     /// Every other row tinted; on by default.
@@ -633,6 +639,9 @@ pub struct GridPreferences {
     pub null_text: bool,
     /// Boolean columns drawn as checkboxes instead of `true` / `false`; off by default.
     pub bool_checkboxes: bool,
+    /// How many result tabs an editor tab keeps (SDB-378), from 1 to [`MAX_RESULT_TABS`]:
+    /// past it, the oldest result that is not pinned is closed.
+    pub result_tabs: u32,
 }
 
 impl Default for GridPreferences {
@@ -641,6 +650,7 @@ impl Default for GridPreferences {
             zebra: true,
             null_text: true,
             bool_checkboxes: false,
+            result_tabs: DEFAULT_RESULT_TABS,
         }
     }
 }
@@ -1347,6 +1357,12 @@ impl Store {
             zebra: self.get_flag("grid.zebra", defaults.zebra)?,
             null_text: self.get_flag("grid.null_text", defaults.null_text)?,
             bool_checkboxes: self.get_flag("grid.bool_checkboxes", defaults.bool_checkboxes)?,
+            // A value that is not a number in range reads as the default.
+            result_tabs: self
+                .personal_setting("results.kept_tabs")?
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|tabs| (1..=MAX_RESULT_TABS).contains(tabs))
+                .unwrap_or(defaults.result_tabs),
         })
     }
 
@@ -1355,10 +1371,17 @@ impl Store {
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
         } = *preferences;
+        if !(1..=MAX_RESULT_TABS).contains(&result_tabs) {
+            return Err(StoreError::new(format!(
+                "an editor tab keeps from 1 to {MAX_RESULT_TABS} result tabs"
+            )));
+        }
         self.set_flag("grid.zebra", zebra)?;
         self.set_flag("grid.null_text", null_text)?;
-        self.set_flag("grid.bool_checkboxes", bool_checkboxes)
+        self.set_flag("grid.bool_checkboxes", bool_checkboxes)?;
+        self.set_personal_setting("results.kept_tabs", &result_tabs.to_string())
     }
 
     /// The user's read-only mode for every agent (ADR-033). Off until turned on; any value
@@ -2253,12 +2276,23 @@ mod tests {
         let defaults = GridPreferences::default();
         assert_eq!(store.get_grid_preferences().unwrap(), defaults);
         assert!(defaults.zebra && defaults.null_text && !defaults.bool_checkboxes);
-        // Every field is saved on its own: each one flipped from its default.
+        assert_eq!(defaults.result_tabs, 20);
+        // Every field is saved on its own: each one changed from its default.
         let changed = GridPreferences {
             zebra: false,
             null_text: false,
             bool_checkboxes: true,
+            result_tabs: 5,
         };
+        // A number of result tabs out of range is refused, and nothing is saved.
+        for result_tabs in [0, MAX_RESULT_TABS + 1] {
+            let out_of_range = GridPreferences {
+                result_tabs,
+                ..changed
+            };
+            assert!(store.set_grid_preferences(&out_of_range).is_err());
+        }
+        assert_eq!(store.get_grid_preferences().unwrap(), defaults);
         store.set_grid_preferences(&changed).unwrap();
         drop(store);
         let reopened = Store::open(&path).unwrap();

@@ -217,7 +217,7 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
       const detail = e instanceof Error ? e.message : String(e);
       useApp.getState().updateTab(tabId, {
         status: "disconnected",
-        run: { running: false, results: [], activeResult: null, messages: [], error: { message: detail, offset: null, translation: { key: "messages.connectionFailed", values: { detail } } }, startedAt: 0, elapsedMs: null },
+        run: { running: false, results: tab.run?.results ?? [], activeResult: null, messages: [], error: { message: detail, offset: null, translation: { key: "messages.connectionFailed", values: { detail } } }, startedAt: 0, elapsedMs: null },
       });
     }
   })();
@@ -274,7 +274,8 @@ export async function closeTabs(ids: string[]) {
       if (run?.running) await call(commands.cancel(id)).catch(() => undefined);
       await call(commands.disconnect(id)).catch(() => undefined);
     })();
-    for (const r of run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
+    // The core frees every result of the tab, and any its run still starts (SDB-378).
+    void call(commands.releaseResults(id)).catch(() => undefined);
   }
 }
 
