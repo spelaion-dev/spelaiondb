@@ -2301,6 +2301,11 @@ export type EngineItem_Deserialize = {
 	 *  agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
 	 */
 	readBarrier: boolean,
+	/**
+	 *  Agents' writes can run on this engine (`runs_agent_writes`): the form offers them only
+	 *  here, and says they are not available on the others.
+	 */
+	agentWrites: boolean,
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
@@ -2336,6 +2341,11 @@ export type EngineItem_Serialize = {
 	 *  agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
 	 */
 	readBarrier: boolean,
+	/**
+	 *  Agents' writes can run on this engine (`runs_agent_writes`): the form offers them only
+	 *  here, and says they are not available on the others.
+	 */
+	agentWrites: boolean,
 };
 
 /**  The answer to a paused run. */
@@ -3348,7 +3358,9 @@ export type McpInstallPlanItem = {
 
 export type McpInstallStateItem = "noFile" | "notInstalled" | "installed" | "different" | "unreadable";
 
-export type McpReadOnlyReasonItem = "allAgents" | "connection" | "writesDenied" | "confirmUnsupported";
+export type McpReadOnlyReasonItem = "allAgents" | "connection" | "writesDenied" | "confirmUnsupported" | 
+/**  The engine cannot run agents' writes yet (`runs_agent_writes`). */
+"engineWithoutWrites";
 
 export type McpSettingsItem = {
 	readOnly: boolean,

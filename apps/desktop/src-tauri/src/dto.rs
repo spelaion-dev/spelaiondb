@@ -2628,6 +2628,9 @@ pub struct EngineItem {
     /// The core has a read barrier for this engine, so the form offers read-only connections and
     /// agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
     pub read_barrier: bool,
+    /// Agents' writes can run on this engine (`runs_agent_writes`): the form offers them only
+    /// here, and says they are not available on the others.
+    pub agent_writes: bool,
 }
 
 impl From<spelaion_core::EngineInfo> for EngineItem {
@@ -2650,6 +2653,7 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
             session_schema: info.engine.is_some_and(|e| e.has_session_schema()),
             sql: info.engine.is_none_or(|e| e.is_sql()),
             read_barrier: info.engine.is_none_or(spelaion_core::has_read_barrier),
+            agent_writes: info.engine.is_some_and(spelaion_core::runs_agent_writes),
             isolation_levels: info
                 .engine
                 .map(|engine| {
@@ -4692,6 +4696,8 @@ pub enum McpReadOnlyReasonItem {
     Connection,
     WritesDenied,
     ConfirmUnsupported,
+    /// The engine cannot run agents' writes yet (`runs_agent_writes`).
+    EngineWithoutWrites,
 }
 
 /// What agents can do on one connection, as the core decides it.
@@ -4736,6 +4742,9 @@ impl McpAccessItem {
                     ReadOnlyBecause::WritesDenied => McpReadOnlyReasonItem::WritesDenied,
                     ReadOnlyBecause::ConfirmUnsupported => {
                         McpReadOnlyReasonItem::ConfirmUnsupported
+                    }
+                    ReadOnlyBecause::EngineWithoutWrites => {
+                        McpReadOnlyReasonItem::EngineWithoutWrites
                     }
                 }),
             ),

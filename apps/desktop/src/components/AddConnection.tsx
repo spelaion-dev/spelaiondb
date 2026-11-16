@@ -578,8 +578,9 @@ function ConnectionForm(props: {
     setSaveError(null);
   }, []);
 
-  // Agents write only on an exposed connection that is not read-only (ADR-019).
-  const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly;
+  // Agents write only on an exposed connection that is not read-only (ADR-019), on an engine
+  // whose writes the core can run (SDB-325).
+  const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly && engine.agentWrites;
   const selectedType = pickedType(connectionTypes, draft.env, savedType);
   // What the core receives: the form's choices mapped to the configuration format.
   const passwordMode: PasswordMode =
@@ -1319,7 +1320,7 @@ function ConnectionForm(props: {
               <select
                 aria-label={t("fields.mcpAccess")}
                 value={agentsWrite ? "write" : "read"}
-                disabled={!draft.mcpExposed || draft.readOnly || fileFolder}
+                disabled={!draft.mcpExposed || draft.readOnly || fileFolder || !engine.agentWrites}
                 onChange={(e) => update({ mcpWrites: e.target.value === "write" })}
               >
                 <option value="read">{t("fields.mcpRead")}</option>
@@ -1329,7 +1330,9 @@ function ConnectionForm(props: {
             {agentsWrite && selectedType?.safeguards.confirmDataChanges && (
               <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
             )}
-            <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
+            <p className="muted small">
+              {agentsWrite ? t("fields.mcpWriteHint") : engine.agentWrites ? t("fields.mcpHint") : t("fields.mcpWritesUnavailable")}
+            </p>
           </fieldset> : (
             <fieldset>
               <legend>{t("sections.safety")}</legend>

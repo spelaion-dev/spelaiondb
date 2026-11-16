@@ -5452,6 +5452,23 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await shot("12a1-connection-url");
   await urlForm.getByRole("button", { name: "Back", exact: true }).click();
   wizard = page.getByRole("dialog", { name: "Add connection" });
+  // SDB-325: agents can only read on an engine whose writes the core cannot run (ClickHouse),
+  // and the form says so instead of offering writes that would all fail.
+  await wizard.getByRole("searchbox").fill("ClickHouse");
+  await wizard.locator(".engine-card", { hasText: "ClickHouse" }).click();
+  const clickhouseForm = page.locator(".modal.wizard");
+  await clickhouseForm.getByRole("heading", { name: "New ClickHouse connection" }).waitFor();
+  await clickhouseForm.getByRole("tab", { name: "Options" }).click();
+  await clickhouseForm.getByRole("checkbox", { name: "Expose to AI agents" }).check();
+  const clickhouseAgents = clickhouseForm.getByLabel("Agents can", { exact: true });
+  assert.equal(await clickhouseAgents.isDisabled(), true);
+  assert.equal(await clickhouseAgents.inputValue(), "read");
+  await clickhouseForm.getByText("Writes from agents are not available for this engine yet", { exact: false }).waitFor();
+  await shot("12a2-clickhouse-agents-read-only");
+  await clickhouseForm.getByRole("tab", { name: "Main" }).click();
+  await clickhouseForm.getByRole("button", { name: "Back", exact: true }).click();
+  wizard = page.getByRole("dialog", { name: "Add connection" });
+  await wizard.getByRole("searchbox").fill("");
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("redis://cache:6379");
   await wizard.getByRole("button", { name: "Use URL" }).click();
   await wizard.getByRole("alert").filter({ hasText: "not a connection URL" }).waitFor();

@@ -130,7 +130,8 @@
         "allAgents": "El modo solo lectura está activado.",
         "connection": "La conexión es de solo lectura.",
         "writesDenied": "La conexión no deja escribir a los agentes.",
-        "confirmUnsupported": "La conexión pide confirmar cada escritura, y eso aún no está disponible."
+        "confirmUnsupported": "La conexión pide confirmar cada escritura, y eso aún no está disponible.",
+        "engineWithoutWrites": "Las escrituras de los agentes aún no están disponibles para este motor."
       },
       "change": "Para cambiar lo que pueden hacer los agentes en una conexión, edítala: «Exponer a agentes de IA» y «Los agentes pueden». Esta página solo puede hacer a los agentes más estrictos."
     },

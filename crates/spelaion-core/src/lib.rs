@@ -222,5 +222,5 @@ pub use value_view::{
 };
 pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
-    agent_view, check_write, has_read_barrier,
+    agent_view, check_write, has_read_barrier, runs_agent_writes,
 };
