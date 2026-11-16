@@ -14,7 +14,7 @@ use std::ops::ControlFlow;
 
 use spelaion_config::Safeguards;
 use spelaion_driver_api::{Dialect, RequestClass, StatementSpan};
-use sqlparser::ast::{Statement, visit_statements};
+use sqlparser::ast::{BinaryOperator, Expr, Statement, Value as SqlValue, visit_statements};
 use sqlparser::dialect::{
     BigQueryDialect, ClickHouseDialect, Dialect as SqlDialect, DuckDbDialect, GenericDialect,
     HiveDialect, MsSqlDialect, MySqlDialect, OracleDialect, PostgreSqlDialect, SQLiteDialect,
@@ -445,21 +445,143 @@ fn oracle_unparsed_risk(sql: &str) -> Option<Risk> {
     risky_words(&tokens).or(dynamic.then_some(Risk::UncheckedWrite))
 }
 
-/// The risk of a ClickHouse `ALTER TABLE`, which is also how it changes rows and wipes data:
-/// `… DROP COLUMN | PARTITION | INDEX …` drops, and `… CLEAR COLUMN | INDEX | PROJECTION …`
-/// empties a column in every row, like an `UPDATE` without `WHERE`. Its mutations `… DELETE
-/// WHERE …` and `… UPDATE … WHERE …` always have a `WHERE` (the server requires it), like a
-/// `DELETE … WHERE`, and ask nothing. Words are read with sqlparser's tokenizer, so a name or a
-/// string that says `drop` is not one; an open quote reads nothing.
+/// The risk of a ClickHouse `ALTER TABLE`, which is also how it changes rows and wipes data,
+/// each as the closest risk the guard has:
+/// - drops: `… DROP COLUMN | PARTITION | INDEX …`, `… MOVE PARTITION … TO TABLE other` (the
+///   partition leaves the table; `TO DISK | VOLUME` only moves its files) and `… REPLACE
+///   PARTITION … FROM other` (the partition's rows give way to another table's);
+/// - a `DELETE` of every row: `… MODIFY TTL …` and `… MATERIALIZE TTL` (rows already past the
+///   new TTL expire), and the mutation `… DELETE WHERE 1` (a condition always true);
+/// - an `UPDATE` of every row: `… CLEAR COLUMN | INDEX | PROJECTION …` (a column emptied in every
+///   row), a column's TTL set with `… MODIFY COLUMN c … TTL …` (its expired values reset), and
+///   the mutation `… UPDATE … WHERE 1`.
+///
+/// Other mutations (`… DELETE WHERE …`, `… UPDATE … WHERE …`) always have a `WHERE` (the server
+/// requires it), like a `DELETE … WHERE`, and ask nothing. Words are read with sqlparser's
+/// tokenizer, so a name or a string that says `drop` is not one; an open quote reads nothing.
 fn clickhouse_alter_risk(sql: &str) -> Option<Risk> {
-    let tokens = Tokenizer::new(&ClickHouseDialect {}, sql).tokenize().ok()?;
-    let words: Vec<String> = tokens.iter().filter_map(plain_word).collect();
-    if words.iter().any(|word| word == "drop") {
-        Some(Risk::Drop)
-    } else if words.iter().any(|word| word == "clear") {
-        Some(Risk::UpdateAll)
-    } else {
-        None
+    let tokens: Vec<Token> = Tokenizer::new(&ClickHouseDialect {}, sql)
+        .tokenize()
+        .ok()?
+        .into_iter()
+        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .collect();
+    let words: Vec<String> = tokens
+        .iter()
+        .map(|token| plain_word(token).unwrap_or_default())
+        .collect();
+    let has = |word: &str| words.iter().any(|w| w == word);
+    let pair =
+        |first: &str, second: &str| words.windows(2).any(|w| w[0] == first && w[1] == second);
+    if has("drop") || (has("move") && pair("to", "table")) || pair("replace", "partition") {
+        return Some(Risk::Drop);
+    }
+    // One `ALTER` may hold several commands, separated by commas outside brackets.
+    let commands = clickhouse_alter_commands(&tokens);
+    let mutation_of_every_row = |kind: &str| {
+        commands
+            .iter()
+            .any(|command| clickhouse_mutation_of_every_row(&tokens[command.clone()], kind))
+    };
+    if pair("modify", "ttl") || pair("materialize", "ttl") || mutation_of_every_row("delete") {
+        return Some(Risk::DeleteAll);
+    }
+    let column_ttl = commands.iter().any(|command| {
+        let words = &words[command.clone()];
+        words
+            .windows(2)
+            .any(|w| w[0] == "modify" && w[1] == "column")
+            && words
+                .iter()
+                .enumerate()
+                .any(|(i, w)| w == "ttl" && (i == 0 || words[i - 1] != "remove"))
+    });
+    if has("clear") || column_ttl || mutation_of_every_row("update") {
+        return Some(Risk::UpdateAll);
+    }
+    None
+}
+
+/// The token ranges of an `ALTER`'s commands: split at its commas outside brackets.
+fn clickhouse_alter_commands(tokens: &[Token]) -> Vec<std::ops::Range<usize>> {
+    let mut commands = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.saturating_sub(1),
+            Token::Comma if depth == 0 => {
+                commands.push(start..i);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    commands.push(start..tokens.len());
+    commands
+}
+
+/// Whether one command of an `ALTER` is the mutation `kind` (`delete` or `update`) with a
+/// `WHERE` that is always true (`WHERE 1`, `WHERE true`, `WHERE 1 = 1`…), so every row changes.
+/// The condition runs to the command's end, its `SETTINGS` or a `;`.
+fn clickhouse_mutation_of_every_row(command: &[Token], kind: &str) -> bool {
+    let mut depth = 0usize;
+    let mut found_kind = false;
+    let mut condition = None;
+    for (i, token) in command.iter().enumerate() {
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.saturating_sub(1),
+            _ if depth == 0 => match plain_word(token).as_deref() {
+                Some(word) if word == kind => found_kind = true,
+                Some("where") if found_kind => {
+                    condition = Some(i + 1);
+                    break;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    let Some(start) = condition else {
+        return false;
+    };
+    let condition: Vec<String> = command[start..]
+        .iter()
+        .take_while(|token| {
+            !matches!(token, Token::SemiColon | Token::EOF)
+                && plain_word(token).as_deref() != Some("settings")
+        })
+        .map(Token::to_string)
+        .collect();
+    Parser::new(&ClickHouseDialect {})
+        .try_with_sql(&condition.join(" "))
+        .and_then(|mut parser| parser.parse_expr())
+        .is_ok_and(|expr| always_true(&expr))
+}
+
+/// A condition true for every row whatever the row holds: a non-zero number, `true`, a literal
+/// equal to itself, and those combined with `AND`, `OR` or brackets.
+fn always_true(expr: &Expr) -> bool {
+    match expr {
+        Expr::Value(value) => match &value.value {
+            SqlValue::Boolean(b) => *b,
+            SqlValue::Number(n, _) => n.parse::<f64>().is_ok_and(|n| n != 0.0),
+            _ => false,
+        },
+        Expr::Nested(inner) => always_true(inner),
+        Expr::BinaryOp { left, op, right } => match op {
+            BinaryOperator::Or => always_true(left) || always_true(right),
+            BinaryOperator::And => always_true(left) && always_true(right),
+            BinaryOperator::Eq => match (left.as_ref(), right.as_ref()) {
+                // `NULL = NULL` is not true.
+                (Expr::Value(l), Expr::Value(r)) => l.value != SqlValue::Null && l.value == r.value,
+                _ => false,
+            },
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -1029,6 +1151,99 @@ mod tests {
         // A name or a string that says drop is not a DROP.
         assert_eq!(ch("alter table t comment column `drop` 'drop it'"), None);
         assert_eq!(ch("select 1"), None);
+    }
+
+    /// ClickHouse also takes data out of a table with `ALTER TABLE` by moving or replacing a
+    /// partition, by a TTL, and by a mutation whose `WHERE` holds for every row: each asks as
+    /// the closest risk.
+    #[test]
+    fn clickhouse_alter_table_moves_replaces_ttls_and_whole_mutations_ask() {
+        let ch = |sql: &str| destructive("clickhouse", sql);
+        // The partition leaves the table, or gives way to another table's rows.
+        assert_eq!(
+            ch("ALTER TABLE t MOVE PARTITION 202401 TO TABLE archive"),
+            Some(Risk::Drop)
+        );
+        assert_eq!(
+            ch("alter table t move partition id '202401' to table db.archive"),
+            Some(Risk::Drop)
+        );
+        assert_eq!(
+            ch("ALTER TABLE t REPLACE PARTITION 202401 FROM t2"),
+            Some(Risk::Drop)
+        );
+        // Rows already past a new TTL expire.
+        assert_eq!(
+            ch("ALTER TABLE t MODIFY TTL d + INTERVAL 1 DAY"),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(ch("alter table t materialize ttl"), Some(Risk::DeleteAll));
+        // A column's expired values reset to their default.
+        assert_eq!(
+            ch("alter table t modify column c String TTL d + interval 1 day"),
+            Some(Risk::UpdateAll)
+        );
+        // Mutations over every row.
+        assert_eq!(ch("ALTER TABLE t DELETE WHERE 1"), Some(Risk::DeleteAll));
+        assert_eq!(
+            ch("alter table t delete where true;"),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(
+            ch("alter table t delete where (1 = 1)"),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(
+            ch(
+                "alter table t on cluster c delete in partition 1 where 1 settings mutations_sync = 2"
+            ),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(
+            ch("alter table t update a = 0 where 1"),
+            Some(Risk::UpdateAll)
+        );
+        assert_eq!(
+            ch("alter table t update a = 0 where id = 1, update b = 0 where 1 or id = 2"),
+            Some(Risk::UpdateAll)
+        );
+        // Mutations whose WHERE picks rows, and moves and TTLs that keep the data.
+        assert_eq!(ch("alter table t delete where 0"), None);
+        assert_eq!(ch("alter table t delete where null = null"), None);
+        assert_eq!(ch("alter table t delete where id = 1"), None);
+        assert_eq!(ch("alter table t delete where a = 1 and 1"), None);
+        assert_eq!(ch("alter table t update a = 1 where id in (1, 2)"), None);
+        assert_eq!(
+            ch("alter table t move partition 202401 to disk 'cold'"),
+            None
+        );
+        assert_eq!(
+            ch("alter table t move partition 202401 to volume 'slow'"),
+            None
+        );
+        assert_eq!(ch("alter table t remove ttl"), None);
+        assert_eq!(ch("alter table t modify column c remove ttl"), None);
+        assert_eq!(ch("alter table t attach partition 202401 from t2"), None);
+        assert_eq!(
+            ch("alter table t modify column c String default replace(x, 'a', 'b')"),
+            None
+        );
+        // A name or a string that holds those words is not one.
+        assert_eq!(
+            ch("alter table t comment column `move` 'move partition 1 to table x'"),
+            None
+        );
+        assert_eq!(
+            ch("alter table t comment column c 'replace partition 1 from t2, modify ttl d'"),
+            None
+        );
+        assert_eq!(ch("alter table t modify column `ttl` UInt8"), None);
+        assert_eq!(
+            ch("alter table `replace` modify column `ttl` String comment 'delete where 1'"),
+            None
+        );
+        assert_eq!(ch("alter table t update c = 'where 1' where id = 1"), None);
+        assert_eq!(ch("alter table t delete where c = 'x where 1'"), None);
     }
 
     /// HiveServer2's engines replace data with `OVERWRITE` and drop partitions with `ALTER TABLE`;
