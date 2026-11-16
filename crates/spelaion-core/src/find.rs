@@ -340,10 +340,10 @@ mod tests {
         let (store, id) = store();
         let r = store.get(id).unwrap();
         let mut r = r.write().unwrap();
-        r.sort(Some(SortKey {
+        r.sort(&[SortKey {
             column: 0,
             descending: true,
-        }))
+        }])
         .unwrap();
         // Sorted 12, 5, 4, 3, 2, 1: "ana" is now in rows 2 and 5.
         let m = run(&r, &query("ana", false));

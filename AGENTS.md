@@ -523,10 +523,16 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   counts to a few a second for the app (a big result streams hundreds of batches a second;
   every other event and the final count go through as they come). `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it, and the
-  primary key orders it after the user's order, ADR-054), and writes "filter by this value"
+  primary key orders it after the user's order, ADR-054), writes the `ORDER BY` of its header
+  sort from the table's own columns (`table_order_by`: the UI names columns, never writes SQL),
+  and writes "filter by this value"
   conditions into its WHERE from the typed cell. `query_page.rs` pages an editor query only when
   each page can be fetched exactly (ADR-054): one table, its primary key in the result, keyset
-  pages after the last row shown, never OFFSET; anything else runs once as written.
+  pages after the last row shown, never OFFSET; anything else runs once as written. The grid's
+  sort of a paged query (a list of `SortKey`s, as the stored result's) is read again from the
+  server the same way: its columns order the pages first and may hold NULLs, which the core
+  writes last in both directions on every engine, in the `ORDER BY` and in the comparison that
+  fetches the next page alike.
   `tests/query_pages.rs` writes between pages on every engine.
   `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
   read from the catalog again each time (the UI only names one), the values come from the

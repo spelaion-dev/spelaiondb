@@ -3802,6 +3802,43 @@ impl From<ColumnFilterItem> for spelaion_core::ColumnFilter {
     }
 }
 
+/// One key of a result's sort: a result column by position, and its direction.
+#[derive(Debug, Clone, Deserialize, Type)]
+pub struct SortKeyItem {
+    pub column: u32,
+    pub descending: bool,
+}
+
+impl From<SortKeyItem> for spelaion_core::SortKey {
+    fn from(item: SortKeyItem) -> Self {
+        Self {
+            column: item.column as usize,
+            descending: item.descending,
+        }
+    }
+}
+
+/// The keys of a sort as the core takes them.
+pub fn sort_keys(items: Vec<SortKeyItem>) -> Vec<spelaion_core::SortKey> {
+    items.into_iter().map(Into::into).collect()
+}
+
+/// One key of a table data tab's sort: a column of the table by name, and its direction.
+#[derive(Debug, Clone, Deserialize, Type)]
+pub struct ColumnSortItem {
+    pub column: String,
+    pub descending: bool,
+}
+
+impl From<ColumnSortItem> for spelaion_core::ColumnSort {
+    fn from(item: ColumnSortItem) -> Self {
+        Self {
+            column: item.column,
+            descending: item.descending,
+        }
+    }
+}
+
 /// A page of a table for the table data tab (see `spelaion_core::TablePage`).
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

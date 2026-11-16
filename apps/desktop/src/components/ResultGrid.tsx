@@ -26,6 +26,14 @@ import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 
+/** No sort: one list, so an unsorted result keeps the same value between renders. */
+const NO_SORT: SortState[] = [];
+
+/** Whether two sorts have the same keys in the same order. */
+function sameSort(a: SortState[], b: SortState[]): boolean {
+  return a.length === b.length && a.every((key, i) => key.column === b[i]?.column && key.descending === b[i]?.descending);
+}
+
 const ROW_H = 24;
 const HEADER_H = 34;
 const PAD = 6;
@@ -233,6 +241,7 @@ export function ResultGrid({
   onSorted,
   onColumnFiltered,
   serverSort,
+  onQuerySort,
   editing,
   viewerOpen: viewer,
   onViewerOpen: setViewer,
@@ -248,10 +257,15 @@ export function ResultGrid({
 }: {
   result: ResultMeta;
   session: string;
-  onSorted(sort: SortState | undefined): void;
+  /** The core sorted the loaded rows by these keys (none: the order they arrived in). */
+  onSorted(sort: SortState[]): void;
   onColumnFiltered(filters: ColumnFilterItem[], rows: number, total: number): void;
   /** In a table data tab, header clicks sort in the server (ORDER BY) instead. */
-  serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
+  serverSort?: { sort: SortState[]; onSort(sort: SortState[]): void };
+  /** A paged query (ADR-054): reads it again from the server ordered by these keys. Resolves
+   *  to `false` when the core cannot page it in that order; the grid then sorts the rows it
+   *  has loaded and says so. */
+  onQuerySort?(sort: SortState[]): Promise<boolean>;
   /** Editable table data tab: pending changes and how to change them. */
   editing?: GridEditing;
   viewerOpen: boolean;
@@ -271,7 +285,10 @@ export function ResultGrid({
    *  can be followed to new table data tabs of `connectionId`. */
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
 }) {
-  const sortShown = serverSort ? serverSort.sort : result.sort;
+  // The sort the headers show: the table data tab's, else the core's sort of the loaded rows,
+  // else the one a paged query's pages were read with.
+  const localSort = result.sort ?? NO_SORT;
+  const sortShown = serverSort ? serverSort.sort : localSort.length > 0 ? localSort : result.paging?.sort ?? NO_SORT;
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -319,7 +336,8 @@ export function ResultGrid({
   const menuRef = useRef<HTMLDivElement>(null);
   /** The custom filter dialog, starting from a column and a value. */
   const [customFilter, setCustomFilter] = useState<ColumnFilterItem | null>(null);
-  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  /** `slow`: a sentence to read, kept on screen as long as an error. */
+  const [notice, setNotice] = useState<{ text: string; error: boolean; slow?: boolean } | null>(null);
   const dragging = useRef(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
   /** A table data tab's foreign keys: its own and those of other tables that point to it. */
@@ -504,7 +522,7 @@ export function ResultGrid({
   // A sort or filter changes which row is at each position: a new cache asks the core again
   // (blocks still on their way to the old one are dropped with it).
   const filtersKey = JSON.stringify(result.columnFilters ?? []);
-  const view = `${result.sort ? `${result.sort.column}:${result.sort.descending}` : ""}|${result.filter ?? ""}|${filtersKey}`;
+  const view = `${localSort.map((key) => `${key.column}:${key.descending}`).join(",")}|${result.filter ?? ""}|${filtersKey}`;
   const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw]);
   cache.grewTo(result.rows);
 
@@ -777,12 +795,15 @@ export function ResultGrid({
       }
       ctx.font = HEADER_FONT;
       ctx.fillStyle = c.text;
-      const sorted = sortShown?.column === col;
-      ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - (sorted ? 14 : 0)), x + PAD, 13);
-      if (sorted) {
+      // The column's place in the sort: its direction and, with several keys, its position.
+      const place = sortShown.findIndex((key) => key.column === col);
+      const mark = place < 0 ? "" : `${sortShown[place]?.descending ? "▼" : "▲"}${sortShown.length > 1 ? place + 1 : ""}`;
+      const markW = mark ? Math.ceil(ctx.measureText(mark).width) + 4 : 0;
+      ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - markW), x + PAD, 13);
+      if (mark) {
         ctx.fillStyle = c.accent;
         ctx.textAlign = "right";
-        ctx.fillText(sortShown?.descending ? "▼" : "▲", x + w - PAD, 13);
+        ctx.fillText(mark, x + w - PAD, 13);
         ctx.textAlign = "left";
       }
       ctx.font = TYPE_FONT;
@@ -1294,20 +1315,21 @@ export function ResultGrid({
   /** Sorts in the core and asks for the rows again; `undefined` restores the server order. */
   // Clicks can come faster than the core answers: the next click cycles from the last sort
   // asked for, and the requests reach the core one after another, in order.
-  const requestedSort = useRef(result.sort);
+  const requestedSort = useRef(sortShown);
   const sortQueue = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
-    requestedSort.current = serverSort ? serverSort.sort : result.sort;
+    requestedSort.current = sortShown;
     // Only when another result is shown; within one result the ref leads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.id]);
 
-  function sortBy(sort: SortState | undefined) {
+  /** Sorts by `sort`, the most significant key first; none restores the original order. */
+  function sortBy(sort: SortState[]) {
     setMenu(null);
     if (result.paging?.loading) return;
-    const sortColumn = sort ? result.columns[sort.column] : undefined;
-    if (sortColumn?.masked) {
-      setNotice({ text: t("masking.noSort", { column: sortColumn.name }), error: true });
+    const maskedColumn = sort.map((key) => result.columns[key.column]).find((column) => column?.masked);
+    if (maskedColumn) {
+      setNotice({ text: t("masking.noSort", { column: maskedColumn.name }), error: true });
       return;
     }
     if (editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) {
@@ -1327,10 +1349,23 @@ export function ResultGrid({
     requestedSort.current = sort;
     sortsPending.current += 1;
     setSorting(true);
+    const paging = result.paging;
+    const pagesSort = paging?.sort ?? NO_SORT;
     sortQueue.current = sortQueue.current.then(async () => {
       try {
-        await call(commands.sortResult(result.id, sort?.column ?? null, sort?.descending ?? false));
-        onSorted(sort);
+        // A paged query whose rows are not all here, or were read in a sort's order, is
+        // read again from the server in the new order (ADR-054) when the core can page it
+        // that way.
+        if (paging && onQuerySort && !sameSort(sort, pagesSort) && (sort.length > 0 ? paging.hasMore || pagesSort.length > 0 : true)) {
+          if (await onQuerySort(sort)) return;
+        }
+        // Otherwise the core sorts the rows it holds; the pages' own order needs no sort.
+        const local = paging && sameSort(sort, pagesSort) ? NO_SORT : sort;
+        await call(commands.sortResult(result.id, local));
+        onSorted(local);
+        if (local.length > 0 && paging?.hasMore) {
+          setNotice({ text: t("results.sortLoadedOnly", { count: result.rows, formattedCount: numbers.format(result.rows) }), error: false, slow: true });
+        }
       } catch (e) {
         requestedSort.current = previous;
         setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
@@ -1341,12 +1376,20 @@ export function ResultGrid({
     });
   }
 
-  /** Header clicks cycle: ascending, descending, server order. */
-  function cycleSort(col: number) {
+  /** A header click cycles that column: ascending, descending, out of the sort. A plain click
+   *  starts over with that column alone; with Shift (`add`) the column is the next key of the
+   *  sort in force, or changes in place when it is already one. */
+  function cycleSort(col: number, add: boolean) {
     const current = requestedSort.current;
-    if (current?.column !== col) sortBy({ column: col, descending: false });
-    else if (!current.descending) sortBy({ column: col, descending: true });
-    else sortBy(undefined);
+    const place = current.findIndex((key) => key.column === col);
+    const key = current[place];
+    if (!add) {
+      if (!key || current.length > 1) sortBy([{ column: col, descending: false }]);
+      else if (!key.descending) sortBy([{ column: col, descending: true }]);
+      else sortBy([]);
+    } else if (!key) sortBy([...current, { column: col, descending: false }]);
+    else if (!key.descending) sortBy(current.map((k, i) => (i === place ? { column: col, descending: true } : k)));
+    else sortBy(current.filter((_, i) => i !== place));
   }
 
   /** Moves the active cell to `col` in the same row (the first row if none) and shows it. */
@@ -1471,7 +1514,7 @@ export function ResultGrid({
 
   useEffect(() => {
     if (!notice) return;
-    const timer = setTimeout(() => setNotice(null), notice.error ? 6000 : 2000);
+    const timer = setTimeout(() => setNotice(null), notice.error || notice.slow ? 6000 : 2000);
     return () => clearTimeout(timer);
   }, [notice]);
 
@@ -1648,7 +1691,7 @@ export function ResultGrid({
   const resizeViewer = (width: number) => onViewerWidth(Math.round(Math.max(viewerMin, Math.min(width, viewerMax))));
   const viewerId = `cell-viewer-${session}`;
   const paging = result.paging;
-  const pageViewChanged = !!(result.sort || result.filter || result.columnFilters?.length);
+  const pageViewChanged = !!(localSort.length || result.filter || result.columnFilters?.length);
   const pageBusy = pagingLocked || !!paging?.loading || !!cellEditor || sorting;
   const pageCanLoad = !!paging?.hasMore && (paging.total === undefined || result.rows < paging.total);
   const pageStart = paging ? queryPage * paging.pageSize : 0;
@@ -1812,9 +1855,10 @@ export function ResultGrid({
           const header = headerAt(e.clientX, e.clientY);
           if (header !== null) {
             e.preventDefault();
-            // Ctrl+click selects the column (Ctrl+Shift+click up to it); a plain click sorts.
+            // Ctrl+click selects the column (Ctrl+Shift+click up to it); a plain click sorts by
+            // it alone, Shift+click adds it to the sort.
             if (e.ctrlKey || e.metaKey) selectColumn(header, e.shiftKey);
-            else cycleSort(header);
+            else cycleSort(header, e.shiftKey);
             return;
           }
           // The link of a foreign key cell, or Ctrl+click anywhere on one, follows the key.
@@ -1868,14 +1912,15 @@ export function ResultGrid({
         }}
         onKeyDown={onKeyDown}
         data-column-widths={widths.join(",")}
+        data-sort={sortShown.map((key) => `${key.column}:${key.descending ? "desc" : "asc"}`).join(",")}
         aria-label={
           t("results.gridLabel", { count: result.rows, formattedCount: numbers.format(result.rows) }) +
-          (sortShown
-            ? `, ${t("results.gridSorted", {
-                column: result.columns[sortShown.column]?.name ?? "",
-                direction: t(sortShown.descending ? "results.descending" : "results.ascending"),
-              })}`
-            : "")
+          sortShown
+            .map((key, i) => `, ${t(i === 0 ? "results.gridSorted" : "results.gridSortedThen", {
+              column: result.columns[key.column]?.name ?? "",
+              direction: t(key.descending ? "results.descending" : "results.ascending"),
+            })}`)
+            .join("")
         }
       >
         <div aria-hidden="true" style={{ width: totalW, height: scrollMap(totalH, 0).spacerH }} />
@@ -1891,7 +1936,7 @@ export function ResultGrid({
             hiddenCount={hidden.size}
             canHide={visibleCols.length > 1}
             frozen={frozen}
-            sorted={!!sortShown}
+            sort={sortShown}
             onSelect={() => selectColumn(menu.header ?? 0, false)}
             onFit={() => {
               const col = menu.header ?? 0;
@@ -2166,14 +2211,14 @@ export function ResultGrid({
           {selection && (
             <>
               <hr />
-              <button role="menuitem" onClick={() => sortBy({ column: selection.focus.col, descending: false })}>
+              <button role="menuitem" onClick={() => sortBy([{ column: selection.focus.col, descending: false }])}>
                 {t("results.sortAsc")}
               </button>
-              <button role="menuitem" onClick={() => sortBy({ column: selection.focus.col, descending: true })}>
+              <button role="menuitem" onClick={() => sortBy([{ column: selection.focus.col, descending: true }])}>
                 {t("results.sortDesc")}
               </button>
-              {sortShown && (
-                <button role="menuitem" onClick={() => sortBy(undefined)}>
+              {sortShown.length > 0 && (
+                <button role="menuitem" onClick={() => sortBy([])}>
                   {t("results.sortClear")}
                 </button>
               )}
@@ -2593,14 +2638,15 @@ function HeaderMenuItems(props: {
   hiddenCount: number;
   canHide: boolean;
   frozen: boolean;
-  sorted: boolean;
+  /** The sort in force, the most significant key first. */
+  sort: SortState[];
   onSelect(): void;
   onFit(): void;
   onHide(): void;
   onChooser(): void;
   onShowAll(): void;
   onFreeze(): void;
-  onSort(sort: SortState | undefined): void;
+  onSort(sort: SortState[]): void;
   /** The column is masked (ADR-051): it cannot be sorted by. */
   masked?: boolean;
   /** Column-wide copies, after the hide and freeze entries. */
@@ -2608,6 +2654,16 @@ function HeaderMenuItems(props: {
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = new Intl.NumberFormat(i18n.language);
+  const noSortHint = props.masked ? t("masking.noSortHint") : undefined;
+  // "Then sort": this column as the next key of the sort in force (what Shift+click does), or
+  // its direction changed in place when it is already a key.
+  const others = props.sort.filter((key) => key.column !== props.column);
+  const then = (descending: boolean) => {
+    const key = { column: props.column, descending };
+    return props.sort.some((k) => k.column === props.column)
+      ? props.sort.map((k) => (k.column === props.column ? key : k))
+      : [...props.sort, key];
+  };
   return (
     <>
       <button role="menuitem" onClick={props.onSelect}>{t("results.selectColumn")}</button>
@@ -2629,9 +2685,15 @@ function HeaderMenuItems(props: {
       {props.children && <hr />}
       {props.children}
       <hr />
-      <button role="menuitem" disabled={props.masked} title={props.masked ? t("masking.noSortHint") : undefined} onClick={() => props.onSort({ column: props.column, descending: false })}>{t("results.sortAsc")}</button>
-      <button role="menuitem" disabled={props.masked} title={props.masked ? t("masking.noSortHint") : undefined} onClick={() => props.onSort({ column: props.column, descending: true })}>{t("results.sortDesc")}</button>
-      {props.sorted && <button role="menuitem" onClick={() => props.onSort(undefined)}>{t("results.sortClear")}</button>}
+      <button role="menuitem" disabled={props.masked} title={noSortHint} onClick={() => props.onSort([{ column: props.column, descending: false }])}>{t("results.sortAsc")}</button>
+      <button role="menuitem" disabled={props.masked} title={noSortHint} onClick={() => props.onSort([{ column: props.column, descending: true }])}>{t("results.sortDesc")}</button>
+      {others.length > 0 && (
+        <>
+          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint")} onClick={() => props.onSort(then(false))}>{t("results.sortThenAsc")}</button>
+          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint")} onClick={() => props.onSort(then(true))}>{t("results.sortThenDesc")}</button>
+        </>
+      )}
+      {props.sort.length > 0 && <button role="menuitem" onClick={() => props.onSort([])}>{t("results.sortClear")}</button>}
     </>
   );
 }

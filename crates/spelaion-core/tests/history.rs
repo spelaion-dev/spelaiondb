@@ -109,7 +109,7 @@ async fn paged_queries_keep_the_original_sql_in_history() {
         .collect()
         .await;
     let original = "select * from t order by id;";
-    let page = spelaion_core::first_query_page_sql(&session, original, 2)
+    let page = spelaion_core::first_query_page_sql(&session, original, 2, &[])
         .await
         .unwrap();
     let _: Vec<_> = history

@@ -42,8 +42,9 @@ A summary of how the pieces fit together. The reasons behind each decision are i
 3. Rows arrive streamed, are converted to Arrow batches and stored in the core's result
    store (in memory up to a budget; then on disk).
 4. The UI requests windows of rows while scrolling and receives them as binary Arrow IPC.
-   Sorting by a column keeps a row permutation in the core, so windows, copies and exports
-   all see the same order.
+   Sorting by one or several columns keeps a row permutation in the core, so windows, copies
+   and exports all see the same order. A table data tab and a paged query (ADR-054) are
+   sorted on the server instead: the core writes the `ORDER BY` and the page is read again.
 
 **Column masking (ADR-051)**
 A connection's masking rules (its `[masking]`, the user's `user.toml`, its connection type)

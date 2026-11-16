@@ -35,8 +35,8 @@ use spelaion_config::{
 use spelaion_core::{
     AppLog, Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect,
     OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth,
-    SortKey, StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text,
-    open_connection, start_over,
+    StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
+    start_over,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -2345,32 +2345,38 @@ async fn start_script(
     Ok(())
 }
 
-/// Whether a SELECT matches the conservative rules for fetching pages.
+/// Whether a SELECT matches the conservative rules for fetching pages, ordered by the grid's
+/// `sort` first (result columns by position; none for the query's own order).
 #[command]
 async fn query_page_supported(
     session: String,
     sql: String,
+    sort: Vec<SortKeyItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<bool> {
     let open = state.session(&session).await?;
-    Ok(spelaion_core::query_pages_exactly(&open.session, &sql).await)
+    Ok(spelaion_core::query_pages_exactly(&open.session, &sql, &sort_keys(sort)).await)
 }
 
-/// Run the first page, keeping the original SQL in the user's query history.
+/// Run the first page, keeping the original SQL in the user's query history. `sort` is the
+/// grid's sort: the core writes the page's order from it.
+#[allow(clippy::too_many_arguments)]
 #[command]
 async fn run_query_page(
     session: String,
     sql: String,
     limit: u32,
+    sort: Vec<SortKeyItem>,
     confirmed: bool,
     options: RunOptionsItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let open = state.session(&session).await?;
-    let paged = spelaion_core::first_query_page_sql(&open.session, &sql, limit.into())
-        .await
-        .ok_or("this query cannot be paged")?;
+    let paged =
+        spelaion_core::first_query_page_sql(&open.session, &sql, limit.into(), &sort_keys(sort))
+            .await
+            .ok_or("this query cannot be paged")?;
     start_script(
         &state,
         &session,
@@ -2392,6 +2398,7 @@ async fn append_query_page(
     sql: String,
     limit: u32,
     offset: u32,
+    sort: Vec<SortKeyItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
     let open = state.session(&session).await?;
@@ -2401,6 +2408,7 @@ async fn append_query_page(
         &sql,
         limit.into(),
         offset.into(),
+        &sort_keys(sort),
     )
     .await?;
     Ok(u32::try_from(added).unwrap_or(u32::MAX))
@@ -2972,28 +2980,24 @@ async fn statements_from_cursor(
         .map_err(|e| e.to_string())
 }
 
-/// Sorts a result by one column in the core (`None` restores the server's order). The
-/// grid then asks for its windows again.
+/// Sorts a result by columns in the core, the first key being the most significant (no keys
+/// restore the server's order). The grid then asks for its windows again.
 #[command]
 async fn sort_result(
     result: u32,
-    column: Option<u32>,
-    descending: bool,
+    keys: Vec<SortKeyItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let stored = state
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
-    let key = column.map(|column| SortKey {
-        column: column as usize,
-        descending,
-    });
+    let keys = sort_keys(keys);
     tokio::task::spawn_blocking(move || {
         stored
             .write()
             .map_err(|_| "result lock poisoned".to_string())?
-            .sort(key)
+            .sort(&keys)
             .map_err(|e| e.to_string())
     })
     .await
@@ -4178,15 +4182,19 @@ async fn row_references(
     Ok(references.into_iter().map(RowReferenceItem::from).collect())
 }
 
-/// An identifier quoted for the session's engine (for an ORDER BY the UI writes).
+/// The ORDER BY of a table data tab sorted by its headers, written by the core from the
+/// table's own columns (read from the catalog now): the UI names columns, never writes SQL.
 #[command]
-async fn quote_identifier(
+async fn table_order_by(
     session: String,
-    identifier: String,
+    schema: String,
+    name: String,
+    sort: Vec<ColumnSortItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let open = state.session(&session).await?;
-    Ok(open.session.dialect().quote_identifier(&identifier))
+    let sort: Vec<spelaion_core::ColumnSort> = sort.into_iter().map(Into::into).collect();
+    spelaion_core::table_order_by(&open.session, &schema, &name, &sort).await
 }
 
 /// Objects' names as the engine writes them (`schema.table`, quoted where it needs to be),
@@ -5125,7 +5133,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             count_rows,
             table_page_sql,
             count_table_rows,
-            quote_identifier,
+            table_order_by,
             qualified_names,
             browse_statement,
             object_actions,

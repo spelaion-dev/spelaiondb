@@ -1164,6 +1164,87 @@ try {
   await page.waitForFunction((el) => !el.disabled, await queryPages.getByRole("button", { name: "Previous page" }).elementHandle());
   await queryPages.getByRole("button", { name: "Previous page" }).click();
   await queryPages.getByText("rows 1–100").waitFor();
+
+  step("query pages: a header sort reads the query again in that order, by two columns");
+  {
+    const pagedGrid = () => panel.locator(".grid-scroller");
+    const pagedBox = async () => {
+      // A sort read from the server mounts a new grid: wait until it is laid out.
+      for (let i = 0; i < 60; i++) {
+        const box = await pagedGrid().boundingBox().catch(() => null);
+        if (box) return box;
+        await page.waitForTimeout(100);
+      }
+      throw new Error("the sorted result's grid never appeared");
+    };
+    const pagedWidths = async () => (await pagedGrid().getAttribute("data-column-widths")).split(",").map(Number);
+    // Row numbers take 52 px while the result has under 10,000 rows.
+    const headerX = async (column) => 52 + (await pagedWidths()).slice(0, column).reduce((sum, width) => sum + width, 0) + 20;
+    const clickPaged = async (column, shift) => {
+      const box = await pagedBox();
+      const x = await headerX(column);
+      if (shift) await page.keyboard.down("Shift");
+      await page.mouse.click(box.x + x, box.y + 18);
+      if (shift) await page.keyboard.up("Shift");
+    };
+    const firstRows = async (rows) => {
+      const box = await pagedBox();
+      const before = await page.evaluate(() => window.__copied.length);
+      await pagedGrid().evaluate((el) => {
+        el.scrollTop = 0;
+        el.scrollLeft = 0;
+      });
+      await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+      await page.keyboard.press("Shift+ArrowRight");
+      for (let i = 1; i < rows; i++) await page.keyboard.press("Shift+ArrowDown");
+      await page.keyboard.press("Control+c");
+      return (await copied(before + 1)).trimEnd().split("\n").map((line) => line.split("\t").map(Number));
+    };
+    const inOrder = (rows) => {
+      for (let i = 1; i < rows.length; i++) {
+        const [[idA, customerA], [idB, customerB]] = [rows[i - 1], rows[i]];
+        assert.ok(customerA < customerB || (customerA === customerB && idA > idB), `${customerA}/${idA} then ${customerB}/${idB}`);
+      }
+    };
+    // customer_id repeats: the server orders every row by it, then by the key.
+    await clickPaged(1, false);
+    await panel.locator('.grid-scroller[aria-label$="sorted by customer_id, ascending"]').waitFor();
+    await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+    // Shift+click id twice: the second key, descending.
+    await clickPaged(0, true);
+    await panel.locator('.grid-scroller[aria-label$="sorted by customer_id, ascending, then by id, ascending"]').waitFor();
+    await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+    await clickPaged(0, true);
+    await panel.locator('.grid-scroller[aria-label$="sorted by customer_id, ascending, then by id, descending"]').waitFor();
+    await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+    assert.equal(await pagedGrid().getAttribute("data-sort"), "1:asc,0:desc");
+    const firstPage = await firstRows(100);
+    assert.equal(firstPage.length, 100);
+    inOrder(firstPage);
+    // The sort ran on the server, over all 50,000 rows: the first customer's newest order is
+    // first, which was not among the 200 rows (ids 1 to 200) loaded before.
+    assert.ok(firstPage[0][0] > 200, `the first row is order ${firstPage[0][0]}`);
+    // The sort is the pages' own order: scrolling still fetches the next page, in order.
+    await pagedGrid().evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await panel.locator(".statusline", { hasText: "200 rows" }).waitFor();
+    const twoPages = await firstRows(200);
+    assert.equal(twoPages.length, 200);
+    inOrder(twoPages);
+    assert.deepEqual(twoPages.slice(0, 100), firstPage);
+    await shot("04a1-query-pages-sorted");
+    // total is a REAL: its values do not round-trip as literals, so the query cannot be read
+    // again in that order. The loaded rows are sorted, and the grid says so.
+    await clickPaged(3, false);
+    await panel.locator('.grid-scroller[aria-label$="sorted by total, ascending"]').waitFor();
+    // Selecting down to row 200 fetched one more page: the note counts the rows loaded.
+    await panel.getByText(/^Sorted the \d+ rows loaded only: this query cannot be read again in that order\.$/).waitFor();
+    // Back to the query's own order: read again from the server, its first page.
+    await clickPaged(3, false);
+    await clickPaged(3, false);
+    await panel.locator('.grid-scroller[data-sort=""]').waitFor();
+    await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+    assert.deepEqual((await firstRows(2)).map((row) => row[0]), [1, 2]);
+  }
   await page.keyboard.press("Control+w");
   await setHistorySaving("Shop (SQLite)", true);
 
@@ -1218,6 +1299,79 @@ try {
   await clickHeader(TOTAL_X);
   await sortedAs("");
   assert.deepEqual(await copyFirstRows(0, 2), ["1", "2"]);
+
+  step("sort: Shift+click adds a second column to the sort, a plain click starts over");
+  {
+    const customerX = ROW_GUTTER_50K + initialWidths[0] + 20;
+    const shiftClickHeader = async (x) => {
+      await page.keyboard.down("Shift");
+      await clickHeader(x);
+      await page.keyboard.up("Shift");
+    };
+    await clickHeader(customerX);
+    await sortedAs(", sorted by customer_id, ascending");
+    await shiftClickHeader(TOTAL_X);
+    await sortedAs(", sorted by customer_id, ascending, then by total, ascending");
+    await shiftClickHeader(TOTAL_X);
+    await sortedAs(", sorted by customer_id, ascending, then by total, descending");
+    assert.equal(await sortGrid.getAttribute("data-sort"), "1:asc,3:desc");
+    // The first rows, customer_id to total: customers in order, and each one's totals from
+    // the largest down.
+    const before = await page.evaluate(() => window.__copied.length);
+    await sortGrid.evaluate((el) => {
+      el.scrollTop = 0;
+      el.scrollLeft = 0;
+    });
+    await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12);
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Shift+ArrowRight");
+    await page.keyboard.press("Shift+ArrowRight");
+    for (let i = 1; i < 200; i++) await page.keyboard.press("Shift+ArrowDown");
+    await page.keyboard.press("Control+c");
+    const sortedRows = (await copied(before + 1)).trimEnd().split("\n").map((line) => {
+      const cells = line.split("\t");
+      return { customer: Number(cells[0]), total: Number(cells[cells.length - 1]) };
+    });
+    assert.equal(sortedRows.length, 200);
+    let ties = 0;
+    for (let i = 1; i < sortedRows.length; i++) {
+      const [a, b] = [sortedRows[i - 1], sortedRows[i]];
+      assert.ok(a.customer <= b.customer, `customers in order: ${a.customer} then ${b.customer}`);
+      if (a.customer === b.customer) {
+        ties += 1;
+        assert.ok(a.total >= b.total, `customer ${a.customer}: ${a.total} then ${b.total}`);
+      }
+    }
+    assert.ok(ties > 0, "some customer has several orders among the first rows");
+    // Both looks, put on the page for the screenshots alone (as the theme setting does) and
+    // put back: the headers' arrows and key numbers are drawn from the theme's colors.
+    {
+      const themeNow = await page.locator("html").getAttribute("data-theme");
+      const lookOf = (theme) =>
+        page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+          window.dispatchEvent(new Event("spelaion-themechange"));
+        }, theme);
+      for (const theme of ["light", "dark"]) {
+        await lookOf(theme);
+        await page.waitForTimeout(200);
+        await shot(`04b1-grid-sorted-two-columns-${theme}`);
+      }
+      await lookOf(themeNow);
+    }
+    // A third Shift+click takes the column out; a plain click on another starts over.
+    await shiftClickHeader(TOTAL_X);
+    await sortedAs(", sorted by customer_id, ascending");
+    await shiftClickHeader(TOTAL_X);
+    await sortedAs(", sorted by customer_id, ascending, then by total, ascending");
+    await clickHeader(ID_X);
+    await sortedAs(", sorted by id, ascending");
+    await clickHeader(ID_X);
+    await clickHeader(ID_X);
+    await sortedAs("");
+    assert.equal(await sortGrid.getAttribute("data-sort"), "");
+    assert.deepEqual(await copyFirstRows(0, 2), ["1", "2"]);
+  }
 
   step("columns: drag a header edge to resize, double-click it to fit the content");
   const widthsNow = async () => (await sortGrid.getAttribute("data-column-widths")).split(",").map(Number);
@@ -3223,6 +3377,39 @@ try {
     await panel.locator('.grid-scroller[aria-label$="sorted by id, descending"]').waitFor();
     assert.equal(await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue(), "id DESC");
     await range.filter({ hasText: "rows 1–500" }).waitFor();
+    // Shift+click adds a second column: the core writes both into the ORDER BY, and two more
+    // Shift+clicks turn it descending and take it out again.
+    {
+      const orderBy = async (text) => {
+        for (let i = 0; i < 40; i++) {
+          if ((await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue()) === text) return;
+          await page.waitForTimeout(100);
+        }
+        assert.equal(await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue(), text);
+      };
+      const shiftClick = async () => {
+        // The sort shows at once, but the page the last click asked for is read after it and
+        // mounts a new grid: a click before it is there would be lost. "Count" is disabled
+        // while the page loads.
+        await page.waitForFunction((button) => !button.disabled, await panel.getByRole("button", { name: "Count", exact: true }).elementHandle());
+        await range.filter({ hasText: "rows 1–500" }).waitFor();
+        await panel.locator(".grid-scroller").waitFor();
+        await page.keyboard.down("Shift");
+        const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+        await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 18);
+        await page.keyboard.up("Shift");
+      };
+      await shiftClick();
+      await panel.locator('.grid-scroller[aria-label$="sorted by id, descending, then by customer_id, ascending"]').waitFor();
+      await orderBy("id DESC, customer_id");
+      assert.equal(await panel.locator(".grid-scroller").getAttribute("data-sort"), "0:desc,1:asc");
+      await shiftClick();
+      await panel.locator('.grid-scroller[aria-label$="sorted by id, descending, then by customer_id, descending"]').waitFor();
+      await orderBy("id DESC, customer_id DESC");
+      await shiftClick();
+      await panel.locator('.grid-scroller[aria-label$="sorted by id, descending"]').waitFor();
+      await orderBy("id DESC");
+    }
     // The sort shows at once; the page it asked for may still be on its way.
     let firstId = "";
     for (let i = 0; i < 20 && firstId !== "50000"; i++) {

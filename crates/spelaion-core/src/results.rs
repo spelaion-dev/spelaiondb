@@ -18,7 +18,7 @@ use crate::find::{FindMatches, FindQuery, FindTicket, search};
 use crate::masking::{MaskPolicy, mask_batch, masked_schema};
 use crate::pending::{EditOutcome, PendingEdit, PendingEdits};
 use crate::selection_stats::{self, CellBlock, SelectionStats, StatsTicket};
-use crate::sort::{SortKey, ViewError, sorted_instants, sorted_rows};
+use crate::sort::{MAX_SORT_KEYS, SortKey, ViewError, sorted_instants, sorted_rows};
 
 /// Identifier of a result within a [`ResultStore`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -33,7 +33,8 @@ pub struct StoredResult {
     starts: Vec<usize>,
     rows: usize,
     complete: bool,
-    sort: Option<(SortKey, Vec<u32>)>,
+    /// The sort's keys and the original rows in their order.
+    sort: Option<(Vec<SortKey>, Vec<u32>)>,
     /// The filter text and, per original row, whether it matches.
     filter: Option<(String, Vec<bool>)>,
     /// Column filters (all must pass) and, per original row, whether it passes them.
@@ -179,9 +180,10 @@ impl StoredResult {
         self.complete
     }
 
-    /// The column the rows are sorted by, if any.
-    pub fn sort_key(&self) -> Option<SortKey> {
-        self.sort.as_ref().map(|(key, _)| *key)
+    /// The columns the rows are sorted by, the most significant first; none for the server's
+    /// order.
+    pub fn sort_keys(&self) -> &[SortKey] {
+        self.sort.as_ref().map_or(&[], |(keys, _)| keys.as_slice())
     }
 
     /// The text rows are filtered by, if any.
@@ -189,43 +191,56 @@ impl StoredResult {
         self.filter.as_ref().map(|(text, _)| text.as_str())
     }
 
-    /// Sorts the rows by one column (`None` goes back to the order the server sent). Every
-    /// later window, copy and export sees the new order.
-    pub fn sort(&mut self, key: Option<SortKey>) -> Result<(), ViewError> {
-        if self.sort_key() != key {
+    /// Sorts the rows by `keys`, the first being the most significant (none goes back to the
+    /// order the server sent). Rows equal in every key keep the server's order, and NULLs go
+    /// last in each key. Every later window, copy and export sees the new order. A refused
+    /// sort leaves the one in force.
+    pub fn sort(&mut self, keys: &[SortKey]) -> Result<(), ViewError> {
+        if self.sort_keys() != keys {
             self.check_unedited()?;
         }
-        let Some(key) = key else {
+        if keys.is_empty() {
             self.sort = None;
             self.rebuild_view();
             return Ok(());
-        };
-        self.check_viewable()?;
-        let meta = self
-            .schema
-            .columns
-            .get(key.column)
-            .ok_or(ViewError::NoSuchColumn(key.column))?;
-        if self.is_masked(key.column) {
-            return Err(ViewError::Masked(meta.name.clone()));
         }
-        let parts: Vec<&dyn Array> = self
-            .batches
-            .iter()
-            .map(|b| b.column(key.column).as_ref())
-            .collect();
-        let rows = if parts.is_empty() {
-            Vec::new()
-        } else {
-            let values = concat(&parts).map_err(|_| ViewError::UnexpectedArray(key.column))?;
-            match crate::temporal::text_temporal(meta) {
-                Some(spelaion_driver_api::LogicalType::TimestampTz) => {
-                    sorted_instants(values.as_ref(), key)?
-                }
-                _ => sorted_rows(values.as_ref(), meta.logical, key)?,
+        self.check_viewable()?;
+        if keys.len() > MAX_SORT_KEYS {
+            return Err(ViewError::TooManyKeys);
+        }
+        for (i, key) in keys.iter().enumerate() {
+            let meta = self
+                .schema
+                .columns
+                .get(key.column)
+                .ok_or(ViewError::NoSuchColumn(key.column))?;
+            if self.is_masked(key.column) {
+                return Err(ViewError::Masked(meta.name.clone()));
             }
-        };
-        self.sort = Some((key, rows));
+            if keys[..i].iter().any(|k| k.column == key.column) {
+                return Err(ViewError::RepeatedKey(key.column));
+            }
+        }
+        // From the last key to the first, each pass stable over the order the one before left.
+        let mut rows: Vec<u32> = (0..self.rows as u32).collect();
+        if !self.batches.is_empty() {
+            for key in keys.iter().rev() {
+                let meta = &self.schema.columns[key.column];
+                let parts: Vec<&dyn Array> = self
+                    .batches
+                    .iter()
+                    .map(|b| b.column(key.column).as_ref())
+                    .collect();
+                let values = concat(&parts).map_err(|_| ViewError::UnexpectedArray(key.column))?;
+                rows = match crate::temporal::text_temporal(meta) {
+                    Some(spelaion_driver_api::LogicalType::TimestampTz) => {
+                        sorted_instants(values.as_ref(), *key, rows)?
+                    }
+                    _ => sorted_rows(values.as_ref(), meta.logical, *key, rows)?,
+                };
+            }
+        }
+        self.sort = Some((keys.to_vec(), rows));
         self.rebuild_view();
         Ok(())
     }
@@ -773,25 +788,25 @@ mod tests {
             column: 0,
             descending: true,
         };
-        assert_eq!(r.sort(Some(down)), Err(ViewError::Incomplete));
+        assert_eq!(r.sort(&[down]), Err(ViewError::Incomplete));
         drop(r);
         store.complete(id);
         let r = store.get(id).unwrap();
         let mut r = r.write().unwrap();
         assert_eq!(
-            r.sort(Some(SortKey {
+            r.sort(&[SortKey {
                 column: 1,
                 descending: false
-            })),
+            }]),
             Err(ViewError::NoSuchColumn(1))
         );
-        r.sort(Some(down)).unwrap();
-        assert_eq!(r.sort_key(), Some(down));
+        r.sort(&[down]).unwrap();
+        assert_eq!(r.sort_keys(), [down]);
         assert_eq!(values(&r.window(8, 9)), (13..=21).rev().collect::<Vec<_>>());
         assert_eq!(values(&r.window(25, 100)), [4, 3, 2, 1, 0]);
         assert!(r.window(30, 5).is_empty());
-        r.sort(None).unwrap();
-        assert_eq!(r.sort_key(), None);
+        r.sort(&[]).unwrap();
+        assert!(r.sort_keys().is_empty());
         assert_eq!(values(&r.window(8, 3)), [8, 9, 10]);
     }
 
@@ -816,10 +831,10 @@ mod tests {
         assert_eq!(r.total_rows(), 25);
         assert_eq!(r.filter_text(), Some("1"));
         assert_eq!(values(&r.window(0, 3)), [1, 10, 11]);
-        r.sort(Some(SortKey {
+        r.sort(&[SortKey {
             column: 0,
             descending: true,
-        }))
+        }])
         .unwrap();
         assert_eq!(values(&r.window(0, 3)), [21, 19, 18]);
         assert_eq!(values(&r.window(10, 5)), [10, 1]);
@@ -855,10 +870,10 @@ mod tests {
         assert_eq!(r.filter(Some("5")), Ok(1));
         assert_eq!(values(&r.window(0, 5)), [15]);
         r.filter(None).unwrap();
-        r.sort(Some(SortKey {
+        r.sort(&[SortKey {
             column: 0,
             descending: true,
-        }))
+        }])
         .unwrap();
         assert_eq!(values(&r.window(0, 2)), [19, 18]);
         assert_eq!(r.column_filters().len(), 2);
@@ -883,6 +898,109 @@ mod tests {
         assert_eq!(values(&r.window(0, 1)), [29]);
     }
 
+    /// Nine rows in two batches: a number and a text that both repeat and hold NULLs, and
+    /// the row's own number.
+    fn three_columns() -> (ResultStore, ResultId) {
+        use arrow::array::StringArray;
+        let column = |name: &str, logical, native: &str| ColumnMeta {
+            name: name.into(),
+            logical,
+            native_type: native.into(),
+            native_id: None,
+            origin: None,
+        };
+        let s = Arc::new(ResultSchema::new(vec![
+            column("a", LogicalType::Int, "int8"),
+            column("b", LogicalType::Text, "text"),
+            column("id", LogicalType::Int, "int8"),
+        ]));
+        let a = [
+            Some(2),
+            None,
+            Some(1),
+            Some(2),
+            Some(1),
+            None,
+            Some(2),
+            Some(1),
+            None,
+        ];
+        let b = [
+            Some("x"),
+            Some("y"),
+            None,
+            Some("x"),
+            Some("b"),
+            None,
+            Some("a"),
+            Some("b"),
+            Some("y"),
+        ];
+        let store = ResultStore::new();
+        let id = store.create(s.clone());
+        for rows in [0..5usize, 5..9] {
+            let batch = RecordBatch::try_new(
+                s.arrow.clone(),
+                vec![
+                    Arc::new(Int64Array::from(a[rows.clone()].to_vec())),
+                    Arc::new(StringArray::from(b[rows.clone()].to_vec())),
+                    Arc::new(Int64Array::from_iter_values(rows.map(|i| i as i64))),
+                ],
+            )
+            .unwrap();
+            store.append(id, batch);
+        }
+        store.complete(id);
+        (store, id)
+    }
+
+    fn ids(r: &StoredResult) -> Vec<i64> {
+        (0..r.rows())
+            .map(|row| match r.value_at(row, 2) {
+                Some(Value::Int(n)) => n,
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn three_keys_sort_with_nulls_last_in_each_and_ties_broken_by_the_next() {
+        let (store, id) = three_columns();
+        let r = store.get(id).unwrap();
+        let mut r = r.write().unwrap();
+        let key = |column, descending| SortKey { column, descending };
+        // a ascending, then b descending, then id descending: NULLs last in a and in b,
+        // whatever the direction; equal a and b fall to id.
+        let three = [key(0, false), key(1, true), key(2, true)];
+        r.sort(&three).unwrap();
+        assert_eq!(r.sort_keys(), three);
+        assert_eq!(ids(&r), [7, 4, 2, 3, 0, 6, 8, 1, 5]);
+        // Two keys: rows equal in both keep the order the server sent.
+        r.sort(&[key(0, true), key(1, false)]).unwrap();
+        assert_eq!(ids(&r), [6, 0, 3, 4, 7, 2, 1, 8, 5]);
+        // The sort combines with a filter, and one key is the old sort.
+        assert_eq!(r.filter(Some("b")), Ok(2));
+        assert_eq!(ids(&r), [4, 7]);
+        r.filter(None).unwrap();
+        r.sort(&[key(1, false)]).unwrap();
+        assert_eq!(ids(&r), [6, 4, 7, 0, 3, 1, 8, 2, 5]);
+        // A refused sort leaves the one in force.
+        assert_eq!(
+            r.sort(&[key(0, false), key(1, false), key(0, true)]),
+            Err(ViewError::RepeatedKey(0))
+        );
+        assert_eq!(
+            r.sort(&[key(0, false), key(3, false)]),
+            Err(ViewError::NoSuchColumn(3))
+        );
+        let many: Vec<SortKey> = (0..=MAX_SORT_KEYS).map(|c| key(c, false)).collect();
+        assert_eq!(r.sort(&many), Err(ViewError::TooManyKeys));
+        assert_eq!(r.sort_keys(), [key(1, false)]);
+        assert_eq!(ids(&r), [6, 4, 7, 0, 3, 1, 8, 2, 5]);
+        r.sort(&[]).unwrap();
+        assert_eq!(ids(&r), (0..9).collect::<Vec<_>>());
+    }
+
     #[test]
     fn an_empty_result_sorts() {
         let store = ResultStore::new();
@@ -890,10 +1008,10 @@ mod tests {
         store.complete(id);
         let r = store.get(id).unwrap();
         let mut r = r.write().unwrap();
-        r.sort(Some(SortKey {
+        r.sort(&[SortKey {
             column: 0,
             descending: false,
-        }))
+        }])
         .unwrap();
         assert!(r.window(0, 10).is_empty());
     }

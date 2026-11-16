@@ -1171,7 +1171,7 @@ mod tests {
             column: 1,
             descending: false,
         };
-        assert_eq!(stored.sort(Some(key)), Err(ViewError::PendingEdits));
+        assert_eq!(stored.sort(&[key]), Err(ViewError::PendingEdits));
         assert_eq!(stored.filter(Some("bob")), Err(ViewError::PendingEdits));
         let names_with_a = ColumnFilter {
             column: 1,
@@ -1183,12 +1183,12 @@ mod tests {
             Err(ViewError::PendingEdits)
         );
         // Asking for the view it already has is no change.
-        assert_eq!(stored.sort(None), Ok(()));
+        assert_eq!(stored.sort(&[]), Ok(()));
         assert_eq!(stored.filter(Some("  ")), Ok(6));
         assert_eq!(stored.filter_columns(vec![]), Ok(6));
         stored.edit_pending(PendingEdit::Discard).unwrap();
-        assert_eq!(stored.sort(Some(key)), Ok(()));
-        assert_eq!(stored.sort(None), Ok(()));
+        assert_eq!(stored.sort(&[key]), Ok(()));
+        assert_eq!(stored.sort(&[]), Ok(()));
 
         // A column filter on before the edits: neither removing it nor adding another moves
         // the rows the edits name (SDB-138).

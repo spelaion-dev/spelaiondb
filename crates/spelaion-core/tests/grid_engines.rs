@@ -309,10 +309,10 @@ async fn find_searches_the_stored_result_of_every_engine() {
             assert_eq!(search(&r, "ANA", true), [(5, NAME)], "{label}");
             assert_eq!(search(&r, "50%", false), [(2, NAME)], "{label}");
             // After a sort the matches follow the rows.
-            r.sort(Some(spelaion_core::SortKey {
+            r.sort(&[spelaion_core::SortKey {
                 column: ID,
                 descending: true,
-            }))
+            }])
             .unwrap();
             assert_eq!(search(&r, "ana", false), [(0, NAME), (5, NAME)], "{label}");
             assert_eq!(search(&r, "brien", false), [(4, NAME)], "{label}");
@@ -951,14 +951,14 @@ async fn mysql_zero_dates_far_down_sort_filter_and_export() {
                 "{label}"
             );
             // Sorting by the date: the zero date comes first, the server's text kept.
-            r.sort(Some(spelaion_core::SortKey {
+            r.sort(&[spelaion_core::SortKey {
                 column: 1,
                 descending: false,
-            }))
+            }])
             .unwrap();
             let first = r.value_at(0, 1).unwrap().to_string();
             assert_eq!(first, "0000-00-00", "{label}");
-            r.sort(None).unwrap();
+            r.sort(&[]).unwrap();
         }
         // "Filter by this value" on the zero date, and on an ordinary date.
         for (row, expected) in [(10_000, 1), (0, 10_000)] {
