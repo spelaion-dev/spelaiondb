@@ -1,49 +1,7 @@
 import { useEffect, useState } from "react";
 import { commands, type EngineItem } from "./api";
 
-// Two-letter engine badges, shared by the sidebar and the "add connection" catalog. Unique
-// within the catalog; engines not listed fall back to their name's first letters.
-
-const BADGES: Record<string, string> = {
-  postgres: "PG",
-  sqlite: "SQ",
-  mysql: "MY",
-  mariadb: "MA",
-  sqlserver: "MS",
-  oracle: "OR",
-  cockroachdb: "CR",
-  yugabytedb: "YB",
-  timescaledb: "TS",
-  tidb: "TI",
-  oceanbase: "OB",
-  singlestore: "S2",
-  duckdb: "DK",
-  libsql: "LS",
-  "file-folder": "FF",
-  clickhouse: "CH",
-  trino: "TR",
-  presto: "PR",
-  flightsql: "FS",
-  dremio: "DR",
-  gizmosql: "GZ",
-  influxdb: "IX",
-  hive: "HV",
-  spark: "SP",
-  kyuubi: "KY",
-  impala: "IM",
-  snowflake: "SF",
-  bigquery: "BQ",
-  mongodb: "MG",
-  redis: "RD",
-  neo4j: "N4",
-  databend: "DB",
-  spanner: "SP",
-  cassandra: "CA",
-};
-
-export function engineBadge(id: string, name?: string): string {
-  return BADGES[id] ?? (name ?? id).slice(0, 2).toUpperCase();
-}
+// The engine catalog from the core. An engine's mark is `components/EngineIcon.tsx`'s.
 
 let catalog: Promise<EngineItem[]> | null = null;
 
