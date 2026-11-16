@@ -1967,7 +1967,31 @@ try {
     await replaceQuery(panel, "orders orders orders");
     await page.keyboard.press("Control+Home");
     await page.keyboard.press("ArrowRight");
-    await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-selectionMatch').length === 3);
+    for (const theme of ["light", "dark"]) {
+      await setTheme(theme, theme);
+      await sqlEditor.focus();
+      await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-selectionMatch').length === 3);
+      const highlights = await panel.locator(".cm-selectionMatch").evaluateAll((marks) => marks.map((mark) => ({
+        main: mark.classList.contains("cm-selectionMatch-main"),
+        background: getComputedStyle(mark).backgroundColor,
+        outline: getComputedStyle(mark).outlineStyle,
+      })));
+      assert.equal(highlights.filter((mark) => mark.main).length, 1);
+      assert.equal(highlights.find((mark) => mark.main).background, "rgba(0, 0, 0, 0)");
+      assert.equal(highlights.find((mark) => mark.main).outline, "none");
+      assert.ok(highlights.filter((mark) => !mark.main).every((mark) => mark.background !== "rgba(0, 0, 0, 0)"));
+      await shot(`05e-editor-occurrences-${theme}`);
+      await page.keyboard.press("Control+Shift+L");
+      await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-selectionBackground').length === 3);
+      await page.keyboard.press("Control+f");
+      await panel.locator('.cm-search input[name="search"]').fill("orders");
+      await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-searchMatch').length === 3);
+      await page.keyboard.press("Escape");
+      await sqlEditor.focus();
+      await page.keyboard.press("Control+Home");
+      await page.keyboard.press("ArrowRight");
+    }
+    await setTheme("light", "light");
     await sqlEditor.focus();
     await page.keyboard.press("Shift+F10");
     await menu.waitFor();

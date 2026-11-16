@@ -61,7 +61,7 @@ const theme = EditorView.theme({
   ".cm-scroller": { fontFamily: "var(--sql-font, var(--font-code))", lineHeight: "var(--sql-line-height, var(--leading-md))" },
   ".cm-gutters": { backgroundColor: "var(--editor-bg)", color: "var(--muted)", border: "none" },
   ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
-  ".cm-selectionMatch-main": { outline: "1px solid var(--accent)" },
+  ".cm-selectionMatch-main": { backgroundColor: "transparent" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--editor-active)" },
   "&.cm-focused .cm-cursor": { borderLeftColor: "var(--accent)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
