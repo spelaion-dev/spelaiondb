@@ -21,7 +21,8 @@ import { summaryMessages, summaryShort } from "../scriptRun";
 import { saveTab, saveTabAs } from "../sqlFiles";
 import { notifyFinished } from "../notify";
 import { EditorActionsButton } from "./EditorMenu";
-import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
+import { SqlEditor, type RunLabel, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
+import { commandSpec } from "../commandRegistry";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
@@ -123,6 +124,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const explainAction = useRef<() => Promise<void>>(async () => undefined);
   // A short message in the toolbar: a formatting error or "saved as …".
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [runLabel, setRunLabel] = useState<RunLabel | null>(null);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), notice.error ? 6000 : 2500);
@@ -586,6 +588,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
         case "runScript":
           if (!running && !runBlocked) editor.current?.runScript();
           break;
+        case "runFromCursor":
+          if (!running && !runBlocked) editor.current?.action(command);
+          break;
         case "explain":
           if (!running && !runBlocked) void explainAction.current();
           break;
@@ -1033,6 +1038,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   const running = tab.run?.running ?? false;
+  // What Run will send, in the core's words; plain "Run" until its first answer.
+  const runPicks = runLabel?.kind === "selection" && runLabel.statements > 1;
+  const runName = !runLabel ? t("run")
+    : runLabel.kind === "statement" ? t("runStatement")
+    : runLabel.kind === "script" ? t("runScript")
+    : runPicks ? t("runSelectionPick") : t("runSelection");
   actionState.current = { running, runBlocked: historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging };
   const maximized = !tab.table && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
@@ -1176,7 +1187,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
                 <EditorActionIcon name="cancel" />
               </button>
             ) : (
-              <button className="editor-action editor-action-run" aria-label={t("run")} title={t("runHint")} disabled={historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
+              <button className="editor-action editor-action-run" data-run-target={runLabel?.kind ?? ""} aria-label={runName} title={`${runPicks ? t("runSelectionPickHint", { count: runLabel?.statements }) : runName} (${commandSpec("editor.run").shortcut})`} disabled={historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
                 <EditorActionIcon name="run" />
               </button>
             )}
@@ -1216,6 +1227,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             engine={connection?.engine ?? null}
             catalog={completion.catalog}
             onRun={(r) => void run(r)}
+            onRunLabel={(next) => setRunLabel((before) => (before?.kind === next.kind && before.statements === next.statements ? before : next))}
             error={editorError}
           />
         </div>

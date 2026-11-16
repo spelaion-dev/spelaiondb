@@ -1,6 +1,8 @@
 // SQL editor with CodeMirror 6: engine dialect, table autocompletion, Ctrl/Cmd+Enter to run
-// the statement under the cursor (split by the core) or the selection, Ctrl/Cmd+Shift+Enter
-// to run everything, Shift+Alt+F to format, and underlining of the error at its position.
+// the statement under the cursor (split by the core) or the selection (several statements:
+// the picker asks which), Ctrl/Cmd+Shift+Enter to run everything, Ctrl/Cmd+Alt+Enter to run
+// from the cursor to the end, Shift+Alt+F to format, and underlining of the error at its
+// position. What Run will send is the core's answer, asked again as the cursor moves.
 
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -18,7 +20,8 @@ import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
 import { sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase } from "../sqlCompletion";
 import { formatHttp, httpLanguage, isHttpLanguage } from "../httpLanguage";
 import { usePreferences } from "../preferences";
-import type { EditorPreferencesItem } from "../bindings";
+import type { EditorPreferencesItem, RunKindItem } from "../bindings";
+import { useDialogs } from "../dialogStore";
 import { EditorMenu } from "./EditorMenu";
 import { call, commands } from "../api";
 import { byteToIndex, indexToByte, wordEnd } from "../text";
@@ -29,6 +32,16 @@ export interface RunRequest {
   /** Index (JS) in the document where `text` starts. */
   from: number;
 }
+
+/** What Run will send, as the core answered for the cursor and selection. */
+export interface RunLabel {
+  kind: RunKindItem;
+  /** Statements in it: a selection with several opens the picker. */
+  statements: number;
+}
+
+/** How long the cursor rests before the core is asked what Run will send. */
+const RUN_LABEL_DELAY_MS = 120;
 
 /** What the toolbar can ask the editor to do. */
 export interface SqlEditorHandle {
@@ -52,6 +65,8 @@ interface Props {
   /** Catalog metadata already read in the background, never fetched while typing. */
   catalog: CompletionCatalog;
   onRun(request: RunRequest): void;
+  /** What Run will send changed (the cursor, the selection, the text or the engine). */
+  onRunLabel(label: RunLabel): void;
   /** Error to underline, with its JS index in the document. */
   error: { index: number; message: string; source: object } | null;
 }
@@ -244,7 +259,7 @@ function editorPreferences(p: EditorPreferencesItem) {
   ];
 }
 
-export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, error }: Props) {
+export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, error }: Props) {
   const { t } = useTranslation("editor");
   const preferences = usePreferences((s) => s.editor);
   const settings = useRef(new Compartment());
@@ -253,8 +268,25 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const locale = useRef(new Compartment());
-  const callbacks = useRef({ onChange, onRun, engine, onFormatError, onActionError });
-  callbacks.current = { onChange, onRun, engine, onFormatError, onActionError };
+  const callbacks = useRef({ onChange, onRun, onRunLabel, engine, onFormatError, onActionError });
+  callbacks.current = { onChange, onRun, onRunLabel, engine, onFormatError, onActionError };
+  const failed = (e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e));
+  // The Run button's label: the core says what Run will send. Asked once the cursor rests, so
+  // typing never waits for it, and an answer to an older question is dropped.
+  const label = useRef({ timer: undefined as number | undefined, asked: 0 });
+  const askRunLabel = (v: EditorView, delay = RUN_LABEL_DELAY_MS) => {
+    window.clearTimeout(label.current.timer);
+    const asked = ++label.current.asked;
+    label.current.timer = window.setTimeout(() => {
+      if (!v.dom.isConnected) return;
+      const doc = v.state.doc.toString(), sel = v.state.selection.main;
+      call(commands.runTarget(callbacks.current.engine, doc, indexToByte(doc, sel.head), sel.empty ? null : indexToByte(doc, sel.from), sel.empty ? null : indexToByte(doc, sel.to)))
+        .then((target) => {
+          if (asked === label.current.asked) callbacks.current.onRunLabel({ kind: target.kind, statements: target.statements.length });
+        })
+        .catch((e: unknown) => console.error("run_target", e));
+    }, delay);
+  };
   const format = (v: EditorView) => {
     void formatIn(v, callbacks.current.engine, usePreferences.getState().editor).then((failure) => {
       if (failure) callbacks.current.onFormatError(failure);
@@ -265,14 +297,57 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     callbacks.current.onRun({ text: v.state.doc.toString(), from: 0 });
     return true;
   };
+  // A selection with several statements (the core splits it as the run will): the picker asks
+  // which to run, and the core writes the text of the ones chosen.
+  const runSelection = async (v: EditorView, engine: string, selected: RunRequest) => {
+    const doc = v.state.doc.toString(), selection = v.state.selection;
+    const stale = () => !v.dom.isConnected || v.state.doc.toString() !== doc || !v.state.selection.eq(selection);
+    const to = selected.from + selected.text.length;
+    const target = await call(commands.runTarget(engine, doc, indexToByte(doc, selection.main.head), indexToByte(doc, selected.from), indexToByte(doc, to)));
+    if (stale()) return;
+    if (target.statements.length < 2) {
+      callbacks.current.onRun(selected);
+      return;
+    }
+    const statements = target.statements.map((span) => doc.slice(byteToIndex(doc, span.start), byteToIndex(doc, span.end)));
+    const answer = await useDialogs.getState().askStatements(statements);
+    if (answer === null || stale()) return;
+    if (answer === "all" || answer.length === statements.length) {
+      callbacks.current.onRun(selected);
+      return;
+    }
+    const picked = await call(commands.pickStatements(engine, selected.text, answer));
+    if (stale()) return;
+    const from = selected.from + byteToIndex(selected.text, picked.span.start);
+    flash(v, from, selected.from + byteToIndex(selected.text, picked.span.end));
+    callbacks.current.onRun({ text: picked.text, from });
+  };
+  // From the statement under the cursor to the end of the script: the core says where that
+  // statement starts and writes the text. With no connection there is nothing to split with.
+  const runFromCursor = (v: EditorView) => {
+    const engine = callbacks.current.engine;
+    if (!engine) return runAll(v);
+    const doc = v.state.doc.toString();
+    call(commands.statementsFromCursor(engine, doc, indexToByte(doc, v.state.selection.main.head)))
+      .then((picked) => {
+        if (!picked || !v.dom.isConnected || v.state.doc.toString() !== doc) return;
+        const from = byteToIndex(doc, picked.span.start);
+        flash(v, from, byteToIndex(doc, picked.span.end));
+        callbacks.current.onRun({ text: picked.text, from });
+      })
+      .catch(failed);
+    return true;
+  };
   // Use the same selection and dialect splitter for the toolbar and keyboard shortcut.
   const run = (v: EditorView) => {
     const sel = v.state.selection.main;
+    const engine = callbacks.current.engine;
     if (!sel.empty) {
-      callbacks.current.onRun({ text: v.state.sliceDoc(sel.from, sel.to), from: sel.from });
+      const selected = { text: v.state.sliceDoc(sel.from, sel.to), from: sel.from };
+      if (engine) void runSelection(v, engine, selected).catch(failed);
+      else callbacks.current.onRun(selected);
       return true;
     }
-    const engine = callbacks.current.engine;
     if (!engine) return runAll(v);
     const doc = v.state.doc.toString();
     call(commands.statementAt(engine, doc, indexToByte(doc, sel.head)))
@@ -329,6 +404,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       case "upperCase": return transform(v, (text) => text.toUpperCase());
       case "lowerCase": return transform(v, (text) => text.toLowerCase());
       case "quotedList": return transform(v, (text) => quotedLines(text, callbacks.current.engine), true);
+      case "runFromCursor": return runFromCursor(v);
       case "selectStatement": return currentStatement(v, false);
       case "copyStatement": return currentStatement(v, true);
       case "selectOccurrences": return selectAllOccurrences(v);
@@ -398,6 +474,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
           theme,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) callbacks.current.onChange(u.state.doc.toString());
+            if (u.docChanged || u.selectionSet) askRunLabel(u.view);
             // Completions arrive asynchronously: one that lands after the editor lost focus
             // (a dialog opened meanwhile) would stay open on top of it.
             if (!u.view.hasFocus && completionStatus(u.state) !== null) {
@@ -421,7 +498,10 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     });
     view.current = editor;
     editor.focus();
-    return () => editor.destroy();
+    return () => {
+      window.clearTimeout(label.current.timer);
+      editor.destroy();
+    };
     // The editor is created once; dialect and schema are reconfigured below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -429,6 +509,13 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   useEffect(() => {
     view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, catalog, preferences.keywordCase as KeywordCase)) });
   }, [engine, catalog, preferences.keywordCase]);
+
+  // Asked at once when the editor opens and when its engine changes: another engine reads the
+  // same text otherwise, and with none only the whole script can be sent.
+  useEffect(() => {
+    if (view.current) askRunLabel(view.current, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: settings.current.reconfigure(editorPreferences(preferences)) });

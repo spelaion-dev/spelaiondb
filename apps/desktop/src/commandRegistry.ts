@@ -65,6 +65,7 @@ export const COMMANDS = [
   { id: "editor.run", category: "editor", label: "editor:run", shortcut: "Ctrl+Enter", scope: "editor" },
   { id: "editor.explain", category: "editor", label: "editor:plan.explain", menus: ["editor"] },
   { id: "editor.runScript", category: "editor", label: "editor:runScript", shortcut: "Ctrl+Shift+Enter", scope: "editor" },
+  { id: "editor.runFromCursor", category: "editor", label: "editor:actions.runFromCursor", shortcut: "Ctrl+Alt+Enter", scope: "editor", menus: ["editor"] },
   { id: "editor.cancel", category: "editor", label: "app:commands.cancelQuery" },
   { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor" },
   { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", menus: ["editor"] },

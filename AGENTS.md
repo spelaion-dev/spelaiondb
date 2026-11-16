@@ -515,7 +515,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   computed once per model and display options, and its Mermaid and DBML text, which must parse
   with their own tools: `tests/er_diagram.rs` writes `apps/desktop/scripts/fixtures/er` and
   `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again)
-  and `cursor.rs` finds the statement under the editor's cursor. `progress.rs` thins a run's row
+  and `cursor.rs` finds the statement under the editor's cursor, says what Run will send
+  (`run_target`, the Run button's label) and writes the text of the statements picked from a
+  selection or from the cursor to the end (`pick_statements`, `from_cursor`): the rest written
+  over with spaces, and returned only if the engine's splitter reads in it exactly those
+  statements (`tests/run_from_cursor.rs`, on every dialect). `progress.rs` thins a run's row
   counts to a few a second for the app (a big result streams hundreds of batches a second;
   every other event and the final count go through as they come). `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it, and the

@@ -1536,11 +1536,11 @@ try {
   await replaceQuery(panel, "select 'private_history_marker' as secret;");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await replaceQuery(panel, "select private_error_marker from no_history_private_table;");
   await run(panel);
   await panel.locator(".messages", { hasText: "no_history_private_table" }).waitFor();
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await waitForHistoryCount(4);
   await history.getByRole("textbox", { name: "Search query history" }).fill("private");
@@ -1578,7 +1578,7 @@ try {
   await sqlEditor.click();
   await page.keyboard.press("Control+End");
   await page.keyboard.press("Control+Enter");
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.waitForFunction(() => document.querySelector(".cm-ran")?.textContent?.includes("-- the third"));
   // The status line already says "1 row" from the previous run: wait for the new value.
   let third = "";
@@ -1590,14 +1590,16 @@ try {
 
   step("editor toolbar: run the current statement or selection, and run the whole script");
   const actions = panel.getByRole("toolbar", { name: "Query actions" });
-  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Explain query", "Editor actions", "Format", "Save", "Save as file"]);
+  // The Run button is named by what it will send (SDB-379): here, the statement under the cursor.
+  await actions.getByRole("button", { name: "Run statement", exact: true }).waitFor();
+  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run statement", "Run script", "Run options", "Explain query", "Editor actions", "Format", "Save", "Save as file"]);
   for (const button of await actions.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   await sqlEditor.click();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("End");
   let previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
-  await actions.getByRole("button", { name: "Run", exact: true }).click();
+  await actions.locator(".editor-action-run[data-run-target]").click();
   await page.waitForFunction((button) => !button.isConnected, previousResult);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   let selected = "";
@@ -1611,7 +1613,7 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Shift+End");
   previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
-  await actions.getByRole("button", { name: "Run", exact: true }).click();
+  await actions.locator(".editor-action-run[data-run-target]").click();
   await page.waitForFunction((button) => !button.isConnected, previousResult);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   selected = "";
@@ -1627,6 +1629,117 @@ try {
   await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
   await sqlEditor.click();
   await page.keyboard.press("Control+Shift+Enter");
+  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+
+  step("run says what it will run: a statement, the selection or the script (SDB-379)");
+  // The name and the tooltip come from the core's answer for the cursor and the selection.
+  const runButton = actions.locator(".editor-action-run[data-run-target]");
+  const runIsNamed = async (name, target, title) => {
+    await actions.locator(`.editor-action-run[data-run-target="${target}"][aria-label="${name}"]`).waitFor();
+    assert.equal(await runButton.getAttribute("title"), title);
+  };
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("ArrowDown");
+  await runIsNamed("Run statement", "statement", "Run statement (Ctrl+Enter)");
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+End");
+  await runIsNamed("Run selection", "selection", "Run selection (Ctrl+Enter)");
+  await page.keyboard.press("Control+A");
+  await runIsNamed("Run selection…", "selection", "Run selection: choose among its 3 statements (Ctrl+Enter)");
+
+  step("statement picker: one of three selected statements by its number, some of them, all, or none");
+  const resultTabs = panel.locator(".result-tabs button", { hasText: /^Result/ });
+  const firstCellIs = async (value) => {
+    let cell = "";
+    for (let i = 0; i < 20 && cell !== value; i++) {
+      cell = await firstCell();
+      if (cell !== value) await page.waitForTimeout(250);
+    }
+    assert.equal(cell, value);
+  };
+  const picker = page.getByRole("dialog", { name: "Run which statements?" });
+  await runButton.click();
+  await picker.waitFor();
+  assert.equal(await picker.locator(".pick-list li").count(), 3);
+  assert.match(await picker.locator(".pick-list li").nth(1).innerText(), /^2\s*select 'second;' as which$/);
+  // "Run all" has the focus: Enter runs what Run ran before the picker existed.
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Run all 3");
+  assert.ok(await picker.getByRole("button", { name: "Run 0 statements", exact: true }).isDisabled());
+  await shot("sdb-379-statement-picker-light");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await shot("sdb-379-statement-picker-dark");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  // 2 runs the second statement alone.
+  await page.keyboard.press("2");
+  await picker.waitFor({ state: "detached" });
+  await panel.locator(".result-tabs button", { hasText: "Result 2" }).waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await firstCellIs("second;");
+  assert.equal(await resultTabs.count(), 1);
+  // The first and the third, ticked: the second one, between them, does not run.
+  await sqlEditor.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Control+Enter");
+  await picker.waitFor();
+  await picker.getByRole("checkbox").nth(0).check();
+  await picker.getByRole("checkbox").nth(2).check();
+  await picker.getByRole("button", { name: "Run 2 statements", exact: true }).click();
+  await picker.waitFor({ state: "detached" });
+  await panel.locator(".result-tabs button", { hasText: "Result 2" }).waitFor();
+  await panel.locator(".statusline", { hasText: "2 OK, 0 failed, 0 not run" }).waitFor();
+  assert.equal(await resultTabs.count(), 2);
+  await firstCellIs("first");
+  await panel.locator(".result-tabs button", { hasText: "Result 2" }).click();
+  await firstCellIs("third");
+  // Escape runs nothing; Enter runs the three.
+  await sqlEditor.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Control+Enter");
+  await picker.waitFor();
+  await page.keyboard.press("Escape");
+  await picker.waitFor({ state: "detached" });
+  assert.equal(await resultTabs.count(), 2);
+  await sqlEditor.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Control+Enter");
+  await picker.waitFor();
+  await page.keyboard.press("Enter");
+  await picker.waitFor({ state: "detached" });
+  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+
+  step("run from the cursor to the end: the second and third statements, by its shortcut and from the menu");
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Control+Alt+Enter");
+  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "2 OK, 0 failed, 0 not run" }).waitFor();
+  assert.equal(await resultTabs.count(), 2);
+  await firstCellIs("second;");
+  await sqlEditor.click();
+  await page.keyboard.press("Control+End");
+  await actions.getByRole("button", { name: "Editor actions", exact: true }).click();
+  const fromCursor = page.getByRole("menuitem", { name: "Run from the cursor to the end", exact: true });
+  assert.equal(await fromCursor.locator(".menu-shortcut").innerText(), "Ctrl+Alt+Enter");
+  await fromCursor.click();
+  await panel.locator(".result-tabs button", { hasText: "Result 2" }).waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await firstCellIs("third");
+
+  step("run with no connection: only the whole script can be sent, and the button says so");
+  const tabsWithEditor = await page.getByRole("tab").count();
+  await page.keyboard.press("Control+t");
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count + 1, tabsWithEditor);
+  const unconnected = page.locator(".tab-panel:not([hidden])");
+  await unconnected.getByRole("combobox", { name: "Connection", exact: true }).selectOption("");
+  await unconnected.locator('.editor-action-run[data-run-target="script"][aria-label="Run script"]').waitFor();
+  assert.equal(await unconnected.locator(".editor-action-run[data-run-target]").getAttribute("title"), "Run script (Ctrl+Enter)");
+  await page.keyboard.press("Control+w");
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count, tabsWithEditor);
+  assert.match(await panel.locator(".cm-content").innerText(), /select 'second;' as which/);
+  // The whole script again: the next step starts from its three results.
+  await run(panel);
   await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
 
   step("risky statements: the core asks before a DELETE without WHERE runs");
@@ -7583,7 +7696,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Rows keep streaming in while Cancel is clicked: redrawing on every batch used to keep the
   // window too busy to take the click (the core now thins the row counts to a few a second).
   await panel.getByRole("button", { name: "Cancel", exact: true }).click();
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await history.getByRole("textbox", { name: "Search query history" }).fill("cancel_history_marker");
   await waitForHistoryCount(1);
@@ -7600,7 +7713,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Run's old button remains visible while async preflight runs. Wait for this script's
   // completion summary before taking the history snapshot: new entries reset its anchor.
   await panel.locator(".statusline", { hasText: "105 OK, 0 failed, 0 not run" }).waitFor();
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await history.getByRole("textbox", { name: "Search query history" }).fill("history_page_marker");
   // Newest first: page 1 is statements 104 to 55, page 2 is 54 to 5 and page 3 is 4 to 0.

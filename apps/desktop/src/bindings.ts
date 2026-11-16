@@ -672,6 +672,22 @@ export const commands = {
 	 */
 	statementAt: (engine: string, sql: string, offset: number) => typedError<TextSpan | null, string>(__TAURI_INVOKE("statement_at", { engine, sql, offset })),
 	/**
+	 *  What the editor's Run will send for this cursor and selection (UTF-8 bytes), for its
+	 *  label and for the statement picker: the core decides and splits, the page only asks.
+	 *  `engine` is `None` for a tab with no connection.
+	 */
+	runTarget: (engine: string | null, sql: string, cursor: number, selectionStart: number | null, selectionEnd: number | null) => typedError<RunTargetItem_Serialize, string>(__TAURI_INVOKE("run_target", { engine, sql, cursor, selectionStart, selectionEnd })),
+	/**
+	 *  The statements `picked` of a script (positions among its statements) as text to run,
+	 *  written by the core, which refuses when they would not run as they read in the script.
+	 */
+	pickStatements: (engine: string, sql: string, picked: number[]) => typedError<PickedTextItem, string>(__TAURI_INVOKE("pick_statements", { engine, sql, picked })),
+	/**
+	 *  From the statement under the cursor (`offset` in UTF-8 bytes) to the end of the script,
+	 *  as text to run; `None` when the script has no statement.
+	 */
+	statementsFromCursor: (engine: string, sql: string, offset: number) => typedError<PickedTextItem | null, string>(__TAURI_INVOKE("statements_from_cursor", { engine, sql, offset })),
+	/**
 	 *  Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
 	 *  overwrites an existing file.
 	 */
@@ -3842,6 +3858,17 @@ export type PendingValueItem_Serialize = {
 
 export type PgFormatItem = "plain" | "custom" | "directory" | "tar";
 
+/**
+ *  Some statements of a script as text to run, written by the core: what is left out is
+ *  blank, so a position in `text` is one in the script.
+ */
+export type PickedTextItem = {
+	text: string,
+	/**  Where `text` starts and ends in the script, in UTF-8 bytes. */
+	span: TextSpan,
+	statements: number,
+};
+
 /**  A date and time as picked in the date and time picker. */
 export type PickedTimeItem = {
 	year: number,
@@ -4641,6 +4668,12 @@ export type RowReferenceItem_Serialize = {
 	error: string | null,
 };
 
+/**
+ *  What the editor's Run will send: the statement under the cursor, the selection, or the
+ *  whole script (a tab with no connection).
+ */
+export type RunKindItem = "statement" | "selection" | "script";
+
 /**  How one run goes: its error mode and, if set, its own statement timeout. */
 export type RunOptionsItem = RunOptionsItem_Serialize | RunOptionsItem_Deserialize;
 
@@ -4656,6 +4689,27 @@ export type RunOptionsItem_Serialize = {
 	onError: OnErrorItem,
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds: number | null,
+};
+
+/**  What Run will send and the statements in it, as the core reads them. */
+export type RunTargetItem = RunTargetItem_Serialize | RunTargetItem_Deserialize;
+
+/**  What Run will send and the statements in it, as the core reads them. */
+export type RunTargetItem_Deserialize = {
+	kind: RunKindItem,
+	/**  The text Run sends; `null` when there is nothing to run. */
+	span?: TextSpan | null,
+	/**  The statements of that text, in bytes of the script. */
+	statements: TextSpan[],
+};
+
+/**  What Run will send and the statements in it, as the core reads them. */
+export type RunTargetItem_Serialize = {
+	kind: RunKindItem,
+	/**  The text Run sends; `null` when there is nothing to run. */
+	span: TextSpan | null,
+	/**  The statements of that text, in bytes of the script. */
+	statements: TextSpan[],
 };
 
 /**  What a connection type asks for (ADR-029). */

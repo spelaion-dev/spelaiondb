@@ -85,7 +85,10 @@ pub use conn_test::{
     TestReport, TestScope, TestStep, classify_driver, classify_ssh, test_connection,
     test_network_profile,
 };
-pub use cursor::statement_at;
+pub use cursor::{
+    PickedText, RunKind, RunPickError, RunTarget, from_cursor, pick_statements, run_target,
+    statement_at,
+};
 pub use data_search::{
     ColumnMatch, DEFAULT_ROWS_PER_TABLE, DataSearchError, DataSearchEvent, DataSearchOptions,
     DataSearchRequest, DataSearchSummary, MAX_ROWS_PER_TABLE, MAX_SEARCH_HITS, MAX_SEARCH_TABLES,

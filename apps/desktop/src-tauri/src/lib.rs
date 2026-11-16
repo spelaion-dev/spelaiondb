@@ -2918,6 +2918,60 @@ async fn statement_at(engine: String, sql: String, offset: u32) -> CmdResult<Opt
     )
 }
 
+/// What the editor's Run will send for this cursor and selection (UTF-8 bytes), for its
+/// label and for the statement picker: the core decides and splits, the page only asks.
+/// `engine` is `None` for a tab with no connection.
+#[command]
+async fn run_target(
+    engine: Option<String>,
+    sql: String,
+    cursor: u32,
+    selection_start: Option<u32>,
+    selection_end: Option<u32>,
+) -> CmdResult<RunTargetItem> {
+    let dialect = match engine {
+        Some(engine) => Some(
+            spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?,
+        ),
+        None => None,
+    };
+    let selection = selection_start
+        .zip(selection_end)
+        .map(|(start, end)| start as usize..end as usize);
+    Ok(spelaion_core::run_target(dialect.as_deref(), &sql, cursor as usize, selection).into())
+}
+
+/// The statements `picked` of a script (positions among its statements) as text to run,
+/// written by the core, which refuses when they would not run as they read in the script.
+#[command]
+async fn pick_statements(
+    engine: String,
+    sql: String,
+    picked: Vec<u32>,
+) -> CmdResult<PickedTextItem> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    let picked: Vec<usize> = picked.into_iter().map(|index| index as usize).collect();
+    spelaion_core::pick_statements(dialect.as_ref(), &sql, &picked)
+        .map(PickedTextItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// From the statement under the cursor (`offset` in UTF-8 bytes) to the end of the script,
+/// as text to run; `None` when the script has no statement.
+#[command]
+async fn statements_from_cursor(
+    engine: String,
+    sql: String,
+    offset: u32,
+) -> CmdResult<Option<PickedTextItem>> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    spelaion_core::from_cursor(dialect.as_ref(), &sql, offset as usize)
+        .map(|picked| picked.map(PickedTextItem::from))
+        .map_err(|e| e.to_string())
+}
+
 /// Sorts a result by one column in the core (`None` restores the server's order). The
 /// grid then asks for its windows again.
 #[command]
@@ -5105,6 +5159,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_snippets,
             delete_snippet,
             statement_at,
+            run_target,
+            pick_statements,
+            statements_from_cursor,
             create_database,
             script_risks,
             script_params,
