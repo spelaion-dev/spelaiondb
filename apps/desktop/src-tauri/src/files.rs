@@ -2,6 +2,7 @@
 //! reads and writes files (encodings, atomic writes, the changed-on-disk check), decides how
 //! often the tabs are written and checks them before they come back; these commands carry it.
 
+use spelaion_desktop_macros::command;
 use std::path::Path;
 
 use spelaion_config::Source;
@@ -22,8 +23,7 @@ fn file_name(path: &str) -> String {
 
 /// Reads a `.sql` file the user picked (or one from the recent files or a kept tab) and puts
 /// it first in the recent files.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn open_sql_file(
     path: String,
     state: State<'_, AppState>,
@@ -49,8 +49,7 @@ pub(crate) async fn open_sql_file(
 /// Saves a tab's text to `path`. `format` is the file's (`None`: a new file, UTF-8 and the
 /// platform's line break); `expected_hash` is what the tab last read or saved (`None`: write
 /// whatever is there, after a "save as" dialog or the user's "overwrite").
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn save_sql_file(
     path: String,
     text: String,
@@ -95,8 +94,7 @@ pub(crate) async fn save_sql_file(
 }
 
 /// The recent files, newest first, each saying whether it is still there.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn recent_files(state: State<'_, AppState>) -> CmdResult<Vec<RecentFileItem>> {
     let recent = state
         .history
@@ -113,8 +111,7 @@ pub(crate) async fn recent_files(state: State<'_, AppState>) -> CmdResult<Vec<Re
         .collect())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn forget_recent_file(path: String, state: State<'_, AppState>) -> CmdResult<()> {
     state
         .history
@@ -126,8 +123,7 @@ pub(crate) async fn forget_recent_file(path: String, state: State<'_, AppState>)
 
 /// The open folder's kept tabs, checked by the core: every one comes back disconnected,
 /// with its text and a note when its connection or file is gone. Nothing is run.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn restore_tabs_for_workspace(
     state: State<'_, AppState>,
 ) -> CmdResult<RestoredTabsItem> {
@@ -174,8 +170,7 @@ pub(crate) async fn restore_tabs_for_workspace(
 
 /// The open tabs as they are now, for the folder `scope` (from `restore_tabs_for_workspace`).
 /// The core writes them within a second (ADR-036).
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn save_tabs(
     scope: String,
     tabs: Vec<OpenTabItem>,
@@ -191,14 +186,12 @@ pub(crate) async fn save_tabs(
 }
 
 /// Writes the tabs waiting now (before switching folders).
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn flush_tabs(state: State<'_, AppState>) -> CmdResult<()> {
     state.tabs.flush().await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn get_reconnect_on_start(state: State<'_, AppState>) -> CmdResult<bool> {
     state
         .history
@@ -207,8 +200,7 @@ pub(crate) async fn get_reconnect_on_start(state: State<'_, AppState>) -> CmdRes
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn set_reconnect_on_start(
     enabled: bool,
     state: State<'_, AppState>,

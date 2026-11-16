@@ -12,6 +12,7 @@
 
 use serde::Deserialize;
 use specta::Type;
+use spelaion_desktop_macros::command;
 
 use crate::CmdResult;
 
@@ -54,8 +55,7 @@ pub struct PathDialogRequest {
 
 /// Shows a file dialog over the window that asked and answers the path picked, or `None` when
 /// the user cancelled. Only on Linux.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn choose_path(
     window: tauri::WebviewWindow,
     request: PathDialogRequest,

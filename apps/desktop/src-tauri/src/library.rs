@@ -1,10 +1,10 @@
 //! Thin adapters for the paged local query library.
 use crate::{AppState, CmdResult, dto::*, history_workspace};
 use spelaion_config::Source;
+use spelaion_desktop_macros::command;
 use tauri::State;
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn history_page(
     filter: HistoryFilterItem,
     limit: u32,
@@ -23,8 +23,7 @@ pub async fn history_page(
         through_id: page.through_id,
     })
 }
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn history_databases(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     state
@@ -33,8 +32,7 @@ pub async fn history_databases(state: State<'_, AppState>) -> CmdResult<Vec<Stri
         .await
         .map_err(|e| e.to_string())
 }
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn pin_history(id: u32, pinned: bool, state: State<'_, AppState>) -> CmdResult<bool> {
     let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     state
@@ -43,8 +41,7 @@ pub async fn pin_history(id: u32, pinned: bool, state: State<'_, AppState>) -> C
         .await
         .map_err(|e| e.to_string())
 }
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn export_history(
     export_id: u32,
     filter: HistoryFilterItem,
@@ -73,8 +70,7 @@ pub async fn export_history(
         .map(|count| u32::try_from(count).unwrap_or(u32::MAX))
         .map_err(|e| e.to_string())
 }
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn snippet_page(
     search: String,
     folder: Option<u32>,
@@ -100,8 +96,7 @@ pub async fn snippet_page(
         .map(|items| items.into_iter().map(SnippetItem::from).collect())
         .map_err(|e| e.to_string())
 }
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn snippet_folders(state: State<'_, AppState>) -> CmdResult<Vec<SnippetFolderItem>> {
     let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     state
@@ -120,8 +115,7 @@ pub async fn snippet_folders(state: State<'_, AppState>) -> CmdResult<Vec<Snippe
         })
         .map_err(|e| e.to_string())
 }
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn create_snippet_folder(name: String, state: State<'_, AppState>) -> CmdResult<u32> {
     let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     state
@@ -131,8 +125,7 @@ pub async fn create_snippet_folder(name: String, state: State<'_, AppState>) -> 
         .map_err(|e| e.to_string())
         .and_then(|id| u32::try_from(id).map_err(|_| "folder identifier out of range".into()))
 }
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn move_snippet(
     id: u32,
     folder: Option<u32>,

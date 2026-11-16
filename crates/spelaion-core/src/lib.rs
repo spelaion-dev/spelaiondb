@@ -34,6 +34,7 @@ mod objects;
 mod observe;
 mod open;
 mod open_tabs;
+mod panics;
 mod params;
 mod pending;
 pub mod plan;
@@ -155,6 +156,7 @@ pub use open::{
     create_file_database, dialect_of, open_connection, open_route, test_tunnel,
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
+pub use panics::{INTERNAL_ERROR, Panicked, catch_panic, install_panic_log};
 pub use params::{ParamError, bind_params, script_params};
 pub use pending::{
     Block, BulkAction, CellEdit, EditOutcome, MAX_PASTE_BYTES, MAX_UNDO_STEPS, PendingEdit,

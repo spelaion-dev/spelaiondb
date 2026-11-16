@@ -6,6 +6,7 @@
 //! that comes from the UI is the password of an encrypted export (TablePlus's), typed by the
 //! user and passed on to the core with each read.
 
+use spelaion_desktop_macros::command;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -321,8 +322,7 @@ pub struct ImportScan {
 /// none), with the connections each would duplicate; without secrets. An encrypted export
 /// (TablePlus's) is opened with `file_password`; without it, or with a wrong one, the scan
 /// says so instead of failing.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn scan_connections(
     client: String,
     path: Option<String>,
@@ -402,8 +402,7 @@ pub struct ImportReport {
 /// files are read again here, so passwords never leave Rust: with `save_passwords` the ones
 /// the client saved go to the keychain (those it keeps in the system keychain are only read
 /// now), otherwise they are asked when connecting.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn import_connections(
     client: String,
     path: Option<String>,

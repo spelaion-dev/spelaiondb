@@ -76,7 +76,7 @@ fn body(result: &CallToolResult) -> String {
 fn call(tool: &'static str) -> Call {
     Call {
         client: "test".into(),
-        tool,
+        tool: tool.into(),
     }
 }
 
@@ -1546,4 +1546,46 @@ async fn tunnelled_sessions_ended_by_the_server_are_replaced() {
         || async { admin_run(&admin, &format!("drop table if exists {table}")).await },
     )
     .await;
+}
+
+/// A tool call that panics (SDB-163) answers with an error, is recorded as failed, and the
+/// server goes on answering. Before, rmcp's task for the request died without an answer: the
+/// agent waited until its own timeout and nothing reached the audit.
+#[tokio::test]
+async fn a_tool_call_that_panics_answers_an_error_and_the_server_keeps_working() {
+    let Personal {
+        user_dir, server, ..
+    } = personal(false);
+    let panicking = async {
+        if std::hint::black_box(true) {
+            panic!("a tool panicked with postgres://ann:hunter2@db/shop");
+        }
+        tool_error("never")
+    };
+    let answer = tokio::time::timeout(
+        Duration::from_secs(10),
+        server.guarded(&call("run_query"), "~/notes", panicking),
+    )
+    .await
+    .expect("the call must answer, not wait")
+    .unwrap();
+    assert!(refused(&answer));
+    let text = body(&answer);
+    assert!(text.contains("internal error"), "{text}");
+    assert!(!text.contains("hunter2"), "{text}");
+    let last = &app_store(&user_dir).recent(1).unwrap()[0];
+    assert_eq!(last.decision, Decision::Failed, "{last:?}");
+    assert_eq!(last.connection, "~/notes");
+    assert_eq!(last.tool.as_deref(), Some("run_query"));
+    assert!(
+        !last
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("hunter2")
+    );
+    // The next calls work.
+    assert!(listed(&server).await.contains("~/notes"));
+    let after = query(&server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&after), "{}", body(&after));
 }

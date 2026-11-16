@@ -3,6 +3,7 @@
 //! restore, runs the tool and redacts its log; these commands only carry the dialog's choices to
 //! it and its events back.
 
+use spelaion_desktop_macros::command;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -36,8 +37,7 @@ pub struct BackupPreferencesItem {
     pub default_name_pattern: String,
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn backup_preferences(state: State<'_, AppState>) -> CmdResult<BackupPreferencesItem> {
     let p = state
         .history
@@ -53,8 +53,7 @@ pub async fn backup_preferences(state: State<'_, AppState>) -> CmdResult<BackupP
     })
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn set_backup_preferences(
     preferences: BackupPreferencesItem,
     state: State<'_, AppState>,
@@ -102,8 +101,7 @@ pub struct BackupToolsItem {
 }
 
 /// The client tools of the connection's engine, from `folder` (empty: found automatically).
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn backup_tools(
     session: String,
     folder: String,
@@ -332,8 +330,7 @@ pub struct BackupPreviewItem {
 }
 
 /// The tool a backup will run and the file it will write, for the dialog to show first.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn preview_backup(
     session: String,
     request: BackupRequestItem,
@@ -439,8 +436,7 @@ async fn source(
 
 /// Backs up the connection's database with its vendor's tool, through its tunnel; the tool's
 /// output goes to `on_event` line by line.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn run_backup(
     session: String,
     run_id: u32,
@@ -598,8 +594,7 @@ pub struct RestorePreviewItem {
 }
 
 /// The tool a restore will run and what its confirmation must say.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn preview_restore(
     session: String,
     request: RestoreRequestItem,
@@ -635,8 +630,7 @@ pub enum RestoreOutcome {
 
 /// Restores a file into the connection's database with its vendor's tool, through its tunnel.
 /// The core refuses a read-only connection and an unconfirmed restore.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn run_restore(
     session: String,
     run_id: u32,
@@ -681,8 +675,7 @@ pub async fn run_restore(
 }
 
 /// Stops a running backup or restore: the tool is killed and a partial backup removed.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn cancel_backup(run_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
     let cancel = state
         .backups
@@ -757,8 +750,7 @@ impl From<EmbeddedBackupItem> for backup::EmbeddedDumpRequest {
 }
 
 /// The file (SQLite) or folder (DuckDB) a copy will be.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn preview_embedded_backup(
     session: String,
     request: EmbeddedBackupItem,
@@ -771,8 +763,7 @@ pub async fn preview_embedded_backup(
 }
 
 /// Copies a SQLite database with `VACUUM INTO`, or exports a DuckDB one, in a session of its own.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn run_embedded_backup(
     session: String,
     run_id: u32,
@@ -813,8 +804,7 @@ pub async fn run_embedded_backup(
 
 /// Loads a DuckDB export folder into the connection's database. The core refuses a read-only
 /// connection and an unconfirmed import.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn run_duckdb_import(
     session: String,
     run_id: u32,
@@ -877,8 +867,7 @@ pub struct FilePlanItem {
 }
 
 /// Reads an `.sql` file and counts its statements and what the guard would ask about.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn plan_sql_file(
     session: String,
     path: String,
@@ -927,8 +916,7 @@ pub enum FileRunOutcome {
 
 /// Runs an `.sql` file in a session of its own, statement by statement. The core refuses a
 /// read-only connection and an unconfirmed run.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 pub async fn run_sql_file(
     session: String,

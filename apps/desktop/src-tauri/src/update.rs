@@ -10,6 +10,7 @@
 
 use serde::Serialize;
 use specta::Type;
+use spelaion_desktop_macros::command;
 use tauri::utils::config::BundleType;
 use tauri::{AppHandle, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -131,8 +132,7 @@ fn this_install(app: &AppHandle) -> UpdateMethod {
     )
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn update_check(
     app: AppHandle,
     pending: State<'_, PendingUpdate>,
@@ -171,8 +171,7 @@ pub async fn update_check(
 /// Downloads and installs the update the last check found, then restarts the app. Open tabs
 /// come back with their SQL, not executed (AGENTS.md). Refused for an install the app cannot
 /// replace (see `update_method`), whatever the web view asks.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn update_install(app: AppHandle, pending: State<'_, PendingUpdate>) -> CmdResult<()> {
     if let Some(reason) = refusal(this_install(&app)) {
         return Err(reason);
@@ -189,8 +188,7 @@ pub async fn update_install(app: AppHandle, pending: State<'_, PendingUpdate>) -
 
 /// Opens the latest release's page in the system's browser, for an install that is updated by
 /// hand or by the package manager. Only that fixed address can be opened.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub fn update_open_releases_page() -> CmdResult<()> {
     open_in_browser(RELEASES_PAGE)
 }

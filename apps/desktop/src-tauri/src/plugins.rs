@@ -19,6 +19,7 @@
 //!   core does it) and its sessions are lost (ADR-028), so the page is asked to confirm first.
 //! - `spelaiondb mcp` has none of this: it starts what the app installed.
 
+use spelaion_desktop_macros::command;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
@@ -345,8 +346,7 @@ fn item(
 
 /// Every plugin of ours: the build in use, what is refused and why, what the catalogue offers.
 /// Reads only this machine: it fetches nothing.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn plugins_overview(state: State<'_, AppState>) -> CmdResult<PluginsOverview> {
     Ok(overview(&state).await)
 }
@@ -354,8 +354,7 @@ pub async fn plugins_overview(state: State<'_, AppState>) -> CmdResult<PluginsOv
 /// Reads the published catalogue and accepts it, if the "check for updates" setting allows it
 /// and this SpelaionDB has the catalogue's key (else the core's error says which). For when
 /// the Plugins page opens. The engines are swapped when it is accepted.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn plugins_refresh_catalogue(state: State<'_, AppState>) -> CmdResult<PluginsOverview> {
     let allowed = updates_allowed(&state).await;
     let transport = HttpsTransport::new().map_err(|error| error.0)?;
@@ -398,8 +397,7 @@ pub(crate) fn refresh_in_background(app: AppHandle) {
 /// an update, on the user's click. `install` is an id the page chooses, for
 /// `pluginsCancelInstall` and the `PluginInstallProgress` events. The next connection of its
 /// engines starts the new build; connections already open keep theirs.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn plugins_install(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -436,8 +434,7 @@ pub async fn plugins_install(
 }
 
 /// Stops the install `install`, if it runs. Nothing of it is kept.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub fn plugins_cancel_install(state: State<'_, AppState>, install: u32) {
     state.plugins.stop(install);
 }
@@ -446,8 +443,7 @@ pub fn plugins_cancel_install(state: State<'_, AppState>, install: u32) {
 /// as the accepted catalogue's entry with its SHA-256) or, for a file whose name ends in
 /// `.signed`, a catalogue with its signature (accepted only with our signature, not older than
 /// the one kept). The engines are swapped.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn plugins_install_file(
     state: State<'_, AppState>,
     path: String,
@@ -494,8 +490,7 @@ pub async fn plugins_install_file(
 /// overview lists in `installed`). If that build is running, nothing is removed until
 /// `confirmed`: removing it stops it, and its sessions are lost (ADR-028). The engines are
 /// swapped, so the next connection starts whatever build is left.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn plugins_remove(
     state: State<'_, AppState>,
     name: String,
