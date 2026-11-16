@@ -130,7 +130,8 @@
         "allAgents": "Read-only mode is on.",
         "connection": "The connection is read-only.",
         "writesDenied": "The connection does not let agents write.",
-        "confirmUnsupported": "The connection asks to confirm each write, which is not supported yet."
+        "confirmUnsupported": "The connection asks to confirm each write, which is not supported yet.",
+        "engineWithoutWrites": "Writes from agents are not available for this engine yet."
       },
       "change": "To change what agents can do on one connection, edit it: “Expose to AI agents” and “Agents can”. This page can only make agents stricter."
     },

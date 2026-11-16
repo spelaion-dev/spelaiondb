@@ -77,6 +77,9 @@ pub enum ReadOnlyBecause {
     WritesDenied,
     /// `[mcp] writes = "confirm"`, which is not supported yet (ADR-019).
     ConfirmUnsupported,
+    /// The engine cannot run agents' writes yet: each runs in a transaction of its own, and the
+    /// engine has none [`Session::run_write`] can open (ClickHouse, Trino, Presto).
+    EngineWithoutWrites,
 }
 
 /// What agents may do on the connection in `file`. `all_read_only` is the user's read-only
@@ -87,6 +90,9 @@ pub fn agent_access(file: &ConnectionFile, all_read_only: bool) -> AgentAccess {
     }
     if file.read_only {
         return AgentAccess::ReadOnly(ReadOnlyBecause::Connection);
+    }
+    if !runs_agent_writes(file.engine) {
+        return AgentAccess::ReadOnly(ReadOnlyBecause::EngineWithoutWrites);
     }
     match file.mcp.writes {
         WritePolicy::Allow => AgentAccess::ReadWrite,
@@ -120,6 +126,25 @@ pub enum AgentView {
 /// same engines: both read `Engine::has_read_barrier`.
 pub fn has_read_barrier(engine: Engine) -> bool {
     engine.has_read_barrier()
+}
+
+/// Whether agents' writes can run on `engine`: it has agents' barriers, and its dialect has a
+/// transaction [`Session::run_write`] opens (the same [`write_begin`] it reads), so a write is
+/// committed only if it succeeds. The app's form and [`agent_access`] read it.
+pub fn runs_agent_writes(engine: Engine) -> bool {
+    has_read_barrier(engine)
+        && crate::dialect_of(engine).is_some_and(|dialect| write_begin(dialect.name()).is_some())
+}
+
+/// The statement that opens an agent's write transaction on a dialect, or `None` where agents'
+/// writes cannot run.
+fn write_begin(dialect: &str) -> Option<&'static str> {
+    match dialect {
+        "postgres" | "sqlite" => Some("begin"),
+        "mysql" => Some("start transaction"),
+        "sqlserver" | "duckdb" => Some("begin transaction"),
+        _ => None,
+    }
 }
 
 /// What agents see of `entry` (ADR-008, ADR-022) and may do on it (ADR-019, ADR-033).
@@ -160,6 +185,9 @@ impl ReadOnlyBecause {
             ),
             ReadOnlyBecause::ConfirmUnsupported => format!(
                 "connection {connection:?} asks to confirm each write, which is not supported yet; the user can set writes to allow or deny"
+            ),
+            ReadOnlyBecause::EngineWithoutWrites => format!(
+                "connection {connection:?} is read-only for agents: writes from agents are not available for its engine yet"
             ),
         }
     }
@@ -288,11 +316,8 @@ impl Session {
         limits: &WriteLimits,
     ) -> Result<WriteResult, WriteError> {
         let engine = self.dialect().name();
-        let begin = match engine {
-            "postgres" | "sqlite" => "begin",
-            "mysql" => "start transaction",
-            "sqlserver" | "duckdb" => "begin transaction",
-            other => return Err(WriteError::Unsupported(other.into())),
+        let Some(begin) = write_begin(engine) else {
+            return Err(WriteError::Unsupported(engine.into()));
         };
         let sql = sql.trim().trim_end_matches(';').trim();
         check_write(self.dialect().as_ref(), sql).map_err(WriteError::Rejected)?;
@@ -660,6 +685,81 @@ mod tests {
             agent_access(&connection("[mcp]\nwrites = \"confirm\"\n"), false),
             AgentAccess::ReadOnly(ReadOnlyBecause::ConfirmUnsupported)
         );
+    }
+
+    /// SDB-325: an engine whose writes `run_write` cannot open a transaction for is read-only
+    /// for agents whatever `[mcp]` says, so neither the app nor `list_connections` offers
+    /// writes that would all fail.
+    #[test]
+    fn an_engine_without_agents_writes_is_read_only_for_agents() {
+        let on = |engine: &str, extra: &str| {
+            let file = format!(
+                "schema_version = 1\nname = \"Events\"\nengine = \"{engine}\"\nhost = \"db\"\n{extra}"
+            );
+            toml::from_str::<ConnectionFile>(&file).unwrap()
+        };
+        let allow = "[mcp]\nexposed = true\nwrites = \"allow\"\n";
+        for engine in ["clickhouse", "trino", "presto"] {
+            for extra in [
+                allow,
+                "[mcp]\nwrites = \"deny\"\n",
+                "[mcp]\nwrites = \"confirm\"\n",
+            ] {
+                assert_eq!(
+                    agent_access(&on(engine, extra), false),
+                    AgentAccess::ReadOnly(ReadOnlyBecause::EngineWithoutWrites),
+                    "{engine}: {extra}"
+                );
+            }
+            // The user's switch and the connection's own read-only mode still come first.
+            assert_eq!(
+                agent_access(&on(engine, allow), true),
+                AgentAccess::ReadOnly(ReadOnlyBecause::AllAgents)
+            );
+            assert_eq!(
+                agent_access(&on(engine, &format!("read_only = true\n{allow}")), false),
+                AgentAccess::ReadOnly(ReadOnlyBecause::Connection)
+            );
+        }
+        for engine in ["postgres", "mysql", "mariadb", "sqlserver"] {
+            assert_eq!(
+                agent_access(&on(engine, allow), false),
+                AgentAccess::ReadWrite,
+                "{engine}"
+            );
+        }
+        assert!(
+            ReadOnlyBecause::EngineWithoutWrites
+                .refusal("events")
+                .contains("not available for its engine")
+        );
+    }
+
+    /// What `agent_access` says matches what `run_write` does: writes are offered exactly on the
+    /// engines whose dialect has a transaction to open, and only where agents have barriers.
+    #[test]
+    fn agents_writes_are_offered_exactly_where_run_write_opens_a_transaction() {
+        for engine in Engine::ALL {
+            // Never writes where agents cannot even read.
+            assert!(
+                has_read_barrier(engine) || !runs_agent_writes(engine),
+                "{}",
+                engine.as_str()
+            );
+        }
+        for engine in [
+            Engine::Postgres,
+            Engine::Mysql,
+            Engine::Mariadb,
+            Engine::Sqlserver,
+            Engine::Sqlite,
+            Engine::Duckdb,
+        ] {
+            assert!(runs_agent_writes(engine), "{}", engine.as_str());
+        }
+        for engine in [Engine::Clickhouse, Engine::Trino, Engine::Presto] {
+            assert!(!runs_agent_writes(engine), "{}", engine.as_str());
+        }
     }
 
     #[test]

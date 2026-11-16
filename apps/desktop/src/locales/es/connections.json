@@ -67,6 +67,7 @@
     "readOnly": "Solo lectura",
     "mcpExposed": "Exponer a agentes de IA",
     "mcpHint": "Los agentes que usan spelaiondb mcp solo pueden leer, y cada consulta queda auditada.",
+    "mcpWritesUnavailable": "Las escrituras de los agentes aún no están disponibles para este motor: los agentes que usan spelaiondb mcp solo pueden leer, y cada consulta queda auditada.",
     "serviceName": "Nombre del servicio",
     "noBarrierSafety": "El modo solo lectura y los agentes aún no están disponibles para este motor: SpelaionDB todavía no tiene una salvaguarda para ellos en él. El aviso de seguridad sigue preguntando antes de las sentencias de riesgo.",
     "noSqlSafety": "El modo solo lectura y los agentes aún no están disponibles para este motor: SpelaionDB todavía no tiene una salvaguarda para ellos en él. El aviso de seguridad sigue preguntando antes de borrar o vaciar una colección.",
