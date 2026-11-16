@@ -807,7 +807,7 @@ export const commands = {
 	 */
 	tableStats: (session: string, schema: string, table: string) => typedError<TableStatsItem_Serialize | null, string>(__TAURI_INVOKE("table_stats", { session, schema, table })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
-	runScript: (session: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, options, onEvent })),
+	runScript: (session: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, placement: ResultPlacementItem, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, options, placement, onEvent })),
 	/**
 	 *  Answers a run paused after an error (ADR-035). The core refuses a ticket that is not the
 	 *  pause it is waiting on.
@@ -822,7 +822,7 @@ export const commands = {
 	 *  Run the first page, keeping the original SQL in the user's query history. `sort` is the
 	 *  grid's sort: the core writes the page's order from it.
 	 */
-	runQueryPage: (session: string, sql: string, limit: number, sort: SortKeyItem[], confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, sort, confirmed, options, onEvent })),
+	runQueryPage: (session: string, sql: string, limit: number, sort: SortKeyItem[], confirmed: boolean, options: RunOptionsItem_Deserialize, placement: ResultPlacementItem, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, sort, confirmed, options, placement, onEvent })),
 	/**
 	 *  The UI requests subsequent pages of the read it already confirmed. The core only permits
 	 *  eligible read queries to be paged, and appends each page at the expected offset.
@@ -830,8 +830,20 @@ export const commands = {
 	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number, sort: SortKeyItem[]) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset, sort })),
 	countQueryRows: (session: string, sql: string) => typedError<number | null, string>(__TAURI_INVOKE("count_query_rows", { session, sql })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
-	/**  Frees a result the UI no longer shows. */
+	/**  Frees a result the UI no longer shows: closing a result tab, pinned or not, frees it. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
+	/**
+	 *  Frees every result of an editor tab that was closed; a result that a run still going
+	 *  there starts later is freed by the core as it starts.
+	 */
+	releaseResults: (session: string) => typedError<null, string>(__TAURI_INVOKE("release_results", { session })),
+	/**  Pins a result tab, so no run replaces it, or unpins it (SDB-378). */
+	pinResult: (session: string, result: number, pinned: boolean) => typedError<ResultTabItem_Serialize, string>(__TAURI_INVOKE("pin_result", { session, result, pinned })),
+	/**
+	 *  Names a result tab; an empty name gives back the one its statement's comment gave it.
+	 *  The core cleans the name and answers what the tab is called now.
+	 */
+	renameResult: (session: string, result: number, name: string) => typedError<ResultTabItem_Serialize, string>(__TAURI_INVOKE("rename_result", { session, result, name })),
 	currentDatabase: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("current_database", { session })),
 	/**  The databases this tab's session can switch to (MySQL, MariaDB, SQL Server). */
 	listDatabases: (session: string) => typedError<string[], string>(__TAURI_INVOKE("list_databases", { session })),
@@ -2706,11 +2718,15 @@ export type GrantedPrivilegeItem = {
 	denied: boolean,
 };
 
-/**  How the result grid draws its cells; personal, like the theme. */
+/**
+ *  How the result grid draws its cells and how many result tabs an editor tab keeps;
+ *  personal, like the theme.
+ */
 export type GridPreferencesItem = {
 	zebra: boolean,
 	nullText: boolean,
 	boolCheckboxes: boolean,
+	resultTabs: number,
 };
 
 export type HistoryFilterItem = HistoryFilterItem_Serialize | HistoryFilterItem_Deserialize;
@@ -4606,6 +4622,32 @@ export type RestoredTabsItem_Serialize = {
 	reconnect: boolean,
 };
 
+/**  Where a run's results go (SDB-378). */
+export type ResultPlacementItem = 
+/**  In place of every result that is not pinned. */
+{ kind: "replace" } | 
+/**  Next to the results already there. */
+{ kind: "newTab" } | 
+/**  In place of this result: a re-run of its query. */
+{ kind: "into"; result: number };
+
+/**  A result tab as the core keeps it (SDB-378). */
+export type ResultTabItem = ResultTabItem_Serialize | ResultTabItem_Deserialize;
+
+/**  A result tab as the core keeps it (SDB-378). */
+export type ResultTabItem_Deserialize = {
+	result: number,
+	name?: string | null,
+	pinned: boolean,
+};
+
+/**  A result tab as the core keeps it (SDB-378). */
+export type ResultTabItem_Serialize = {
+	result: number,
+	name: string | null,
+	pinned: boolean,
+};
+
 /**  A masked cell's value, revealed on the user's request (ADR-051). */
 export type RevealedCellItem = RevealedCellItem_Serialize | RevealedCellItem_Deserialize;
 
@@ -4813,8 +4855,19 @@ export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "seq
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
 export type ScriptEvent_Deserialize = 
+/**
+ *  The run was accepted, before any of its statements: the result tabs it replaced,
+ *  already freed by the core (SDB-378).
+ */
+{ kind: "runStarted"; closed: number[] } | 
 /**  Byte range of the statement within the script. */
-{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
+{ kind: "statementStarted"; index: number; start: number; end: number } | 
+/**
+ *  A result started, and where the core put its tab (SDB-378): its name, whether it is
+ *  pinned, the result whose place it took (a re-run) and the ones closed to stay within
+ *  the limit, all freed already.
+ */
+{ kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name?: string | null; pinned: boolean; replaces?: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */
@@ -4827,8 +4880,19 @@ timedOut: boolean } |
 { kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
 
 export type ScriptEvent_Serialize = 
+/**
+ *  The run was accepted, before any of its statements: the result tabs it replaced,
+ *  already freed by the core (SDB-378).
+ */
+{ kind: "runStarted"; closed: number[] } | 
 /**  Byte range of the statement within the script. */
-{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
+{ kind: "statementStarted"; index: number; start: number; end: number } | 
+/**
+ *  A result started, and where the core put its tab (SDB-378): its name, whether it is
+ *  pinned, the result whose place it took (a re-run) and the ones closed to stay within
+ *  the limit, all freed already.
+ */
+{ kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name: string | null; pinned: boolean; replaces: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */

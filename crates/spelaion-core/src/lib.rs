@@ -44,6 +44,7 @@ mod progress;
 mod query_page;
 mod readonly;
 mod references;
+mod result_tabs;
 mod results;
 mod save_name;
 mod script;
@@ -175,6 +176,10 @@ pub use references::{
     FollowError, KeyDirection, KeyRef, KeyRows, KeyTarget, MAX_PREVIEW_ROWS, PREVIEW_CHARS,
     ReferenceOutcome, RowReference, TableKey, find_key, follow, key_rows, read_references,
     reference_targets, table_keys,
+};
+pub use result_tabs::{
+    DEFAULT_RESULT_TABS, MAX_RESULT_NAME, MAX_RESULT_TABS, Placed, Placement, ResultTab,
+    ResultTabs, ResultTabsError, RunResults, statement_title,
 };
 pub use results::{ResultId, ResultSource, ResultStore, RevealError, RevealedCell, StoredResult};
 pub use save_name::{renamed_for_type, type_extension, type_pattern};

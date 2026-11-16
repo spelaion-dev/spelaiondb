@@ -63,6 +63,9 @@ struct AppState {
     plugins: plugins::PluginOps,
     tunnels: Arc<TunnelPool>,
     results: Arc<ResultStore>,
+    /// Each editor tab's result tabs over `results` (SDB-378): what a run replaces, the pins
+    /// and the names are the core's.
+    result_tabs: Arc<spelaion_core::ResultTabs>,
     plans: Arc<spelaion_core::plan::PlanStore>,
     startup_plan: std::sync::Mutex<Option<String>>,
     sessions: Mutex<HashMap<String, DesktopSession>>,
@@ -137,6 +140,36 @@ impl AppState {
         change: impl FnOnce(&mut TrustStore) -> Result<T, E>,
     ) -> CmdResult<T> {
         TrustStore::update(&self.user_dir, change).map_err(|e| e.to_string())
+    }
+
+    /// Starts placing the results of a run the core accepted in the editor tab `editor`
+    /// (SDB-378): the core frees what the run replaces, within the user's limit of kept
+    /// result tabs, and refuses when that would lose unsaved edits.
+    async fn begin_results(
+        &self,
+        editor: &str,
+        placement: spelaion_core::Placement,
+        open: &OpenConnection,
+        sql: &str,
+        original: Option<&str>,
+    ) -> CmdResult<spelaion_core::RunResults> {
+        // A store that cannot be read keeps the default number of tabs.
+        let limit = self
+            .history
+            .grid_preferences()
+            .await
+            .map(|preferences| preferences.result_tabs as usize)
+            .unwrap_or(spelaion_core::DEFAULT_RESULT_TABS);
+        self.result_tabs
+            .begin_run(
+                editor,
+                placement,
+                open.session.dialect(),
+                sql,
+                original,
+                limit,
+            )
+            .map_err(|e| e.to_string())
     }
 
     async fn reload(&self) {
@@ -2260,10 +2293,14 @@ async fn run_script(
     sql: String,
     confirmed: bool,
     options: RunOptionsItem,
+    placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    start_script(&state, &session, sql, confirmed, options, on_event, None).await
+    start_script(
+        &state, &session, sql, confirmed, options, placement, on_event, None,
+    )
+    .await
 }
 
 /// Answers a run paused after an error (ADR-035). The core refuses a ticket that is not the
@@ -2281,15 +2318,18 @@ async fn answer_script_error(
         .map_err(|e| e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_script(
     state: &AppState,
     session: &str,
     sql: String,
     confirmed: bool,
     options: RunOptionsItem,
+    placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     original: Option<String>,
 ) -> CmdResult<()> {
+    let editor = session;
     let (open, workspace) = {
         let sessions = state.sessions.lock().await;
         let session = sessions
@@ -2303,6 +2343,13 @@ async fn start_script(
     // is refused by the core, whatever its error mode.
     spelaion_core::check_run(&open.session, &sql, &open.resolved.safeguards(), confirmed)
         .map_err(|e| e.to_string())?;
+    // Only a run the core accepted replaces results, and the core decides which (SDB-378).
+    let mut placed = RunEvents::new(
+        state
+            .begin_results(editor, placement.into(), &open, &sql, original.as_deref())
+            .await?,
+    );
+    let _ = on_event.send(placed.started());
     let events = state.history.run_script_in_context(
         &open.session,
         &sql,
@@ -2339,7 +2386,7 @@ async fn start_script(
         while let Some(event) = events.next().await {
             // Keep consuming after the tab closes: executed statements still need their
             // completion/error recorded, and later statements must not be silently aborted.
-            let _ = on_event.send(ScriptEvent::from(event));
+            let _ = on_event.send(placed.event(event));
         }
     });
     Ok(())
@@ -2369,6 +2416,7 @@ async fn run_query_page(
     sort: Vec<SortKeyItem>,
     confirmed: bool,
     options: RunOptionsItem,
+    placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
@@ -2383,6 +2431,7 @@ async fn run_query_page(
         paged,
         confirmed,
         options,
+        placement,
         on_event,
         Some(sql),
     )
@@ -3725,11 +3774,50 @@ async fn search_referenced(
         .map_err(|e| e.to_string())
 }
 
-/// Frees a result the UI no longer shows.
+/// Frees a result the UI no longer shows: closing a result tab, pinned or not, frees it.
 #[command]
 async fn release_result(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    state.results.remove(ResultId(result.into()));
+    state.result_tabs.close(ResultId(result.into()));
     Ok(())
+}
+
+/// Frees every result of an editor tab that was closed; a result that a run still going
+/// there starts later is freed by the core as it starts.
+#[command]
+async fn release_results(session: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state.result_tabs.close_editor(&session);
+    Ok(())
+}
+
+/// Pins a result tab, so no run replaces it, or unpins it (SDB-378).
+#[command]
+async fn pin_result(
+    session: String,
+    result: u32,
+    pinned: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<ResultTabItem> {
+    state
+        .result_tabs
+        .pin(&session, ResultId(result.into()), pinned)
+        .map(ResultTabItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Names a result tab; an empty name gives back the one its statement's comment gave it.
+/// The core cleans the name and answers what the tab is called now.
+#[command]
+async fn rename_result(
+    session: String,
+    result: u32,
+    name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ResultTabItem> {
+    state
+        .result_tabs
+        .rename(&session, ResultId(result.into()), &name)
+        .map(ResultTabItem::from)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -5220,6 +5308,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             count_query_rows,
             cancel,
             release_result,
+            release_results,
+            pin_result,
+            rename_result,
             current_database,
             list_databases,
             select_database,
@@ -5451,6 +5542,7 @@ pub fn run() {
     let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
     // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
     let engines = plugins::engines_for(&user_dir);
+    let results = Arc::new(ResultStore::new());
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
@@ -5459,7 +5551,8 @@ pub fn run() {
         engines: std::sync::RwLock::new(engines),
         plugins: plugins::PluginOps::default(),
         tunnels: Arc::new(TunnelPool::new()),
-        results: Arc::new(ResultStore::new()),
+        result_tabs: Arc::new(spelaion_core::ResultTabs::new(results.clone())),
+        results,
         plans: Arc::new(spelaion_core::plan::PlanStore::new()),
         startup_plan: std::sync::Mutex::new(startup_plan),
         sessions: Mutex::new(HashMap::new()),

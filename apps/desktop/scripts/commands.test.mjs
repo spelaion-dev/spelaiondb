@@ -33,6 +33,7 @@ const MENUS = {
   file: { file: "components/FileMenu.tsx", fn: "FileMenu", pattern: /<CommandMenuItem id="([^"]+)"/g },
   activity: { file: "components/ActivityBar.tsx", fn: "ActivityBar", pattern: /<ActivityButton command="([^"]+)"/g },
   welcome: { file: "App.tsx", fn: "App", pattern: /<WelcomeButton command="([^"]+)"/g },
+  result: { file: "components/ResultTabs.tsx", fn: "ResultTabMenu", pattern: /item\("([^"]+)"\)/g },
 };
 
 /** Menu items each menu may write without a command: rows that are data, listed by the palette. */
@@ -74,6 +75,7 @@ test("every label exists in English and Spanish", () => {
     ...COMMANDS.map((c) => `app:commands.categories.${c.category}`),
     // Labels that follow the state (commands.ts).
     "app:tabs.unpin",
+    "editor:resultTabs.unpin",
     "app:commands.restoreEditor",
     "app:commands.saveQuery",
   ];
@@ -154,7 +156,9 @@ test("global shortcuts find their command; AltGr characters and editor keys do n
 
 test("the editor menu and keymap derive actions from the central palette registry", () => {
   const editor = menuCommands("editor");
-  assert.equal(editor.length, 17);
+  assert.equal(editor.length, 18);
+  // Run in a new result tab is the editor's own key, like its other actions (SDB-378).
+  assert.ok(editor.some(command => command.id === "editor.runNewTab" && command.shortcut === "Alt+Enter"));
   assert.ok(editor.some(command => command.id === "editor.explain" && command.shortcut === undefined));
   for (const command of editor) {
     assert.equal(command.scope, command.shortcut ? "editor" : undefined);

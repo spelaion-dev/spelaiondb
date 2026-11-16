@@ -10,6 +10,12 @@ import type { DiagramScopeItem_Deserialize, RestoredTabItem } from "./bindings";
 export interface ResultMeta {
   id: number;
   statement: number;
+  /** The run of this tab that produced it: a tab keeps results of several runs (SDB-378). */
+  run?: number;
+  /** Its tab's name, as the core keeps it: the user's, else its statement's first comment. */
+  name?: string;
+  /** Pinned in the core: no run replaces it until it is unpinned or closed. */
+  pinned?: boolean;
   columns: ColumnItem[];
   rows: number;
   complete: boolean;
@@ -233,7 +239,9 @@ export interface ExplorerReveal {
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
-export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | EditorActionId;
+export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | ResultTabCommand | EditorActionId;
+/** What a result tab's menu asks about the tab's active result (SDB-378). */
+export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "resultClose";
 
 /** Window event asking the editor tab `detail.tab` to do `detail.command` (SDB-18). */
 export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";

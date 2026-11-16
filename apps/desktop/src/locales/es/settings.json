@@ -16,7 +16,9 @@
     "zebra": "Filas alternas sombreadas",
     "nullText": "Mostrar NULL como texto (desactivado: celda vacía)",
     "boolCheckboxes": "Mostrar los booleanos como casillas",
-    "gridHint": "Solo cambia cómo se dibujan las celdas: al copiar y exportar se conservan los valores."
+    "gridHint": "Solo cambia cómo se dibujan las celdas: al copiar y exportar se conservan los valores.",
+    "resultTabs": "Pestañas de resultado que conserva cada pestaña del editor",
+    "resultTabsHint": "De 1 a {{max}}. Al superarlo se cierra el resultado más antiguo que no esté fijado; una ejecución siempre muestra todos los resultados que devuelve."
   },
   "language": {
     "title": "Idioma",

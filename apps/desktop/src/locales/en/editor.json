@@ -807,9 +807,24 @@
     "fileChangedOnDisk": "The file changed on disk while the app was closed: these are your unsaved changes, and saving asks before overwriting it.",
     "dismiss": "Dismiss"
   },
+  "resultTabs": {
+    "rerun": "Run this result's query again",
+    "pin": "Pin result",
+    "unpin": "Unpin result",
+    "rename": "Rename result…",
+    "close": "Close result",
+    "closeNamed": "Close {{name}}",
+    "menu": "Actions of {{name}}",
+    "pinned": "(pinned)",
+    "pinnedTitle": "{{name}} (pinned: a run does not replace it)",
+    "renameTitle": "Rename result",
+    "name": "Name",
+    "renameConfirm": "Rename"
+  },
   "actions": {
     "menu": "Editor actions",
     "runFromCursor": "Run from the cursor to the end",
+    "runNewTab": "Run in a new result tab",
     "lineComment": "Toggle line comment",
     "blockComment": "Toggle block comment",
     "wordWrap": "Toggle word wrap",

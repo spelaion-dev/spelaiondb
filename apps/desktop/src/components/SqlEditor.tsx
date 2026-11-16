@@ -64,7 +64,8 @@ interface Props {
   engine: string | null;
   /** Catalog metadata already read in the background, never fetched while typing. */
   catalog: CompletionCatalog;
-  onRun(request: RunRequest): void;
+  /** `newTab`: the results go next to the ones already there (SDB-378). */
+  onRun(request: RunRequest, newTab?: boolean): void;
   /** What Run will send changed (the cursor, the selection, the text or the engine). */
   onRunLabel(label: RunLabel): void;
   /** Error to underline, with its JS index in the document. */
@@ -299,28 +300,28 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   };
   // A selection with several statements (the core splits it as the run will): the picker asks
   // which to run, and the core writes the text of the ones chosen.
-  const runSelection = async (v: EditorView, engine: string, selected: RunRequest) => {
+  const runSelection = async (v: EditorView, engine: string, selected: RunRequest, newTab = false) => {
     const doc = v.state.doc.toString(), selection = v.state.selection;
     const stale = () => !v.dom.isConnected || v.state.doc.toString() !== doc || !v.state.selection.eq(selection);
     const to = selected.from + selected.text.length;
     const target = await call(commands.runTarget(engine, doc, indexToByte(doc, selection.main.head), indexToByte(doc, selected.from), indexToByte(doc, to)));
     if (stale()) return;
     if (target.statements.length < 2) {
-      callbacks.current.onRun(selected);
+      callbacks.current.onRun(selected, newTab);
       return;
     }
     const statements = target.statements.map((span) => doc.slice(byteToIndex(doc, span.start), byteToIndex(doc, span.end)));
     const answer = await useDialogs.getState().askStatements(statements);
     if (answer === null || stale()) return;
     if (answer === "all" || answer.length === statements.length) {
-      callbacks.current.onRun(selected);
+      callbacks.current.onRun(selected, newTab);
       return;
     }
     const picked = await call(commands.pickStatements(engine, selected.text, answer));
     if (stale()) return;
     const from = selected.from + byteToIndex(selected.text, picked.span.start);
     flash(v, from, selected.from + byteToIndex(selected.text, picked.span.end));
-    callbacks.current.onRun({ text: picked.text, from });
+    callbacks.current.onRun({ text: picked.text, from }, newTab);
   };
   // From the statement under the cursor to the end of the script: the core says where that
   // statement starts and writes the text. With no connection there is nothing to split with.
@@ -339,16 +340,19 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     return true;
   };
   // Use the same selection and dialect splitter for the toolbar and keyboard shortcut.
-  const run = (v: EditorView) => {
+  const run = (v: EditorView, newTab = false) => {
     const sel = v.state.selection.main;
     const engine = callbacks.current.engine;
     if (!sel.empty) {
       const selected = { text: v.state.sliceDoc(sel.from, sel.to), from: sel.from };
-      if (engine) void runSelection(v, engine, selected).catch(failed);
-      else callbacks.current.onRun(selected);
+      if (engine) void runSelection(v, engine, selected, newTab).catch(failed);
+      else callbacks.current.onRun(selected, newTab);
       return true;
     }
-    if (!engine) return runAll(v);
+    if (!engine) {
+      callbacks.current.onRun({ text: v.state.doc.toString(), from: 0 }, newTab);
+      return true;
+    }
     const doc = v.state.doc.toString();
     call(commands.statementAt(engine, doc, indexToByte(doc, sel.head)))
       .then((span) => {
@@ -356,7 +360,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
         const from = byteToIndex(doc, span.start);
         const to = byteToIndex(doc, span.end);
         flash(v, from, to);
-        callbacks.current.onRun({ text: doc.slice(from, to), from });
+        callbacks.current.onRun({ text: doc.slice(from, to), from }, newTab);
       })
       .catch((e: unknown) => console.error("statement_at", e));
     return true;
@@ -389,6 +393,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   };
   const action = (v: EditorView, id: EditorActionId): boolean => {
     switch (id) {
+      case "runNewTab": return run(v, true);
       case "lineComment": return toggleLineComment(v);
       case "blockComment": return toggleBlockComment(v);
       case "wordWrap": {
@@ -453,7 +458,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
           Prec.highest(
             keymap.of([
               { key: "Mod-Shift-Enter", run: runAll },
-              { key: "Mod-Enter", run },
+              { key: "Mod-Enter", run: (v) => run(v) },
               { key: "Shift-Alt-f", run: format },
               ...EDITOR_ACTIONS.map(({ id, key }) => ({ key, run: (v: EditorView) => action(v, id) })),
               { key: "Enter", run: acceptCompletion },

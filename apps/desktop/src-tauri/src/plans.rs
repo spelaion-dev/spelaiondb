@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::{
     AppState, CmdResult,
-    dto::{RiskyItem, ScriptEvent},
+    dto::{RiskyItem, RunEvents, ScriptEvent},
 };
 use spelaion_core::plan::{
     self, ExplainOptions, ExplainPolicy, PlanPage, PlanStatKind, PlanStatsPage, PlanSummary,
@@ -77,6 +77,30 @@ pub async fn explain_query(
             .then(|| open.resolved.params.database.clone()),
         switchable_database: false,
     };
+    // The same checks the run makes, before anything is replaced: a refused explain leaves the
+    // results as they were. Then, like a run, it takes the place of the results that are not
+    // pinned (SDB-378).
+    plan::explain_preflight(
+        &open.session,
+        &sql,
+        options,
+        &ExplainPolicy::for_connection(&open),
+    )
+    .map_err(|e| e.to_string())?;
+    // The plan's own rows are the core's and it frees them itself: they are not result tabs.
+    let replaced = RunEvents::new(
+        state
+            .begin_results(
+                &session,
+                spelaion_core::Placement::Replace,
+                &open,
+                &sql,
+                None,
+            )
+            .await?,
+    );
+    let _ = on_event.send(replaced.started());
+    drop(replaced);
     let document = plan::explain(
         &open.session,
         &sql,

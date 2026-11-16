@@ -534,6 +534,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   writes last in both directions on every engine, in the `ORDER BY` and in the comparison that
   fetches the next page alike.
   `tests/query_pages.rs` writes between pages on every engine.
+  `result_tabs.rs` (SDB-378) is each editor tab's result tabs over the `ResultStore`: which
+  results a run replaces is decided there, never in the UI. A run frees the results that are
+  not pinned, a run into a new tab frees none, a re-run of one result takes its place when
+  its new rows start, and past the user's limit the oldest unpinned result of an earlier run
+  is closed; a result with unsaved edits is never freed by a run. A pin is only an entry no
+  run frees: closing the tab frees it. A tab's name is the user's, else its statement's first
+  `--` comment line as the engine's dialect reads comments (`statement_title`). The app's run
+  commands place every result through `begin_run` and `RunResults::observe`
+  (`tests/kept_results.rs` runs it against a real session).
   `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
   read from the catalog again each time (the UI only names one), the values come from the
   stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
