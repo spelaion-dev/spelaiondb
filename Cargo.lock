@@ -5870,6 +5870,7 @@ name = "spelaion-plugin-sdk"
 version = "0.10.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "futures-util",
  "serde",
  "serde_json",

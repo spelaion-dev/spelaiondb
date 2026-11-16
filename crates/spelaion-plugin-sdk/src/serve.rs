@@ -21,6 +21,7 @@ use spelaion_plugin_protocol::{
     method, read_frame, write_frame,
 };
 use tokio::sync::{Notify, Semaphore, mpsc, oneshot};
+use tokio::task::JoinSet;
 
 use crate::Plugin;
 
@@ -28,6 +29,9 @@ use crate::Plugin;
 const DATA_CHUNK: usize = 16 * 1024 * 1024;
 /// How often the sessions are asked whether their connection is known to be closed.
 const CLOSED_CHECK: Duration = Duration::from_millis(500);
+/// The most a plugin whose input closed waits for its drivers to close what they keep open
+/// before it ends anyway. The core kills a plugin it stops sooner than this (its own grace).
+const SHUTDOWN: Duration = Duration::from_secs(30);
 
 /// Serves `plugin` over `reader` and `writer` until `reader` ends. [`crate::run`] does this on
 /// the program's standard input and output.
@@ -52,6 +56,7 @@ where
         sessions: Mutex::new(HashMap::new()),
         streams: Mutex::new(HashMap::new()),
         incoming: Mutex::new(HashMap::new()),
+        tasks: Mutex::new(JoinSet::new()),
     });
     let watcher = tokio::spawn(watch_closed(shared.clone()));
 
@@ -70,8 +75,7 @@ where
     // Without an answer the thread is gone: the conversation is over either way.
     let result = ending.await.unwrap_or(Ok(()));
     watcher.abort();
-    // The sessions end with the conversation.
-    shared.sessions.lock().expect("lock poisoned").clear();
+    shared.end().await;
     result
 }
 
@@ -140,7 +144,7 @@ fn read_loop<R: Read>(
                         shared.send_now(Message::error(id, error));
                         continue;
                     }
-                    runtime.spawn(guarded(shared.clone(), id, name, message));
+                    shared.spawn(runtime, guarded(shared.clone(), id, name, message));
                 }
             }
         }
@@ -200,9 +204,58 @@ struct Shared {
     sessions: Mutex<HashMap<u64, Slot>>,
     streams: Mutex<HashMap<StreamId, Arc<Sending>>>,
     incoming: Mutex<HashMap<StreamId, Incoming>>,
+    /// The requests being served: each holds what it uses of its session until it ends.
+    tasks: Mutex<JoinSet<()>>,
 }
 
 impl Shared {
+    /// Serves a request in a task of its own, kept until it ends so the conversation's end can
+    /// stop it.
+    fn spawn(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        request: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        let mut tasks = self.tasks.lock().expect("lock poisoned");
+        // What already ended is let go of here, so the set holds only what still runs.
+        while tasks.try_join_next().is_some() {}
+        tasks.spawn_on(request, runtime);
+    }
+
+    /// The conversation is over: every request still being served stops, every session's
+    /// connection is dropped, and then each driver closes what it keeps open past them (a
+    /// DuckDB file shared by several sessions writes what it holds), for at most
+    /// [`SHUTDOWN`]. Only then may the program end: ending it while a driver still writes a
+    /// file can leave that file corrupt.
+    async fn end(&self) {
+        let mut tasks = std::mem::take(&mut *self.tasks.lock().expect("lock poisoned"));
+        // Stopped, and waited for: a request that is dropped drops what it held of its session.
+        tasks.shutdown().await;
+        let sessions: Vec<Slot> = self
+            .sessions
+            .lock()
+            .expect("lock poisoned")
+            .drain()
+            .map(|(_, slot)| slot)
+            .collect();
+        drop(sessions);
+        self.streams.lock().expect("lock poisoned").clear();
+        self.incoming.lock().expect("lock poisoned").clear();
+        let drivers = self.plugin.drivers.clone();
+        let closed = tokio::time::timeout(SHUTDOWN, async move {
+            for driver in &drivers {
+                driver.shutdown().await;
+            }
+        })
+        .await;
+        if closed.is_err() {
+            eprintln!(
+                "the drivers had not closed everything after {} seconds: the plugin ends anyway",
+                SHUTDOWN.as_secs()
+            );
+        }
+    }
+
     async fn send(&self, message: Message) {
         let _ = self.out.send(Frame::Message(message.to_bytes())).await;
     }
@@ -842,5 +895,45 @@ async fn send_data(shared: &Shared, stream: StreamId, start: bool, bytes: Vec<u8
             bytes: chunk.to_vec(),
         };
         let _ = shared.out.send(frame).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    /// A driver whose shutdown never ends.
+    struct Hangs;
+
+    #[async_trait]
+    impl Driver for Hangs {
+        fn engine(&self) -> &str {
+            "hangs"
+        }
+
+        async fn connect(
+            &self,
+            _: &ConnectParams,
+        ) -> spelaion_driver_api::Result<Box<dyn Connection>> {
+            Err(DriverError::Other("not here".into()))
+        }
+
+        async fn shutdown(&self) {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_driver_that_never_closes_does_not_keep_the_plugin_for_ever() {
+        // The input is already closed: the conversation ends at once, and the plugin waits
+        // for its driver only as long as it may, even with nobody left to kill it.
+        let plugin = Plugin::new("hangs", "0", vec![Arc::new(Hangs)]);
+        let served = tokio::time::timeout(
+            SHUTDOWN + Duration::from_secs(5),
+            serve(plugin, std::io::empty(), std::io::sink()),
+        )
+        .await;
+        assert!(matches!(served, Ok(Ok(()))), "{served:?}");
     }
 }

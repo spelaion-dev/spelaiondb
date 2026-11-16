@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -30,8 +30,15 @@ const PIPE_BUFFER: usize = 64 * 1024;
 const LOG_LINE: usize = 16 * 1024;
 /// The most bytes of rows one data frame carries.
 pub(crate) const DATA_CHUNK: usize = 16 * 1024 * 1024;
+/// How long a plugin that is stopped has to end by itself once its input is closed, before it
+/// is killed: the time its drivers take to close what they keep open (a DuckDB file writes
+/// what it holds). A plugin that hangs is killed then.
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(5);
+/// How often a plugin that was asked to end is looked at.
+const STOP_POLL: Duration = Duration::from_millis(10);
 
-/// A running plugin. Dropping it stops the program.
+/// A running plugin. Dropping it stops the program: its input is closed, it has
+/// [`STOP_GRACE`] to end by itself, and it is killed if it has not.
 ///
 /// Its pipes are read and written on threads of their own, with plain blocking calls: a plugin
 /// is shared by everything in this program (ADR-016 needs one DuckDB per file and process), so
@@ -41,15 +48,41 @@ pub(crate) const DATA_CHUNK: usize = 16 * 1024 * 1024;
 pub(crate) struct Process {
     shared: Arc<Shared>,
     info: InitializeResult,
-    running: Running,
+    running: Arc<Running>,
 }
 
 /// The program itself: killed when this value goes, however that happens.
 struct Running(Mutex<Option<Child>>);
 
 impl Running {
-    /// Stops the program now, and returns once it has ended.
-    fn end(&self) {
+    /// Whether the program has ended (it is let go of then).
+    fn ended(&self) -> bool {
+        let mut child = self.0.lock().expect("lock poisoned");
+        let ended = match child.as_mut() {
+            None => true,
+            Some(running) => !matches!(running.try_wait(), Ok(None)),
+        };
+        if ended {
+            child.take();
+        }
+        ended
+    }
+
+    /// Lets the program end by itself for at most `grace`, then kills it; returns once it
+    /// has ended either way.
+    fn end(&self, grace: Duration) {
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if self.ended() {
+                return;
+            }
+            std::thread::sleep(STOP_POLL);
+        }
+        self.kill();
+    }
+
+    /// Kills the program now, and returns once it has ended.
+    fn kill(&self) {
         let child = self.0.lock().expect("lock poisoned").take();
         if let Some(mut child) = child {
             let _ = child.kill();
@@ -60,7 +93,16 @@ impl Running {
 
 impl Drop for Running {
     fn drop(&mut self) {
-        self.end();
+        self.kill();
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        // Asked to end first, as `kill` does: killed at once, a plugin could leave a file it
+        // was writing half written.
+        self.shared.close_input();
+        self.running.end(STOP_GRACE);
     }
 }
 
@@ -74,7 +116,7 @@ struct Receiving {
 pub(crate) struct Shared {
     name: String,
     /// Frames to write, in sets that go out together: one wake-up and one flush for each.
-    out: mpsc::Sender<Vec<Frame>>,
+    out: mpsc::Sender<Outgoing>,
     pending: Mutex<HashMap<u64, oneshot::Sender<std::result::Result<Value, RpcError>>>>,
     streams: Mutex<HashMap<StreamId, Receiving>>,
     /// Each session's "the connection is known to be closed".
@@ -120,7 +162,7 @@ impl Process {
         let mut child = command.spawn().map_err(|e| could_not_start(&e))?;
         let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
         // From here the program ends with this value, an early return included.
-        let running = Running(Mutex::new(Some(child)));
+        let running = Arc::new(Running(Mutex::new(Some(child))));
         let (Some(stdin), Some(stdout), Some(stderr)) = pipes else {
             return Err(could_not_start(&"its pipes are missing"));
         };
@@ -176,11 +218,30 @@ impl Process {
         self.shared.dead.load(Ordering::SeqCst)
     }
 
-    /// Stops the program now, and returns once it has ended.
+    /// Stops the program, and returns once it has ended. It is asked to end first (its input
+    /// closes, so it drops its sessions and its drivers close what they keep open), and killed
+    /// if it has not ended after [`STOP_GRACE`].
     pub(crate) async fn kill(&self, why: &str) {
         // First, so everything that waits fails with this reason and not with "it exited".
         self.shared.die(why);
-        self.running.end();
+        self.shared.close_input();
+        // Waited for on a thread of its own, with blocking calls, as the pipes are: not on
+        // the caller's runtime, which may be about to end.
+        let running = self.running.clone();
+        let (ended, ending) = oneshot::channel();
+        let waiter = std::thread::Builder::new()
+            .name(format!("plugin {} stop", self.shared.name))
+            .spawn(move || {
+                running.end(STOP_GRACE);
+                let _ = ended.send(());
+            });
+        match waiter {
+            Ok(_) => {
+                let _ = ending.await;
+            }
+            // No thread to wait on: it is killed now, as it was before it could be asked.
+            Err(_) => self.running.kill(),
+        }
     }
 }
 
@@ -294,7 +355,7 @@ impl Shared {
         frames.push(Frame::Message(
             Message::request(id, method, params).to_bytes(),
         ));
-        if self.dead.load(Ordering::SeqCst) || self.out.send(frames).is_err() {
+        if self.dead.load(Ordering::SeqCst) || self.out.send(Outgoing::Frames(frames)).is_err() {
             return Err(Failure::Lost);
         }
         let answer = answered.await;
@@ -318,8 +379,14 @@ impl Shared {
 
     fn send(&self, message: Message) -> bool {
         self.out
-            .send(vec![Frame::Message(message.to_bytes())])
+            .send(Outgoing::Frames(vec![Frame::Message(message.to_bytes())]))
             .is_ok()
+    }
+
+    /// Closes the plugin's input once what was sent before has been written: how a plugin is
+    /// asked to end (`docs/plugin-protocol.md`).
+    fn close_input(&self) {
+        let _ = self.out.send(Outgoing::End);
     }
 
     /// The frames of rows for the plugin, on `stream`.
@@ -616,27 +683,38 @@ impl Drop for Waiting<'_> {
     }
 }
 
-fn write_loop(stdin: ChildStdin, frames: mpsc::Receiver<Vec<Frame>>) {
+/// What the thread that writes the plugin's input is given.
+enum Outgoing {
+    /// Frames that go out together.
+    Frames(Vec<Frame>),
+    /// The input closes, after everything sent before: the plugin is asked to end.
+    End,
+}
+
+fn write_loop(stdin: ChildStdin, frames: mpsc::Receiver<Outgoing>) {
     let mut stdin = BufWriter::with_capacity(PIPE_BUFFER, stdin);
-    while let Ok(set) = frames.recv() {
-        let mut write = |set: Vec<Frame>| {
-            set.iter()
-                .all(|frame| write_frame(&mut stdin, frame).is_ok())
-        };
-        if !write(set) {
-            return;
+    // Whether to go on: not after `End`, nor once the plugin no longer reads.
+    let write = |stdin: &mut BufWriter<ChildStdin>, outgoing: Outgoing| match outgoing {
+        Outgoing::Frames(set) => set.iter().all(|frame| write_frame(stdin, frame).is_ok()),
+        Outgoing::End => false,
+    };
+    'frames: while let Ok(outgoing) = frames.recv() {
+        if !write(&mut stdin, outgoing) {
+            break;
         }
         // Whatever else is waiting goes out before the flush.
-        while let Ok(set) = frames.try_recv() {
-            if !write(set) {
-                return;
+        while let Ok(outgoing) = frames.try_recv() {
+            if !write(&mut stdin, outgoing) {
+                break 'frames;
             }
         }
         if stdin.flush().is_err() {
             return;
         }
     }
-    // Every sender is gone: closing its input is how the plugin is told to end.
+    // Asked to end, or every sender is gone: what was written goes out, and the input closes
+    // as `stdin` is dropped. That is how the plugin is told to end.
+    let _ = stdin.flush();
 }
 
 /// However the thread ends, nothing waits on the plugin for ever.

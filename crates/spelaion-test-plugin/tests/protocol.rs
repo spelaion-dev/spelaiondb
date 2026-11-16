@@ -876,6 +876,123 @@ async fn the_plugin_ends_when_its_input_closes() {
     panic!("the plugin outlived its standard input");
 }
 
+/// A file of this test, that does not exist yet.
+fn kept_file(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("spelaion-kept-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+/// What a `file:` database wrote: every line it kept, then `closed`, for each time it closed.
+fn written(path: &PathBuf) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_stopped_plugin_lets_its_driver_write_what_it_holds_before_it_ends() {
+    // What a DuckDB file goes through when the app quits, or replaces the plugin, while it
+    // writes: the connection is closed, and the driver writes what it holds into the file on a
+    // thread of its own. Killed at once, the plugin would leave the file without it.
+    let path = kept_file("stopped");
+    let database = format!("file:{}", path.display());
+    let plugin = Plugin::new(PROGRAM);
+    let mut expected = Vec::new();
+    for i in 0..20 {
+        // Each time from a new process: the one stopped before is started again.
+        let connection = within(plugin.driver("test").connect(&params(&database)))
+            .await
+            .expect("connecting");
+        let line = format!("line-{i}");
+        run(connection.as_ref(), &format!("keep {line}")).await;
+        // Still open half of the times, as a session the user left open when quitting.
+        if i % 2 == 0 {
+            drop(connection);
+            within(plugin.stop()).await;
+        } else {
+            within(plugin.stop()).await;
+            drop(connection);
+        }
+        assert!(!within(plugin.is_running()).await);
+        expected.extend([line, "closed".to_string()]);
+        assert_eq!(written(&path), expected, "after stop {i}");
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn a_plugin_dropped_lets_its_driver_write_what_it_holds_before_it_ends() {
+    let path = kept_file("dropped");
+    let plugin = Plugin::new(PROGRAM);
+    let connection = within(
+        plugin
+            .driver("test")
+            .connect(&params(&format!("file:{}", path.display()))),
+    )
+    .await
+    .expect("connecting");
+    run(connection.as_ref(), "keep the-only-line").await;
+    // The last of the plugin goes with these two: its process is asked to end, and waited for.
+    drop(connection);
+    drop(plugin);
+    assert_eq!(written(&path), ["the-only-line", "closed"]);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn a_plugin_that_does_not_end_when_asked_is_killed() {
+    // Its driver never finishes closing: the plugin is killed after its grace, and stopping it
+    // still ends.
+    let path = kept_file("hangs");
+    let plugin = Plugin::new(PROGRAM);
+    let connection = within(
+        plugin
+            .driver("test")
+            .connect(&params(&format!("file-hang:{}", path.display()))),
+    )
+    .await
+    .expect("connecting");
+    run(connection.as_ref(), "keep never-written").await;
+    drop(connection);
+    let started = std::time::Instant::now();
+    within(plugin.stop()).await;
+    let took = started.elapsed();
+    assert!(
+        took >= Duration::from_secs(4) && took < Duration::from_secs(20),
+        "stopping took {took:?}"
+    );
+    assert!(!within(plugin.is_running()).await);
+    assert!(written(&path).is_empty());
+}
+
+#[tokio::test]
+async fn a_statement_still_running_does_not_hold_up_the_end() {
+    // The plugin stops what it was running when it is asked to end, and does not wait for it
+    // (nor is it killed for it).
+    let plugin = Plugin::new(PROGRAM);
+    let connection = connect(&plugin).await;
+    let mut events = connection
+        .execute("sleep", &ExecOptions::default())
+        .await
+        .expect("the statement starts");
+    assert!(matches!(
+        within(events.next()).await,
+        Some(Ok(ExecEvent::Columns(_)))
+    ));
+    let started = std::time::Instant::now();
+    within(plugin.stop()).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "stopping took {:?}",
+        started.elapsed()
+    );
+    // What it was reading ends with the plugin's loss, not with silence.
+    assert!(matches!(within(events.next()).await, Some(Err(_))));
+}
+
 // ------------------------------------------------------------------------ secrets
 
 #[tokio::test]

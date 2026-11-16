@@ -16,5 +16,10 @@ serde_json = "1"
 # io-std: the protocol is the program's standard input and output.
 tokio = { workspace = true, features = ["rt", "io-std", "io-util", "sync", "time", "macros"] }
 
+[dev-dependencies]
+async-trait.workspace = true
+# test-util: a paused clock, so the shutdown's bound is tried without waiting for it.
+tokio = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

@@ -17,8 +17,21 @@ in another language implements what is written here.
   anything about a connection. Everything arrives in messages on standard input.
 - One process serves every session of its engines in that program (the app, or `spelaiondb
   mcp`). It is started the first time a connection of one of its engines opens.
-- The plugin **exits when its standard input closes**. The core also stops it when the
-  program ends.
+- The plugin **exits when its standard input closes**, which is also how it ends when the
+  program that started it ends.
+- **Closing its standard input is how the core stops a plugin**, after the messages sent
+  before it. The core waits 5 seconds for it to exit, and kills it after that. No message
+  asks a plugin to end.
+- A plugin whose standard input closed ends in this order:
+  1. It reads nothing more, and stops every request it was serving (their answers are not
+     sent).
+  2. It drops every session's connection.
+  3. It closes whatever its engines keep open past their sessions, and waits for that: a
+     database file opened once for several sessions writes what it holds into the file and
+     lets go of it (the SDK calls each driver's `Driver::shutdown`). A program ended before
+     that can leave such a file corrupt.
+  4. It exits. If step 3 has not finished after 30 seconds, it exits anyway: nobody may be
+     left to kill it when the program that started it has ended.
 - **Standard output is the protocol and nothing else.** Anything a plugin wants to say goes
   to standard error, one line at a time: the core logs it after taking out the secrets it
   gave that plugin.
