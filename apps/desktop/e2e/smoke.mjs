@@ -440,6 +440,23 @@ try {
   await page.getByText("is not trusted").waitFor();
   await shot("01-start");
 
+  step("open object without a connection keeps focus and closes with Escape");
+  await page.keyboard.press("Control+Shift+D");
+  const emptyOpenObject = page.getByRole("dialog", { name: "Open object by name" });
+  await emptyOpenObject.getByText("Connect a connection in the explorer first: the search reads its catalog.").waitFor();
+  const closeEmptyOpenObject = emptyOpenObject.getByRole("button", { name: "Close" });
+  await page.waitForFunction(() => document.activeElement?.textContent === "Close" && document.activeElement.closest('.open-object-dialog'));
+  await page.keyboard.press("Tab");
+  assert.equal(await closeEmptyOpenObject.evaluate((button) => document.activeElement === button), true);
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await closeEmptyOpenObject.evaluate((button) => document.activeElement === button), true);
+  await page.keyboard.press("Escape");
+  await emptyOpenObject.waitFor({ state: "detached" });
+  await page.keyboard.press("Control+Shift+D");
+  await emptyOpenObject.waitFor();
+  await closeEmptyOpenObject.click();
+  await emptyOpenObject.waitFor({ state: "detached" });
+
   step("Kubernetes editor requires repository trust before listing");
   await (await connectionMenu("Shop (SQLite)")).getByRole("menuitem", { name: "Edit…" }).click();
   let trustDialog = page.getByRole("dialog", { name: "Trust this repository?" });
