@@ -380,6 +380,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
               { key: "Mod-Enter", run },
               { key: "Shift-Alt-f", run: format },
               ...EDITOR_ACTIONS.map(({ id, key }) => ({ key, run: (v: EditorView) => action(v, id) })),
+              { key: "Enter", run: acceptCompletion },
               { key: "Tab", run: tab },
               { key: "Shift-Tab", run: (v) => prevSnippetField(v) || indentLess(v) },
             ]),
