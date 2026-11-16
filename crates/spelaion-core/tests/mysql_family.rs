@@ -10,6 +10,9 @@
 //!   refused because the server says its session is still writable;
 //! - Databend (`SPELAION_TEST_DATABEND_MYSQL`) accepts MySQL's read-only transaction and session and
 //!   writes anyway: it is recognised by its version and gets neither (SDB-350).
+//! - GreptimeDB (`SPELAION_TEST_GREPTIME_MYSQL`, the main project's `greptime` service, which CI
+//!   runs) is browsed, keyed by its time index, edited by that key and cancelled (SDB-344), and
+//!   its ignored transactions get it neither barrier (SDB-343).
 //!
 //! Each variable is `host:port`; a server without one is skipped, which does not count as
 //! tested.
@@ -27,11 +30,15 @@ use spelaion_config::{
     ConnectionId, Resolver, Safeguards, Source, SystemBackend, TrustStore, load,
 };
 use spelaion_core::{
-    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportCancel, ExportError, ExportFormat,
-    OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits, ResultStore, ServerFamily,
-    StreamExport, TextEncoding, TunnelPool, export_query, open_connection,
+    CellInput, CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, EditError, Engines, ExportCancel,
+    ExportError, ExportFormat, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits,
+    ResultId, ResultStore, RowChange, ServerFamily, StreamExport, TablePage, TextEncoding,
+    TunnelPool, apply_edits, edit_statements, export_query, open_connection, query_pages_exactly,
+    table_page_sql_by_key,
 };
-use spelaion_driver_api::{ExecEvent, ExecOptions, Secret, TransactionState, bound_placeholder};
+use spelaion_driver_api::{
+    ExecEvent, ExecOptions, Secret, TransactionState, Value, bound_placeholder,
+};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
 fn unique(prefix: &str) -> String {
@@ -589,6 +596,239 @@ async fn greptime_read_only_transaction_does_not_stop_writes() {
         rows, 1,
         "GreptimeDB unexpectedly enforced its transaction barrier"
     );
+}
+
+/// Runs `sql` and returns its stored result.
+async fn stored(open: &OpenConnection, sql: &str) -> ResultId {
+    let mut found = None;
+    let mut events = open.session.run_script(sql);
+    while let Some(event) = events.next().await {
+        match event {
+            CoreEvent::ResultStarted { result, .. } => found = Some(result),
+            CoreEvent::StatementFailed { error, .. } => panic!("{sql}: {}", error.message),
+            _ => {}
+        }
+    }
+    found.unwrap_or_else(|| panic!("{sql}: no result"))
+}
+
+/// Every row of a stored result, each value as text.
+fn rows_of(open: &OpenConnection, id: ResultId) -> Vec<Vec<String>> {
+    let stored = open.session.results().get(id).unwrap();
+    let stored = stored.read().unwrap();
+    (0..stored.rows())
+        .map(|row| {
+            (0..stored.schema().columns.len())
+                .map(|column| match stored.value_at(row, column).unwrap() {
+                    Value::Text(text) => text,
+                    other => other.to_string(),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// GreptimeDB as a MySQL connection (SDB-344): the explorer's calls work without the catalog
+/// tables it lacks; a table's rows are identified by their primary key and time index (a
+/// second insert with both replaces the row), and an append-only table, which keeps equal rows,
+/// has no key; the table data tab's pages are ordered by that key, and the editor never pages a
+/// query by it (a timestamp's literal may not compare exactly, ADR-054); the data search and
+/// imports, which it cannot bind, are refused; and a long query is cancelled.
+#[tokio::test]
+async fn greptime_is_browsed_and_edited_by_its_time_index_and_cancelled() {
+    let ws = Workspace::new();
+    let Some(open) = ws.open(&GREPTIME, false, false).await else {
+        return;
+    };
+    let open = open.unwrap();
+    assert_eq!(
+        open.session.server_family(),
+        Some(&ServerFamily::GreptimeDb)
+    );
+    let db = unique("sdb344");
+    run(&open, &format!("create database {db}")).await.unwrap();
+    support::cleaning_up(
+        async {
+            // 3 hosts × 200 instants, some with milliseconds (a page must start after the
+            // exact instant); then (b, 8 s) again, which replaces that row.
+            let values: Vec<String> = ["a", "b", "c"]
+                .iter()
+                .flat_map(|host| {
+                    (1..=200)
+                        .map(move |s| format!("('{host}', {}, {s}.5)", s * 1000 + (s % 4) * 125))
+                })
+                .collect();
+            run(
+                &open,
+                &format!(
+                    "create table {db}.cpu (host string, ts timestamp(3) time index, \
+                        val double, primary key (host));
+                     insert into {db}.cpu values {};
+                     insert into {db}.cpu values ('b', 8000, 80.5);
+                     create table {db}.logs (host string, ts timestamp(3) time index, \
+                        msg string, primary key (host)) with (append_mode = 'true');
+                     insert into {db}.logs values ('a', 1000, 'x'), ('a', 1000, 'x');",
+                    values.join(", ")
+                ),
+            )
+            .await
+            .unwrap();
+            let conn = open.session.connection();
+
+            // The explorer.
+            assert!(conn.list_databases().await.unwrap().contains(&db));
+            let objects = conn.list_objects(&db).await.unwrap();
+            for name in ["cpu", "logs"] {
+                assert!(objects.iter().any(|o| o.name == name), "{name}");
+            }
+            assert!(conn.list_schema_objects(&db).await.unwrap().is_empty());
+            assert!(conn.list_server_objects().await.unwrap().is_empty());
+            let cpu = conn.describe_table(&db, "cpu").await.unwrap();
+            let columns: Vec<_> = cpu.columns.iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(columns, ["host", "ts", "val"]);
+            assert_eq!(cpu.primary_key, ["host", "ts"]);
+            assert!(
+                conn.describe_table(&db, "logs")
+                    .await
+                    .unwrap()
+                    .primary_key
+                    .is_empty()
+            );
+            let all = conn.list_columns(&db).await.unwrap();
+            assert!(all.iter().any(|c| c.table == "cpu" && c.name == "val"));
+
+            // Values as the server writes them (whole seconds without their milliseconds).
+            let id = stored(
+                &open,
+                &format!(
+                    "select host, ts, val from {db}.cpu \
+                     where host = 'b' and ts >= 7000 and ts <= 8000 order by ts"
+                ),
+            )
+            .await;
+            assert_eq!(
+                rows_of(&open, id),
+                [
+                    ["b", "1970-01-01 00:00:07.375", "7.5"],
+                    ["b", "1970-01-01 00:00:08", "80.5"]
+                ]
+            );
+            open.session.results().remove(id);
+            let id = stored(&open, &format!("select * from {db}.cpu order by host, ts")).await;
+            let ordered = rows_of(&open, id);
+            open.session.results().remove(id);
+            assert_eq!(ordered.len(), 600);
+
+            // The editor's query pages need a key whose literals compare exactly (ADR-054): a
+            // GreptimeDB key always ends with its time index, a timestamp, so its queries run as
+            // written; an append-only table has no key at all.
+            for table in ["cpu", "logs"] {
+                assert!(
+                    !query_pages_exactly(&open.session, &format!("select * from {db}.{table}"))
+                        .await,
+                    "{table}"
+                );
+            }
+
+            // The table data tab's page, ordered by the key.
+            let page = table_page_sql_by_key(
+                &open.session,
+                &TablePage {
+                    schema: db.clone(),
+                    name: "cpu".into(),
+                    filter: String::new(),
+                    order_by: String::new(),
+                    limit: 3,
+                    offset: 200,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(page.contains("`host`, `ts`"), "{page}");
+            let id = stored(&open, &page).await;
+            let rows = rows_of(&open, id);
+            assert_eq!(rows, ordered[200..203]);
+
+            // An edit of that page addresses one row by host and time: deleting the first row
+            // shown deletes it alone, not the host's other 199. GreptimeDB has no UPDATE, so a
+            // changed cell fails with its error.
+            let target = open.session.edit_target().await.unwrap();
+            let edits = |changes: &[RowChange]| {
+                let stored = open.session.results().get(id).unwrap();
+                let stored = stored.read().unwrap();
+                edit_statements(&target, &cpu, &stored, changes).unwrap()
+            };
+            let delete = edits(&[RowChange::Delete { row: 0 }]);
+            assert_eq!(apply_edits(&open.session, &delete).await, Ok(1));
+            let id_after =
+                stored(&open, &format!("select * from {db}.cpu order by host, ts")).await;
+            let after = rows_of(&open, id_after);
+            open.session.results().remove(id_after);
+            let mut expected = ordered.clone();
+            expected.remove(200);
+            assert_eq!(after, expected);
+            let update = edits(&[RowChange::Update {
+                row: 1,
+                values: vec![(2, CellInput::Text("1.0".into()))],
+            }]);
+            assert!(
+                matches!(
+                    apply_edits(&open.session, &update).await,
+                    Err(EditError::Failed { index: 1, .. })
+                ),
+                "{update:?}"
+            );
+            open.session.results().remove(id);
+
+            // The data search binds its value to a user variable, which GreptimeDB does not
+            // have, and an import binds every value as text, which its prepared inserts do not
+            // convert: the plugin says it can do neither, so both are refused before they run.
+            let capabilities = conn.capabilities();
+            assert!(!capabilities.bound_params);
+            assert!(!capabilities.insert_rows);
+
+            // A long query, cancelled by its process id.
+            let session = &open.session;
+            let started = Instant::now();
+            let long = session
+                .run_script(
+                    "select count(*) from generate_series(1, 100000000) a, \
+                     generate_series(1, 1000) b",
+                )
+                .collect::<Vec<CoreEvent>>();
+            tokio::pin!(long);
+            let events = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    tokio::select! {
+                        events = &mut long => break events,
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                            session.cancel().await.unwrap();
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("the cancel did not stop the statement");
+            assert!(started.elapsed() < Duration::from_secs(30));
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, CoreEvent::StatementFailed { .. })),
+                "{events:?}"
+            );
+            // The session goes on.
+            run(&open, "select 1").await.unwrap();
+        },
+        |panicked| {
+            let session = &open.session;
+            let drop_db = format!("drop database if exists {db}");
+            async move {
+                support::run_cleanup("GreptimeDB", session, &[drop_db], panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
 }
 
 /// Why Databend gets no barrier: its read-only transaction and session are accepted without an

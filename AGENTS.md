@@ -462,7 +462,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included); a
   server that speaks another engine's protocol is a kind of that engine's connection there
   (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169; TiDB, OceanBase
-  and SingleStore are MySQL connections, SDB-170), and
+  and SingleStore are MySQL connections, SDB-170, and so is GreptimeDB, SDB-344, whose rows the
+  MySQL plugin keys by primary key and time index, and an append-only table by nothing), and
   `server_family.rs` reads which server a PostgreSQL or MySQL session reached from the server:
   one that does not enforce its engine's read-only transaction or session mode gets no agents,
   streaming reads or read-only connections (unchecked PostgreSQL forks neither), and a
@@ -472,7 +473,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350).
   Like `readonly.rs`, any change
   there needs tests that try to get around it (`tests/postgres_family.rs` and
-  `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`).
+  `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`, and GreptimeDB
+  in the main project's `warehouse` profile, which CI runs).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the

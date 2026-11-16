@@ -147,6 +147,17 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             Some("root"),
             None,
         ),
+        // Its MySQL port; no login by default (SDB-344). Read-only connections and agents are
+        // refused on it: its transactions are accepted and ignored (`server_family.rs`).
+        kind_of(
+            Engine::Mysql,
+            "greptimedb",
+            "GreptimeDB",
+            Analytical,
+            4002,
+            None,
+            Some("public"),
+        ),
         supported(Engine::Sqlserver, "SQL Server", Relational, Network),
         supported(Engine::Oracle, "Oracle", Relational, Network),
         // SQLite's SQL over HTTP: libSQL's server and Turso (ADR-058).
@@ -315,6 +326,7 @@ mod tests {
                 ("tidb", Some(Engine::Mysql), Some(4000)),
                 ("oceanbase", Some(Engine::Mysql), Some(2881)),
                 ("singlestore", Some(Engine::Mysql), Some(3306)),
+                ("greptimedb", Some(Engine::Mysql), Some(4002)),
                 ("cockroachdb", Some(Engine::Postgres), Some(26257)),
                 ("yugabytedb", Some(Engine::Postgres), Some(5433)),
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),

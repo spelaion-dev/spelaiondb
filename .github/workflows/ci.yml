@@ -87,6 +87,10 @@ jobs:
       # TDengine (ADR-056), through its pinned plugin.
       SPELAION_TEST_TDENGINE: 127.0.0.1:16141
       SPELAION_TEST_INFLUXDB: 127.0.0.1:18181
+      # GreptimeDB (SDB-344), a MySQL connection through the MySQL plugin; its PostgreSQL port
+      # only for the barrier test (SDB-343). Second phase, with the warehouses.
+      SPELAION_TEST_GREPTIME_MYSQL: 127.0.0.1:18402
+      SPELAION_TEST_GREPTIME_PG: 127.0.0.1:18403
       SPELAION_TEST_GIZMOSQL: 127.0.0.1:31337
       # Apache Hive (SDB-176), through its pinned plugin.
       SPELAION_TEST_HIVE: 127.0.0.1:11010
@@ -225,20 +229,20 @@ jobs:
           fi
       - if: steps.scope.outputs.rust != 'false'
         # These suites run in the following phase, after the other servers release their RAM.
-        run: env -u SPELAION_TEST_HIVE -u SPELAION_TEST_TRINO -u SPELAION_TEST_PRESTO -u SPELAION_TEST_INFLUXDB cargo test --workspace --locked
+        run: env -u SPELAION_TEST_HIVE -u SPELAION_TEST_TRINO -u SPELAION_TEST_PRESTO -u SPELAION_TEST_INFLUXDB -u SPELAION_TEST_GREPTIME_MYSQL -u SPELAION_TEST_GREPTIME_PG cargo test --workspace --locked
       - name: Warehouse services and integration tests
         timeout-minutes: 20
         if: steps.scope.outputs.rust != 'false'
         run: |
           docker compose -f testing/docker/compose.yaml stop
-          services=(hive trino presto influxdb bastion1 bastion2)
+          services=(hive trino presto influxdb greptime bastion1 bastion2)
           docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
             | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')" "${services[@]}"
           if ! timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --build --wait "${services[@]}"; then
             bash testing/docker/diagnostics.sh
             exit 1
           fi
-          cargo test --locked -p spelaion-core --test hive --test trino --test influxdb
+          cargo test --locked -p spelaion-core --test hive --test trino --test influxdb --test mysql_family --test postgres_family
       # The app's own unit tests: its library says `test = false` because the test executable of
       # a Tauri crate does not start on Windows, so `--workspace` skips them. Here, on Linux, it
       # starts: named, they run.
