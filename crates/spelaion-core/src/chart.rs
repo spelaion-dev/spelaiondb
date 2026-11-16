@@ -989,10 +989,10 @@ mod tests {
         let (store, id) = sales();
         let r = store.get(id).unwrap();
         let mut r = r.write().unwrap();
-        r.sort(Some(SortKey {
+        r.sort(&[SortKey {
             column: 1,
             descending: true,
-        }))
+        }])
         .unwrap();
         let data = chart(&r, ChartKind::Line, 1, &[2]);
         assert_eq!(texts(&data), ["1", "2", "3"]);

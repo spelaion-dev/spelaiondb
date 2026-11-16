@@ -76,10 +76,10 @@ async fn a_million_rows() {
         format!("{} batches", r.window(500_000, 500).len())
     });
     time("sort by price, descending", &mut || {
-        r.sort(Some(SortKey {
+        r.sort(&[SortKey {
             column: 2,
             descending: true,
-        }))
+        }])
         .unwrap();
         "sorted".into()
     });
@@ -97,7 +97,7 @@ async fn a_million_rows() {
         format!("{rows} rows")
     });
     r.filter_columns(Vec::new()).unwrap();
-    r.sort(None).unwrap();
+    r.sort(&[]).unwrap();
     let dialect = session.dialect().clone();
     time("IN list of lucky (2 values)", &mut || {
         column_in_list(&r, 3, dialect.as_ref()).unwrap()

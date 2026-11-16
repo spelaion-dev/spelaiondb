@@ -34,6 +34,9 @@ import { mayChangeCompletionCatalog } from "../sqlCompletion";
 import { useEngineInfo } from "../engines";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
+/** No header sort: one list, so the grid sees the same value between renders. */
+const NO_TABLE_SORT: SortState[] = [];
+
 function databaseSwitching(engine: string | undefined): boolean {
   return engine === "mysql" || engine === "mariadb" || engine === "sqlserver";
 }
@@ -331,7 +334,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
       clearPending();
       setNotice({ text: t("edit.applied", { count: applied }), error: false });
       if (tab.table) void loadPage(tab.table);
-      else if (executedRequest.current) void run(executedRequest.current, true);
+      // A query read in the grid's sort is read again in it.
+      else if (executedRequest.current) void run(executedRequest.current, true, undefined, result.paging?.sort ?? []);
     } catch (e) {
       setNotice({ text: message(e), error: true });
     } finally {
@@ -359,7 +363,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
       const file = path.split(/[\\/]/).pop() ?? path;
       setNotice({ text: t("edit.fileLoaded", { file, column: result.columns[column]?.name ?? "" }), error: false });
       if (tab.table) void loadPage(tab.table);
-      else if (executedRequest.current) void run(executedRequest.current, true);
+      // A query read in the grid's sort is read again in it.
+      else if (executedRequest.current) void run(executedRequest.current, true, undefined, result.paging?.sort ?? []);
     } catch (e) {
       setNotice({ text: t("edit.fileLoadFailed", { detail: message(e) }), error: true });
     } finally {
@@ -437,17 +442,35 @@ export function EditorTab({ tab }: { tab: Tab }) {
     void loadPage(next);
   }
 
-  /** A header click in a table data tab: ORDER BY that column, quoted by the core. */
-  async function sortTable(sort: SortState | undefined) {
+  /** Header clicks in a table data tab: the core writes the ORDER BY from the table's own
+   *  columns (the tab only names them), and the page is read again from the server. */
+  async function sortTable(sort: SortState[]) {
+    const view = tab.table;
+    if (!view) return;
     const columns = tab.run?.results[0]?.columns ?? [];
-    const column = sort ? columns[sort.column]?.name : undefined;
-    if (sort && !column) return;
+    const keys = sort.map((key) => ({ column: columns[key.column]?.name, descending: key.descending }));
+    if (keys.some((key) => key.column === undefined)) return;
     try {
-      const orderBy = sort && column ? `${await call(commands.quoteIdentifier(tab.id, column))}${sort.descending ? " DESC" : ""}` : "";
-      changeView({ sort, orderBy, page: 0 });
+      const orderBy = await call(commands.tableOrderBy(tab.id, view.schema, view.name,
+        keys.map((key) => ({ column: key.column ?? "", descending: key.descending }))));
+      changeView({ sort: sort.length > 0 ? sort : undefined, orderBy, page: 0 });
     } catch (e) {
       setNotice({ text: message(e), error: true });
     }
+  }
+
+  /** Header clicks on a paged query (ADR-054): reads it again from the server in that order,
+   *  its first page replacing the rows shown. `false` when the core cannot page the query
+   *  that way: the grid then sorts the rows it has loaded. */
+  async function sortQuery(resultId: number, sort: SortState[]): Promise<boolean> {
+    const current = useApp.getState().tabs.find((item) => item.id === tab.id);
+    const paging = current?.run?.results.find((item) => item.id === resultId)?.paging;
+    const request = executedRequest.current;
+    if (!paging || !request || request.text !== paging.sql) return false;
+    if (current?.run?.running || queryPageBusy.current || startingRun.current) throw new Error(t("results.sortBusy"));
+    if (sort.length > 0 && !(await call(commands.queryPageSupported(tab.id, paging.sql, sort)).catch(() => false))) return false;
+    await run(request, false, paging.pageSize, sort);
+    return true;
   }
 
   const countSequence = useRef(0);
@@ -479,13 +502,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const result = current?.run?.results.find((item) => item.id === resultId);
     const paging = result?.paging;
     if (!result || !result.complete || !paging || !paging.hasMore || paging.loading || current?.run?.running ||
-        queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort || result.filter || result.columnFilters?.length ||
+        queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length ||
         (paging.total !== undefined && result.rows >= paging.total)) return 0;
     queryPageBusy.current = true;
     updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
       ? { ...item, paging: { ...item.paging, loading: true } } : item) }));
     try {
-      const added = await call(commands.appendQueryPage(tab.id, resultId, paging.sql, paging.pageSize, result.rows));
+      const added = await call(commands.appendQueryPage(tab.id, resultId, paging.sql, paging.pageSize, result.rows, paging.sort ?? []));
       updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
         ? { ...item, rows: item.rows + added, paging: { ...item.paging, hasMore: added === paging.pageSize } } : item) }));
       return added;
@@ -501,7 +524,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   async function countQueryResult(resultId: number) {
     const result = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.id === resultId);
-    if (!result?.complete || !result.paging || tab.run?.running || queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort || result.filter || result.columnFilters?.length) return;
+    if (!result?.complete || !result.paging || tab.run?.running || queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return;
     queryPageBusy.current = true;
     updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
       ? { ...item, paging: { ...item.paging, loading: true } } : item) }));
@@ -522,7 +545,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   function changeQueryPageSize(size: number) {
     if (queryPageBusy.current || pendingCount > 0 || savingEditsRef.current || !executedRequest.current) return;
     setQueryPageSize(size);
-    void run(executedRequest.current, false, size);
+    // The grid's sort of the pages stays: the new pages are read in the same order.
+    void run(executedRequest.current, false, size, activeResult?.paging?.sort ?? []);
   }
 
   useEffect(() => {
@@ -813,7 +837,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
     editor.current.runScript();
   }, [tab.id, runOnOpenReady]);
 
-  async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize) {
+  /** `sort`: the grid's sort a paged query is read with (its header clicks); none for the
+   *  query's own order, as every run from the editor. */
+  async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize, sort: SortState[] = []) {
     if (!refreshingEdits && (pendingCount > 0 || savingEditsRef.current)) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (queryPageBusy.current || startingRun.current) return;
     if (!request.text.trim() || tab.run?.running || databaseBusyRef.current || useApp.getState().workspaceChanging ||
@@ -851,8 +877,16 @@ export function EditorTab({ tab }: { tab: Tab }) {
       if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
       confirmed = true;
     }
-    const canPage = !tab.table && await call(commands.queryPageSupported(tab.id, sent.text)).catch(() => false);
-    const queryPage = canPage ? { sql: sent.text, pageSize } : null;
+    const pages = (order: SortState[]) => call(commands.queryPageSupported(tab.id, sent.text, order)).catch(() => false);
+    // A sort the pages can no longer follow is dropped, never the paging: the query's own
+    // order is still read a page at a time.
+    let pageSort = sort;
+    let canPage = !tab.table && await pages(pageSort);
+    if (!canPage && !tab.table && pageSort.length > 0) {
+      pageSort = [];
+      canPage = await pages(pageSort);
+    }
+    const queryPage = canPage ? { sql: sent.text, pageSize, ...(pageSort.length > 0 ? { sort: pageSort } : {}) } : null;
     for (const r of tab.run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
     lastRequest.current = request;
     executedRequest.current = { text: sent.text, from: 0 };
@@ -868,7 +902,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     channel.onmessage = (event) => handle(event, sent, startedAt, queryPage, failures);
     const options = runOptionsOf(tab);
     try {
-      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, confirmed, options, channel));
+      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, pageSort, confirmed, options, channel));
       else await call(commands.runScript(tab.id, sent.text, confirmed, options, channel));
     } catch (e) {
       const detail = message(e);
@@ -933,7 +967,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
   explainAction.current = explainCurrent;
 
-  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null, failures: Map<number, string>) {
+  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number; sort?: SortState[] } | null, failures: Map<number, string>) {
     switch (event.kind) {
       case "statementStarted":
         if (event.index === 0) statementTexts.current = {};
@@ -1263,7 +1297,8 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             session={tab.id}
             connectionId={tab.connectionId}
             table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
-            serverSort={tab.table ? { sort: tab.table.sort, onSort: (sort) => void sortTable(sort) } : undefined}
+            serverSort={tab.table ? { sort: tab.table.sort ?? NO_TABLE_SORT, onSort: (sort) => void sortTable(sort) } : undefined}
+            onQuerySort={tab.table ? undefined : sortQuery}
             tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0 }), connectionId: tab.connectionId } : undefined}
             editing={editing}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
@@ -1316,6 +1351,7 @@ function Results({
   onFiltered,
   onColumnFiltered,
   serverSort,
+  onQuerySort,
   tableData,
   editing,
   readOnlyHint,
@@ -1332,10 +1368,12 @@ function Results({
   connectionId: string | null;
   table: { schema: string; name: string; filter: string; orderBy: string } | null;
   onSelect(id: number | null): void;
-  onSorted(result: number, sort: SortState | undefined): void;
+  onSorted(result: number, sort: SortState[]): void;
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
   onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
-  serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
+  serverSort?: { sort: SortState[]; onSort(sort: SortState[]): void };
+  /** Reads a paged query again from the server in a sort's order (see `ResultGrid`). */
+  onQuerySort?(result: number, sort: SortState[]): Promise<boolean>;
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
   editing?: GridEditing;
   readOnlyHint?: boolean;
@@ -1452,6 +1490,7 @@ function Results({
             onSorted={(sort) => onSorted(active.id, sort)}
             onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
             serverSort={serverSort}
+            onQuerySort={onQuerySort ? (sort) => onQuerySort(active.id, sort) : undefined}
             tableData={tableData}
             editing={filteringResult === active.id ? undefined : editing}
             viewerOpen={viewerOpen}

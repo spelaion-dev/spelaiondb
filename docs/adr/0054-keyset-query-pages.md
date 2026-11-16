@@ -32,6 +32,24 @@ them all. Table data tabs had the same problem: they had no order unless the use
 4. **Table data tabs are ordered by the primary key** when the table has one, after the order
    the user chose, so their numbered pages no longer depend on the server's order.
 
+## The grid's sort (2026-11-16)
+A header click on a paged query no longer sorts only the rows loaded: the query is read again
+from the server, its pages ordered by the columns clicked (several with Shift+click), then by
+the query's own `ORDER BY`, then by the key. The rules above hold, with one addition:
+
+- **A column of the grid's sort may hold NULLs.** Engines disagree on where NULLs go
+  (PostgreSQL and DuckDB after every value; MySQL, MariaDB, SQL Server and SQLite before), so
+  the core writes it: `CASE WHEN c IS NULL THEN 1 ELSE 0 END, c`, NULLs last in both
+  directions, as the core sorts a stored result. The comparison that fetches the next page
+  follows the same rule: after a value come the greater ones and every NULL; after a NULL,
+  nothing in that column; two NULLs are equal. The query's own `ORDER BY` still may only name
+  `NOT NULL` columns: its NULLs go where the engine puts them, which the core does not rewrite.
+- A sort the pages cannot follow exactly (a column whose type does not round-trip as a
+  literal, a masked column) is not read again: the core sorts the rows it holds, and the grid
+  says that only the loaded rows were sorted.
+- A table data tab keeps its numbered pages (point 4): its header sort is an `ORDER BY` the
+  core writes from the table's own columns, followed by the key.
+
 ## Alternatives
 - **`OFFSET` with the key appended to the order.** Stable against plan changes and ties, but a
   row inserted or deleted between pages still shifts the rest.

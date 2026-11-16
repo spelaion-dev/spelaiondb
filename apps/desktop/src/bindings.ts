@@ -499,10 +499,10 @@ export const commands = {
 	 */
 	loadValueFile: (session: string, result: number, schema: string, name: string, row: number, column: number, path: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("load_value_file", { session, result, schema, name, row, column, path, confirmed })),
 	/**
-	 *  Sorts a result by one column in the core (`None` restores the server's order). The
-	 *  grid then asks for its windows again.
+	 *  Sorts a result by columns in the core, the first key being the most significant (no keys
+	 *  restore the server's order). The grid then asks for its windows again.
 	 */
-	sortResult: (result: number, column: number | null, descending: boolean) => typedError<null, string>(__TAURI_INVOKE("sort_result", { result, column, descending })),
+	sortResult: (result: number, keys: SortKeyItem[]) => typedError<null, string>(__TAURI_INVOKE("sort_result", { result, keys })),
 	/**
 	 *  Filters a result in the core: rows where some cell contains `text` (ignoring case);
 	 *  `None` shows every row again. The grid then asks for its windows again.
@@ -529,8 +529,11 @@ export const commands = {
 	tablePageSql: (session: string, page: TablePageItem) => typedError<string, string>(__TAURI_INVOKE("table_page_sql", { session, page })),
 	/**  How many rows of a table the filter keeps (the table data tab's "Count"). */
 	countTableRows: (session: string, schema: string, name: string, filter: string) => typedError<number | null, string>(__TAURI_INVOKE("count_table_rows", { session, schema, name, filter })),
-	/**  An identifier quoted for the session's engine (for an ORDER BY the UI writes). */
-	quoteIdentifier: (session: string, identifier: string) => typedError<string, string>(__TAURI_INVOKE("quote_identifier", { session, identifier })),
+	/**
+	 *  The ORDER BY of a table data tab sorted by its headers, written by the core from the
+	 *  table's own columns (read from the catalog now): the UI names columns, never writes SQL.
+	 */
+	tableOrderBy: (session: string, schema: string, name: string, sort: ColumnSortItem[]) => typedError<string, string>(__TAURI_INVOKE("table_order_by", { session, schema, name, sort })),
 	/**
 	 *  Objects' names as the engine writes them (`schema.table`, quoted where it needs to be),
 	 *  for the explorer's "Copy qualified name".
@@ -810,15 +813,21 @@ export const commands = {
 	 *  pause it is waiting on.
 	 */
 	answerScriptError: (session: string, ticket: number, answer: ErrorAnswerItem) => typedError<null, string>(__TAURI_INVOKE("answer_script_error", { session, ticket, answer })),
-	/**  Whether a SELECT matches the conservative rules for fetching pages. */
-	queryPageSupported: (session: string, sql: string) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql })),
-	/**  Run the first page, keeping the original SQL in the user's query history. */
-	runQueryPage: (session: string, sql: string, limit: number, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, confirmed, options, onEvent })),
+	/**
+	 *  Whether a SELECT matches the conservative rules for fetching pages, ordered by the grid's
+	 *  `sort` first (result columns by position; none for the query's own order).
+	 */
+	queryPageSupported: (session: string, sql: string, sort: SortKeyItem[]) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql, sort })),
+	/**
+	 *  Run the first page, keeping the original SQL in the user's query history. `sort` is the
+	 *  grid's sort: the core writes the page's order from it.
+	 */
+	runQueryPage: (session: string, sql: string, limit: number, sort: SortKeyItem[], confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, sort, confirmed, options, onEvent })),
 	/**
 	 *  The UI requests subsequent pages of the read it already confirmed. The core only permits
 	 *  eligible read queries to be paged, and appends each page at the expected offset.
 	 */
-	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset })),
+	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number, sort: SortKeyItem[]) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset, sort })),
 	countQueryRows: (session: string, sql: string) => typedError<number | null, string>(__TAURI_INVOKE("count_query_rows", { session, sql })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
 	/**  Frees a result the UI no longer shows. */
@@ -1449,6 +1458,12 @@ export type ColumnMatchItem_Serialize = {
 	column: string,
 	/**  Its text around the match; `None` for binary columns. */
 	text: string | null,
+};
+
+/**  One key of a table data tab's sort: a column of the table by name, and its direction. */
+export type ColumnSortItem = {
+	column: string,
+	descending: boolean,
 };
 
 export type ColumnStatisticsItem = "auto" | "off" | "on";
@@ -5084,6 +5099,12 @@ export type SnippetItem_Serialize = {
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
 	folderId: number | null,
+};
+
+/**  One key of a result's sort: a result column by position, and its direction. */
+export type SortKeyItem = {
+	column: number,
+	descending: boolean,
 };
 
 export type SourceEncodingItem = "auto" | "utf8" | "utf16Le" | "utf16Be" | "windows1252";

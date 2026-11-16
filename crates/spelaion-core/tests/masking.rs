@@ -360,14 +360,14 @@ async fn sorting_filtering_searching_and_the_calc_panel_never_see_the_value() {
             for descending in [false, true] {
                 assert!(
                     matches!(
-                        result.sort(Some(SortKey { column, descending })),
+                        result.sort(&[SortKey { column, descending }]),
                         Err(ViewError::Masked(_))
                     ),
                     "{label}"
                 );
             }
         }
-        assert_eq!(result.sort_key(), None);
+        assert!(result.sort_keys().is_empty());
         // The text filter matches the mask, never the value.
         assert_eq!(result.filter(Some("ada@example")).unwrap(), 0, "{label}");
         assert_eq!(result.filter(Some("7000")).unwrap(), 0, "{label}");
@@ -842,4 +842,86 @@ async fn an_alias_does_not_unmask_a_column_where_the_engine_reports_its_origin()
         assert_no_secret(label, "an agent's read", &format!("{:?}", read.rows));
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A sort read from the server (SDB-380) is refused for a masked column as the stored
+/// result's is: the order of the rows would tell the masked values apart. Neither a paged
+/// query's pages nor a table data tab's ORDER BY are written for one, by any name.
+#[tokio::test]
+async fn a_sort_read_from_the_server_is_never_by_a_masked_column() {
+    use spelaion_core::{ColumnSort, first_query_page_sql, query_pages_exactly, table_order_by};
+    let _serial = SERIAL.lock().await;
+    for (label, session, schema, _) in engines().await {
+        setup(label, &session).await;
+        let key = |column| {
+            [SortKey {
+                column,
+                descending: false,
+            }]
+        };
+        let sql = "SELECT id, name, email, salary, card_number FROM mask_customers";
+        // Where the query is paged (not on SQLite: an `INT PRIMARY KEY` may hold NULLs there),
+        // it is also paged sorted by a column that is not masked.
+        let paged = query_pages_exactly(&session, sql, &[]).await;
+        assert_eq!(paged, label != "sqlite", "{label}: paged");
+        assert_eq!(
+            query_pages_exactly(&session, sql, &key(1)).await,
+            paged,
+            "{label}: by name"
+        );
+        for masked in [2, 3, 4] {
+            assert!(
+                !query_pages_exactly(&session, sql, &key(masked)).await,
+                "{label}: column {masked}"
+            );
+            assert!(
+                first_query_page_sql(&session, sql, 100, &key(masked))
+                    .await
+                    .is_none(),
+                "{label}: column {masked}"
+            );
+            // Not as a later key either.
+            let two = [key(1)[0], key(masked)[0]];
+            assert!(
+                !query_pages_exactly(&session, sql, &two).await,
+                "{label}: name, then column {masked}"
+            );
+        }
+        // Another name in the result does not unmask the table's column.
+        let aliased = "SELECT id, email AS e, salary AS s FROM mask_customers";
+        for masked in [1, 2] {
+            assert!(
+                !query_pages_exactly(&session, aliased, &key(masked)).await,
+                "{label}: aliased column {masked}"
+            );
+        }
+        // The table data tab's ORDER BY.
+        let by = |column: &str| {
+            [ColumnSort {
+                column: column.into(),
+                descending: true,
+            }]
+        };
+        for shown in ["name", "email_verified"] {
+            assert!(
+                table_order_by(&session, schema, "mask_customers", &by(shown))
+                    .await
+                    .is_ok(),
+                "{label}: {shown}"
+            );
+        }
+        for masked in ["email", "salary", "card_number"] {
+            let refused = table_order_by(&session, schema, "mask_customers", &by(masked))
+                .await
+                .expect_err(masked);
+            assert!(refused.contains("masked"), "{label}: {refused}");
+            let two = [by("name")[0].clone(), by(masked)[0].clone()];
+            assert!(
+                table_order_by(&session, schema, "mask_customers", &two)
+                    .await
+                    .is_err(),
+                "{label}: name, then {masked}"
+            );
+        }
+    }
 }

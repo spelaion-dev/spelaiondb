@@ -191,7 +191,7 @@ pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
     isolation_statement, read_only_statement, setup_is_restricted,
 };
-pub use sort::{SortKey, ViewError};
+pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};
 pub use spelaion_store::{
     AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
     HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
@@ -208,9 +208,10 @@ pub use sql_file::{
 };
 pub use startup::{StartOverError, StartupAction, StartupDialog, StartupFailure, start_over};
 pub use table_data::{
-    ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, cell_filter_value,
-    count_table_rows, key_filter, order_with_key, table_count_sql, table_export_sql,
-    table_page_sql, table_page_sql_by_key, typed_value, value_condition,
+    ColumnSort, ConditionError, MAX_PAGE_ROWS, OrderError, PageError, TablePage, add_condition,
+    cell_filter_value, count_table_rows, key_filter, order_by_columns, order_with_key,
+    table_count_sql, table_export_sql, table_order_by, table_page_sql, table_page_sql_by_key,
+    typed_value, value_condition,
 };
 pub use table_stats::{TableStats, table_stats};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};

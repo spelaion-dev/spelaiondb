@@ -13,8 +13,9 @@ export interface ResultMeta {
   columns: ColumnItem[];
   rows: number;
   complete: boolean;
-  /** Column the core sorted the rows by (`undefined`: the server's order). */
-  sort?: SortState;
+  /** Columns the core sorted the loaded rows by, the most significant first (none: the
+   *  order they arrived in). */
+  sort?: SortState[];
   /** Text the core filtered the rows by; `rows` then counts what is left of `total`. */
   filter?: string;
   /** Column conditions the core filtered the rows by (all must hold). */
@@ -23,7 +24,9 @@ export interface ResultMeta {
   /** The statement that produced it, as it ran: what an export runs again (ADR-034). */
   sql?: string;
   /** Pages fetched from one safe SELECT, appended to this result. */
-  paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number };
+  /** `sort`: the grid sort its pages were read from the server with (the header clicks of a
+   *  paged query), by result column. */
+  paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number; sort?: SortState[] };
 }
 
 export interface SortState {
@@ -146,8 +149,9 @@ export interface TableView {
   /** Typed after WHERE / ORDER BY. */
   filter: string;
   orderBy: string;
-  /** Set by a header click (shown in the grid); typing an ORDER BY clears it. */
-  sort?: SortState;
+  /** Set by header clicks (shown in the grid), the most significant first; typing an ORDER BY
+   *  clears it. */
+  sort?: SortState[];
   pageSize: number;
   /** From 0. */
   page: number;

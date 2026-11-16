@@ -133,7 +133,7 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
     let session = session().await;
     let _: Vec<CoreEvent> = session.run_script("create table t (id integer primary key, name text); insert into t values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e')").collect().await;
     let original = "select id, name from t where id > 1 order by id";
-    let first = spelaion_core::first_query_page_sql(&session, original, 2)
+    let first = spelaion_core::first_query_page_sql(&session, original, 2, &[])
         .await
         .unwrap();
     let id = first_result(&session, &first).await;
@@ -150,7 +150,7 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
         "count releases its temporary result"
     );
     assert_eq!(
-        spelaion_core::append_query_page(&session, id, original, 2, 2)
+        spelaion_core::append_query_page(&session, id, original, 2, 2, &[])
             .await
             .unwrap(),
         2
@@ -162,7 +162,7 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
         "fetch releases its temporary result"
     );
     assert!(
-        spelaion_core::append_query_page(&session, id, original, 2, 2)
+        spelaion_core::append_query_page(&session, id, original, 2, 2, &[])
             .await
             .is_err(),
         "a stale offset cannot append twice"
@@ -171,7 +171,7 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
     assert_eq!(result.read().unwrap().rows(), 4);
     result.write().unwrap().filter(Some("e")).unwrap();
     assert!(
-        spelaion_core::append_query_page(&session, id, original, 2, 4)
+        spelaion_core::append_query_page(&session, id, original, 2, 4, &[])
             .await
             .is_err(),
         "a filtered view cannot be extended"
@@ -188,7 +188,7 @@ async fn a_paged_query_still_requires_execution_confirmation() {
         .collect()
         .await;
     let dialect = session.dialect().clone();
-    let sql = spelaion_core::first_query_page_sql(&session, "select * from orders", 100)
+    let sql = spelaion_core::first_query_page_sql(&session, "select * from orders", 100, &[])
         .await
         .expect("a pageable query");
     let safeguards = spelaion_config::Safeguards {

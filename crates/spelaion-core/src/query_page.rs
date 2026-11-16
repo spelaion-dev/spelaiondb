@@ -2,6 +2,12 @@
 //! primary key the catalog reports, with every key column in the result, is paged, and its
 //! pages are keyset pages: ordered by the user's ORDER BY and then the key, each page asking
 //! for the rows after the last one shown. Any other statement runs once, as written.
+//!
+//! The grid's sort of a paged query (its header clicks) is read again from the server the same
+//! way: the columns clicked order the pages before the query's own ORDER BY and the key. Such
+//! a column may hold NULLs: the core then writes where they go itself (last, in both
+//! directions, as the grid sorts stored rows), because each engine puts them elsewhere, and
+//! the comparison that fetches the next page follows the same rule.
 
 use std::ops::ControlFlow;
 
@@ -19,6 +25,7 @@ use crate::export::sql_literal;
 use crate::generate::scalar_count;
 use crate::guard::sql_dialect;
 use crate::objects::active_schema;
+use crate::sort::{MAX_SORT_KEYS, SortKey};
 use crate::{CoreEvent, MAX_PAGE_ROWS, ResultId, Session};
 
 /// The query, if it has a shape the core pages: one plain SELECT without its own limit,
@@ -210,6 +217,9 @@ struct OrderColumn {
     position: usize,
     result_name: String,
     descending: bool,
+    /// The column may hold NULLs (only a column of the grid's sort may): the pages put them
+    /// last, whatever the direction and the engine.
+    nullable: bool,
 }
 
 /// How a query's pages are fetched: its parsed text, how its table's columns are qualified,
@@ -225,8 +235,19 @@ struct Keyset {
 /// could not be fetched exactly: no primary key, a key column missing from the result, an
 /// ORDER BY on something other than a `NOT NULL` column of the result, or a type whose
 /// literals might not compare exactly.
-fn keyset(engine: &str, query: Query, qualifier: String, table: &TableInfo) -> Option<Keyset> {
-    if table.primary_key.is_empty() {
+///
+/// `sort` is the grid's sort, by position in the result: those columns order the pages first.
+/// They may be nullable, but not `masked` (asked with the column's name in the catalog and
+/// in the result): the order of a masked column would tell its values apart (ADR-051).
+fn keyset(
+    engine: &str,
+    query: Query,
+    qualifier: String,
+    table: &TableInfo,
+    sort: &[SortKey],
+    masked: &dyn Fn(&str, &str) -> bool,
+) -> Option<Keyset> {
+    if table.primary_key.is_empty() || sort.len() > MAX_SORT_KEYS {
         return None;
     }
     let SetExpr::Select(select) = query.body.as_ref() else {
@@ -307,9 +328,14 @@ fn keyset(engine: &str, query: Query, qualifier: String, table: &TableInfo) -> O
                         && info.native_type.eq_ignore_ascii_case("integer"))))
     };
     let mut order: Vec<OrderColumn> = Vec::new();
-    let push = |column: &str, descending: bool, order: &mut Vec<OrderColumn>| -> Option<()> {
+    let push = |column: &str,
+                descending: bool,
+                may_be_null: bool,
+                order: &mut Vec<OrderColumn>|
+     -> Option<()> {
         let info = column_of(column)?;
-        if !never_null(info) || !exact_literal_type(&info.native_type) {
+        let nullable = !never_null(info);
+        if (nullable && !may_be_null) || !exact_literal_type(&info.native_type) {
             return None;
         }
         if order
@@ -324,9 +350,23 @@ fn keyset(engine: &str, query: Query, qualifier: String, table: &TableInfo) -> O
             position,
             result_name,
             descending,
+            nullable,
         });
         Some(())
     };
+    // The grid's sort first: each key is a result column, which is a column of the table.
+    for (i, key) in sort.iter().enumerate() {
+        if sort[..i].iter().any(|k| k.column == key.column) {
+            return None;
+        }
+        let (column, _, result_name) = in_result
+            .iter()
+            .find(|(_, position, _)| *position == key.column)?;
+        if masked(column, result_name) {
+            return None;
+        }
+        push(column, key.descending, true, &mut order)?;
+    }
     if let Some(order_by) = &query.order_by {
         let OrderByKind::Expressions(items) = &order_by.kind else {
             return None;
@@ -355,11 +395,11 @@ fn keyset(engine: &str, query: Query, qualifier: String, table: &TableInfo) -> O
                 Expr::CompoundIdentifier(parts) => parts.last()?,
                 _ => return None,
             };
-            push(&catalog_name(engine, ident), descending, &mut order)?;
+            push(&catalog_name(engine, ident), descending, false, &mut order)?;
         }
     }
     for key in &table.primary_key {
-        push(key, false, &mut order)?;
+        push(key, false, false, &mut order)?;
     }
     Some(Keyset {
         query,
@@ -389,40 +429,82 @@ impl Keyset {
         let column =
             |c: &OrderColumn| format!("{}.{}", self.qualifier, dialect.quote_identifier(&c.column));
         let mut query = self.query.clone();
-        let order = self
-            .order
-            .iter()
-            .map(|c| {
-                Some(OrderByExpr {
-                    expr: parse(&column(c))?,
+        let mut order = Vec::new();
+        for c in &self.order {
+            if c.nullable {
+                // NULLs last in both directions, written out: PostgreSQL and DuckDB put them
+                // after every value, MySQL, SQL Server and SQLite before, and `NULLS LAST`
+                // is not SQL everywhere.
+                order.push(OrderByExpr {
+                    expr: parse(&format!(
+                        "CASE WHEN {} IS NULL THEN 1 ELSE 0 END",
+                        column(c)
+                    ))?,
                     options: OrderByOptions {
-                        sort: c.descending.then_some(OrderBySort::Desc),
+                        sort: None,
                         nulls_first: None,
                     },
                     with_fill: None,
-                })
-            })
-            .collect::<Option<Vec<_>>>()?;
+                });
+            }
+            order.push(OrderByExpr {
+                expr: parse(&column(c))?,
+                options: OrderByOptions {
+                    sort: c.descending.then_some(OrderBySort::Desc),
+                    nulls_first: None,
+                },
+                with_fill: None,
+            });
+        }
         query.order_by = Some(OrderBy {
             kind: OrderByKind::Expressions(order),
             interpolate: None,
         });
         if let Some(values) = after {
-            if values.len() != self.order.len() || values.iter().any(|v| matches!(v, Value::Null)) {
+            if values.len() != self.order.len()
+                || values
+                    .iter()
+                    .zip(&self.order)
+                    .any(|(v, c)| matches!(v, Value::Null) && !c.nullable)
+            {
                 return None;
             }
-            // (a > x) OR (a = x AND b > y) OR …, with < for a descending column.
+            // (a > x) OR (a = x AND b > y) OR …, with < for a descending column. Where a
+            // column may be NULL, its NULLs come after every value: a row with one is after
+            // any value (`a > x OR a IS NULL`), nothing is after a NULL in that column (no
+            // term for it), and two NULLs are equal there (`a IS NULL`).
             let literals: Vec<String> = values.iter().map(|v| sql_literal(v, engine)).collect();
+            let null = |i: usize| matches!(values[i], Value::Null);
             let terms: Vec<String> = (0..self.order.len())
+                .filter(|&i| !null(i))
                 .map(|i| {
                     let mut parts: Vec<String> = (0..i)
-                        .map(|j| format!("{} = {}", column(&self.order[j]), literals[j]))
+                        .map(|j| {
+                            if null(j) {
+                                format!("{} IS NULL", column(&self.order[j]))
+                            } else {
+                                format!("{} = {}", column(&self.order[j]), literals[j])
+                            }
+                        })
                         .collect();
-                    let op = if self.order[i].descending { "<" } else { ">" };
-                    parts.push(format!("{} {op} {}", column(&self.order[i]), literals[i]));
+                    let c = &self.order[i];
+                    let op = if c.descending { "<" } else { ">" };
+                    parts.push(if c.nullable {
+                        format!(
+                            "({name} {op} {} OR {name} IS NULL)",
+                            literals[i],
+                            name = column(c)
+                        )
+                    } else {
+                        format!("{} {op} {}", column(c), literals[i])
+                    });
                     format!("({})", parts.join(" AND "))
                 })
                 .collect();
+            // The key's columns are never NULL, so the last term is always there.
+            if terms.is_empty() {
+                return None;
+            }
             let condition = parse(&terms.join(" OR "))?;
             let SetExpr::Select(select) = query.body.as_mut() else {
                 return None;
@@ -444,8 +526,9 @@ impl Keyset {
     }
 }
 
-/// The keyset of `sql` on `session`, with its table's key read from the catalog now.
-async fn resolve(session: &Session, sql: &str) -> Option<Keyset> {
+/// The keyset of `sql` on `session` ordered by the grid's `sort` first, with its table's key
+/// read from the catalog now.
+async fn resolve(session: &Session, sql: &str, sort: &[SortKey]) -> Option<Keyset> {
     let dialect = session.dialect();
     let engine = dialect.name();
     let query = pageable(dialect.as_ref(), sql)?;
@@ -459,20 +542,32 @@ async fn resolve(session: &Session, sql: &str) -> Option<Keyset> {
         .describe_table(&schema, &table)
         .await
         .ok()?;
-    keyset(engine, query, qualifier, &info)
+    let masking = session.masking();
+    let masked = |column: &str, result_name: &str| {
+        masking.masks_table_column(&table, column) || masking.masks(result_name)
+    };
+    keyset(engine, query, qualifier, &info, sort, &masked)
 }
 
-/// Whether the editor pages `sql` (ADR-054). When it does not, the app runs it as written.
-pub async fn query_pages_exactly(session: &Session, sql: &str) -> bool {
-    resolve(session, sql).await.is_some()
+/// Whether the editor pages `sql` (ADR-054) ordered by the grid's `sort` first (result
+/// columns by position, the most significant first; none for the query's own order). When it
+/// does not, the app runs it as written, or sorts only the rows it has loaded.
+pub async fn query_pages_exactly(session: &Session, sql: &str, sort: &[SortKey]) -> bool {
+    resolve(session, sql, sort).await.is_some()
 }
 
-/// The first page of `sql`, or `None` when it is not paged and must run as written.
-pub async fn first_query_page_sql(session: &Session, sql: &str, limit: u64) -> Option<String> {
+/// The first page of `sql` ordered by the grid's `sort` first, or `None` when it is not paged
+/// that way and must run as written.
+pub async fn first_query_page_sql(
+    session: &Session,
+    sql: &str,
+    limit: u64,
+    sort: &[SortKey],
+) -> Option<String> {
     if limit == 0 || limit > MAX_PAGE_ROWS {
         return None;
     }
-    resolve(session, sql)
+    resolve(session, sql, sort)
         .await?
         .page_sql(session.dialect().as_ref(), limit, None)
 }
@@ -509,18 +604,19 @@ pub async fn count_query_rows(session: &Session, sql: &str) -> Result<i64, Strin
 /// temporary result, then appends it atomically. The last row's order values come from the
 /// stored result, read in the core (a masked value's original too: it never leaves the core).
 /// A failed page never alters the rows already shown; `offset` also refuses a fetch for a
-/// result that changed meanwhile.
+/// result that changed meanwhile. `sort` is the grid's sort the first page was read with.
 pub async fn append_query_page(
     session: &Session,
     target: ResultId,
     sql: &str,
     limit: u64,
     offset: u64,
+    sort: &[SortKey],
 ) -> Result<usize, String> {
     if limit == 0 || limit > MAX_PAGE_ROWS {
         return Err(format!("a page holds from 1 to {MAX_PAGE_ROWS} rows"));
     }
-    let keyset = resolve(session, sql)
+    let keyset = resolve(session, sql, sort)
         .await
         .ok_or("this query cannot be paged")?;
     let after = {
@@ -629,7 +725,128 @@ mod tests {
     fn plan(dialect: &dyn Dialect, sql: &str, table: &TableInfo) -> Option<Keyset> {
         let query = pageable(dialect, sql)?;
         let (_, _, qualifier) = target_table(dialect.name(), &query)?;
-        keyset(dialect.name(), query, qualifier, table)
+        keyset(dialect.name(), query, qualifier, table, &[], &|_, _| false)
+    }
+
+    /// [`plan`] with the grid's sort (result position, descending) and the masked columns.
+    fn sorted_plan(
+        dialect: &dyn Dialect,
+        sql: &str,
+        table: &TableInfo,
+        sort: &[(usize, bool)],
+        masked: &[&str],
+    ) -> Option<Keyset> {
+        let query = pageable(dialect, sql)?;
+        let (_, _, qualifier) = target_table(dialect.name(), &query)?;
+        let sort: Vec<SortKey> = sort
+            .iter()
+            .map(|&(column, descending)| SortKey { column, descending })
+            .collect();
+        keyset(
+            dialect.name(),
+            query,
+            qualifier,
+            table,
+            &sort,
+            &|column, _| masked.contains(&column),
+        )
+    }
+
+    #[test]
+    fn the_grids_sort_orders_the_pages_first_with_nulls_last() {
+        let pg = spelaion_dialect::PostgresDialect;
+        let table = orders();
+        // `note` may be NULL, `customer` may not: only the first gets the CASE.
+        let k = sorted_plan(
+            &pg,
+            "select * from orders order by customer",
+            &table,
+            &[(3, true), (1, false)],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            k.page_sql(&pg, 10, None).unwrap(),
+            "SELECT * FROM orders ORDER BY CASE WHEN orders.note IS NULL THEN 1 ELSE 0 END, orders.note DESC, orders.customer, orders.id\nLIMIT 10"
+        );
+        // After a row with a note: smaller notes and every NULL, then ties by the rest.
+        let after = [
+            Value::Text("m".into()),
+            Value::Text("ada".into()),
+            Value::Int(7),
+        ];
+        assert_eq!(
+            k.page_sql(&pg, 10, Some(&after)).unwrap(),
+            "SELECT * FROM orders WHERE ((orders.note < 'm' OR orders.note IS NULL)) OR (orders.note = 'm' AND orders.customer > 'ada') OR (orders.note = 'm' AND orders.customer = 'ada' AND orders.id > 7) ORDER BY CASE WHEN orders.note IS NULL THEN 1 ELSE 0 END, orders.note DESC, orders.customer, orders.id\nLIMIT 10"
+        );
+        // After a row without one: nothing is after a NULL, only its ties.
+        let after = [Value::Null, Value::Text("ada".into()), Value::Int(7)];
+        assert_eq!(
+            k.page_sql(&pg, 10, Some(&after)).unwrap(),
+            "SELECT * FROM orders WHERE (orders.note IS NULL AND orders.customer > 'ada') OR (orders.note IS NULL AND orders.customer = 'ada' AND orders.id > 7) ORDER BY CASE WHEN orders.note IS NULL THEN 1 ELSE 0 END, orders.note DESC, orders.customer, orders.id\nLIMIT 10"
+        );
+        // A NULL where the column cannot hold one is not a row of this table.
+        let after = [Value::Text("m".into()), Value::Null, Value::Int(7)];
+        assert!(k.page_sql(&pg, 10, Some(&after)).is_none());
+        // The positions are the result's: with named columns, 1 is `customer` as `who`.
+        let k = sorted_plan(
+            &pg,
+            "select o.id, o.customer as who, o.note from orders o where o.id > 5",
+            &table,
+            &[(1, true)],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            k.page_sql(&pg, 10, Some(&[Value::Text("x".into()), Value::Int(9)]))
+                .unwrap(),
+            "SELECT o.id, o.customer AS who, o.note FROM orders o WHERE (o.id > 5) AND ((o.customer < 'x') OR (o.customer = 'x' AND o.id > 9)) ORDER BY o.customer DESC, o.id\nLIMIT 10"
+        );
+        assert_eq!(k.order[0].result_name, "who");
+        // The key itself, clicked descending, is the whole order.
+        let k = sorted_plan(&pg, "select * from orders", &table, &[(0, true)], &[]).unwrap();
+        assert_eq!(
+            k.page_sql(&pg, 10, None).unwrap(),
+            "SELECT * FROM orders ORDER BY orders.id DESC\nLIMIT 10"
+        );
+    }
+
+    #[test]
+    fn a_sort_the_pages_cannot_follow_exactly_is_not_paged() {
+        let pg = spelaion_dialect::PostgresDialect;
+        let table = orders();
+        let sql = "select * from orders";
+        // A type whose literals might not compare exactly, a column that is not there, the
+        // same column twice, too many keys, and a masked column.
+        assert!(sorted_plan(&pg, sql, &table, &[(2, false)], &[]).is_none());
+        assert!(sorted_plan(&pg, sql, &table, &[(4, false)], &[]).is_none());
+        assert!(sorted_plan(&pg, sql, &table, &[(1, false), (1, true)], &[]).is_none());
+        let many: Vec<(usize, bool)> = (0..=MAX_SORT_KEYS).map(|_| (1, false)).collect();
+        assert!(sorted_plan(&pg, sql, &table, &many, &[]).is_none());
+        assert!(sorted_plan(&pg, sql, &table, &[(3, false)], &["note"]).is_none());
+        assert!(sorted_plan(&pg, sql, &table, &[(3, false)], &["customer"]).is_some());
+        // The query's own ORDER BY still may not name a nullable column.
+        assert!(
+            sorted_plan(
+                &pg,
+                "select * from orders order by note",
+                &table,
+                &[(1, false)],
+                &[]
+            )
+            .is_none()
+        );
+        // A query that is not paged at all is not paged with a sort either.
+        assert!(
+            sorted_plan(
+                &pg,
+                "select customer from orders",
+                &table,
+                &[(0, false)],
+                &[]
+            )
+            .is_none()
+        );
     }
 
     #[test]

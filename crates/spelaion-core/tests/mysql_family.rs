@@ -724,8 +724,12 @@ async fn greptime_is_browsed_and_edited_by_its_time_index_and_cancelled() {
             // written; an append-only table has no key at all.
             for table in ["cpu", "logs"] {
                 assert!(
-                    !query_pages_exactly(&open.session, &format!("select * from {db}.{table}"))
-                        .await,
+                    !query_pages_exactly(
+                        &open.session,
+                        &format!("select * from {db}.{table}"),
+                        &[]
+                    )
+                    .await,
                     "{table}"
                 );
             }

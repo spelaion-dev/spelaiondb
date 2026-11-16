@@ -803,10 +803,10 @@ mod tests {
         let (store, id) = store();
         let r = store.get(id).unwrap();
         let mut r = r.write().unwrap();
-        r.sort(Some(SortKey {
+        r.sort(&[SortKey {
             column: 0,
             descending: true,
-        }))
+        }])
         .unwrap();
         // The first two rows of the view are now ids 12 and 5.
         let s = run(&r, &block(0, 2, &[0]));
