@@ -10,8 +10,10 @@
 //! version 1.0 (before requests, ADR-056); with `not-a-plugin`, a program that prints text;
 //! anything else, the plugin.
 
+use std::io::Write as _;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
@@ -35,6 +37,10 @@ static CONNECTING: AtomicU64 = AtomicU64::new(0);
 static CREATED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Every row `insert_rows` was given, with its target.
 static INSERTED: Mutex<Vec<(String, Vec<Option<String>>)>> = Mutex::new(Vec::new());
+/// How many `file:` databases a closed connection is still writing, and a wake-up each time
+/// one is done: what a driver that keeps a file open for several connections does after the
+/// last one goes (DuckDB writes what it holds into the file as it closes it).
+static CLOSING: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
 
 #[tokio::main]
 async fn main() {
@@ -187,6 +193,18 @@ impl Driver for Made {
         Ok(())
     }
 
+    /// Waits for every `file:` database to be written whole, as DuckDB's driver waits for its
+    /// files to be closed.
+    async fn shutdown(&self) {
+        let _ = tokio::task::spawn_blocking(|| {
+            let mut closing = CLOSING.0.lock().expect("lock poisoned");
+            while *closing > 0 {
+                closing = CLOSING.1.wait(closing).expect("lock poisoned");
+            }
+        })
+        .await;
+    }
+
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
         let password = params
             .password
@@ -221,8 +239,20 @@ impl Driver for Made {
             }
             _ => {}
         }
+        // `file:<path>`: the lines it is told to keep go into that file only as the connection
+        // closes, slowly; `file-hang:<path>`: that closing never ends.
+        let kept = [("file:", false), ("file-hang:", true)]
+            .into_iter()
+            .find_map(|(prefix, hangs)| {
+                params.database.strip_prefix(prefix).map(|path| Kept {
+                    path: PathBuf::from(path),
+                    hangs,
+                    lines: Mutex::new(Vec::new()),
+                })
+            });
         OPEN.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(MadeConnection {
+            kept,
             engine: self.0,
             password,
             params: format!(
@@ -254,7 +284,36 @@ impl Driver for Made {
     }
 }
 
+/// The lines a `file:` database holds until its connection closes.
+struct Kept {
+    path: PathBuf,
+    hangs: bool,
+    lines: Mutex<Vec<String>>,
+}
+
+impl Kept {
+    /// Writes the lines, then `closed`, taking its time over it as a database writing what it
+    /// holds into its file does: a program ended meanwhile leaves the file without them.
+    fn write(self) {
+        std::thread::sleep(Duration::from_millis(200));
+        if self.hangs {
+            std::thread::sleep(Duration::from_secs(600));
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .expect("the file opens");
+        for line in self.lines.into_inner().expect("lock poisoned") {
+            writeln!(file, "{line}").expect("a line is written");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        writeln!(file, "closed").expect("a line is written");
+    }
+}
+
 struct MadeConnection {
+    kept: Option<Kept>,
     engine: &'static str,
     password: String,
     params: String,
@@ -266,6 +325,16 @@ struct MadeConnection {
 impl Drop for MadeConnection {
     fn drop(&mut self) {
         OPEN.fetch_sub(1, Ordering::SeqCst);
+        // Written on a thread of its own after the connection is gone, as DuckDB closes a file
+        // on its connection's thread: only the driver's `shutdown` knows when it is done.
+        if let Some(kept) = self.kept.take() {
+            *CLOSING.0.lock().expect("lock poisoned") += 1;
+            std::thread::spawn(move || {
+                kept.write();
+                *CLOSING.0.lock().expect("lock poisoned") -= 1;
+                CLOSING.1.notify_all();
+            });
+        }
     }
 }
 
@@ -342,6 +411,20 @@ impl Connection for MadeConnection {
         let words: Vec<&str> = sql.split_whitespace().collect();
         let batch_size = opts.batch_size as i64;
         match words.as_slice() {
+            // `keep LINE`: a `file:` database holds the line until its connection closes.
+            ["keep", line] => {
+                let kept = self
+                    .kept
+                    .as_ref()
+                    .ok_or_else(|| other("keep needs file:"))?;
+                kept.lines
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(line.to_string());
+                events(vec![Ok(ExecEvent::Done {
+                    rows_affected: Some(1),
+                })])
+            }
             // `rows N`: N numbered rows, in batches of the size asked for.
             ["rows", total] => {
                 let total: i64 = total.parse().map_err(|_| other("rows N"))?;

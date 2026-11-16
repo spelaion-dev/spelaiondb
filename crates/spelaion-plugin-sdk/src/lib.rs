@@ -52,8 +52,10 @@ impl Plugin {
 }
 
 /// Serves `plugin` on the program's standard input and output until standard input closes,
-/// then ends the program: a plugin never outlives the program that started it, whatever its
-/// drivers still have running.
+/// then ends the program: a plugin never outlives the program that started it. Before it ends,
+/// the requests still running stop, every session's connection is dropped and each driver's
+/// [`Driver::shutdown`] closes what it keeps open, for at most 30 seconds: a database file is
+/// never left half written by a plugin that was only asked to end.
 pub async fn run(plugin: Plugin) -> ! {
     run_inner(plugin).await
 }

@@ -195,6 +195,13 @@ pub trait Driver: Send + Sync {
             self.engine()
         )))
     }
+
+    /// Called once when the program that serves this driver ends normally (a plugin whose
+    /// standard input closed), after every connection it made has been dropped. Returns once
+    /// whatever the driver keeps open past its connections is closed: a database file opened
+    /// once for several connections writes what it holds and lets go of the file. Nothing is
+    /// asked of the driver afterwards. Most drivers keep nothing, and do nothing.
+    async fn shutdown(&self) {}
 }
 
 /// A shared driver is a driver: what holds an `Arc<dyn Driver>` (the core's engines) can be
@@ -211,6 +218,10 @@ impl<D: Driver + ?Sized> Driver for Arc<D> {
 
     async fn create_database(&self, database: &str) -> Result<()> {
         (**self).create_database(database).await
+    }
+
+    async fn shutdown(&self) {
+        (**self).shutdown().await
     }
 }
 

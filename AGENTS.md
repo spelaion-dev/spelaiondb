@@ -72,14 +72,19 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   - `crates/spelaion-plugin-sdk`: the plugin's side. A Rust plugin implements `Driver` and
     `Connection` and calls `run`. It sends a batch only with credit from the core, reports a
     connection known to be closed, answers even when a driver panics and ends the program when
-    its input closes. Standard output is the protocol: a plugin never prints to it.
+    its input closes: first its requests stop, its sessions are dropped and each driver's
+    `Driver::shutdown` closes what it keeps open (DuckDB's shared files write what they hold),
+    so a file is never left half written by a plugin that was only asked to end (SDB-360).
+    Standard output is the protocol: a plugin never prints to it.
   - `crates/spelaion-plugin-host`: the core's side. `Plugin` is one process per program,
     started on the first connection and shared by every session of its engines. Its pipes are
     read and written on threads of their own with blocking calls, as the SDK's are (never
     `tokio::spawn` or tokio's own pipes there: the runtime that connected first may end before
     the others, and each read would be a trip through the runtime's blocking pool); `PluginDriver`
     and its connection are the `Driver` and `Connection` the core already uses. A plugin that
-    stops loses its sessions (`is_closed`, ADR-028) and nothing is re-run. The password goes
+    stops loses its sessions (`is_closed`, ADR-028) and nothing is re-run. Stopping one
+    (`Plugin::stop`, or the last of it dropped) closes its input and kills it only if it has
+    not ended after `STOP_GRACE` (5 s): a plugin killed at once could leave a file half written. The password goes
     only in `connect`, and every error, notice and log line of a plugin has the secrets it was
     given taken out. `conformance.rs` is the set a plugin runs against itself in its own CI
     (ADR-042).

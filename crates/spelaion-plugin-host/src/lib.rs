@@ -129,7 +129,9 @@ impl Plugin {
             .is_some_and(|p| !p.is_dead())
     }
 
-    /// Stops the process. Its sessions are lost; the next connection starts it again.
+    /// Stops the process, and returns once it has ended: its input closes, so it drops its
+    /// sessions and closes what its engines keep open, and it is killed if it has not ended
+    /// after a few seconds. Its sessions are lost; the next connection starts it again.
     pub async fn stop(&self) {
         if let Some(process) = self.inner.running.lock().await.take() {
             process.kill("the plugin was stopped").await;
