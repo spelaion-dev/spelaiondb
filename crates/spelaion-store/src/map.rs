@@ -56,7 +56,7 @@ impl Store {
     pub fn set_map_preferences(&self, preferences: &MapPreferences) -> Result<(), StoreError> {
         preferences
             .validate()
-            .map_err(|e| StoreError(e.to_string()))?;
+            .map_err(|e| StoreError::new(e.to_string()))?;
         let transaction = self.conn.unchecked_transaction()?;
         self.set_flag("map.tiles", preferences.tiles)?;
         self.set_personal_setting("map.tile_name", preferences.tile_name.trim())?;

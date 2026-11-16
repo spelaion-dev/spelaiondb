@@ -276,7 +276,11 @@ to an action that is also in a context menu, never its only way in.
   background (opt-in, ADR-035), never with SQL, data or error text. Native dialogs only choose
   files and folders, always through `dialogs.ts`: on Linux it opens GTK's chooser over the
   window, starting in the file's folder or the workspace, with the saved name's extension
-  following the chosen type (`src-tauri/src/file_dialog.rs`).
+  following the chosen type (`src-tauri/src/file_dialog.rs`). The one other native dialog is the
+  startup error, shown when the app cannot open its window or its local store and so has no page
+  to say it in (SDB-283, `src-tauri/src/startup.rs`): its text and buttons come from the core
+  (`spelaion-core`'s `startup.rs`), Quit first and focused, closing it quits, and it follows the
+  wording below.
 
 A confirmation reads:
 

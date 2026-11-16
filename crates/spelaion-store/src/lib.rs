@@ -8,10 +8,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+mod aside;
 mod backup;
 mod library;
 mod map;
 mod tabs;
+pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
 pub use library::{HistoryFilter, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder};
 pub use map::{
@@ -23,18 +25,38 @@ pub use tabs::{
 };
 
 #[derive(Debug, thiserror::Error)]
-#[error("local store: {0}")]
-pub struct StoreError(String);
+#[error("local store: {message}")]
+pub struct StoreError {
+    message: String,
+    /// The schema version of a store a newer SpelaionDB wrote (see [`StoreError::newer_schema`]).
+    newer_schema: Option<i64>,
+}
+
+impl StoreError {
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            newer_schema: None,
+        }
+    }
+
+    /// The store's schema version when it could not be opened because a newer SpelaionDB wrote
+    /// it. That store is still in use by that version: it must not be started over, only opened
+    /// by updating (SDB-283).
+    pub fn newer_schema(&self) -> Option<i64> {
+        self.newer_schema
+    }
+}
 
 impl From<rusqlite::Error> for StoreError {
     fn from(e: rusqlite::Error) -> Self {
-        StoreError(e.to_string())
+        StoreError::new(e.to_string())
     }
 }
 
 impl From<std::io::Error> for StoreError {
     fn from(error: std::io::Error) -> Self {
-        Self(error.to_string())
+        Self::new(error.to_string())
     }
 }
 
@@ -487,7 +509,7 @@ fn pattern_lines(patterns: &[String]) -> Result<String, StoreError> {
     for pattern in patterns {
         let pattern = pattern.trim();
         if pattern.contains(['\n', '\r']) {
-            return Err(StoreError(
+            return Err(StoreError::new(
                 "a filter pattern cannot contain a line break".into(),
             ));
         }
@@ -596,7 +618,7 @@ impl EditorPreferences {
             || !["preserve", "upper", "lower"].contains(&self.keyword_case.as_str())
             || !["leading", "trailing"].contains(&self.comma_position.as_str())
         {
-            return Err(StoreError("invalid editor preferences".into()));
+            return Err(StoreError::new("invalid editor preferences".into()));
         }
         Ok(())
     }
@@ -692,7 +714,7 @@ pub struct Store {
 impl Store {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| StoreError(e.to_string()))?;
+            std::fs::create_dir_all(parent).map_err(|e| StoreError::new(e.to_string()))?;
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -708,16 +730,31 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        let current = usize::try_from(current).unwrap_or(usize::MAX);
-        if current > MIGRATIONS.len() {
-            return Err(StoreError(format!(
-                "the local database is from a newer version of SpelaionDB (schema {current})"
+        let version: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let Ok(current) = usize::try_from(version) else {
+            return Err(StoreError::new(format!(
+                "the local database has an unknown schema version ({version})"
             )));
+        };
+        if current > MIGRATIONS.len() {
+            return Err(StoreError {
+                message: format!(
+                    "the local database is from a newer version of SpelaionDB (schema {version})"
+                ),
+                newer_schema: Some(version),
+            });
         }
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(current) {
-            tx.execute_batch(sql)?;
-            tx.pragma_update(None, "user_version", (i + 1) as i64)?;
+            // Which step failed tells a store left half-way by another build (SDB-283).
+            let step = |e: rusqlite::Error| {
+                StoreError::new(format!(
+                    "could not update the local database to schema {}: {e}",
+                    i + 1
+                ))
+            };
+            tx.execute_batch(sql).map_err(step)?;
+            tx.pragma_update(None, "user_version", (i + 1) as i64)
+                .map_err(step)?;
         }
         tx.commit()?;
         Ok(())
@@ -1387,13 +1424,13 @@ impl Store {
             confirm_delay_seconds,
         } = *preferences;
         if !(1..=ScriptPreferences::MAX_NOTIFY_AFTER).contains(&notify_after_seconds) {
-            return Err(StoreError(format!(
+            return Err(StoreError::new(format!(
                 "the notification threshold is in seconds, from 1 to {}",
                 ScriptPreferences::MAX_NOTIFY_AFTER
             )));
         }
         if confirm_delay_seconds > ScriptPreferences::MAX_CONFIRM_DELAY {
-            return Err(StoreError(format!(
+            return Err(StoreError::new(format!(
                 "the pause before \"Run anyway\" is in seconds, from 0 to {}",
                 ScriptPreferences::MAX_CONFIRM_DELAY
             )));
@@ -1499,7 +1536,7 @@ fn validate_language(language: &str) -> Result<(), StoreError> {
     if matches!(language, "system" | "en" | "es") {
         Ok(())
     } else {
-        Err(StoreError(
+        Err(StoreError::new(
             "unsupported language; expected system, en or es".into(),
         ))
     }
@@ -1509,7 +1546,7 @@ fn validate_theme(theme: &str) -> Result<(), StoreError> {
     if matches!(theme, "system" | "light" | "dark") {
         Ok(())
     } else {
-        Err(StoreError(
+        Err(StoreError::new(
             "unsupported theme; expected system, light or dark".into(),
         ))
     }
@@ -1954,6 +1991,76 @@ mod tests {
                 .unwrap(),
             MIGRATIONS.len() as i64
         );
+    }
+
+    /// The store 0.8.0 met on 2026-11-13 (SDB-283): schema 10 by its version, but its history
+    /// table without the `cancelled` column migration 3 adds, left by a development build.
+    #[test]
+    fn a_store_left_half_way_by_another_build_is_an_error_that_names_the_step() {
+        let path = temp("half-way");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for (i, migration) in MIGRATIONS[..10].iter().enumerate() {
+                let sql = if i == 2 {
+                    migration.replace(
+                        "alter table history add column cancelled integer not null default 0 check (cancelled in (0, 1));",
+                        "",
+                    )
+                } else {
+                    (*migration).to_string()
+                };
+                conn.execute_batch(&sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 10).unwrap();
+        }
+        let error = Store::open(&path)
+            .err()
+            .expect("the broken store must not open");
+        assert_eq!(error.newer_schema(), None);
+        let message = error.to_string();
+        assert!(
+            message.contains("schema 11") && message.contains("cancelled"),
+            "{message}"
+        );
+        // Nothing was half-applied: the version is still the one the file had.
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 10);
+    }
+
+    #[test]
+    fn a_store_from_a_newer_version_is_an_error_that_says_so_and_is_left_as_it_is() {
+        let path = temp("newer");
+        drop(Store::open(&path).unwrap());
+        let newer = MIGRATIONS.len() as i64 + 5;
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", newer)
+            .unwrap();
+        let error = Store::open(&path)
+            .err()
+            .expect("a newer store must not open");
+        assert_eq!(error.newer_schema(), Some(newer));
+        assert!(error.to_string().contains("newer version"), "{error}");
+        let version: i64 = Connection::open(&path)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, newer);
+    }
+
+    #[test]
+    fn a_negative_schema_version_is_an_error_not_a_newer_store() {
+        let path = temp("negative");
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", -1)
+            .unwrap();
+        let error = Store::open(&path).err().expect("must not open");
+        assert_eq!(error.newer_schema(), None);
+        assert!(error.to_string().contains("unknown schema"), "{error}");
     }
 
     #[test]

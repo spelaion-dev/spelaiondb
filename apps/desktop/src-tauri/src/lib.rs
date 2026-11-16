@@ -14,6 +14,7 @@ mod library;
 mod mcp;
 mod plans;
 mod plugins;
+mod startup;
 mod update;
 
 use std::collections::HashMap;
@@ -30,9 +31,10 @@ use spelaion_config::{
     default_user_dir, load,
 };
 use spelaion_core::{
-    Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect, OpenConnection,
-    OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth, SortKey,
-    StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
+    AppLog, Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect,
+    OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth,
+    SortKey, StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text,
+    open_connection, start_over,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -5466,6 +5468,34 @@ fn move_offscreen(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     ))
 }
 
+/// Opens the local store, asking the user what to do while it cannot be opened (SDB-283): quit,
+/// or start with a new store, the old file moved aside and never deleted.
+fn open_history(user_dir: &Path, log: &AppLog) -> QueryHistory {
+    let path = spelaion_config::state_db(user_dir);
+    loop {
+        let error = match QueryHistory::open(path.clone()) {
+            Ok(history) => return history,
+            Err(error) => error,
+        };
+        let failure = StartupFailure::store(path.clone(), &error);
+        match startup::ask(&failure, log) {
+            StartupAction::StartOver => match start_over(&failure, std::time::SystemTime::now()) {
+                Ok(moved) => startup::note(
+                    log,
+                    &format!(
+                        "moved the local store to {}; starting with a new one",
+                        moved.display()
+                    ),
+                ),
+                Err(e) => {
+                    startup::fail(log, &format!("Could not start with a new local store: {e}"))
+                }
+            },
+            StartupAction::Quit | StartupAction::OpenFolder => std::process::exit(1),
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = specta_builder();
@@ -5476,24 +5506,41 @@ pub fn run() {
         eprintln!("could not generate the TS types: {e}");
     }
 
+    // Nothing on the way to the window panics: what stops the start is shown in a native dialog
+    // and written to the log (SDB-283); what does not is only logged.
     // SPELAION_USER_DIR allows another personal directory (tests, profiles), as in the CLI.
+    let mut copy_failed = None;
     let user_dir = match std::env::var_os("SPELAION_USER_DIR") {
         Some(dir) => PathBuf::from(dir),
         None => {
-            let dir = default_user_dir().expect("user configuration directory");
+            let Some(dir) = default_user_dir() else {
+                startup::ask(&StartupFailure::NoUserDir, &AppLog::without_user_dir());
+                std::process::exit(1);
+            };
             // First start after the rename (ADR-023): the old personal folder is copied,
-            // never moved, so nothing is lost if this version is uninstalled.
+            // never moved, so nothing is lost if this version is uninstalled. Before anything
+            // is written to the new folder (the log included): an existing one is not copied to.
             if let Some(old) = spelaion_config::legacy_user_dir()
                 && let Err(e) = spelaion_config::migrate_user_dir(&old, &dir)
             {
-                eprintln!("could not copy the old personal folder: {e}");
+                copy_failed = Some(format!(
+                    "could not copy the old personal folder {}: {e}",
+                    old.display()
+                ));
             }
             dir
         }
     };
+    let log = AppLog::in_user_dir(&user_dir);
+    if let Some(message) = copy_failed {
+        startup::note(&log, &message);
+    }
     // Query history and audit live there: other local users must not read them.
     if let Err(e) = spelaion_config::ensure_private_dir(&user_dir) {
-        eprintln!("could not make the personal folder private: {e}");
+        startup::note(
+            &log,
+            &format!("could not make the personal folder private: {e}"),
+        );
     }
     // Initial folder: command-line argument or the last one opened.
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -5525,8 +5572,7 @@ pub fn run() {
         })
         .filter(|p| p.is_dir());
     let config = load(workspace.as_deref(), &user_dir);
-    let history = QueryHistory::open(spelaion_config::state_db(&user_dir))
-        .expect("error while opening the local query history");
+    let history = open_history(&user_dir, &log);
     // Its writer runs on Tauri's runtime, which `block_on` starts here.
     let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
     // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
@@ -5556,7 +5602,8 @@ pub fn run() {
     };
 
     let typed = builder.invoke_handler();
-    tauri::Builder::default()
+    let setup_log = log.clone();
+    let built = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -5573,22 +5620,34 @@ pub fn run() {
         })
         .setup(move |app| {
             builder.mount_events(app);
-            open_main_window(app)?;
+            // The window and its webview (WebView2 on Windows, WebKitGTK on Linux) open here:
+            // when they cannot, there is no page to tell it in. An error returned from `setup`
+            // would only be Tauri's panic.
+            if let Err(e) = open_main_window(app) {
+                startup::ask(&StartupFailure::window(&e), &setup_log);
+                std::process::exit(1);
+            }
             Ok(())
         })
-        .build(tauri::generate_context!())
-        .expect("error while starting SpelaionDB")
-        .run(|app, event| {
-            // Tauri exits without dropping the state: stop each `kubectl port-forward`
-            // first, or it would outlive the app (ADR-015).
-            if let tauri::RunEvent::Exit = event {
-                let state = app.state::<AppState>();
-                // The open tabs the core already has are written now, not in a second
-                // (ADR-036).
-                let tabs = state.tabs.clone();
-                let _ = tauri::async_runtime::block_on(tabs.flush());
-                let tunnels = state.tunnels.clone();
-                tauri::async_runtime::block_on(tunnels.close_all());
-            }
-        });
+        .build(tauri::generate_context!());
+    let app = match built {
+        Ok(app) => app,
+        Err(e) => {
+            startup::ask(&StartupFailure::window(&e), &log);
+            std::process::exit(1);
+        }
+    };
+    app.run(|app, event| {
+        // Tauri exits without dropping the state: stop each `kubectl port-forward`
+        // first, or it would outlive the app (ADR-015).
+        if let tauri::RunEvent::Exit = event {
+            let state = app.state::<AppState>();
+            // The open tabs the core already has are written now, not in a second
+            // (ADR-036).
+            let tabs = state.tabs.clone();
+            let _ = tauri::async_runtime::block_on(tabs.flush());
+            let tunnels = state.tunnels.clone();
+            tauri::async_runtime::block_on(tunnels.close_all());
+        }
+    });
 }
