@@ -105,15 +105,13 @@ pub async fn run_sql_file(
     let started = Instant::now();
     let (text, _) = read(path)?;
     let total = session.dialect().split_statements(&text).len() as u64;
-    cancel.attach(session);
-    if cancel.is_cancelled() {
-        return Err(BackupError::Cancelled);
-    }
     // The run asks nothing: a paused run would wait for an answer no one gives.
     let on_error = match on_error {
         OnError::Ask => OnError::Stop,
         other => other,
     };
+    // Requested, not started: nothing is sent until the stream is polled. From here on the
+    // session's cancel stops this run, whatever `on_error` (SDB-365).
     let mut stream = session.run_script_with(
         &text,
         ScriptOptions {
@@ -121,6 +119,10 @@ pub async fn run_sql_file(
             statement_timeout: None,
         },
     );
+    cancel.attach(session);
+    if cancel.is_cancelled() {
+        return Err(BackupError::Cancelled);
+    }
     let (mut done, mut failed) = (0u64, 0u64);
     let mut last = Instant::now();
     events(BackupEvent::Statements { done: 0, total });

@@ -214,6 +214,28 @@ pub struct Session {
     server_family: Option<crate::ServerFamily>,
 }
 
+/// A session's cancel, owned ([`Session::canceller`]). It is the session's own: the run sees
+/// it, so a cancelled script stops whatever its [`OnError`], which a cancel sent straight to
+/// the connection does not do (SDB-365).
+#[derive(Clone)]
+pub(crate) struct SessionCancel {
+    connection: Arc<dyn Connection>,
+    pause: Arc<Pause>,
+    cancels: Arc<AtomicU64>,
+    cancel_gate: CancelGate,
+}
+
+impl SessionCancel {
+    pub(crate) async fn cancel(&self) -> Result<(), DriverError> {
+        let _in_flight = self.cancel_gate.enter();
+        self.cancels.fetch_add(1, Ordering::SeqCst);
+        if self.pause.resume(Resume::Cancelled) {
+            return Ok(());
+        }
+        self.connection.cancel_handle().cancel().await
+    }
+}
+
 /// How long Commit, Rollback or the auto-commit switch wait for one of the core's own reads
 /// that holds the session (SDB-277) before they say it is busy.
 const CORE_READ_WAIT: Duration = Duration::from_secs(10);
@@ -448,12 +470,18 @@ impl Session {
     /// the run can see it, and a new run, a commit or a rollback waits until it has returned,
     /// so it never stops them (SDB-266). A cancel never waits for anything.
     pub async fn cancel(&self) -> Result<(), DriverError> {
-        let _in_flight = self.cancel_gate.enter();
-        self.cancels.fetch_add(1, Ordering::SeqCst);
-        if self.pause.resume(Resume::Cancelled) {
-            return Ok(());
+        self.canceller().cancel().await
+    }
+
+    /// [`Session::cancel`] for whoever must stop this session's run without holding the
+    /// session: the Stop of a job that runs in a session of its own.
+    pub(crate) fn canceller(&self) -> SessionCancel {
+        SessionCancel {
+            connection: self.connection.clone(),
+            pause: self.pause.clone(),
+            cancels: self.cancels.clone(),
+            cancel_gate: self.cancel_gate.clone(),
         }
-        self.connection.cancel_handle().cancel().await
     }
 
     /// Answers the run that paused after an error ([`CoreEvent::ErrorPaused`]). The ticket

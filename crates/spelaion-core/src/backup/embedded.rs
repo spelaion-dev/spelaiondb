@@ -125,6 +125,9 @@ async fn run_one(
     cancel: &BackupCancel,
     events: &(dyn Fn(BackupEvent) + Send + Sync),
 ) -> Result<(), BackupError> {
+    // Requested, not started: nothing is sent until the stream is polled, and a cancel from
+    // here on stops it.
+    let mut stream = session.run_generated(sql);
     cancel.attach(session);
     if cancel.is_cancelled() {
         return Err(BackupError::Cancelled);
@@ -132,7 +135,6 @@ async fn run_one(
     events(BackupEvent::Started {
         command_line: sql.to_string(),
     });
-    let mut stream = session.run_generated(sql);
     let mut failure = None;
     while let Some(event) = stream.next().await {
         match event {
