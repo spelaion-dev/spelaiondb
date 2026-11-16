@@ -4229,6 +4229,72 @@ pub struct TextSpan {
     pub end: u32,
 }
 
+fn text_span(span: spelaion_driver_api::StatementSpan) -> TextSpan {
+    TextSpan {
+        start: u32::try_from(span.start).unwrap_or(u32::MAX),
+        end: u32::try_from(span.end).unwrap_or(u32::MAX),
+    }
+}
+
+/// What the editor's Run will send: the statement under the cursor, the selection, or the
+/// whole script (a tab with no connection).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum RunKindItem {
+    Statement,
+    Selection,
+    Script,
+}
+
+/// What Run will send and the statements in it, as the core reads them.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RunTargetItem {
+    pub kind: RunKindItem,
+    /// The text Run sends; `null` when there is nothing to run.
+    pub span: Option<TextSpan>,
+    /// The statements of that text, in bytes of the script.
+    pub statements: Vec<TextSpan>,
+}
+
+impl From<spelaion_core::RunTarget> for RunTargetItem {
+    fn from(target: spelaion_core::RunTarget) -> Self {
+        Self {
+            kind: match target.kind {
+                spelaion_core::RunKind::Statement => RunKindItem::Statement,
+                spelaion_core::RunKind::Selection => RunKindItem::Selection,
+                spelaion_core::RunKind::Script => RunKindItem::Script,
+            },
+            span: target.span.map(text_span),
+            statements: target.statements.into_iter().map(text_span).collect(),
+        }
+    }
+}
+
+/// Some statements of a script as text to run, written by the core: what is left out is
+/// blank, so a position in `text` is one in the script.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedTextItem {
+    pub text: String,
+    /// Where `text` starts and ends in the script, in UTF-8 bytes.
+    pub span: TextSpan,
+    pub statements: u32,
+}
+
+impl From<spelaion_core::PickedText> for PickedTextItem {
+    fn from(picked: spelaion_core::PickedText) -> Self {
+        Self {
+            span: text_span(spelaion_driver_api::StatementSpan {
+                start: picked.start,
+                end: picked.end,
+            }),
+            statements: u32::try_from(picked.statements).unwrap_or(u32::MAX),
+            text: picked.text,
+        }
+    }
+}
+
 /// Rows of a result by position, and the columns taken from each, in order (the grid leaves
 /// out the columns it hides).
 #[derive(Debug, Clone, Deserialize, Type)]

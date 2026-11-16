@@ -17,6 +17,7 @@ export function Dialogs() {
   const scriptError = useDialogs((s) => s.scriptError);
   const openTransactions = useDialogs((s) => s.openTransactions);
   const params = useDialogs((s) => s.params);
+  const statements = useDialogs((s) => s.statements);
   const text = useDialogs((s) => s.text);
   const choice = useDialogs((s) => s.choice);
   const interaction = useDialogs((s) => s.interactions[0]);
@@ -25,6 +26,7 @@ export function Dialogs() {
   if (change) return <ChangeDialog key={change.item} />;
   if (variables) return <VariablesDialog key={variables.names.join(",")} />;
   if (params) return <ParamsDialog />;
+  if (statements) return <StatementsDialog key={statements.statements.length} />;
   if (text) return <TextDialog />;
   if (choice) return <ChoiceDialog key={choice.title} />;
   if (risk) return <RiskDialog />;
@@ -276,6 +278,80 @@ function ParamsDialog() {
       </div>
     </Modal>
   );
+}
+
+/** The picker lists at most this many statements; the rest run only with all of them. */
+const SHOWN_PICKS = 100;
+/** A statement's first characters are enough to tell it from its neighbours. */
+const SHOWN_PICK_SQL = 240;
+
+/** Run with several statements selected: one of them (its number key), the ticked ones, or
+ *  all. The core split the selection and writes the text of what is chosen; whatever is
+ *  chosen then goes through the guard like every run. "Run all" has the focus: Enter runs
+ *  what Run ran before this question existed. */
+function StatementsDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.statements);
+  const [checked, setChecked] = useState<ReadonlySet<number>>(new Set());
+  const all = useRef<HTMLButtonElement>(null);
+  useEffect(() => all.current?.focus(), []);
+  if (!request) return null;
+  const count = request.statements.length;
+  const shown = request.statements.slice(0, SHOWN_PICKS);
+  const toggle = (index: number) => setChecked((before) => {
+    const next = new Set(before);
+    if (!next.delete(index)) next.add(index);
+    return next;
+  });
+  return (
+    <Modal title={t("pick.title")} onCancel={() => request.resolve(null)}>
+      <p>{t("pick.explanation", { count })}</p>
+      <ol
+        className="pick-list"
+        aria-label={t("pick.list")}
+      >
+        {shown.map((sql, index) => (
+          <li key={index}>
+            <label>
+              <input type="checkbox" checked={checked.has(index)} onChange={() => toggle(index)} />
+              {index < 9 ? <kbd className="pick-key">{index + 1}</kbd> : <span className="pick-key" aria-hidden="true" />}
+              <code className="mono small">{sql.length > SHOWN_PICK_SQL ? `${sql.slice(0, SHOWN_PICK_SQL)}…` : sql}</code>
+            </label>
+          </li>
+        ))}
+      </ol>
+      {count > shown.length && <p className="muted small">{t("pick.more", { count: count - shown.length })}</p>}
+      <div className="modal-actions">
+        <button onClick={() => request.resolve(null)}>{t("pick.cancel")}</button>
+        <button disabled={checked.size === 0} onClick={() => request.resolve([...checked].sort((a, b) => a - b))}>
+          {t("pick.runChecked", { count: checked.size })}
+        </button>
+        <button ref={all} className="primary" onClick={() => request.resolve("all")}>
+          {t("pick.runAll", { count })}
+        </button>
+      </div>
+      <PickKeys count={Math.min(count, 9)} onPick={(index) => request.resolve([index])} />
+    </Modal>
+  );
+}
+
+/** The picker's number keys: 1–9 run that statement alone, wherever the focus is inside it. */
+function PickKeys({ count, onPick }: { count: number; onPick(index: number): void }) {
+  const pick = useRef(onPick);
+  pick.current = onPick;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
+      const index = Number(e.key) - 1;
+      if (index >= count) return;
+      e.preventDefault();
+      e.stopPropagation();
+      pick.current(index);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [count]);
+  return null;
 }
 
 /** Long statements are cut in the list: the reason is what matters. */

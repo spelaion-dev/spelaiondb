@@ -280,6 +280,18 @@
     "join": "Generar JOIN de las {{count}} tablas elegidas",
     "innerJoin": "Generar INNER JOIN de las {{count}} tablas elegidas"
   },
+  "pick": {
+    "title": "¿Qué sentencias ejecutar?",
+    "explanation_one": "La selección contiene {{count}} sentencia. Pulsa su número para ejecutarla sola, o marca qué ejecutar. Aún no se ha ejecutado nada.",
+    "explanation_other": "La selección contiene {{count}} sentencias. Pulsa el número de una sentencia para ejecutarla sola, o marca las que quieras ejecutar. Aún no se ha ejecutado nada.",
+    "list": "Sentencias de la selección",
+    "more_one": "…y {{count}} sentencia más, que solo se ejecuta con todas",
+    "more_other": "…y {{count}} sentencias más, que solo se ejecutan con todas",
+    "cancel": "Cancelar",
+    "runChecked_one": "Ejecutar {{count}} sentencia",
+    "runChecked_other": "Ejecutar {{count}} sentencias",
+    "runAll": "Ejecutar las {{count}}"
+  },
   "params": {
     "title": "Parámetros de la consulta",
     "explanation": "Los números, NULL, TRUE y FALSE se escriben tal cual; lo demás como texto, entrecomillado para esta base de datos.",

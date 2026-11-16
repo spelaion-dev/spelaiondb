@@ -3004,6 +3004,40 @@ select {
   padding: 8px 0;
   border-top: 1px solid var(--line);
 }
+.pick-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 40vh;
+  overflow: auto;
+}
+.pick-list li {
+  border-top: 1px solid var(--line);
+}
+.pick-list label {
+  display: grid;
+  grid-template-columns: auto 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.pick-list code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pick-key {
+  min-width: 20px;
+  text-align: center;
+  color: var(--muted);
+  font-family: var(--font-code);
+  font-size: var(--text-xs);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+}
+span.pick-key {
+  border-color: transparent;
+}
 .risk-list pre {
   margin: 4px 0 0;
   white-space: pre-wrap;

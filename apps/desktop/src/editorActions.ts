@@ -6,7 +6,7 @@ export type EditorActionId = EditorActionCommand["id"] extends `editor.${infer A
 export const EDITOR_ACTIONS = menuCommands("editor").filter((command) => command.shortcut !== undefined).map((command) => ({
   id: command.id.slice("editor.".length) as EditorActionId,
   shortcut: command.shortcut!,
-  key: command.shortcut!.split("+").map((part, index, parts) => part === "Ctrl" ? "Mod" : index === parts.length - 1 ? part.toLowerCase() : part).join("-"),
+  key: command.shortcut!.split("+").map((part, index, parts) => part === "Ctrl" ? "Mod" : index === parts.length - 1 && part.length === 1 ? part.toLowerCase() : part).join("-"),
 }));
 
 /** Explicit tab-stop ordering keeps the last editable field active until the final stop. */
