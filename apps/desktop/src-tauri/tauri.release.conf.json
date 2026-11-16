@@ -2,6 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/spelaiondb"]
+    "externalBin": [
+      "binaries/spelaiondb"
+    ],
+    "resources": {
+      "plugins/*.tar.gz": "plugins/"
+    }
   }
 }

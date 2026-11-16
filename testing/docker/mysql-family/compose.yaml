@@ -1,0 +1,69 @@
+# Servers that speak MySQL's protocol (SDB-170), for `crates/spelaion-core/tests/mysql_family.rs`.
+# A project of its own, apart from the main test environment: the images are large (StarRocks'
+# is about 8 GB), so nothing starts them unless asked, and CI does not.
+#
+#   docker compose -f testing/docker/mysql-family/compose.yaml up -d --wait
+#
+# Then, with the plugin variables of `spelaion-plugin-fetch`:
+#   SPELAION_TEST_TIDB=127.0.0.1:14000 SPELAION_TEST_OCEANBASE=127.0.0.1:12881
+#   SPELAION_TEST_SINGLESTORE=127.0.0.1:13308 SPELAION_TEST_STARROCKS=127.0.0.1:19030
+#   SPELAION_TEST_DATABEND_MYSQL=127.0.0.1:18300
+#   cargo test -p spelaion-core --test mysql_family
+#
+# Every server logs in as root: SingleStore with the password `spelaion` (a test value), the
+# others without one, as their images start.
+name: spelaion-test-mysql-family
+
+services:
+  tidb:
+    image: pingcap/tidb:v8.5.4
+    ports:
+      - "127.0.0.1:14000:4000"
+    # No client in the image: the port answering is enough.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4000"]
+      interval: 2s
+      retries: 60
+
+  # Its MySQL mode, in the image's smallest configuration. It takes a minute or two to boot.
+  oceanbase:
+    image: oceanbase/oceanbase-ce:4.3.5-lts
+    environment:
+      MODE: mini
+    ports:
+      - "127.0.0.1:12881:2881"
+    healthcheck:
+      test: ["CMD-SHELL", "obclient -h127.0.0.1 -P2881 -uroot -e 'select 1'"]
+      interval: 5s
+      retries: 60
+
+  # The developer image (SingleStore 10.9, pinned by digest: it has no version tags), which
+  # runs without a licence key for development.
+  singlestore:
+    image: ghcr.io/singlestore-labs/singlestoredb-dev@sha256:2f181587a74b63a83e7dbd46b02e9dce031b8cacf1f5651bff297b2d8c87df37
+    environment:
+      ROOT_PASSWORD: spelaion
+    ports:
+      - "127.0.0.1:13308:3306"
+
+  starrocks:
+    image: starrocks/allin1-ubuntu:3.4.5
+    ports:
+      - "127.0.0.1:19030:9030"
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -P9030 -uroot -e 'select 1'"]
+      interval: 5s
+      retries: 60
+
+  # Databend (SDB-350), its MySQL handler on 3307. It logs in as root without a password from
+  # anywhere, as its image starts. About 300 MB, a single process with local storage.
+  databend:
+    image: datafuselabs/databend:v1.2.881
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:18300:3307"
+    # No client in the image: the port answering is enough.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3307"]
+      interval: 2s
+      retries: 60

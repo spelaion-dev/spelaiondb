@@ -271,6 +271,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   // The MCP page fills the window: leaving it shows the explorer again.
   "view.mcp": { run: () => useApp.getState().setSidebarSection((current) => (current === "mcp" ? "connections" : "mcp")) },
   "view.settings": { run: () => useApp.getState().openSettings() },
+  "view.plugins": { run: () => useApp.getState().openSettings("plugins") },
 };
 
 export function commandEnabled(id: CommandId, context: CommandContext): boolean {

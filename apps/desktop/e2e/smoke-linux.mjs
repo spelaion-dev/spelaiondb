@@ -71,6 +71,20 @@ mkdirSync(join(userDir, "connections"), { recursive: true });
 const personal = {
   "sql-server-docker.toml": `schema_version = 1\nname = "SQL Server (Docker)"\nengine = "sqlserver"\nhost = "127.0.0.1"\nport = 11433\nuser = "sa"\npassword = { secret = "prompt" }\n`,
   "bastions.toml": `schema_version = 1\nname = "Postgres through the tunnel"\nengine = "postgres"\nhost = "postgres"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "verify-full"\nca = ${JSON.stringify(join(keys, "ca.crt"))}\n`,
+  // ClickHouse, only a plugin (ADR-041), behind the same two bastions: its HTTP port has no TLS.
+  "clickhouse.toml": `schema_version = 1\nname = "ClickHouse through the tunnel"\nengine = "clickhouse"\nhost = "clickhouse"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // Trino (one plugin with Presto) behind the same bastions: no password over plain HTTP.
+  "trino.toml": `schema_version = 1\nname = "Trino through the tunnel"\nengine = "trino"\nhost = "trino"\ndatabase = "tpch.tiny"\nuser = "spelaion"\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // Oracle, only a plugin (ADR-059), behind the same two bastions: its listener, without TLS
+  // (TLS through the bastions is tested in tests/oracle.rs).
+  "oracle.toml": `schema_version = 1\nname = "Oracle through the tunnel"\nengine = "oracle"\nhost = "oracle"\ndatabase = "FREEPDB1"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // libSQL, only a plugin (ADR-058), behind the same two bastions: Hrana over plain HTTP.
+  "libsql.toml": `schema_version = 1\nname = "libSQL through the tunnel"\nengine = "libsql"\nhost = "libsql"\nport = 8080\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // Neo4j, only a plugin whose language is Cypher (ADR-056), behind the same two bastions: its
+  // HTTP Query API without TLS.
+  "neo4j.toml": `schema_version = 1\nname = "Neo4j through the tunnel"\nengine = "neo4j"\nhost = "neo4j"\nport = 7474\nuser = "neo4j"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
+  // Databend, only a plugin (SDB-351), behind the same two bastions: its HTTP query API.
+  "databend.toml": `schema_version = 1\nname = "Databend through the tunnel"\nengine = "databend"\nhost = "databend"\nport = 8000\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "disable"\n`,
 };
 for (const [file, text] of Object.entries(personal)) writeFileSync(join(userDir, "connections", file), text);
 
@@ -349,6 +363,54 @@ try {
     }
     await statusline("1 row");
     await shot("10-tunnel");
+  });
+
+  await step("ClickHouse (a plugin only) behind the same two bastions", async () => {
+    // The hosts were trusted by the step before: no fingerprint is asked again.
+    await newQuery("ClickHouse through the tunnel", "select currentDatabase() as db, 'ñandú' as t, toDate('2024-02-29') as d;");
+    await run();
+    await password("ClickHouse through the tunnel", "spelaion");
+    await statusline("1 row");
+    await shot("10b-clickhouse-tunnel");
+  });
+
+  await step("Trino (a plugin only) behind the same two bastions, its pages followed there", async () => {
+    await newQuery("Trino through the tunnel", "select count(*) as lines, 'ñandú' as t from lineitem;");
+    await run();
+    await statusline("1 row");
+    await shot("10c-trino-tunnel");
+  });
+
+  await step("Oracle (a plugin only) behind the same two bastions", async () => {
+    // The hosts were trusted by an earlier step: no fingerprint is asked again.
+    await newQuery("Oracle through the tunnel", "select user as who, 'ñandú' as t, date '2024-02-29' as d from dual;");
+    await run();
+    await password("Oracle through the tunnel", "spelaion");
+    await statusline("1 row");
+    await shot("10d-oracle-tunnel");
+  });
+
+  await step("libSQL (a plugin only) behind the same two bastions", async () => {
+    await newQuery("libSQL through the tunnel", "select sqlite_version() as v, 'ñandú' as t, 1.5 as r;");
+    await run();
+    await statusline("1 row");
+    await shot("10d-libsql-tunnel");
+  });
+
+  await step("Neo4j (a plugin only, Cypher) behind the same two bastions", async () => {
+    await newQuery("Neo4j through the tunnel", "RETURN 'ñandú' AS t, 1.5 AS r, date('2024-02-29') AS d;");
+    await run();
+    await password("Neo4j through the tunnel", "spelaion-test");
+    await statusline("1 row");
+    await shot("10d-neo4j-tunnel");
+  });
+
+  await step("Databend (a plugin only) behind the same two bastions", async () => {
+    await newQuery("Databend through the tunnel", "select 'ñandú' as t, 1.5 as r, '2024-02-29'::date as d;");
+    await run();
+    await password("Databend through the tunnel", "spelaion-test");
+    await statusline("1 row");
+    await shot("10d-databend-tunnel");
   });
 
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {

@@ -17,12 +17,8 @@ use spelaion_core::{
     export_table, export_tables, rerun_check,
 };
 use spelaion_driver_api::{ConnectParams, Driver, ExecOptions, Secret, TlsMode, Value};
-use spelaion_driver_duckdb::DuckdbDriver;
-use spelaion_driver_mysql::MysqlDriver;
-use spelaion_driver_postgres::PostgresDriver;
-use spelaion_driver_sqlite::SqliteDriver;
-use spelaion_driver_sqlserver::SqlServerDriver;
 
+mod engines;
 mod support;
 use support::{cleaning_up, run_cleanup};
 
@@ -494,8 +490,8 @@ async fn postgres_streams_exports() {
         ..Default::default()
     };
     let session = Session::new(
-        PostgresDriver.connect(&params).await.unwrap(),
-        PostgresDriver.dialect(),
+        engines::postgres().connect(&params).await.unwrap(),
+        spelaion_dialect::for_engine(engines::postgres().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     let t = format!("export_stream_{}", std::process::id());
@@ -546,8 +542,8 @@ async fn postgres_streams_exports() {
         )],
         cleanup: Some((
             Session::new(
-                PostgresDriver.connect(&params).await.unwrap(),
-                PostgresDriver.dialect(),
+                engines::postgres().connect(&params).await.unwrap(),
+                spelaion_dialect::for_engine(engines::postgres().engine()).expect("a dialect"),
                 Arc::new(ResultStore::new()),
             ),
             vec![
@@ -571,8 +567,8 @@ fn digits(alias: &str) -> String {
 #[tokio::test]
 async fn mysql_and_mariadb_stream_exports() {
     for (var, driver) in [
-        ("SPELAION_TEST_MYSQL", MysqlDriver::mysql()),
-        ("SPELAION_TEST_MARIADB", MysqlDriver::mariadb()),
+        ("SPELAION_TEST_MYSQL", engines::mysql()),
+        ("SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         let Ok(addr) = std::env::var(var) else {
             eprintln!("{var} not set: test skipped");
@@ -589,7 +585,7 @@ async fn mysql_and_mariadb_stream_exports() {
         };
         let session = Session::new(
             driver.connect(&params).await.unwrap(),
-            driver.dialect(),
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         );
         let t = format!("export_stream_{}", std::process::id());
@@ -654,7 +650,7 @@ async fn mysql_and_mariadb_stream_exports() {
             cleanup: Some((
                 Session::new(
                     driver.connect(&params).await.unwrap(),
-                    driver.dialect(),
+                    spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
                     Arc::new(ResultStore::new()),
                 ),
                 vec![
@@ -684,8 +680,11 @@ async fn sqlserver_streams_exports() {
         ..Default::default()
     };
     let master = Session::new(
-        SqlServerDriver.connect(&connect("master")).await.unwrap(),
-        SqlServerDriver.dialect(),
+        engines::sqlserver()
+            .connect(&connect("master"))
+            .await
+            .unwrap(),
+        spelaion_dialect::for_engine(engines::sqlserver().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     let _: Vec<CoreEvent> = master
@@ -693,8 +692,11 @@ async fn sqlserver_streams_exports() {
         .collect()
         .await;
     let session = Session::new(
-        SqlServerDriver.connect(&connect("spelaion")).await.unwrap(),
-        SqlServerDriver.dialect(),
+        engines::sqlserver()
+            .connect(&connect("spelaion"))
+            .await
+            .unwrap(),
+        spelaion_dialect::for_engine(engines::sqlserver().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     let t = format!("export_stream_{}", std::process::id());
@@ -736,8 +738,8 @@ async fn sqlserver_streams_exports() {
         hidden_writes: Vec::new(),
         cleanup: Some((
             Session::new(
-                SqlServerDriver.connect(&connect("spelaion")).await.unwrap(),
-                SqlServerDriver.dialect(),
+                engines::sqlserver().connect(&connect("spelaion")).await.unwrap(),
+                spelaion_dialect::for_engine(engines::sqlserver().engine()).expect("a dialect"),
                 Arc::new(ResultStore::new()),
             ),
             vec![format!("drop table if exists {t}")],
@@ -750,9 +752,8 @@ async fn sqlserver_streams_exports() {
 async fn duckdb_streams_exports() {
     let dir = folder("duckdb-file");
     let path = dir.join("export.duckdb");
-    let driver = DuckdbDriver {
-        create_if_missing: true,
-    };
+    engines::create_database(spelaion_config::Engine::Duckdb, &path).await;
+    let driver = engines::duckdb();
     let conn = driver
         .connect(&ConnectParams {
             database: path.display().to_string(),
@@ -760,7 +761,11 @@ async fn duckdb_streams_exports() {
         })
         .await
         .unwrap();
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     let t = "export_stream".to_string();
     exercise(Engine {
         label: "DuckDB",
@@ -801,7 +806,7 @@ async fn sqlite_streams_exports() {
     let dir = folder("sqlite-file");
     let path = dir.join("export.db");
     std::fs::File::create(&path).unwrap();
-    let conn = SqliteDriver::default()
+    let conn = engines::sqlite()
         .connect(&ConnectParams {
             database: path.display().to_string(),
             ..Default::default()
@@ -810,7 +815,7 @@ async fn sqlite_streams_exports() {
         .unwrap();
     let session = Session::new(
         conn,
-        SqliteDriver::default().dialect(),
+        spelaion_dialect::for_engine(engines::sqlite().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     let t = "export_stream".to_string();
@@ -869,8 +874,8 @@ async fn postgres_warns_that_an_open_transaction_is_not_exported() {
     };
     let open = || async {
         Session::new(
-            PostgresDriver.connect(&params).await.unwrap(),
-            PostgresDriver.dialect(),
+            engines::postgres().connect(&params).await.unwrap(),
+            spelaion_dialect::for_engine(engines::postgres().engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         )
     };
@@ -948,8 +953,8 @@ async fn the_export_session_follows_the_tabs_schema() {
     };
     let open = || async {
         Session::new(
-            PostgresDriver.connect(&params).await.unwrap(),
-            PostgresDriver.dialect(),
+            engines::postgres().connect(&params).await.unwrap(),
+            spelaion_dialect::for_engine(engines::postgres().engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         )
     };

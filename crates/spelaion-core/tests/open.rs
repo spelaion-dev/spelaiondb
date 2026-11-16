@@ -3,20 +3,22 @@
 //! SQLite always runs. PostgreSQL needs `SPELAION_TEST_PG` and the tunnels need
 //! `SPELAION_TEST_SSH` (see `testing/docker`).
 
+mod engines;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use spelaion_config::{
-    ConnectionId, HopDraft, PasswordChoice, Resolver, Source, SshAuth, SystemBackend, TrustStore,
-    TunnelDraft, load,
+    ConnectionId, Engine, HopDraft, PasswordChoice, Resolver, Safeguards, Source, SshAuth,
+    SystemBackend, TrustStore, TunnelDraft, load,
 };
 use spelaion_core::{
-    CoreEvent, Engines, OpenConnection, OpenError, OpenOptions, ResultStore, TunnelPool,
-    open_connection, test_tunnel,
+    CoreEvent, Engines, OpenConnection, OpenError, OpenOptions, ResultStore, RunRefused,
+    TunnelPool, check_run, open_connection, test_tunnel,
 };
-use spelaion_driver_api::{ExecOptions, Secret, Value};
+use spelaion_driver_api::{ConnectParams, Connection, Driver, ExecOptions, Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, NonInteractive, SecretRequest, TunnelState};
 
 /// Temporary, trusted repository with `.spelaion/` and a user directory.
@@ -50,6 +52,16 @@ impl Workspace {
         password: Option<Secret>,
         ui: Arc<dyn Interaction>,
     ) -> Result<OpenConnection, OpenError> {
+        self.open_with(id, password, ui, &Engines::builtin()).await
+    }
+
+    async fn open_with(
+        &self,
+        id: &str,
+        password: Option<Secret>,
+        ui: Arc<dyn Interaction>,
+        engines: &Engines,
+    ) -> Result<OpenConnection, OpenError> {
         let config = load(Some(&self.base.join("repo")), &self.base.join("user"));
         assert!(config.problems.is_empty(), "{:?}", config.problems);
         // The repository is trusted as the test wrote it (ADR-022 pins its content).
@@ -73,13 +85,7 @@ impl Workspace {
             password,
             read_only_session: false,
         };
-        open_connection(
-            resolved,
-            &Engines::builtin(),
-            options,
-            Arc::new(ResultStore::new()),
-        )
-        .await
+        open_connection(resolved, engines, options, Arc::new(ResultStore::new())).await
     }
 }
 
@@ -160,15 +166,82 @@ async fn sqlite_from_config() {
     );
 }
 
+/// SQLite's own driver behind another value: what a driver that is not compiled in looks like
+/// to the core.
+struct Stand(Arc<dyn Driver>);
+
+#[async_trait]
+impl Driver for Stand {
+    fn engine(&self) -> &str {
+        self.0.engine()
+    }
+
+    async fn connect(
+        &self,
+        params: &ConnectParams,
+    ) -> spelaion_driver_api::Result<Box<dyn Connection>> {
+        self.0.connect(params).await
+    }
+}
+
+/// ADR-041: a driver is the wire, not the rules. One put in place of an engine's brings no
+/// dialect: the session splits, classifies and guards with the core's dialect for that engine.
+#[tokio::test]
+async fn a_driver_put_in_place_brings_only_the_wire() {
+    let ws = Workspace::new("stand-in");
+    ws.write("data/app.db", "");
+    ws.write(
+        ".spelaion/connections/local.toml",
+        "schema_version = 1
+engine = \"sqlite\"
+database = \"data/app.db\"
+",
+    );
+    let sqlite = Engines::builtin()
+        .get(Engine::Sqlite)
+        .expect("SQLite is built in");
+    let engines = Engines::builtin().with_driver(Arc::new(Stand(sqlite)));
+    let conn = ws
+        .open_with("local", None, Arc::new(NonInteractive), &engines)
+        .await
+        .unwrap();
+
+    let dialect = conn.session.dialect();
+    assert_eq!(dialect.name(), "sqlite");
+    assert_eq!(dialect.quote_identifier("a\"b"), "\"a\"\"b\"");
+
+    // Split by the core: three statements run.
+    let script = "create table t (a int); insert into t values (41), (1); select sum(a) from t";
+    let events: Vec<CoreEvent> = conn.session.run_script(script).collect().await;
+    let finished = events
+        .iter()
+        .filter(|e| matches!(e, CoreEvent::StatementFinished { .. }))
+        .count();
+    assert_eq!(finished, 3, "{events:?}");
+
+    // Guarded by the core: the `DROP` behind the `select` still asks.
+    let refused = check_run(
+        &conn.session,
+        "select 1; drop table t",
+        &Safeguards::default(),
+        false,
+    );
+    assert!(
+        matches!(refused, Err(RunRefused::NeedsConfirmation(_))),
+        "{refused:?}"
+    );
+    assert_eq!(first_value(&conn, "select sum(a) from t").await, "42");
+}
+
 #[tokio::test]
 async fn duckdb_from_config() {
     let ws = Workspace::new("duckdb");
     std::fs::create_dir_all(ws.base.join("repo/data")).unwrap();
-    spelaion_core::create_file_database(
+    engines::create_database(
         spelaion_config::Engine::Duckdb,
         &ws.base.join("repo/data/app.duckdb"),
     )
-    .unwrap();
+    .await;
     ws.write(
         ".spelaion/connections/local.toml",
         "schema_version = 1\nengine = \"duckdb\"\ndatabase = \"data/app.duckdb\"\n",

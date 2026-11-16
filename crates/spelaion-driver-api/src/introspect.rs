@@ -3,23 +3,46 @@
 //! v0.1 only has relational engines. The driver-driven explorer (generic nodes for Redis,
 //! Mongo…) from ADR-005 will come with the first non-relational engine.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SchemaInfo {
     pub name: String,
     /// System schema (`pg_catalog`, `information_schema`…).
     pub system: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ObjectKind {
     Table,
     PartitionedTable,
     View,
     MaterializedView,
     ForeignTable,
+    /// Records with no fixed columns, read with the engine's own language: a MongoDB
+    /// collection, a search index (ADR-056). The core writes no SQL for it.
+    Collection,
+    /// The nodes that carry a label, in a graph (ADR-056).
+    NodeLabel,
+    /// The relationships of a type, in a graph (ADR-056).
+    RelationshipType,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl ObjectKind {
+    /// A relation of SQL's: what the core's table data tabs, edits, structure forms and object
+    /// actions write SQL for. Kinds that are not (ADR-056) are read with the engine's language.
+    pub fn is_relation(self) -> bool {
+        match self {
+            ObjectKind::Table
+            | ObjectKind::PartitionedTable
+            | ObjectKind::View
+            | ObjectKind::MaterializedView
+            | ObjectKind::ForeignTable => true,
+            ObjectKind::Collection | ObjectKind::NodeLabel | ObjectKind::RelationshipType => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ObjectInfo {
     pub schema: String,
     pub name: String,
@@ -30,7 +53,8 @@ pub struct ObjectInfo {
 }
 
 /// What a schema holds besides its relations (ADR-024).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SchemaObjectKind {
     Function,
     Procedure,
@@ -58,7 +82,7 @@ pub fn terminated(sql: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SchemaObject {
     pub schema: String,
     pub name: String,
@@ -71,7 +95,8 @@ pub struct SchemaObject {
 }
 
 /// What lives outside every schema: on the server, or in the connection's database (ADR-024).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ServerObjectKind {
     Role,
     User,
@@ -80,7 +105,7 @@ pub enum ServerObjectKind {
     Extension,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ServerObject {
     pub name: String,
     pub kind: ServerObjectKind,
@@ -91,7 +116,7 @@ pub struct ServerObject {
     pub system: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TableInfo {
     pub object: ObjectInfo,
     pub columns: Vec<ColumnInfo>,
@@ -103,7 +128,8 @@ pub struct TableInfo {
     pub constraints: Vec<ConstraintInfo>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
     PrimaryKey,
     Unique,
@@ -158,7 +184,7 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ConstraintInfo {
     /// None where the engine does not keep a name (SQLite's primary key).
     pub name: Option<String>,
@@ -169,7 +195,7 @@ pub struct ConstraintInfo {
     pub definition: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ColumnInfo {
     pub name: String,
     /// Type as the engine would write it (`numeric(12,2)`, `character varying(80)`).
@@ -180,7 +206,7 @@ pub struct ColumnInfo {
 }
 
 /// A column of a schema's relation, as [`crate::Connection::list_columns`] lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SchemaColumn {
     pub table: String,
     pub name: String,
@@ -188,7 +214,7 @@ pub struct SchemaColumn {
     pub native_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IndexInfo {
     pub name: String,
     pub unique: bool,
@@ -197,7 +223,7 @@ pub struct IndexInfo {
     pub definition: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForeignKeyInfo {
     pub name: String,
     pub columns: Vec<String>,
@@ -208,7 +234,7 @@ pub struct ForeignKeyInfo {
 
 /// A foreign key of another table that points to the one asked about: what the table details'
 /// "References" lists and what the references panel follows back to the referencing rows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReferencingKey {
     /// The referencing table.
     pub schema: String,

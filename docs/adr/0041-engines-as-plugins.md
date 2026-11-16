@@ -1,7 +1,10 @@
 # ADR-041: Engines as plugins: every driver in its own process, behind the same contract
 
-- **Status:** Accepted (not implemented: the stages below are the plan; where our plugins
-  are built and how they are checked is superseded by ADR-042)
+- **Status:** Accepted (stage 0 implemented, 2026-11-13: see "Implementation"; the engines
+  leave the core as their repositories are created, **except SQLite, which stays compiled in:
+  see "SQLite stays compiled in", 2026-11-14**. Where our plugins are built and how they
+  are checked is superseded by ADR-042; how our plugins are found, installed and updated, by
+  ADR-055)
 - **Date:** 2026-11-10
 - **Supersedes:** the "Extensibility" part of ADR-005 (the rest of ADR-005 stands)
 - **Builds on:** ADR-002 (security lives in the core), ADR-004 (no daemon), ADR-005 (driver
@@ -91,6 +94,9 @@ do today. New engines are only written as plugins.**
      name or point to a plugin. Its manifest names one of the core's dialects, or none.
      **Agents get nothing on it and read-only mode is not offered** (not a weaker one): the
      barrier ADR-020 asks of each engine is not ours to vouch for. No registry or marketplace.
+     (Amended by ADR-055: the app has a Plugins page fed by a signed catalogue of our own
+     plugins. Other people's are never in it and are still added only by the user, from a
+     file or from an address typed into that page; the app says they are not ours to support.)
 6. **SQLite on a server stays in the core** (ADR-018). It talks to the server's own `sqlite3`
    through a channel of the core's tunnel, which cannot be handed to another process, and it
    does not use the SQLite library. It is the one driver that is not a plugin.
@@ -139,6 +145,91 @@ do today. New engines are only written as plugins.**
   like any other, and it may link what our licence does not let the core link.
 - The project's "we ship our own drivers, no JDBC-style driver manager" note changes meaning:
   we still write and ship our own; they stop being inside the binary.
+
+## Implementation (2026-11-13)
+Stage 0 is in the repository; the protocol's specification is `docs/plugin-protocol.md`.
+
+- **The protocol** (version 1.0, experimental until SpelaionDB 1.0): frames over the plugin's
+  standard input and output, JSON-RPC 2.0 for control and Arrow IPC for rows, never JSON. The
+  core sets the pace of a result with credit, so a large result does not fill its memory. Three
+  crates: `spelaion-plugin-protocol` (the wire), `spelaion-plugin-sdk` (a plugin implements
+  `Driver` and `Connection` and calls `run`) and `spelaion-plugin-host` (`PluginDriver` is a
+  `Driver`: the session, the result store, the app and the MCP server see no difference).
+- **What running every engine through it added**, before anything depended on it:
+  `create_database` (a database that is a file is created by its driver); a `close` that stops a
+  `connect` still in progress (a login the user stopped is not left open); SQLite on a server
+  stays with the driver compiled in when the local one is a plugin; and the conformance set
+  cancels a statement whose `execute` has not answered (MySQL answers only when its first
+  response arrives).
+- **Each pipe has a thread of its own, with blocking reads and writes,** on both sides: a
+  plugin's process belongs to no caller's runtime, and a frame is one read of the pipe.
+- **The rows of an import travel as columns of text** (`TextRows`, Arrow): the contract's
+  `insert_rows` takes them, and a driver reads them in place.
+- **The gate, measured** (Windows, optimised builds, the same build both ways, median of five,
+  `scripts/measure-plugins.sh`): a million-row result takes 5.7 % longer through DuckDB's
+  plugin; importing a million rows takes at most 13.9 % longer (DuckDB, into a new table;
+  SQLite 13.7 %, PostgreSQL 11.2 %, MySQL 4.2 %, SQL Server 2.0 %, MariaDB 1.2 %). Before the
+  rows travelled as columns and the pipes had their threads, the import took 47 % to 71 %
+  longer on DuckDB. The fastest engines load a million rows in about a second, so 15 % is
+  150 ms: expect a few points between two measurements.
+- **The whole test suite passes through plugins, unchanged**: no test names a driver crate
+  (they take it from the core's engines), and `scripts/test-through-plugins.sh` runs any
+  `cargo test` with every engine through its plugin.
+- **What an engine's leaving saves** (Windows, debug, `cargo test --workspace --no-run` from an
+  empty target folder, each measured once, on the branches where the drivers are already
+  gone): with every driver compiled in, 619 s, 7.8 GB of test executables and a 25.3 GB target
+  folder; without DuckDB, 297 s, 2.2 GB and 10.0 GB; without DuckDB, SQL Server, MySQL/MariaDB
+  and PostgreSQL, 218 s, 1.4 GB and 7.4 GB. DuckDB is most of it, as the Context expected.
+
+## SQLite stays compiled in (2026-11-14)
+Stage 2 ended with "then SQLite files on this machine (last: … that one is only for having one
+path)", and this ADR said an engine that is not worth moving stays built in and is recorded
+here. **SQLite is that engine: its driver stays in this repository, compiled into the core, for
+files on this machine as for files on a server.**
+
+- **Nothing is saved.** The core links SQLite for its own store (ADR-011) whether or not the
+  driver is a plugin. The saving this ADR is about came from DuckDB and the three server
+  engines (see "Implementation").
+- **It would split one driver in two that must stay identical.** SQLite on a server (point 6)
+  stays in the core in any case, and it is not a driver of its own: it shares with the local
+  one every catalog query and its reading (`catalog.rs`) and the whole of the dynamic typing
+  (ADR-006: the affinities, what was seen in a column, the type decided, how a value is
+  written, in `exec.rs`), about 700 lines. Moving the local driver to a repository of its own
+  would leave that code in two repositories, with the explorer and the types of a file having
+  to come out the same whether it is here or on a server. Point 6 said SQLite on a server
+  "does not use the SQLite library": it does not open a database with it, but it is built on
+  the same code as the driver that does.
+- **It is the engine a plugin costs most.** Through a plugin a million-row import took 13.7 %
+  longer: inside the gate, and the closest to it of every engine, because SQLite loads a
+  million rows in about a second and a plugin's cost per row is the same for all of them.
+- **What "one path" would have bought is small**: the core already treats every engine as a
+  `Driver` from its engines, compiled in or a plugin, and no code asks which.
+
+**Its plugin program stays too, as a test and never shipped**
+(`crates/spelaion-driver-sqlite/src/bin/spelaion-plugin-sqlite.rs`): it is how a change to the
+protocol is tried with a real engine without leaving this repository
+(`scripts/test-through-plugins.sh`, `scripts/measure-plugins.sh`), which the made-up engine of
+`spelaion-test-plugin` cannot do.
+
+Revisit if the core stops linking SQLite for its store, or if a tunnel's channel can be handed
+to a plugin (then both halves could move together).
+
+## Stage 3: ClickHouse (2026-11-15)
+The first engine that never existed inside the core: `spelaion-dev/spelaiondb-plugin-clickhouse`,
+pinned in `plugins.toml`. **What it cost the core: about 420 lines of code**, plus about 190
+of unit tests and 540 of tests against the server through the plugin. Of those 420, 160 are
+its dialect's splitter (`spelaion-dialect`), 60 its classifier rules (the table functions that
+reach outside), 70 its read barrier, 30 the guard's `ALTER TABLE … DROP | CLEAR`, and 45 the
+`Engine::Clickhouse` arms the compiler asked for. Everything else (connecting, TLS, results,
+cancel, the catalog) is in its repository, which the core never compiles.
+
+- **The read barrier ADR-020 asks for, without transactions,** is the session's `readonly`
+  setting: once set, ClickHouse refuses every write and every way of setting it back, for the
+  rest of the session. It holds only while the session does, so the plugin never lets a lost
+  server-side session be replaced by a new one (which would not have it): a lost session loses
+  the connection, as ADR-028 wants anyway.
+- **What it cannot do is declared** (no transactions, editing, imports or plans) and the app
+  follows the capabilities; agents' writes are refused, since they run in a transaction.
 
 ## Alternatives
 - **Hybrid for good** (the five inside, the rest as plugins): the least work, and two classes

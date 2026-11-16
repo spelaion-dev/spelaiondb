@@ -117,6 +117,8 @@ pub struct ConnectionDraft {
     pub port: Option<u16>,
     /// Database name; for SQLite and DuckDB, the file path.
     pub database: String,
+    /// DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316).
+    pub file_folder: bool,
     pub user: String,
     pub password: PasswordChoice,
     pub tls_mode: TlsModeConfig,
@@ -381,7 +383,32 @@ impl ConnectionDraft {
             PasswordChoice::CloudToken(token) => {
                 match self.engine {
                     Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
-                    Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb => {
+                    Engine::Sqlserver
+                    | Engine::Sqlite
+                    | Engine::Duckdb
+                    | Engine::Mongodb
+                    | Engine::Clickhouse
+                    | Engine::Redis
+                    | Engine::Trino
+                    | Engine::Presto
+                    | Engine::Oracle
+                    | Engine::Libsql
+                    | Engine::Cassandra
+                    | Engine::Tdengine
+                    | Engine::Flightsql
+                    | Engine::Dremio
+                    | Engine::Gizmosql
+                    | Engine::Neo4j
+                    | Engine::Elasticsearch
+                    | Engine::Opensearch
+                    | Engine::Solr
+                    | Engine::Meilisearch
+                    | Engine::Databend
+                    | Engine::Spanner
+                    | Engine::Hive
+                    | Engine::Spark
+                    | Engine::Kyuubi
+                    | Engine::Impala => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -466,8 +493,35 @@ impl ConnectionDraft {
                 // A path on the server is the server's: as typed.
                 Engine::Sqlite if remote_sqlite => d,
                 Engine::Sqlite | Engine::Duckdb => portable_path(&d, root),
-                Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => d,
+                Engine::Postgres
+                | Engine::Mysql
+                | Engine::Mariadb
+                | Engine::Sqlserver
+                | Engine::Mongodb
+                | Engine::Clickhouse
+                | Engine::Redis
+                | Engine::Trino
+                | Engine::Presto
+                | Engine::Oracle
+                | Engine::Libsql
+                | Engine::Cassandra
+                | Engine::Tdengine
+                | Engine::Flightsql
+                | Engine::Dremio
+                | Engine::Gizmosql
+                | Engine::Neo4j
+                | Engine::Elasticsearch
+                | Engine::Opensearch
+                | Engine::Solr
+                | Engine::Meilisearch
+                | Engine::Databend
+                | Engine::Spanner
+                | Engine::Hive
+                | Engine::Spark
+                | Engine::Kyuubi
+                | Engine::Impala => d,
             }),
+            file_folder: self.file_folder && self.engine == Engine::Duckdb,
             user: non_empty(&self.user).filter(|_| network),
             password: password
                 .filter(|_| network)
@@ -595,6 +649,7 @@ impl ConnectionDraft {
             host: file.host.clone().unwrap_or_default(),
             port: file.port,
             database: file.database.clone().unwrap_or_default(),
+            file_folder: file.file_folder,
             user: file.user.clone().unwrap_or_default(),
             password,
             tls_mode: file.tls.mode,
@@ -892,6 +947,13 @@ pub fn update_connection(
             &mut doc,
             &["read_only"],
             new.read_only.then(|| Value::from(true)),
+        );
+    }
+    if old.file_folder != new.file_folder {
+        put(
+            &mut doc,
+            &["file_folder"],
+            new.file_folder.then(|| Value::from(true)),
         );
     }
     if old.session.setup != new.session.setup {

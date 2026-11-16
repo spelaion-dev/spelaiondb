@@ -53,7 +53,32 @@ fn password_label(choice: &PasswordChoice) -> Option<String> {
 fn passwordless(engine: Engine) -> bool {
     match engine {
         Engine::Postgres | Engine::Mysql | Engine::Mariadb => true,
-        Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb => false,
+        Engine::Sqlserver
+        | Engine::Sqlite
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Clickhouse
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto
+        | Engine::Oracle
+        | Engine::Libsql
+        | Engine::Cassandra
+        | Engine::Tdengine
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql
+        | Engine::Neo4j
+        | Engine::Elasticsearch
+        | Engine::Opensearch
+        | Engine::Solr
+        | Engine::Meilisearch
+        | Engine::Databend
+        | Engine::Spanner
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala => false,
     }
 }
 

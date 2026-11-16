@@ -513,7 +513,7 @@ pub(crate) fn check_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_sqlite::SqliteDialect;
+    use spelaion_dialect::SqliteDialect;
 
     struct Named(&'static str);
 
@@ -820,7 +820,7 @@ mod tests {
             Err(PageError::Unreadable(_))
         ));
         // In T-SQL too: no second page, no TOP, nothing after the order.
-        use spelaion_driver_sqlserver::SqlServerDialect;
+        use spelaion_dialect::SqlServerDialect;
         assert_eq!(
             table_page_sql(&SqlServerDialect, &page("", "")).unwrap(),
             "SELECT *\nFROM main.orders\nORDER BY\n(SELECT NULL)\n\nOFFSET 1000 ROWS FETCH NEXT 500 ROWS ONLY"

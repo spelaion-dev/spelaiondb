@@ -1046,9 +1046,9 @@ fn mysql_columns(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_mysql::MysqlDialect;
-    use spelaion_driver_postgres::PostgresDialect;
-    use spelaion_driver_sqlserver::SqlServerDialect;
+    use spelaion_dialect::MysqlDialect;
+    use spelaion_dialect::PostgresDialect;
+    use spelaion_dialect::SqlServerDialect;
 
     fn change(
         kind: PrincipalKind,

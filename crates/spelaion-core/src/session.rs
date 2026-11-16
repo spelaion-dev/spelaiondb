@@ -132,6 +132,49 @@ impl StatementError {
     }
 }
 
+/// The request a statement is, for an engine whose language is not SQL (ADR-056), run in the
+/// session's current database: `None` for an engine queried with SQL. A statement the core
+/// cannot read is an error with its position, and nothing is sent.
+async fn request_of(
+    language: &dyn Dialect,
+    connection: &dyn Connection,
+    statement: &str,
+) -> Option<Result<serde_json::Value, DriverError>> {
+    if !language.reads_requests() {
+        return None;
+    }
+    let database = connection
+        .current_database()
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    Some(
+        language
+            .to_request(statement, &database)?
+            .map_err(|error| request_error(statement, error)),
+    )
+}
+
+/// A statement the core could not read, as the error the editor shows at its place.
+fn request_error(statement: &str, error: spelaion_driver_api::RequestError) -> DriverError {
+    let at = error.position.min(statement.len());
+    // The engine-like position: characters, 1-based, within the statement.
+    let position = statement
+        .get(..at)
+        .map(|before| before.chars().count() as u32 + 1);
+    DriverError::Database {
+        code: None,
+        message: format!(
+            "SpelaionDB could not read this statement: {}",
+            error.message
+        ),
+        detail: None,
+        hint: None,
+        position,
+    }
+}
+
 pub struct Session {
     /// Unique in this process: a result read through this session remembers it (SDB-137).
     id: u64,
@@ -166,6 +209,9 @@ pub struct Session {
     /// The connection is read-only (ADR-053): a run refuses, before anything is sent, a script
     /// with a statement that is not a read, a session setting or transaction control.
     read_only: bool,
+    /// The server a PostgreSQL session reached (SDB-169), read by [`crate::open_connection`]
+    /// when it opens; `None` for the other engines and for sessions built without it.
+    server_family: Option<crate::ServerFamily>,
 }
 
 /// How long Commit, Rollback or the auto-commit switch wait for one of the core's own reads
@@ -264,7 +310,27 @@ impl Session {
             cancel_gate: CancelGate::default(),
             masking: Arc::new(MaskPolicy::none()),
             read_only: false,
+            server_family: None,
         }
+    }
+
+    /// The server this PostgreSQL session reached (SDB-169): which barriers it enforces.
+    pub fn with_server_family(mut self, family: crate::ServerFamily) -> Self {
+        self.server_family = Some(family);
+        self
+    }
+
+    pub fn server_family(&self) -> Option<&crate::ServerFamily> {
+        self.server_family.as_ref()
+    }
+
+    /// Why a read that relies on the engine's read-only transaction (agents' reads, streaming
+    /// exports, column statistics, the data search) cannot run on this session, if it cannot:
+    /// its server accepts `BEGIN READ ONLY` without enforcing it (SDB-169).
+    pub fn read_only_transaction_refusal(&self) -> Option<String> {
+        self.server_family
+            .as_ref()
+            .and_then(crate::ServerFamily::read_only_transactions_refusal)
     }
 
     /// Makes the session refuse every script a read-only connection does not run (ADR-053).
@@ -646,6 +712,9 @@ impl Session {
         };
         let spans = dialect.split_statements(&script);
         let engine = dialect.name();
+        // An engine whose language is not SQL is sent the request the core reads from each
+        // statement, never its text (ADR-056).
+        let language = dialect.clone();
         let session_dialect = self.dialect.clone();
         let connection = self.connection.clone();
         let results = self.results.clone();
@@ -670,8 +739,11 @@ impl Session {
         let cancels = self.cancels.clone();
         let cancel_gate = self.cancel_gate.clone();
         let mut health = self.health.subscribe();
+        let losing = self.health.clone();
+        let losing_in_run = self.health.clone();
+        let total_statements = spans.len();
 
-        Box::pin(async_stream::stream! {
+        let run = Box::pin(async_stream::stream! {
             if let Some(refusal) = refusal {
                 let index = refusal.index;
                 let total = spans.len();
@@ -791,7 +863,16 @@ impl Session {
                 let execute = async {
                     match plan_mode {
                         Some(mode) => connection.execute_plan(text, mode).await,
-                        None => connection.execute(text, &options).await,
+                        None => match request_of(&*language, &*connection, text).await {
+                            Some(Ok(request)) => connection.execute_request(request, &options).await,
+                            Some(Err(error)) => Err(error),
+                            // A language sent as text may still refuse a statement (CQL's
+                            // `USE`): nothing is sent.
+                            None => match language.refuse_statement(text) {
+                                Some(error) => Err(request_error(text, error)),
+                                None => connection.execute(text, &options).await,
+                            },
+                        },
                     }
                 };
                 tokio::pin!(execute);
@@ -811,6 +892,11 @@ impl Session {
                     }
                     Ok(mut events) => {
                         let mut current: Option<ResultId> = None;
+                        // Every statement the engine finishes ends with `Done` or an error. A
+                        // stream that ends without either was cut off: the driver's actor
+                        // stopped halfway (a panic in its thread, SDB-163). Its rows are not
+                        // the whole result, and the connection cannot be trusted any more.
+                        let mut finished = false;
                         loop {
                             let event = match until(events.next(), deadline, timed_out).await {
                                 Waited::Ready(event) => event,
@@ -820,7 +906,29 @@ impl Session {
                                     continue;
                                 }
                             };
-                            let Some(event) = event else { break };
+                            let Some(event) = event else {
+                                if !finished {
+                                    if let Some(result) = current.take() {
+                                        results.complete(result);
+                                    }
+                                    if cancelled() || timed_out {
+                                        failure = Some(StatementError::from_driver(
+                                            DriverError::Cancelled,
+                                            &script,
+                                            span,
+                                        ));
+                                    } else {
+                                        losing_in_run.lose(format!(
+                                            "the connection stopped in the middle of a statement: {}",
+                                            crate::panics::INTERNAL_ERROR
+                                        ));
+                                        failure = Some(internal_statement_error(
+                                            "the connection stopped in the middle of the statement",
+                                        ));
+                                    }
+                                }
+                                break;
+                            };
                             answered.get_or_insert_with(Instant::now);
                             match event {
                                 Ok(ExecEvent::Columns(schema)) => {
@@ -854,6 +962,7 @@ impl Session {
                                         results.complete(result);
                                     }
                                     rows_affected = rows;
+                                    finished = true;
                                 }
                                 Err(e) => {
                                     if let Some(result) = current.take() {
@@ -1014,8 +1123,85 @@ impl Session {
                 failed: summary.failed > 0,
                 summary,
             };
-        })
+        });
+        end_on_panic(run, losing, total_statements)
     }
+}
+
+/// The error of a statement that an internal error stopped (SDB-163).
+fn internal_statement_error(what: &str) -> StatementError {
+    StatementError {
+        message: format!(
+            "{what}: {}. Reconnect to go on: nothing is re-run on its own.",
+            crate::panics::INTERNAL_ERROR
+        ),
+        code: None,
+        detail: None,
+        hint: None,
+        script_offset: None,
+        cancelled: false,
+        timed_out: false,
+    }
+}
+
+/// `run`, ending as a failed run if it panics (SDB-163): the statement that was running fails
+/// with an internal error, the run finishes, and the session is lost (ADR-028: what state the
+/// connection was left in is unknown, so it is never used again; nothing is re-run). Without
+/// this the app would wait for the end of the run forever.
+fn end_on_panic(
+    run: BoxStream<'static, CoreEvent>,
+    health: Health,
+    statements: usize,
+) -> BoxStream<'static, CoreEvent> {
+    Box::pin(async_stream::stream! {
+        let mut run = std::panic::AssertUnwindSafe(run).catch_unwind();
+        let mut summary = ScriptSummary { statements, ..Default::default() };
+        let mut running = None;
+        while let Some(event) = run.next().await {
+            match event {
+                Ok(event) => {
+                    match &event {
+                        CoreEvent::StatementStarted { index, .. } => {
+                            summary.executed += 1;
+                            running = Some(*index);
+                        }
+                        CoreEvent::StatementFinished { .. } => {
+                            summary.succeeded += 1;
+                            running = None;
+                        }
+                        CoreEvent::StatementFailed { .. } => {
+                            summary.failed += 1;
+                            running = None;
+                        }
+                        CoreEvent::ScriptFinished { .. } => running = None,
+                        CoreEvent::ResultStarted { .. }
+                        | CoreEvent::Rows { .. }
+                        | CoreEvent::Notice { .. }
+                        | CoreEvent::ErrorPaused { .. }
+                        | CoreEvent::HistoryWarning { .. } => {}
+                    }
+                    yield event;
+                }
+                Err(_) => {
+                    health.lose(format!("a run was stopped by {}", crate::panics::INTERNAL_ERROR));
+                    if let Some(index) = running {
+                        summary.failed += 1;
+                        summary.stop = Some(ScriptStop::Failed { index });
+                        yield CoreEvent::StatementFailed {
+                            index,
+                            error: internal_statement_error("the statement did not finish"),
+                        };
+                    }
+                    yield CoreEvent::ScriptFinished {
+                        executed: summary.executed,
+                        failed: true,
+                        summary,
+                    };
+                    break;
+                }
+            }
+        }
+    })
 }
 
 /// What [`until`] got.
@@ -1114,7 +1300,7 @@ mod tests {
     async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
         let session = Session::new(
             driver.connect(&params).await.expect("connecting"),
-            driver.dialect(),
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         );
         // As an editor tab's session does (ADR-031).
@@ -1136,11 +1322,19 @@ mod tests {
         let mut out = vec![
             (
                 "sqlite",
-                session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+                session(
+                    crate::open::test_driver(spelaion_config::Engine::Sqlite).as_ref(),
+                    memory(),
+                )
+                .await,
             ),
             (
                 "duckdb",
-                session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+                session(
+                    crate::open::test_driver(spelaion_config::Engine::Duckdb).as_ref(),
+                    memory(),
+                )
+                .await,
             ),
         ];
         let server = |var: &str, user: &str, password: &str, database: &str| {
@@ -1159,30 +1353,38 @@ mod tests {
         if let Some(params) = server("SPELAION_TEST_PG", "spelaion", "spelaion", "spelaion") {
             out.push((
                 "postgres",
-                session(&spelaion_driver_postgres::PostgresDriver, params).await,
+                session(
+                    crate::open::test_driver(spelaion_config::Engine::Postgres).as_ref(),
+                    params,
+                )
+                .await,
             ));
         }
         for (name, var, driver) in [
             (
                 "mysql",
                 "SPELAION_TEST_MYSQL",
-                spelaion_driver_mysql::MysqlDriver::mysql(),
+                crate::open::test_driver(spelaion_config::Engine::Mysql),
             ),
             (
                 "mariadb",
                 "SPELAION_TEST_MARIADB",
-                spelaion_driver_mysql::MysqlDriver::mariadb(),
+                crate::open::test_driver(spelaion_config::Engine::Mariadb),
             ),
         ] {
             if let Some(params) = server(var, "spelaion", "spelaion", "spelaion") {
-                out.push((name, session(&driver, params).await));
+                out.push((name, session(driver.as_ref(), params).await));
             }
         }
         if let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1", "master") {
             params.tls = TlsMode::Require;
             out.push((
                 "sqlserver",
-                session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+                session(
+                    crate::open::test_driver(spelaion_config::Engine::Sqlserver).as_ref(),
+                    params,
+                )
+                .await,
             ));
         }
         out

@@ -191,13 +191,47 @@ export const commands = {
 	 *  hand or by the package manager. Only that fixed address can be opened.
 	 */
 	updateOpenReleasesPage: () => typedError<null, string>(__TAURI_INVOKE("update_open_releases_page")),
+	/**
+	 *  Every plugin of ours: the build in use, what is refused and why, what the catalogue offers.
+	 *  Reads only this machine: it fetches nothing.
+	 */
+	pluginsOverview: () => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_overview")),
+	/**
+	 *  Reads the published catalogue and accepts it, if the "check for updates" setting allows it
+	 *  and this SpelaionDB has the catalogue's key (else the core's error says which). For when
+	 *  the Plugins page opens. The engines are swapped when it is accepted.
+	 */
+	pluginsRefreshCatalogue: () => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_refresh_catalogue")),
+	/**
+	 *  Installs the newest build the accepted catalogue offers of the plugin `name`: an install or
+	 *  an update, on the user's click. `install` is an id the page chooses, for
+	 *  `pluginsCancelInstall` and the `PluginInstallProgress` events. The next connection of its
+	 *  engines starts the new build; connections already open keep theirs.
+	 */
+	pluginsInstall: (install: number, name: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_install", { install, name })),
+	/**  Stops the install `install`, if it runs. Nothing of it is kept. */
+	pluginsCancelInstall: (install: number) => __TAURI_INVOKE<void>("plugins_cancel_install", { install }),
+	/**
+	 *  Installs a file the user picked in the app's file dialog: a plugin's archive (installed only
+	 *  as the accepted catalogue's entry with its SHA-256) or, for a file whose name ends in
+	 *  `.signed`, a catalogue with its signature (accepted only with our signature, not older than
+	 *  the one kept). The engines are swapped.
+	 */
+	pluginsInstallFile: (path: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_install_file", { path })),
+	/**
+	 *  Removes the build `version` of the plugin `name` from the user's personal folder (one the
+	 *  overview lists in `installed`). If that build is running, nothing is removed until
+	 *  `confirmed`: removing it stops it, and its sessions are lost (ADR-028). The engines are
+	 *  swapped, so the next connection starts whatever build is left.
+	 */
+	pluginsRemove: (name: string, version: string, confirmed: boolean) => typedError<PluginRemoval_Serialize, string>(__TAURI_INVOKE("plugins_remove", { name, version, confirmed })),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
 	/**
 	 *  Whether there is a system keychain. Without one (Linux with no Secret Service running) the
 	 *  forms cannot offer to save a password: it is asked when connecting.
 	 */
-	keychainAvailable: () => __TAURI_INVOKE<boolean>("keychain_available"),
+	keychainAvailable: () => typedError<boolean, string>(__TAURI_INVOKE("keychain_available")),
 	/**  Tunnels a new connection can use (from the repository and the personal directory). */
 	listTunnels: () => typedError<TunnelItem_Serialize[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**
@@ -502,6 +536,12 @@ export const commands = {
 	 *  for the explorer's "Copy qualified name".
 	 */
 	qualifiedNames: (session: string, paths: ObjectPathItem[]) => typedError<string[], string>(__TAURI_INVOKE("qualified_names", { session, paths })),
+	/**
+	 *  The statement that shows an object of an engine whose language is not SQL, written by the
+	 *  core (ADR-056): the explorer opens it in an editor tab and runs it. `None` for SQL, whose
+	 *  objects open in a table data tab.
+	 */
+	browseStatement: (session: string, schema: string, name: string, kind: string, comment: string | null) => typedError<string | null, string>(__TAURI_INVOKE("browse_statement", { session, schema, name, kind, comment })),
 	/**  What the explorer may offer on this session's engine: the core decides (ADR-026). */
 	objectActions: (session: string) => typedError<ObjectActionsItem, string>(__TAURI_INVOKE("object_actions", { session })),
 	/**
@@ -856,6 +896,8 @@ export const commands = {
 export const events = {
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
+	pluginInstallProgress: makeEvent<PluginInstallProgress, PluginInstallProgress>("plugin-install-progress"),
+	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
 	transactionChanged: makeEvent<TransactionChanged_Serialize, TransactionChanged_Deserialize>("transaction-changed"),
@@ -1530,6 +1572,8 @@ export type ConnectionDraftItem_Deserialize = {
 	host: string,
 	port?: number | null,
 	database: string,
+	/**  DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316). */
+	fileFolder: boolean,
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -1588,6 +1632,8 @@ export type ConnectionDraftItem_Serialize = {
 	host: string,
 	port: number | null,
 	database: string,
+	/**  DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316). */
+	fileFolder: boolean,
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -1650,6 +1696,11 @@ export type ConnectionItem_Deserialize = {
 	mcpExposed: boolean,
 	historyEnabled: boolean,
 	readOnly: boolean,
+	/**
+	 *  Whether its engine is queried with SQL. One that is not (ADR-056) is read by the core in
+	 *  its own language: what the app writes SQL for is not offered on it.
+	 */
+	sql: boolean,
 };
 
 export type ConnectionItem_Serialize = {
@@ -1672,6 +1723,11 @@ export type ConnectionItem_Serialize = {
 	mcpExposed: boolean,
 	historyEnabled: boolean,
 	readOnly: boolean,
+	/**
+	 *  Whether its engine is queried with SQL. One that is not (ADR-056) is read by the core in
+	 *  its own language: what the app writes SQL for is not offered on it.
+	 */
+	sql: boolean,
 };
 
 /**
@@ -2216,9 +2272,18 @@ export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;
 export type EngineItem_Deserialize = {
 	id: string,
 	name: string,
+	/**
+	 *  The engine its connections are saved as (`postgres` for CockroachDB, SDB-169): the
+	 *  same as `id` except for a server reached through another engine's protocol. `None`
+	 *  while it is only planned.
+	 */
+	engine?: string | null,
+	/**  What a new connection of a kind starts from: its server's usual user and database. */
+	defaultUser?: string | null,
+	defaultDatabase?: string | null,
 	/**  `relational`, `analytical` or `nosql`. */
 	category: string,
-	/**  `network` or `file`. */
+	/**  `network`, `file` or `folder` (a folder of files read through DuckDB, SDB-316). */
 	access: string,
 	defaultPort?: number | null,
 	available: boolean,
@@ -2226,15 +2291,39 @@ export type EngineItem_Deserialize = {
 	sessionSchema: boolean,
 	/**  Isolation levels a session can be set to (`read-committed`…); empty for one level. */
 	isolationLevels: string[],
+	/**
+	 *  Queried with SQL. An engine that is not (ADR-056) has no read-only mode, no agents and no
+	 *  session setup yet: the form does not offer them.
+	 */
+	sql: boolean,
+	/**
+	 *  The core has a read barrier for this engine, so the form offers read-only connections and
+	 *  agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
+	 */
+	readBarrier: boolean,
+	/**
+	 *  Agents' writes can run on this engine (`runs_agent_writes`): the form offers them only
+	 *  here, and says they are not available on the others.
+	 */
+	agentWrites: boolean,
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
 export type EngineItem_Serialize = {
 	id: string,
 	name: string,
+	/**
+	 *  The engine its connections are saved as (`postgres` for CockroachDB, SDB-169): the
+	 *  same as `id` except for a server reached through another engine's protocol. `None`
+	 *  while it is only planned.
+	 */
+	engine: string | null,
+	/**  What a new connection of a kind starts from: its server's usual user and database. */
+	defaultUser: string | null,
+	defaultDatabase: string | null,
 	/**  `relational`, `analytical` or `nosql`. */
 	category: string,
-	/**  `network` or `file`. */
+	/**  `network`, `file` or `folder` (a folder of files read through DuckDB, SDB-316). */
 	access: string,
 	defaultPort: number | null,
 	available: boolean,
@@ -2242,6 +2331,21 @@ export type EngineItem_Serialize = {
 	sessionSchema: boolean,
 	/**  Isolation levels a session can be set to (`read-committed`…); empty for one level. */
 	isolationLevels: string[],
+	/**
+	 *  Queried with SQL. An engine that is not (ADR-056) has no read-only mode, no agents and no
+	 *  session setup yet: the form does not offer them.
+	 */
+	sql: boolean,
+	/**
+	 *  The core has a read barrier for this engine, so the form offers read-only connections and
+	 *  agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
+	 */
+	readBarrier: boolean,
+	/**
+	 *  Agents' writes can run on this engine (`runs_agent_writes`): the form offers them only
+	 *  here, and says they are not available on the others.
+	 */
+	agentWrites: boolean,
 };
 
 /**  The answer to a paused run. */
@@ -3254,14 +3358,18 @@ export type McpInstallPlanItem = {
 
 export type McpInstallStateItem = "noFile" | "notInstalled" | "installed" | "different" | "unreadable";
 
-export type McpReadOnlyReasonItem = "allAgents" | "connection" | "writesDenied" | "confirmUnsupported";
+export type McpReadOnlyReasonItem = "allAgents" | "connection" | "writesDenied" | "confirmUnsupported" | 
+/**  The engine cannot run agents' writes yet (`runs_agent_writes`). */
+"engineWithoutWrites";
 
 export type McpSettingsItem = {
 	readOnly: boolean,
 	outputFormat: ToolOutputItem,
 };
 
-export type McpVisibilityItem = "visible" | "notExposed" | "untrusted";
+export type McpVisibilityItem = "visible" | "notExposed" | "untrusted" | 
+/**  The engine has no agents' barrier yet (ADR-056). */
+"noAgents";
 
 /**  A connection moved to another folder. */
 export type MovedItem = {
@@ -3487,7 +3595,10 @@ export type ObjectItem = ObjectItem_Serialize | ObjectItem_Deserialize;
 export type ObjectItem_Deserialize = {
 	schema: string,
 	name: string,
-	/**  `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`. */
+	/**
+	 *  `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`, and for
+	 *  engines whose language is not SQL `collection`, `node_label`, `relationship_type`.
+	 */
 	kind: string,
 	estimatedRows?: number | null,
 	comment?: string | null,
@@ -3496,7 +3607,10 @@ export type ObjectItem_Deserialize = {
 export type ObjectItem_Serialize = {
 	schema: string,
 	name: string,
-	/**  `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`. */
+	/**
+	 *  `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`, and for
+	 *  engines whose language is not SQL `collection`, `node_label`, `relationship_type`.
+	 */
 	kind: string,
 	estimatedRows: number | null,
 	comment: string | null,
@@ -3994,6 +4108,172 @@ export type PlanView = {
 	descending: boolean,
 	collapsed: number[],
 	findingsOnly: boolean,
+};
+
+/**  The build of a plugin that its engines start. */
+export type PluginInUse = {
+	version: string,
+	source: PluginSource,
+	/**  The engines it serves, by the name the configuration uses (`duckdb`). */
+	engines: string[],
+};
+
+/**  How far an install's download is. Sent a few times a second at most. */
+export type PluginInstallProgress = {
+	/**  The id the page gave `pluginsInstall`. */
+	install: number,
+	received: number | null,
+	/**  The archive's size, from the catalogue. */
+	total: number | null,
+};
+
+/**  One plugin of ours, as this machine has it. */
+export type PluginItem = PluginItem_Serialize | PluginItem_Deserialize;
+
+/**  One plugin of ours, as this machine has it. */
+export type PluginItem_Deserialize = {
+	/**  The plugin's name: `spelaiondb-plugin-duckdb`. */
+	name: string,
+	/**  Every engine anything here says it serves. */
+	engines: string[],
+	/**  The build started for its engines, if any. */
+	inUse?: PluginInUse | null,
+	/**  The builds on this machine that are not started, newest first. */
+	refused: PluginRefused[],
+	/**  What the catalogue offers, if anything usable here. */
+	offered?: PluginOffered | null,
+	/**  The offered version, when it is newer than the one in use: an update. */
+	update?: string | null,
+	/**  The pinned build, when it should have come inside the installer and is not there. */
+	missing?: PluginMissing | null,
+	/**  Why its engines start nothing although a build is here, as they say it. */
+	message?: string | null,
+	/**  The versions in the user's personal folder: what `pluginsRemove` can remove. */
+	installed: string[],
+	/**  Sessions open now on its engines (editor tabs and the explorer's, one per connection). */
+	openSessions: number,
+};
+
+/**  One plugin of ours, as this machine has it. */
+export type PluginItem_Serialize = {
+	/**  The plugin's name: `spelaiondb-plugin-duckdb`. */
+	name: string,
+	/**  Every engine anything here says it serves. */
+	engines: string[],
+	/**  The build started for its engines, if any. */
+	inUse: PluginInUse | null,
+	/**  The builds on this machine that are not started, newest first. */
+	refused: PluginRefused[],
+	/**  What the catalogue offers, if anything usable here. */
+	offered: PluginOffered | null,
+	/**  The offered version, when it is newer than the one in use: an update. */
+	update: string | null,
+	/**  The pinned build, when it should have come inside the installer and is not there. */
+	missing: PluginMissing | null,
+	/**  Why its engines start nothing although a build is here, as they say it. */
+	message: string | null,
+	/**  The versions in the user's personal folder: what `pluginsRemove` can remove. */
+	installed: string[],
+	/**  Sessions open now on its engines (editor tabs and the explorer's, one per connection). */
+	openSessions: number,
+};
+
+/**  A build pinned into this SpelaionDB whose program is not next to the app. */
+export type PluginMissing = {
+	version: string,
+	/**  The file that is not there. */
+	program: string,
+	engines: string[],
+};
+
+/**  The newest build the catalogue offers for this computer and this SpelaionDB. */
+export type PluginOffered = {
+	version: string,
+	engines: string[],
+	/**  What installing it downloads, in bytes. */
+	archiveSize: number | null,
+	/**
+	 *  Where it is downloaded from, to show: a release of the plugin's repository. Written by
+	 *  the core; no command takes it back.
+	 */
+	address: string,
+};
+
+/**  A build on this machine that is not started, and why (the core's words). */
+export type PluginRefused = {
+	version: string,
+	source: PluginSource,
+	engines: string[],
+	why: string,
+};
+
+/**  What removing a build did. */
+export type PluginRemoval = PluginRemoval_Serialize | PluginRemoval_Deserialize;
+
+/**  What removing a build did. */
+export type PluginRemoval_Deserialize = 
+/**
+ *  Nothing was removed: the build is running, and removing it stops it and loses its
+ *  sessions. Call again with `confirmed` once the user agreed.
+ */
+{ kind: "needsConfirmation"; openSessions: number } | 
+/**  Removed; the engines were swapped. */
+{ kind: "removed"; overview: PluginsOverview_Deserialize };
+
+/**  What removing a build did. */
+export type PluginRemoval_Serialize = 
+/**
+ *  Nothing was removed: the build is running, and removing it stops it and loses its
+ *  sessions. Call again with `confirmed` once the user agreed.
+ */
+{ kind: "needsConfirmation"; openSessions: number } | 
+/**  Removed; the engines were swapped. */
+{ kind: "removed"; overview: PluginsOverview_Serialize };
+
+/**  Where a build is on this machine. */
+export type PluginSource = 
+/**  Next to the app: it came inside the installer. */
+"shipped" | 
+/**  In the user's personal folder: installed from the Plugins page. */
+"installed";
+
+/**
+ *  A catalogue was accepted without the page asking (where the app checks for its own
+ *  updates): what the page shows may have changed.
+ */
+export type PluginsChanged = {
+	catalogueSerial: number | null,
+};
+
+/**  What the Plugins page shows. */
+export type PluginsOverview = PluginsOverview_Serialize | PluginsOverview_Deserialize;
+
+/**  What the Plugins page shows. */
+export type PluginsOverview_Deserialize = {
+	/**  Whether this SpelaionDB can accept a catalogue at all: it carries the catalogue's key. */
+	acceptsCatalogue: boolean,
+	/**
+	 *  Whether the catalogue may be read now: the "check for updates" setting, unless
+	 *  `SPELAION_NO_UPDATES` is set.
+	 */
+	updatesAllowed: boolean,
+	/**  The serial of the catalogue accepted last, if any. */
+	catalogueSerial?: number | null,
+	plugins: PluginItem_Deserialize[],
+};
+
+/**  What the Plugins page shows. */
+export type PluginsOverview_Serialize = {
+	/**  Whether this SpelaionDB can accept a catalogue at all: it carries the catalogue's key. */
+	acceptsCatalogue: boolean,
+	/**
+	 *  Whether the catalogue may be read now: the "check for updates" setting, unless
+	 *  `SPELAION_NO_UPDATES` is set.
+	 */
+	updatesAllowed: boolean,
+	/**  The serial of the catalogue accepted last, if any. */
+	catalogueSerial: number | null,
+	plugins: PluginItem_Serialize[],
 };
 
 export type PreviewColumnItem = {

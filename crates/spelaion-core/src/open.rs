@@ -1,6 +1,7 @@
 //! Opening a connection from the configuration: tunnel (if any) + driver + session.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -9,14 +10,10 @@ use spelaion_config::{
     ResolvedTunnel, SshAuth, TunnelPasswords,
 };
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
+    ConnectParams, Connection, Dialect, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
     RemoteProcess, Secret,
 };
-use spelaion_driver_duckdb::DuckdbDriver;
-use spelaion_driver_mysql::MysqlDriver;
-use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
-use spelaion_driver_sqlserver::SqlServerDriver;
 use spelaion_ssh::{
     AuthMethod, HopSpec, Interaction, KnownHosts, LocalPort, ProxyKind, ProxySpec, RemoteSignals,
     SshError, SsmSpec, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
@@ -29,28 +26,260 @@ use crate::{ResultStore, Session};
 
 /// Available engines, by the name the configuration uses (`engine = "postgres"`).
 pub struct Engines {
-    drivers: HashMap<&'static str, Arc<dyn Driver>>,
+    drivers: HashMap<String, Arc<dyn Driver>>,
 }
 
 impl Engines {
-    /// The engines that ship with SpelaionDB.
+    /// The engines that ship with SpelaionDB: the driver compiled in (SQLite) and the pinned
+    /// plugins next to this program (ADR-041, ADR-042). What has no personal folder to read
+    /// uses this.
     pub fn builtin() -> Self {
-        let drivers: [Arc<dyn Driver>; 6] = [
-            Arc::new(PostgresDriver),
-            Arc::new(SqliteDriver::default()),
-            Arc::new(DuckdbDriver::default()),
-            Arc::new(SqlServerDriver),
-            Arc::new(MysqlDriver::mysql()),
-            Arc::new(MysqlDriver::mariadb()),
-        ];
+        Self::compiled_in()
+            .with_our_plugins(None)
+            .with_dev_plugins()
+    }
+
+    /// [`Engines::builtin`], and the plugins the user installed from the Plugins page
+    /// (ADR-055): for each plugin of ours, the newest build next to this program or in `store`
+    /// that the pins or the catalogue this SpelaionDB accepted name
+    /// ([`crate::plugins::choice::states`]). What the app and `spelaiondb mcp` use; neither
+    /// downloads anything here.
+    ///
+    /// The pinned builds that came inside the installer as archives are installed into
+    /// `store` first (ADR-057, [`crate::plugins::install_bundled`]).
+    pub fn builtin_with(store: &crate::plugins::installed::PluginStore) -> Self {
+        crate::plugins::install_bundled(store);
+        Self::compiled_in()
+            .with_our_plugins(Some(store))
+            .with_dev_plugins()
+    }
+
+    /// The drivers compiled into the core.
+    fn compiled_in() -> Self {
+        let drivers: Vec<Arc<dyn Driver>> = vec![Arc::new(SqliteDriver::default())];
         Self {
-            drivers: drivers.into_iter().map(|d| (d.engine(), d)).collect(),
+            drivers: drivers
+                .into_iter()
+                .map(|d| (d.engine().to_string(), d))
+                .collect(),
         }
     }
 
-    pub fn get(&self, engine: Engine) -> Option<Arc<dyn Driver>> {
-        self.drivers.get(engine.as_str()).cloned()
+    /// These engines with our plugins that are on this machine: next to this program and, with
+    /// a store, the ones installed there, under the catalogue it keeps.
+    fn with_our_plugins(self, store: Option<&crate::plugins::installed::PluginStore>) -> Self {
+        let shipped = crate::plugins::shipped_folder();
+        let catalogue = store.and_then(|store| store.catalogue());
+        let states = crate::plugins::choice::states(
+            crate::plugins::pins::Pins::shipped(),
+            shipped.as_deref(),
+            store,
+            catalogue.as_ref(),
+            &crate::plugins::installed::AppBuild::this(),
+        );
+        self.with_plugin_states(&states)
     }
+
+    /// A development build can be pointed at a plugin built on this machine, engine by engine,
+    /// in place of anything else; a release build cannot (ADR-042).
+    fn with_dev_plugins(self) -> Self {
+        let mut engines = self;
+        // Every engine: one added to the configuration is pointed at here without a list to
+        // keep in step (`Engine::ALL` is checked to be complete in spelaion-config).
+        for engine in Engine::ALL {
+            let variable = crate::plugins::dev_plugin_variable(engine.as_str());
+            let pointed = std::env::var_os(variable);
+            if let Some(program) =
+                crate::plugins::dev_plugin(crate::plugins::RELEASE_BUILD, pointed)
+            {
+                let plugin = crate::plugins::plugin_at(&program).driver(engine.as_str());
+                engines = engines.with_plugin(Arc::new(plugin));
+            }
+        }
+        engines
+    }
+
+    /// These engines with `driver` as the one for its engine, in place of any other: how a
+    /// driver that is not compiled in (a plugin, ADR-041) is used. It brings the wire only:
+    /// the dialect is the core's ([`dialect_of`]).
+    pub fn with_driver(mut self, driver: Arc<dyn Driver>) -> Self {
+        self.drivers.insert(driver.engine().to_string(), driver);
+        self
+    }
+
+    /// These engines with a plugin's driver for its engine. What only the core can reach (a
+    /// database on another machine, ADR-018) stays with the driver compiled in, if there is
+    /// one.
+    fn with_plugin(self, plugin: Arc<dyn Driver>) -> Self {
+        let driver = match self.driver(plugin.engine()) {
+            Some(own) => Arc::new(ThroughPlugin { plugin, own }),
+            None => plugin,
+        };
+        self.with_driver(driver)
+    }
+
+    /// These engines with the plugins `pins` names for this platform whose program is in
+    /// `folder` (ADR-042). **Only a pinned program is ever a plugin**: no other file of the
+    /// folder is looked at. A pinned program is started only while its file has the pinned
+    /// hash, checked at every start; one that does not is refused there, and its engines do not
+    /// fall back to anything else.
+    pub fn with_pinned_plugins(self, pins: &crate::plugins::pins::Pins, folder: &Path) -> Self {
+        let states = crate::plugins::choice::states(
+            pins,
+            Some(folder),
+            None,
+            None,
+            &crate::plugins::installed::AppBuild::this(),
+        );
+        self.with_plugin_states(&states)
+    }
+
+    /// These engines with what [`crate::plugins::choice::states`] decided for each plugin of
+    /// ours: the build it chose, started only while its file has the hash that names it; or,
+    /// when a plugin has builds here and none may be started (withdrawn, another protocol),
+    /// engines that say why. Neither falls back to anything else.
+    pub fn with_plugin_states(mut self, states: &[crate::plugins::choice::PluginState]) -> Self {
+        for state in states {
+            if let Some(chosen) = &state.chosen {
+                let plugin = crate::plugins::pinned_plugin(&chosen.program, &chosen.sha256);
+                for engine in &chosen.engines {
+                    self = self.with_plugin(Arc::new(plugin.driver(engine)));
+                }
+            } else if let Some(why) = state.message() {
+                let says_why = |engine: &String| {
+                    Arc::new(crate::plugins::choice::RefusedPlugin {
+                        engine: engine.clone(),
+                        why: why.clone(),
+                    })
+                };
+                if let Some(refused) = state.refused.first() {
+                    for engine in &refused.engines {
+                        self = self.with_plugin(says_why(engine));
+                    }
+                } else if let Some(missing) = &state.missing {
+                    // Not installed is not refused: an engine whose driver is compiled in is
+                    // still served by it. One served only by its plugin says which file is
+                    // missing, instead of "engine not available".
+                    for engine in &missing.engines {
+                        if self.driver(engine).is_none() {
+                            self = self.with_driver(says_why(engine));
+                        }
+                    }
+                }
+            }
+        }
+        self
+    }
+
+    pub fn get(&self, engine: Engine) -> Option<Arc<dyn Driver>> {
+        self.driver(engine.as_str())
+    }
+
+    /// The driver of an engine by the name the configuration uses. An engine served only by a
+    /// plugin has no other name here.
+    pub fn driver(&self, engine: &str) -> Option<Arc<dyn Driver>> {
+        self.drivers.get(engine).cloned()
+    }
+
+    /// Creates an empty database file for an embedded engine (SQLite, DuckDB), through that
+    /// engine's driver. An existing file is never touched.
+    pub async fn create_file_database(
+        &self,
+        engine: Engine,
+        path: &std::path::Path,
+    ) -> Result<(), DriverError> {
+        let not_a_file = || DriverError::Other(format!("{} is not a file", engine.as_str()));
+        match engine {
+            Engine::Sqlite | Engine::Duckdb => {}
+            Engine::Postgres
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Sqlserver
+            | Engine::Mongodb
+            | Engine::Clickhouse
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
+            | Engine::Databend
+            | Engine::Spanner
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => {
+                return Err(not_a_file());
+            }
+        }
+        let driver = self.get(engine).ok_or_else(not_a_file)?;
+        let Some(database) = path.to_str() else {
+            return Err(DriverError::Other(format!(
+                "{} is not a path this engine can be given",
+                path.display()
+            )));
+        };
+        driver.create_database(database).await
+    }
+}
+
+/// An engine served by a plugin, next to the driver compiled in for what a plugin cannot do:
+/// a database on another machine (ADR-018) runs through the core's own tunnel, which cannot be
+/// handed to another process (ADR-041).
+struct ThroughPlugin {
+    plugin: Arc<dyn Driver>,
+    own: Arc<dyn Driver>,
+}
+
+#[async_trait::async_trait]
+impl Driver for ThroughPlugin {
+    fn engine(&self) -> &str {
+        self.plugin.engine()
+    }
+
+    async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>, DriverError> {
+        if params.remote.is_some() {
+            self.own.connect(params).await
+        } else {
+            self.plugin.connect(params).await
+        }
+    }
+
+    async fn create_database(&self, database: &str) -> Result<(), DriverError> {
+        self.plugin.create_database(database).await
+    }
+}
+
+/// An engine's dialect: the core's own, found by the engine's name and never asked of its
+/// driver (ADR-041). What splits, classifies and guards a statement reads SQL with it.
+pub fn dialect_of(engine: Engine) -> Option<Arc<dyn Dialect>> {
+    spelaion_dialect::for_engine(engine.as_str())
+}
+
+/// Creates an empty database file for an embedded engine (SQLite, DuckDB) with the engines
+/// that ship with SpelaionDB. An existing file is never touched.
+pub async fn create_file_database(
+    engine: Engine,
+    path: &std::path::Path,
+) -> Result<(), DriverError> {
+    Engines::builtin().create_file_database(engine, path).await
+}
+
+/// A built-in engine's driver, for this crate's own tests: they name no driver crate.
+#[cfg(test)]
+pub(crate) fn test_driver(engine: Engine) -> Arc<dyn Driver> {
+    Engines::builtin()
+        .get(engine)
+        .expect("every engine of the configuration is built in")
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +309,15 @@ pub enum OpenError {
     /// closed again.
     #[error("{0}")]
     Setup(#[from] SetupError),
+
+    /// The connection is read-only, or the session only reads, and its server does not enforce
+    /// the barrier that relies on (SDB-169); it was closed again.
+    #[error("{0}")]
+    NoReadOnlyBarrier(String),
+
+    /// A folder of files could not be set up to be read alone (SDB-316); it was closed again.
+    #[error("{0}")]
+    FileFolder(String),
 }
 
 /// Open tunnels, shared between connections (ADR-004): two tabs against the same database,
@@ -232,6 +470,8 @@ pub struct OpenConnection {
     pub resolved: ResolvedConnection,
     /// What the connection's session setup did (ADR-037).
     pub setup: SetupReport,
+    /// For a folder of files (SDB-316), the views made of it and the files left out.
+    pub folder: Option<crate::file_folder::FolderReport>,
     tunnel: Option<ActiveTunnel>,
 }
 
@@ -273,6 +513,8 @@ pub async fn open_connection(
     let driver = engines
         .get(resolved.engine)
         .ok_or_else(|| OpenError::UnknownEngine(resolved.engine.as_str().into()))?;
+    let dialect = dialect_of(resolved.engine)
+        .ok_or_else(|| OpenError::UnknownEngine(resolved.engine.as_str().into()))?;
     if let Password::Prompt { save_to } = &resolved.password
         && options.password.is_none()
     {
@@ -281,6 +523,7 @@ pub async fn open_connection(
         });
     }
     let mut params = resolved.connect_params(options.password);
+    crate::mongodb_srv::resolve(&resolved, &mut params).await?;
     let tunnel = start_tunnel(
         &resolved,
         &mut params,
@@ -291,11 +534,46 @@ pub async fn open_connection(
     .await?;
 
     let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
+    // A folder of files: before anything else runs, its session is set up to read that folder
+    // alone, and locked (SDB-316). Only on the in-memory, read-only database the resolver made.
+    let folder = match &resolved.file_folder {
+        None => None,
+        Some(path) => {
+            if !(params.read_only && params.database == ":memory:") {
+                return Err(OpenError::FileFolder(
+                    "a folder of files is opened only as a read-only in-memory database".into(),
+                ));
+            }
+            let report = crate::file_folder::prepare(connection.as_ref(), dialect.as_ref(), path)
+                .await
+                .map_err(OpenError::FileFolder)?;
+            Some(report)
+        }
+    };
+    // Which server of PostgreSQL's or MySQL's protocol this is decides which of its barriers
+    // can be relied on (SDB-169, SDB-170): it is asked to the server, never taken from the file
+    // or the plugin.
+    let family = crate::server_family::read_family(connection.as_ref(), dialect.name()).await;
     // Every result of the session is masked as its connection says (ADR-051).
-    let session = Session::new(connection, driver.dialect(), results)
+    let mut session = Session::new(connection, dialect, results)
         .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
         // A read-only connection runs only reads, settings and transaction control (ADR-053).
         .with_read_only(resolved.params.read_only);
+    let refusal = family.as_ref().and_then(|family| {
+        let read_only = resolved
+            .params
+            .read_only
+            .then(|| family.read_only_sessions_refusal())
+            .flatten();
+        let reads = options
+            .read_only_session
+            .then(|| family.read_only_transactions_refusal())
+            .flatten();
+        read_only.or(reads)
+    });
+    if let Some(family) = family {
+        session = session.with_server_family(family);
+    }
     // A tunnel that goes down takes its sessions with it (ADR-028).
     match &tunnel {
         Some(ActiveTunnel::Ssh(t)) => session.health_handle().watch_tunnel(t.state()),
@@ -308,14 +586,37 @@ pub async fn open_connection(
         session,
         resolved,
         setup: SetupReport::default(),
+        folder,
         tunnel,
     };
+    // A read-only connection, or a session that only reads, on a server that would not keep
+    // it from writing: refused before anything of the connection's runs.
+    if let Some(reason) = refusal {
+        open.close().await;
+        return Err(OpenError::NoReadOnlyBarrier(reason));
+    }
     match apply_session_setup(&open.session, &open.resolved, restricted).await {
         Ok(report) => open.setup = report,
         Err(error) => {
             open.close().await;
             return Err(error.into());
         }
+    }
+    // The server must say the session is read-only now (SDB-170): one that accepted the
+    // statement and stayed writable gets no read-only connection, whatever it calls itself.
+    if open.resolved.params.read_only
+        && crate::session_setup::read_only_statement(open.session.dialect().name()).is_some()
+        && !crate::server_family::read_only_confirmed(
+            open.session.connection().as_ref(),
+            open.session.dialect().name(),
+        )
+        .await
+    {
+        open.close().await;
+        return Err(OpenError::NoReadOnlyBarrier(
+            "read-only mode is not available on this server: it accepted the session's              read-only mode and its session is still writable"
+                .into(),
+        ));
     }
     // Scripts split as the session reads text: its sql_mode, setup included (SDB-161).
     open.session.refresh_sql_mode().await;
@@ -425,6 +726,7 @@ pub async fn open_route(
         )));
     }
     let mut params = resolved.params.clone();
+    crate::mongodb_srv::resolve(resolved, &mut params).await?;
     let tunnel = start_tunnel(
         resolved,
         &mut params,

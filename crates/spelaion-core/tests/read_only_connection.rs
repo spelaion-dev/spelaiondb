@@ -22,6 +22,7 @@ use spelaion_core::{
 use spelaion_driver_api::{ExecEvent, ExecOptions, Secret, Value};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
+mod engines;
 mod support;
 use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
 
@@ -676,7 +677,7 @@ async fn read_only_sqlite_and_duckdb_files_refuse_writes_in_the_core_too() {
     let lite = ws.file("read_only.sqlite");
     let duck = ws.file("read_only.duckdb");
     std::fs::write(&lite, b"").unwrap();
-    spelaion_driver_duckdb::create_database(std::path::Path::new(&duck)).unwrap();
+    engines::create_database(spelaion_config::Engine::Duckdb, std::path::Path::new(&duck)).await;
     for (label, head) in [
         (
             "sqlite",

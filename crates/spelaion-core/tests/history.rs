@@ -1,5 +1,7 @@
 //! History is tested against real SQLite sessions and the on-disk personal store.
 
+mod engines;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -7,7 +9,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, HistoryEntry, QueryHistory, ResultStore, ScriptOptions, Session};
 use spelaion_driver_api::{ConnectParams, Driver, ExecOptions};
-use spelaion_driver_sqlite::SqliteDriver;
 
 fn history(name: &str) -> (QueryHistory, PathBuf) {
     let nonce = SystemTime::now()
@@ -22,7 +23,7 @@ fn history(name: &str) -> (QueryHistory, PathBuf) {
 }
 
 async fn session() -> Session {
-    let driver = SqliteDriver::default();
+    let driver = engines::sqlite();
     let connection = driver
         .connect(&ConnectParams {
             database: ":memory:".into(),
@@ -30,12 +31,15 @@ async fn session() -> Session {
         })
         .await
         .unwrap();
-    Session::new(connection, driver.dialect(), Arc::new(ResultStore::new())).with_options(
-        ExecOptions {
-            batch_size: 2,
-            ..Default::default()
-        },
+    Session::new(
+        connection,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
     )
+    .with_options(ExecOptions {
+        batch_size: 2,
+        ..Default::default()
+    })
 }
 
 async fn entries(history: &QueryHistory) -> Vec<HistoryEntry> {

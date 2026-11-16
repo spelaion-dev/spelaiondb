@@ -27,7 +27,8 @@ use std::time::{Duration, Instant};
 
 use spelaion_config::Safeguards;
 use spelaion_driver_api::{
-    CancelHandle, Dialect, DriverError, InsertTarget, ObjectKind, TableInfo, TransactionState,
+    CancelHandle, Dialect, DriverError, InsertTarget, ObjectKind, TableInfo, TextRows,
+    TransactionState,
 };
 
 pub use detect::ColumnKind;
@@ -713,7 +714,31 @@ pub async fn run_import(
         zone: zone(&request.options)?,
         mysql: session.dialect().name() == "mysql",
     };
-    let rows = load(session, request, &resolved, &normalizer, cancel, progress).await?;
+    // A panic while loading (SDB-163) rolls back the batch it was in, as any failure does, and
+    // the import ends with an error instead of unwinding into the app.
+    let loaded = crate::panics::catch_panic(load(
+        session,
+        request,
+        &resolved,
+        &normalizer,
+        cancel,
+        progress,
+    ))
+    .await;
+    let rows = match loaded {
+        Ok(rows) => rows?,
+        Err(_) => {
+            if let Ok(TransactionState::Open | TransactionState::Failed) =
+                session.connection().transaction_state().await
+            {
+                let _ = run_one(session, "ROLLBACK").await;
+            }
+            return Err(ImportError::Invalid(format!(
+                "the import stopped: {}; the batch it was loading was rolled back",
+                crate::panics::INTERNAL_ERROR
+            )));
+        }
+    };
     Ok(ImportSummary {
         schema: resolved.plan.schema,
         table: resolved.plan.table,
@@ -734,12 +759,19 @@ fn first_line(statement: &str) -> String {
 
 type Batch = Result<Vec<Vec<Option<String>>>, ImportError>;
 
-/// Reads the source in a blocking thread, a batch at a time: at most two batches wait.
-fn read_batches(request: &ImportRequest) -> tokio::sync::mpsc::Receiver<Batch> {
+/// Reads the source in a blocking thread, a batch at a time: at most two batches wait. The
+/// channel's end alone does not say the source was read to its end: the thread's handle does
+/// (it fails if the reader panicked, SDB-163), and is awaited before anything is committed.
+fn read_batches(
+    request: &ImportRequest,
+) -> (
+    tokio::sync::mpsc::Receiver<Batch>,
+    tokio::task::JoinHandle<()>,
+) {
     let (tx, rx) = tokio::sync::mpsc::channel::<Batch>(2);
     let source = request.source.clone();
     let options = request.options.clone();
-    tokio::task::spawn_blocking(move || {
+    let reader = tokio::task::spawn_blocking(move || {
         let mut reader = match RowReader::open(&source, &options) {
             Ok(reader) => reader,
             Err(e) => {
@@ -773,7 +805,7 @@ fn read_batches(request: &ImportRequest) -> tokio::sync::mpsc::Receiver<Batch> {
             }
         }
     });
-    rx
+    (rx, reader)
 }
 
 async fn load(
@@ -790,7 +822,7 @@ async fn load(
         "mysql" => "START TRANSACTION",
         _ => "BEGIN",
     };
-    let mut batches = read_batches(request);
+    let (mut batches, reader) = read_batches(request);
     let mut read = 0u64;
     let mut committed = 0u64;
     let mut in_transaction = 0u64;
@@ -818,11 +850,12 @@ async fn load(
                 });
             }
         };
-        let mut rows = Vec::with_capacity(batch.len());
+        // The batch as the columns of text a driver loads (in process or through a plugin).
+        let mut rows = TextRows::builder(resolved.sources.len());
         for (offset, row) in batch.into_iter().enumerate() {
             let mut values = Vec::with_capacity(resolved.sources.len());
             for (column, &source) in resolved.sources.iter().enumerate() {
-                let Some(text) = row[source].clone() else {
+                let Some(text) = row[source].as_deref() else {
                     values.push(None);
                     continue;
                 };
@@ -840,11 +873,13 @@ async fn load(
                     }
                 }
             }
-            rows.push(values);
+            rows.push(values.iter().map(|value| value.as_deref()))
+                .map_err(|e| ImportError::Source(e.to_string()))?;
         }
+        let rows = rows.finish();
         // Cut where a transaction ends, so commits fall every `commit_every` rows.
-        let mut rows = rows.into_iter().peekable();
-        while rows.peek().is_some() {
+        let mut taken = 0usize;
+        while taken < rows.len() {
             if cancel.is_cancelled() {
                 rollback(open).await;
                 return Err(ImportError::Cancelled { committed });
@@ -854,11 +889,12 @@ async fn load(
             } else {
                 request.commit_every - in_transaction
             };
-            let part: Vec<_> = rows
-                .by_ref()
-                .take(usize::try_from(room).unwrap_or(usize::MAX))
-                .collect();
-            let count = part.len() as u64;
+            let length = usize::try_from(room)
+                .unwrap_or(usize::MAX)
+                .min(rows.len() - taken);
+            let part = rows.slice(taken, length);
+            taken += length;
+            let count = length as u64;
             if !open {
                 run_one(session, begin)
                     .await
@@ -910,6 +946,20 @@ async fn load(
         rollback(open).await;
         return Err(ImportError::Cancelled { committed });
     }
+    // The reader stopped without an error of its own: it either read the whole source, or it
+    // panicked and the rows after its last batch were never read. Those are not committed.
+    if reader.await.is_err() {
+        rollback(open).await;
+        return Err(ImportError::Failed {
+            first: read + 1,
+            last: read + 1,
+            committed,
+            message: format!(
+                "the file could not be read past this row: {}",
+                crate::panics::INTERNAL_ERROR
+            ),
+        });
+    }
     if open {
         commit(
             session,
@@ -954,6 +1004,105 @@ async fn commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reader that panics halfway (SDB-163). Before, the end of its channel read as the end
+    /// of the file: the rows read so far were committed and the import reported success.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_import_whose_reader_panics_ends_as_an_error_and_commits_nothing() {
+        use futures_util::StreamExt as _;
+        use spelaion_driver_api::{ConnectParams, Driver as _};
+        let dir =
+            std::env::temp_dir().join(format!("spelaion-import-panic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("panic.db");
+        std::fs::File::create(&db).unwrap();
+        let driver = spelaion_driver_sqlite::SqliteDriver::default();
+        let session = Session::new(
+            driver
+                .connect(&ConnectParams {
+                    database: db.display().to_string(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap(),
+            spelaion_dialect::for_engine("sqlite").expect("a dialect"),
+            Arc::new(crate::ResultStore::new()),
+        );
+        crate::edit::run_one(&session, "create table t (id integer, name text)")
+            .await
+            .unwrap();
+        // More than a batch before the row that panics: the first batch is already loaded.
+        let mut text = String::from("id,name\n");
+        for id in 1..=IMPORT_BATCH_ROWS + 500 {
+            text.push_str(&format!("{id},n{id}\n"));
+        }
+        text.push_str(&format!("0,{}\n", source::TEST_PANIC_CELL));
+        let source = ImportSource::Text(text);
+        let shown = preview(&source, None, 100, "sqlite").unwrap();
+        let request = ImportRequest {
+            source,
+            options: shown.options,
+            target: ImportTarget::Existing {
+                schema: "main".into(),
+                table: "t".into(),
+            },
+            columns: vec![
+                ColumnMapping::Existing("id".into()),
+                ColumnMapping::Existing("name".into()),
+            ],
+            commit_every: 0,
+        };
+        let safeguards = Safeguards {
+            confirm_execution: false,
+            confirm_data_changes: false,
+            close_idle_after: None,
+            manual_commit: false,
+            smart_commit: false,
+        };
+        let nothing = |_: ImportProgress| {};
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            run_import(
+                &session,
+                &request,
+                &safeguards,
+                false,
+                true,
+                &ImportCancel::new(),
+                &nothing,
+            ),
+        )
+        .await
+        .expect("the import must end, not wait");
+        let error = outcome.expect_err("a reader that panicked is not a whole file");
+        assert!(error.to_string().contains("internal error"), "{error}");
+        assert!(
+            error.to_string().contains("0 rows were committed"),
+            "{error}"
+        );
+        // Nothing of it was kept, and the session still works.
+        let events: Vec<crate::CoreEvent> =
+            session.run_script("select count(*) from t").collect().await;
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                crate::CoreEvent::ResultStarted { result, .. } => Some(*result),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{events:?}"));
+        let stored = session.results().get(result).unwrap();
+        let stored = stored.read().unwrap();
+        let count = spelaion_driver_api::Value::from_array(
+            stored.window(0, 1)[0].column(0).as_ref(),
+            0,
+            stored.schema().columns[0].logical,
+        )
+        .unwrap();
+        assert_eq!(count, spelaion_driver_api::Value::Int(0));
+        drop(stored);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn user_typed_types_cannot_end_the_statement() {

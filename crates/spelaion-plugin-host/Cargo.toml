@@ -1,0 +1,21 @@
+[package]
+name = "spelaion-plugin-host"
+description = "The core's side of SpelaionDB's plugin protocol: an engine plugin's process as a driver (ADR-041)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+spelaion-driver-api.workspace = true
+spelaion-plugin-protocol.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+serde = "1"
+serde_json = "1"
+# process + io-util: the plugin is a child program, talked to through its pipes.
+tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "rt", "macros"] }
+
+[lints]
+workspace = true

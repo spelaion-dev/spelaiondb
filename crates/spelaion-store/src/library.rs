@@ -166,7 +166,7 @@ impl Store {
             .zip(filter.until_ms)
             .is_some_and(|(from, until)| from >= until)
         {
-            return Err(StoreError(
+            return Err(StoreError::new(
                 "the end of the time range must follow its start".into(),
             ));
         }
@@ -249,7 +249,7 @@ impl Store {
         offset: usize,
     ) -> Result<Vec<Snippet>, StoreError> {
         if filter.folder.is_some() && filter.unfiled {
-            return Err(StoreError("choose a folder or unfiled queries".into()));
+            return Err(StoreError::new("choose a folder or unfiled queries".into()));
         }
         let mut sql = String::from(
             "select id,workspace,name,statement,connection,updated_ms,folder_id from snippets where workspace in (?, '')",
@@ -312,7 +312,7 @@ impl Store {
     pub fn create_snippet_folder(&self, workspace: &str, name: &str) -> Result<i64, StoreError> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 200 || name.chars().any(char::is_control) {
-            return Err(StoreError(
+            return Err(StoreError::new(
                 "a folder needs a name of 1 to 200 characters without control characters".into(),
             ));
         }
@@ -326,7 +326,7 @@ impl Store {
                 rusqlite::Error::SqliteFailure(ref code, _)
                     if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
                 {
-                    StoreError(
+                    StoreError::new(
                         "a saved-query folder with this name already exists; choose another name"
                             .into(),
                     )
@@ -349,8 +349,9 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        let source = source
-            .ok_or_else(|| StoreError("the saved query is unavailable in this workspace".into()))?;
+        let source = source.ok_or_else(|| {
+            StoreError::new("the saved query is unavailable in this workspace".into())
+        })?;
         if let Some(folder) = folder {
             let valid: bool = self.conn.query_row(
                 "select exists(select 1 from snippet_folders where id=? and workspace=?)",
@@ -358,7 +359,7 @@ impl Store {
                 |r| r.get(0),
             )?;
             if !valid {
-                return Err(StoreError(
+                return Err(StoreError::new(
                     "the folder must belong to the same workspace as the saved query".into(),
                 ));
             }

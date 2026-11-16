@@ -17,12 +17,19 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelaion-driver-api`: driver contract (ADR-005). Engines are becoming plugins in
   their own processes, each in its own repository (ADR-041, ADR-042, after v0.9): anything
   added to this contract must be able to travel as a message (owned data; no closures, trait
-  objects or streams in parameters), and new core code does not name a driver crate. Results
-  in Arrow with
+  objects or streams in parameters), and `spelaion-core/src` names a driver crate only in
+  `open.rs`, where `Engines` is built (its unit tests take a driver from `open::test_driver`).
+  **No test names a driver crate either**: the core's tests take an engine's driver from
+  `crates/spelaion-core/tests/engines/mod.rs` (`engines::postgres()`, `engines::create_database`),
+  which is `Engines::builtin()`, and the tests of `spelaion-ssh` and `apps/cli` ask the core the
+  same way, so an engine's tests run unchanged through its plugin (ADR-041's gate).
+  A database that is a file (SQLite, DuckDB) is created by its driver (`Driver::create_database`,
+  `Engines::create_file_database`), never by calling a driver crate.
+  Results in Arrow with
   `spelaion.logical` / `spelaion.native_type` metadata per column; `Value` for single cells.
   The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
-  (SQLite's in `catalog.rs`); each driver's test file checks them against its engine.
+  (SQLite's in `spelaion-sqlite-schema`'s `catalog.rs`); each driver's test file checks them against its engine.
   `list_referencing_keys` is `describe_table`'s foreign keys seen from the other side: the keys
   of every table that point to one (in each driver's `introspect.rs`). `list_columns` is every
   column of a schema in one catalog query (metadata search, ADR-043), and `execute_bound` runs
@@ -30,7 +37,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   user variables with a prepared `SET`, then reads with the text protocol;
   `Capabilities::bound_params` is false for SQLite over SSH).
   `Dialect::code_ranges` is what lies outside a script's strings, quoted names and comments, as
-  that engine's splitter reads them (each driver builds it from its splitter's own pieces with
+  that engine's splitter reads them (each dialect builds it from its splitter's own pieces with
   `code_ranges`): the editor's `:name` placeholders (`spelaion-core`'s `params.rs`) are looked
   for only there.
   `thread_cancel` is the cancel of the engines that run on a thread of their own (DuckDB, local
@@ -38,42 +45,331 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   remembered for everything sent before it (a queued statement never starts, a running one is
   interrupted again until it ends) and never reaches what is sent after it. Every cancel test
   is bounded with `tokio::time::timeout`, so a lost cancel fails in seconds.
-- `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
-  (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
-  (`tests/postgres.rs`) checks it. A new type is added there first.
-- `crates/spelaion-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
-  per connection). Its splitter counts a statement written only as executable comments
-  (how `mysqldump` writes views and triggers) as a statement, and reads quotes as the
-  session's `sql_mode` does (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`): `Dialect::with_sql_mode`
-  gives the session's dialect, which `spelaion-core`'s `sql_mode.rs` reads when the session
-  opens and after a statement that names `sql_mode`. The core writes a MySQL string that holds
-  a backslash as `_utf8mb4 X'…'` (`export::sql_literal`), which every mode reads the same. Where only a plain string
-  may go (`COMMENT`, `IDENTIFIED BY`), `objects::ddl::mysql_string` escapes a backslash only when
-  the session's mode reads it as an escape. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
-  name check (read its `PATCHED.md` before upgrading). Its type zoo (`tests/mysql.rs`) compares every type with the server's
-  text, on both servers. `DATE`, `DATETIME` and `TIMESTAMP` columns are text with their native
-  type (legacy zero dates; ADR-005 and ADR-006, 2026-11-12 notes): what needs them as dates
-  (chart axes, the bulk "now") reads them by native type through `spelaion-core`'s `temporal.rs`.
+- `crates/spelaion-dialect`: each engine's `Dialect` (statement splitting, quoting, code
+  ranges), one file per engine, with their tests. Only text: no network, no native library.
+  They are the core's rules, not the driver's (ADR-041): the core takes an engine's dialect
+  from `for_engine` (`spelaion-core`'s `dialect_of`); a driver has none to give, and
+  uses its engine's file only for what it writes itself (the names in its catalog queries,
+  the words it must recognise in a statement it sends). A new engine's dialect is added here,
+  with its name in `for_engine`. MySQL's splitter (`mysql.rs`) counts a statement written only
+  as executable comments (how `mysqldump` writes views and triggers) as a statement, and reads
+  quotes as the session's `sql_mode` does (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`):
+  `Dialect::with_sql_mode` gives the session's dialect, which `spelaion-core`'s `sql_mode.rs`
+  reads when the session opens and after a statement that names `sql_mode`. T-SQL batches
+  (`GO`, `BEGIN … END`) are split in `sqlserver.rs`; a `DECLARE` keeps the rest of its batch,
+  where its variables live (the guard still checks each statement in it). SQLite's
+  `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
+  dot-command away from the server's shell: any change to them needs its tests there too.
+- The plugin protocol (ADR-041, `docs/plugin-protocol.md`: the specification, which the code
+  must match; experimental until 1.0). An engine plugin is a program the core starts and
+  talks to over its standard input and output: JSON-RPC 2.0 messages for control, Arrow IPC
+  for rows (never JSON), in frames. Three crates:
+  - `crates/spelaion-plugin-protocol`: the wire only. `frame.rs` (frames, at most 64 MiB,
+    refused before anything is allocated), `message.rs` (every method's parameters and the
+    driver's error) and `ipc.rs` (`BatchDecoder` reads one IPC message at a time because Arrow's
+    own `StreamDecoder` does not see a schema until a batch follows it). A change that breaks
+    is a new major `VERSION`; within one, changes only add.
+  - `crates/spelaion-plugin-sdk`: the plugin's side. A Rust plugin implements `Driver` and
+    `Connection` and calls `run`. It sends a batch only with credit from the core, reports a
+    connection known to be closed, answers even when a driver panics and ends the program when
+    its input closes: first its requests stop, its sessions are dropped and each driver's
+    `Driver::shutdown` closes what it keeps open (DuckDB's shared files write what they hold),
+    so a file is never left half written by a plugin that was only asked to end (SDB-360).
+    Standard output is the protocol: a plugin never prints to it.
+  - `crates/spelaion-plugin-host`: the core's side. `Plugin` is one process per program,
+    started on the first connection and shared by every session of its engines. Its pipes are
+    read and written on threads of their own with blocking calls, as the SDK's are (never
+    `tokio::spawn` or tokio's own pipes there: the runtime that connected first may end before
+    the others, and each read would be a trip through the runtime's blocking pool); `PluginDriver`
+    and its connection are the `Driver` and `Connection` the core already uses. A plugin that
+    stops loses its sessions (`is_closed`, ADR-028) and nothing is re-run. Stopping one
+    (`Plugin::stop`, or the last of it dropped) closes its input and kills it only if it has
+    not ended after `STOP_GRACE` (5 s): a plugin killed at once could leave a file half written. The password goes
+    only in `connect`, and every error, notice and log line of a plugin has the secrets it was
+    given taken out. `conformance.rs` is the set a plugin runs against itself in its own CI
+    (ADR-042).
+  `crates/spelaion-test-plugin` is a made-up engine served as a plugin, never shipped; its
+  `tests/protocol.rs` runs the protocol end to end (results, credit, cancel, a plugin that
+  dies, another version, the password in errors, logs, arguments and environment): any change
+  to the three crates needs its test there. In the core, `plugins.rs` decides which program is
+  started: one `Plugin` per file for the whole program (`plugin_at`), and
+  `SPELAION_DEV_PLUGIN_<ENGINE>` points a development build at a plugin built on this machine;
+  a release build ignores it (`dev_plugin`), and nothing in a setting or a repository file can
+  name a plugin.
+  `plugins/pins.rs` holds the pins (ADR-042): `plugins.toml` at the root, compiled into the
+  core, names the builds of our plugins this repository tests and ships. Only a pinned program
+  next to the app is ever a plugin (`Engines::with_pinned_plugins`), and its SHA-256 is checked
+  every time its process is about to start (`check_file`, through the host's `with_check`): the
+  one check, which the catalogue's plugins and a user's own will use with their own hash
+  (ADR-055). Like `trust.rs`, any change there needs tests that try to get around it
+  (`crates/spelaion-test-plugin/tests/pins.rs`).
+  The catalogue of ADR-055 is three more files there, with no page, download or publishing
+  workflow yet. `plugins/catalogue.rs`: a file shaped like `plugins.toml` (every version ever
+  pinned, a serial, the withdrawn builds), read only after its minisign signature by the key
+  compiled in (`SHIPPED_KEY`, whose secret half is only in the `plugins-catalogue` environment,
+  usable only from `dev`; never the update key), and
+  it carries no address: an archive's is written from the checked name and repository
+  (`PinnedPlugin::archive_address`). `plugins/installed.rs`: the user's store
+  (`<personal folder>/plugins`), which is not trusted: the kept catalogue is checked again at
+  every read and never replaced by one with a lower serial, and an archive (`.tar.gz` on every
+  platform) is installed only as the entry whose hashes it has, only its program unpacked.
+  `plugins/choice.rs`: for each plugin, the newest build on this machine (next to the app or
+  installed) that the pins or the accepted catalogue name, that speaks the core's protocol, that
+  this app is not too old for and that was not withdrawn; when builds are here and none may be
+  started, its engines say why and do not fall back; when the pinned build's program is not
+  next to the app, an engine served only by its plugin says which file is missing (one whose
+  driver is compiled in is still served by it). The app and `spelaiondb mcp` take their
+  engines from `Engines::builtin_with(store)`; neither downloads. The installers carry the
+  pinned builds as their release archives, never the programs (ADR-057: a signed macOS app and
+  an AppImage change the programs inside): `builtin_with` first installs into the store each
+  pinned archive found in the installer's resources (`plugins::bundled_folder`,
+  `PluginStore::install_bundled`), with the store's checks. Any change to the three needs
+  tests that try to get around it (`crates/spelaion-test-plugin/tests/catalogue.rs`, which signs
+  its own catalogues with a key of the test).
+  The catalogue is written, never edited: `Catalogue::next` gives the text that follows the
+  published one from the pins, and **only adds** (a published version never changes, a
+  withdrawn build stays withdrawn and is never pinned again, the serial is the next one).
+  `plugins.toml` withdraws a build with a `[[withdrawn]]` entry and its reason; it cannot be the
+  pinned build. `spelaion-write-catalogue` (in `crates/spelaion-plugin-fetch`, never shipped) is
+  that function as a program for the publishing workflow: it must be told which catalogue is
+  published (its one signed file, checked with the key compiled in) or `--first`, writes
+  nothing when nothing is new, and signs nothing. `--check` is the last step before publishing:
+  the signed file must be accepted with the key compiled in and hold the text written.
+  `.github/workflows/plugins-catalogue.yml` runs it on `dev` when `plugins.toml` changes (or by
+  hand), signs with minisign in the `plugins-catalogue` environment and publishes the release
+  `plugins-catalogue`'s one asset (never the latest release, which the updater reads).
+  `plugins/fetch.rs` brings the catalogue and an archive, and the core still has no HTTP
+  client: the adapter gives a `Transport` that only moves bytes. No function there takes an
+  address: the catalogue's is a constant and an archive's is the one the core writes for its
+  entry. HTTPS where it starts and where it ends, a catalogue bounded and an archive of exactly
+  its entry's size, a stalled download given up on, the file removed whatever happens, and what
+  arrives goes through the same checks as a file the user picked. The catalogue is read only
+  when `updates_allowed` (the user's setting; `SPELAION_NO_UPDATES` can only switch it off); an
+  archive only on the user's click. Tests with a made-up network in the same `catalogue.rs`.
+  `crates/spelaion-plugin-fetch` (`spelaion-fetch-plugins`, never shipped) is how the pinned
+  builds get here, for CI, the release and a developer: it downloads each pinned release from
+  its plugin's repository and lets a program into the folder it is given only if the archive
+  has the pinned size and SHA-256, holds the program at its top and that program has the
+  pinned SHA-256; then it prints the `SPELAION_DEV_PLUGIN_<ENGINE>` lines that send the tests
+  through them. No secret, and no new dependency (`curl` and `tar`). Any change there needs
+  tests that try to get around it (`tests/fetch.rs`).
+  Until an engine's driver moves to its own repository, its crate here also builds its plugin
+  program (`src/bin/spelaion-plugin-<engine>.rs`; MySQL's serves MariaDB too), and
+  `scripts/measure-plugins.sh` measures ADR-041's gate (a million-row result and a million-row
+  import, in process and through each plugin: at most 15 % longer), and
+  `scripts/test-through-plugins.sh` runs any `cargo test` with every engine through those
+  programs: a change to the protocol's three crates or to a driver is tested both ways. A
+  database on another machine (SQLite over SSH, ADR-018) never goes through a plugin: the core
+  keeps the driver compiled in for it (`ThroughPlugin` in `open.rs`).
+- **PostgreSQL is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives
+  in `spelaion-dev/spelaiondb-plugin-postgres` with its type zoo (each type's text identical
+  to `psql`'s; a new type is added there first), its TLS and client certificates (ADR-022)
+  and the patched `tokio-postgres`, and this repository pins the release it ships
+  (`plugins.toml`). The plugin does the TLS handshake itself, against the host name the core
+  gives it with the tunnel's local address. Here, its tests run through that plugin,
+  unchanged, `spelaion-ssh`'s tunnel tests included: the pinned build next to the program, or,
+  in a development build, the one `SPELAION_DEV_PLUGIN_POSTGRES` points at.
+- **MySQL and MariaDB are a plugin** (ADR-041, ADR-042): their driver is not in this
+  workspace. It lives in `spelaion-dev/spelaiondb-plugin-mysql` (one program serves both
+  engines) with its type zoo and the patched `mysql_async` (`verify-ca` skips the name check),
+  and this repository pins the release it ships (`plugins.toml`). What is the core's stays
+  here: the dialect (`spelaion-dialect`'s `mysql.rs`), the session's `sql_mode`
+  (`sql_mode.rs`), and how a MySQL string that holds a backslash is written
+  (`export::sql_literal`, `objects::ddl::mysql_string`). `DATE`, `DATETIME` and `TIMESTAMP`
+  columns arrive as text with their native type (ADR-005 and ADR-006, 2026-11-12 notes): what
+  needs them as dates reads them by native type through `temporal.rs`. Here, their tests run
+  through that plugin, unchanged: the pinned build next to the program, or, in a development
+  build, the one `SPELAION_DEV_PLUGIN_MYSQL` and `SPELAION_DEV_PLUGIN_MARIADB` point at.
+- `crates/spelaion-sqlite-schema` (ADR-058): what every program that talks to SQLite shares,
+  with no `rusqlite`, network or runtime: the catalog queries and how their rows become the
+  contract's model (`catalog.rs`), and the dynamic typing (ADR-006, `typing.rs`: affinity,
+  what the first batch holds, the type decided, `ResultBuilder` from storage-class values to
+  Arrow batches). The SQLite driver's two transports and the libSQL plugin are built on it, so
+  they show the same explorer and types; plugins take it by the plugin SDK's tag.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
-  Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
+  Its catalog and typing are `spelaion-sqlite-schema`'s; `exec.rs` only reads rusqlite's
+  values into it. Its tests need nothing external.
+  **It stays compiled into the core** (ADR-041, "SQLite stays compiled in"): the core links
+  SQLite for its store anyway, and the driver for a file on a server (`remote.rs`) is built on
+  the same catalog queries and typing. Its plugin program (`src/bin`) is never shipped: it is
+  how the protocol is tried with a real engine in this repository.
   `remote.rs` opens a file on a server (ADR-018) by running that server's `sqlite3 -safe`
   through `ConnectParams::remote` (an SSH exec channel on the tunnel's last hop,
   `spelaion-ssh::Tunnel::exec`): it must never let a dot-command or an incomplete statement
-  reach the shell. Catalog queries are shared in `catalog.rs`. Tests against
+  reach the shell. Catalog queries and typing are `spelaion-sqlite-schema`'s. Tests against
   `testing/docker/sqlitehost` with `SPELAION_TEST_SSH`.
-- `crates/spelaion-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
-  (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a `DECLARE` keeps the rest of
-  its batch, where its variables live (the guard still checks each statement in it); a batch may return
-  several result sets. Cancel is a TDS Attention through a patched tiberius in
-  `vendor/tiberius` (read its `PATCHED.md` before upgrading). Tests against the Docker SQL
-  Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`. `datetime2`, `datetimeoffset` and `time` are
-  text with their native type, exactly as the server writes them (100 ns and the value's own
-  offset; ADR-005 and ADR-006, 2026-11-12 notes): `temporal.rs` reads them as dates, and sorts
-  a `datetimeoffset` by its instant.
-- `crates/spelaion-driver-duckdb`: `duckdb` (bundled) in one thread per connection, one open
-  per file shared by clones (ADR-016). Arrow from DuckDB converted in `exec.rs`; nested types
-  written as DuckDB's text in `format.rs`. Its type zoo (`tests/duckdb.rs`) compares every
-  type with `CAST(… AS VARCHAR)`; it needs nothing external.
+- **SQL Server is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives
+  in `spelaion-dev/spelaiondb-plugin-sqlserver` with its tests and the patched `tiberius` it
+  needs for cancel (a TDS Attention), and this repository pins the release it ships
+  (`plugins.toml`). T-SQL batches are still split here (`spelaion-dialect`'s `sqlserver.rs`):
+  the plugin receives each batch as one statement and may return several result sets. Here,
+  its tests run through that plugin, unchanged, with `SPELAION_TEST_MSSQL=127.0.0.1:11433`:
+  the pinned build next to the program, or, in a development build, the one
+  `SPELAION_DEV_PLUGIN_SQLSERVER` points at.
+- **MongoDB is a plugin whose language is not SQL** (ADR-056): its driver lives in
+  `spelaion-dev/spelaiondb-plugin-mongodb` (MongoDB and FerretDB), pinned in `plugins.toml`.
+  Its language is the core's, in `spelaion-dialect`'s `mongodb.rs`: a closed subset of the
+  shell's method calls, never run as JavaScript. `Dialect::reads_requests` marks such a
+  language: the session turns each statement into its command document (`Dialect::to_request`)
+  and sends it with `Connection::execute_request` (protocol 1.1), never the text; the guard reads
+  the command (`Dialect::request_class`), so `db.c.drop()` and `db.runCommand({drop: "c"})` ask
+  alike. `Engine::is_sql` is false for it: a connection file with `read_only` or `[session]` is
+  refused when it loads, and agents never see it (`AgentView::EngineWithoutBarrier`), until its
+  own barrier exists. Tests: `spelaion-core`'s `tests/mongodb.rs` with
+  `SPELAION_TEST_MONGO=127.0.0.1:27017` (or `SPELAION_DEV_PLUGIN_MONGODB` in a development
+  build).
+- **Redis is a plugin whose language is not SQL** (ADR-056), the same way: its driver lives in
+  `spelaion-dev/spelaiondb-plugin-redis` (Redis and Valkey), pinned in `plugins.toml`. Its
+  language is `spelaion-dialect`'s `redis.rs`: one command per line, quoted as `redis-cli`
+  quotes, sent as its argument list (`{"args": [...]}`). The core refuses what would change or
+  hold the connection (`AUTH`, `SELECT`, transactions, subscriptions, blocking commands); the
+  tab's database is chosen above the editor. The guard's lists name the reads and the writes;
+  `KEYS`, scripts and anything unlisted are unknown, never a read. The explorer shows each
+  database's keys (kind `collection`, the key's type as its comment), read with bounded `SCAN`
+  pages by the plugin, and opens one with a bounded command of its type
+  (`Dialect::browse_statement`). Tests: `spelaion-core`'s `tests/redis.rs` with
+  `SPELAION_TEST_REDIS=127.0.0.1:16379` (or `SPELAION_DEV_PLUGIN_REDIS`).
+- **Cassandra is a plugin whose language is shaped like SQL but is not SQL** (ADR-056): its
+  driver lives in `spelaion-dev/spelaiondb-plugin-cassandra` (Cassandra and ScyllaDB), pinned in
+  `plugins.toml`. CQL is sent as text, as SQL is, but `sqlparser` never reads it: its splitter
+  (batches whole), quoting and guard lists are `spelaion-dialect`'s `cql.rs`, through
+  `Dialect::statement_class` (what the guard makes of a statement of such a language) and
+  `Dialect::refuse_statement` (what the session never sends: `USE`, the keyspace being chosen
+  above the editor). `Engine::is_sql` is false for it, so read-only mode, session setup and
+  agents are not offered, and its tables open with the core's bounded statement
+  (`Dialect::browse_statement`), never the table data tab, which writes SQL. Tests:
+  `spelaion-core`'s `tests/cassandra.rs` with `SPELAION_TEST_CASSANDRA=127.0.0.1:19142` (or
+  `SPELAION_DEV_PLUGIN_CASSANDRA`).
+- **TDengine is a plugin whose SQL is its own** (ADR-056), the same way as CQL: its driver lives
+  in `spelaion-dev/spelaiondb-plugin-tdengine`, pinned in `plugins.toml`, and talks to
+  taosAdapter's REST API (TDengine's own Rust connector pulls an unmaintained TLS stack, and
+  nothing of TDengine's AGPL code is linked). Its splitter, quoting (backticks) and guard lists are
+  `spelaion-dialect`'s `tdengine.rs`: a `DELETE` without a `WHERE` deletes every row, `KILL` and
+  the cluster's commands drop, `USE` is refused. Through REST a result arrives whole and a cancel
+  only stops waiting. The explorer shows super tables as partitioned tables and at most 1,000
+  child tables per database. Tests: `spelaion-core`'s `tests/tdengine.rs` with
+  `SPELAION_TEST_TDENGINE=127.0.0.1:16141` (or `SPELAION_DEV_PLUGIN_TDENGINE`).
+- **DuckDB is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives in
+  `spelaion-dev/spelaiondb-plugin-duckdb` with its type zoo, and this repository pins the
+  release it ships (`plugins.toml`). The core does not compile DuckDB. Here, DuckDB's tests
+  run through that plugin, unchanged: the pinned build next to the program, or, in a
+  development build, the one `SPELAION_DEV_PLUGIN_DUCKDB` points at (a build of the plugin's
+  repository). Without either, a DuckDB connection fails saying which file is missing. One
+  open per file shared by every session (ADR-016) holds because one plugin process serves
+  them all.
+- **ClickHouse only exists as a plugin** (ADR-041, stage 3): `spelaion-dev/spelaiondb-plugin-clickhouse`
+  (its HTTP interface, one server-side session per connection that is never silently
+  replaced, results as the server's `TabSeparatedWithNamesAndTypes` text), pinned in
+  `plugins.toml`. What the core has of it: `Engine::Clickhouse`, `spelaion-dialect`'s
+  `clickhouse.rs`, its rules in `classify.rs` (table functions that reach outside: `url`,
+  `file`, `s3`, `remote`, `mysql`, `executable`…), `guard.rs` (`ALTER TABLE … DROP | CLEAR`)
+  and its read barrier: no transactions, so the session's `readonly` setting
+  (`readonly.rs`'s `clickhouse_read_only`), set once for agents' reads, exports, column
+  statistics and read-only connections, and never set twice (a user whose profile is
+  read-only cannot set it). It declares no transactions, no editing, no imports, no plans
+  and no data search, and agents' writes are refused (`run_write` needs a transaction). Its
+  tests: `tests/clickhouse.rs` with `SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123` (and
+  `SPELAION_TEST_SSH` for the tunnel); `SPELAION_DEV_PLUGIN_CLICKHOUSE` in a development build.
+- **Trino and Presto are one plugin** (`spelaion-dev/spelaiondb-plugin-trino`, engines `trino`
+  and `presto`: the same HTTP protocol, results polled page by page through `nextUri`, the
+  session kept in the client), pinned in `plugins.toml`. One dialect for both
+  (`spelaion-dialect`'s `trino.rs`, named `trino`, as MariaDB reads as `mysql`). Their read
+  barrier is `START TRANSACTION READ ONLY`, which the server enforces for every catalog
+  (`READ_ONLY_VIOLATION`), always rolled back (`readonly.rs`, the exports' `barrier`); the
+  classifier refuses the `query` and `raw_query` table functions, which send their text to the
+  database behind a catalog. The explorer's three levels are catalogs (its databases), schemas
+  and tables. Declared off: the app's transaction controls (writes depend on each catalog's
+  connector), editing, imports, plans and data search; agents' writes are refused; a read-only
+  connection relies on the core's check (no session-wide read-only mode). Tests:
+  `tests/trino.rs` with `SPELAION_TEST_TRINO=127.0.0.1:18080` and
+  `SPELAION_TEST_PRESTO=127.0.0.1:18081`.
+- **Oracle only exists as a plugin** (ADR-059): `spelaion-dev/spelaiondb-plugin-oracle`, on
+  Oracle's pure-Rust thin driver `oracledb`, vendored and patched there (its
+  `vendor/oracledb/PATCHED.md`: cancel, TLS checked against the host through a tunnel,
+  nothing printed, no aws-lc), pinned in `plugins.toml`. What the core has of it:
+  `Engine::Oracle` (`database` is the service name), `spelaion-dialect`'s `oracle.rs`
+  (statements end at `;`, which is not sent; a PL/SQL unit keeps its `;`s until a line holding
+  only `/`; `q'[…]'` strings), and `guard.rs`'s reading of a PL/SQL block it cannot parse
+  (`oracle_unparsed_risk`: a risky word or dynamic SQL in an anonymous block asks; defining a
+  unit asks nothing). It has **no read-only mode and no agents yet**: the configuration
+  refuses `read_only` and `has_read_barrier` (`agent_view`, the form) leaves it out, because
+  a function with an autonomous transaction writes from inside a `SELECT`, even in a
+  read-only transaction (ADR-059's 2026-11-15 note); no exports, column statistics or data
+  search either, which need that barrier. Its tests: `tests/oracle.rs` with
+  `SPELAION_TEST_ORACLE=127.0.0.1:11521` (and `SPELAION_TEST_SSH` for TLS through the two
+  bastions); `SPELAION_DEV_PLUGIN_ORACLE` in a development build.
+- **libSQL only exists as a plugin** (ADR-058): `spelaion-dev/spelaiondb-plugin-libsql` (Hrana
+  over HTTP, a stream as the session; the token is the password), pinned in `plugins.toml`. Its
+  results and explorer come from `spelaion-sqlite-schema` by the SDK's tag, so they are
+  SQLite's. What the core has of it: `Engine::Libsql` (no database: a server serves one per
+  address), SQLite's dialect and guard. Like Oracle, **no read-only mode and no agents**
+  (`has_read_barrier`; ADR-058, point 4: no session barrier, and a read-only token is the
+  server's), and no cancel. Its tests: `tests/libsql.rs` with `SPELAION_TEST_LIBSQL=127.0.0.1:18095`
+  (and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS` for the tunnel and the proxy);
+  `SPELAION_DEV_PLUGIN_LIBSQL` in a development build.
+- **Arrow Flight SQL is one plugin** (`spelaion-dev/spelaiondb-plugin-flightsql`): a generic
+  `flightsql` engine for any server that speaks it, and `dremio` and `gizmosql` by name, its
+  results Arrow straight from the server (results on another server are refused). Each reads as
+  standard SQL under its own name (`spelaion-dialect`'s `standard.rs`: Trino's splitter, a name
+  no barrier answers to). **They have no read barrier of ours** (`Engine::has_read_barrier`,
+  false for them as for MongoDB and Redis): `read_only` is refused when the file loads, agents
+  never see them (`AgentView::EngineWithoutBarrier`) and the form offers neither (the engine
+  list's `read_barrier`). Tests: `tests/flightsql.rs` with
+  `SPELAION_TEST_GIZMOSQL=127.0.0.1:31337` (GizmoSQL, as `gizmosql` and `flightsql`); Dremio is
+  tested in the plugin's repository. **InfluxDB 3** is a kind of `flightsql` connection in the
+  picker (`catalog.rs`): the plugin sends the connection's database as a `database` header on
+  every call, which InfluxDB chooses its database by; `tests/influxdb.rs` with
+  `SPELAION_TEST_INFLUXDB=127.0.0.1:18181` (no authentication: a token login is not done yet).
+- **Neo4j is a plugin whose language is not SQL** (ADR-056): `spelaion-dev/spelaiondb-plugin-neo4j`
+  (its HTTP Query API, user and password in HTTP Basic; each statement its own transaction),
+  pinned in `plugins.toml`. Its language is `spelaion-dialect`'s `neo4j.rs`: Cypher split at `;`
+  outside strings, backticked names and comments, each statement sent as
+  `{"database", "statement"}` in the session's database. The guard reads the clauses: any
+  `DELETE` asks as a delete, `DROP` as a drop; a write clause is a write, and a procedure
+  (`CALL x.y`) and anything unlisted are unknown, never a read. Nodes, relationships, paths,
+  lists and maps arrive as JSON cells. The explorer shows each database's node labels and
+  relationship types (`ObjectKind::NodeLabel`, `RelationshipType`), opened with a bounded
+  `MATCH` (`Dialect::browse_statement`). Like MongoDB and Redis, no read-only mode, no agents
+  and no session setup, and no cancel. Tests: `spelaion-core`'s `tests/neo4j.rs` with
+  `SPELAION_TEST_NEO4J=127.0.0.1:17474` (and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS`);
+  `SPELAION_DEV_PLUGIN_NEO4J` in a development build.
+- **Databend only exists as a plugin** (SDB-351): `spelaion-dev/spelaiondb-plugin-databend` (its
+  HTTP query API: pages through `next_uri`, the session kept by the client, a cancel by
+  `kill_uri`), pinned in `plugins.toml`. What the core has of it: `Engine::Databend`,
+  `spelaion-dialect`'s `databend.rs` (Databend's own lexer: backslash escapes in `'…'` and
+  `"…"`, backticks without escapes, block comments that do not nest, `$$` bodies, names quoted
+  in double quotes), the guard through sqlparser's generic dialect, and its databases as the
+  explorer's schemas and the editor's schema, as MySQL's (`objects/mod.rs`). Reached through
+  MySQL's protocol instead, it is recognised by its version (`server_family.rs`, SDB-350).
+  **No read-only mode and no agents**: it accepts MySQL's read-only modes and writes anyway
+  (`has_read_barrier`). Its tests: `tests/databend.rs` with `SPELAION_TEST_DATABEND=127.0.0.1:18320`
+  (and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS`); `SPELAION_DEV_PLUGIN_DATABEND` in a
+  development build.
+- **Spanner only exists as a plugin** (SDB-352): `spelaion-dev/spelaiondb-plugin-spanner` (its
+  REST API, GoogleSQL: a session per connection, queries as single-use reads, `BEGIN`/`COMMIT`/
+  `ROLLBACK` driving a read-write transaction, DDL through the admin API), pinned in
+  `plugins.toml`. A connection's `database` is `projects/<p>/instances/<i>/databases/<d>` and its
+  password an OAuth access token (a core secret: a `cmd:` secret may run gcloud). What the core
+  has of it: `Engine::Spanner`, `spelaion-dialect`'s `spanner.rs` (GoogleSQL's lexer: backslash
+  escapes, triple-quoted strings, `#` comments, backtick names), the guard through sqlparser's
+  BigQuery dialect, and its default schema, which has no name, shown as `default` and left out of
+  the names the core writes (`objects::qualified_name`). **No read-only mode and no agents** yet
+  (`has_read_barrier`): Spanner enforces read-only transactions, but making them a barrier needs an
+  ADR. No cancel (the REST API cannot). Its tests: `tests/spanner.rs` with
+  `SPELAION_TEST_SPANNER=127.0.0.1:19021` (Google's emulator; the tests create its instance and
+  database), and `SPELAION_TEST_SSH` and `SPELAION_TEST_SOCKS`; `SPELAION_DEV_PLUGIN_SPANNER` in a
+  development build. Google itself is not tested.
+- **HiveServer2's engines are one plugin** (`spelaion-dev/spelaiondb-plugin-hive`, SDB-176):
+  `hive`, `spark` (Spark's Thrift server), `kyuubi` and `impala`, over HiveServer2's Thrift
+  service (SASL `PLAIN`, or no SASL for Impala without a password; no Kerberos yet), pinned in
+  `plugins.toml`. A Cloudera cluster's Hive and Impala are these engines. Each reads as HiveQL
+  under its own name (`spelaion-dialect`'s `hive.rs`: backquoted names, strings in both quotes
+  with backslash escapes), and the guard parses them with sqlparser's Hive dialect and also asks
+  before what replaces data without deleting it first (`guard.rs`'s `hive_risk`: `OVERWRITE`
+  anywhere, `ALTER TABLE … DROP`). **They have no read barrier of ours** (no read-only session
+  or transaction they enforce), as for the Flight SQL engines: no read-only mode, no agents.
+  Tests: `tests/hive.rs` with `SPELAION_TEST_HIVE=127.0.0.1:11010` (Hive, and `SPELAION_TEST_SSH`
+  for the tunnel); Spark, Kyuubi and Impala are tested in the plugin's repository.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
@@ -168,7 +464,22 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
   ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
   IPC windows).
-  `catalog.rs` lists the engines of the "add connection" picker (planned ones included).
+  `catalog.rs` lists the engines of the "add connection" picker (planned ones included); a
+  server that speaks another engine's protocol is a kind of that engine's connection there
+  (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169; TiDB, OceanBase
+  and SingleStore are MySQL connections, SDB-170, and so is GreptimeDB, SDB-344, whose rows the
+  MySQL plugin keys by primary key and time index, and an append-only table by nothing), and
+  `server_family.rs` reads which server a PostgreSQL or MySQL session reached from the server:
+  one that does not enforce its engine's read-only transaction or session mode gets no agents,
+  streaming reads or read-only connections (unchecked PostgreSQL forks neither), and a
+  read-only connection's session mode is read back from the server after it is set (a MySQL
+  fork that names itself as MySQL, StarRocks, is caught there). A MySQL transaction's read-only
+  mode cannot be read back, so a fork that accepts it and writes anyway must be recognised by
+  its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350).
+  Like `readonly.rs`, any change
+  there needs tests that try to get around it (`tests/postgres_family.rs` and
+  `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`, and GreptimeDB
+  in the main project's `warehouse` profile, which CI runs).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
@@ -281,7 +592,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
   `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
   the DDL, checks read-only and the guard, and loads the rows in transactions through
-  `Connection::insert_rows`, which binds every value (`COPY` on PostgreSQL, prepared inserts on
+  `Connection::insert_rows`, which takes them as columns of text (`TextRows`: Arrow, read as
+  `&str`, never one `String` per cell, so they reach a plugin as they are) and binds every value (`COPY` on PostgreSQL, prepared inserts on
   MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
   `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
   to get around it.
@@ -321,6 +633,20 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
   `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
   `open.rs`); a tunnel file's is per SSH hop.
+  `panics.rs` (SDB-163): a panic is a bug, never swallowed. `install_panic_log` (the app and
+  `spelaiondb mcp`) writes where each one happened to the app log, its message redacted and cut
+  short; `catch_panic` turns one into an error for whoever waited. A run whose stream panics,
+  or whose driver's stream ends without `Done` (an actor that died halfway), ends as a failed
+  statement and the session is lost (ADR-028), never as a finished one (`tests/panics.rs`); an
+  import whose reader panicked commits nothing more; an MCP tool call that panics answers an
+  error and is audited as failed.
+  `startup.rs` is what the desktop app says when it cannot start (SDB-283): no personal folder,
+  a local store it cannot open (a newer version's is never started over: it says to update) or
+  no window; the app shows it in a native dialog (`apps/desktop/src-tauri/src/startup.rs`, never
+  a panic on the way to the window) and writes it to `app_log.rs`'s log
+  (`<personal folder>/logs/spelaion.log`). "Start with a new local store" is
+  `spelaion-store::set_aside`: the store and its `-wal`/`-shm` renamed to
+  `state.db.broken-<date>`, never deleted or overwritten.
   `save_name.rs` keeps a save dialog's file name in step with the chosen file type (Linux's
   GTK dialogs, `apps/desktop/src-tauri/src/file_dialog.rs`).
   `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a
@@ -335,10 +661,29 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`OpenOptions::read_only_session`), every setup statement must first pass
   `classify_session_setup` in `classify.rs`: like `classify.rs`, any change there needs tests
   that try to get around it (`tests/session_setup.rs`).
+  `file_folder.rs` (SDB-316) is a folder of CSV, TSV and Parquet files as a DuckDB connection
+  (`file_folder = true`): the resolver makes it an in-memory database, always read-only, and
+  `open_connection` (and the connection test) set its session up before anything else runs:
+  `allowed_directories` is the folder alone, external access off, a view per file DuckDB's
+  `glob` lists (names quoted by the dialect, paths as literals), then `lock_configuration`.
+  Writing to the folder is refused by the read-only barrier, and agents never see it
+  (`AgentView::FileFolder`). Any change there needs tests that try to read outside the folder
+  or write to it (`tests/file_folder.rs`).
   `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
   `classify.rs`, any change there needs tests that try to get around it.
+- `crates/spelaion-https`: the HTTPS transport the app gives `spelaion-core::plugins::fetch`
+  (ADR-055): the updater's `reqwest`, HTTPS only (a redirect too), the system's proxies, no
+  cookies or credentials. It only moves bytes: what is fetched and kept is the core's. Tested
+  against local servers; `-- --ignored` also fetches a pinned archive from GitHub. The Plugins
+  page's commands are `apps/desktop/src-tauri/src/plugins.rs`: they take a name, a version or a
+  picked file, never an address (`scripts/plugin-commands.test.mjs`), and swap `AppState.engines`
+  after each change, so the next connection starts the new build without a restart. The page
+  itself is `src/components/PluginsSettings.tsx` (Settings → Plugins) and only shows the core's
+  overview; `src/plugins.ts` shares it with the "add connection" picker and a connection that
+  could not open (`MissingPlugin.tsx`), which send to the page when an engine's plugin is not
+  installed.
 - `crates/spelaion-store`: local SQLite (audit, query history, saved queries, personal settings,
   the explorer's filters and bookmarks, the editor's open tabs per workspace and recent files in
   `tabs.rs`; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
@@ -371,7 +716,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
-  text). Our own canvas grid (`ResultGrid.tsx`): past the browsers' 33,554,428 px height cap
+  text). Every other command is `#[command]` (`crates/spelaion-desktop-macros`), never
+  `#[tauri::command]` by hand: it adds `#[specta::specta]` and runs an async command's body
+  through `src-tauri/src/panics.rs`'s `guard`, so a command that panics answers the page with an
+  error instead of leaving it waiting (SDB-163); an async command therefore returns `CmdResult`.
+  Sync commands are caught by the invoke handler (`panics::catch_sync`). Our own canvas grid (`ResultGrid.tsx`): past the browsers' 33,554,428 px height cap
   its spacer stops at `MAX_SPACER_H` and the scroll is scaled to the rows (`src/grid/scroll.ts`),
   so a row position is always read with `contentTop` and set with `scrollToContent`, never with
   the container's `scrollTop`. App commands (name, shortcut, menus) are
@@ -380,8 +729,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
   menus against it. The palette's objects are only what the explorer already read (`catalog.ts`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
-  bundled DuckDB is compiled once: `npx tauri build --no-bundle -- -p spelaion-desktop -p
-  spelaion-cli`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`, see `CONTRIBUTING.md`).
+  nothing is built twice: `npx tauri build --no-bundle -- -p spelaion-desktop -p
+  spelaion-cli -p spelaion-plugin-fetch`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`,
+  see `CONTRIBUTING.md`).
   It drives WebView2 over CDP, so the whole test runs on **Windows** only. Its window is moved
   left of every monitor as it opens and never takes the foreground (`SPELAION_E2E_OFFSCREEN`, read only by
   `open_main_window`), so the user's real mouse and keyboard cannot reach it; never make a step
@@ -404,7 +754,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   runs `.github/workflows/release.yml` (installers for every OS, the `spelaiondb` CLI, notes from
   `docs/releases/vX.Y.Z.md` plus every commit since the previous tag, from
   `scripts/release-notes.sh`, so commit subjects must read well in a changelog); the tag must
-  match the version in `Cargo.toml` and `tauri.conf.json`.
+  match the version in `Cargo.toml` and `tauri.conf.json`. Pushing a branch `release-test/<x>`
+  runs the same workflow as a rehearsal: the same installers and CLI archives, uploaded as the
+  run's artifacts and checked by `scripts/check-release-plugins.sh` (each pinned plugin next to
+  `spelaiondb` with its pinned hash). Its jobs only read the repository, never name a secret and
+  build without update artifacts (`tauri.rehearsal.conf.json`); only the tagged jobs have
+  `contents: write`. Pushing such a branch is a maintainer's step, never an agent's.
 
 ## Branches
 Several people and agents work at the same time: nobody pushes to `dev` or `main`.
@@ -490,8 +845,21 @@ outside the team.
   `docker compose -f testing/docker/compose.yaml up -d --wait` and
   `SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306
   SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
+  SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_ORACLE=127.0.0.1:11521
+  SPELAION_TEST_LIBSQL=127.0.0.1:18095 SPELAION_TEST_NEO4J=127.0.0.1:17474
+  SPELAION_TEST_DATABEND=127.0.0.1:18320 SPELAION_TEST_SPANNER=127.0.0.1:19021
+  SPELAION_TEST_GIZMOSQL=127.0.0.1:31337
   SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_SOCKS=127.0.0.1:11080
-  SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 cargo test --workspace`.
+  SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 SPELAION_TEST_MONGO=127.0.0.1:27017
+  SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142
+  SPELAION_TEST_TDENGINE=127.0.0.1:16141
+  cargo test --workspace`.
+- Hive, Trino, Presto and InfluxDB run in a separate memory-bounded phase: on an isolated test Compose
+  project, stop the first phase, start `hive trino presto influxdb bastion1 bastion2`, then run
+  `SPELAION_TEST_HIVE=127.0.0.1:11010 SPELAION_TEST_TRINO=127.0.0.1:18080
+  SPELAION_TEST_PRESTO=127.0.0.1:18081 SPELAION_TEST_INFLUXDB=127.0.0.1:18181 SPELAION_TEST_SSH=127.0.0.1:2221
+  cargo test -p spelaion-core --test hive --test trino --test influxdb`. See `testing/docker/README.md`;
+  the first workspace pass alone does not count as testing these engines.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),

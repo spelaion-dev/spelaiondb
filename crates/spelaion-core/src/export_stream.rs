@@ -391,8 +391,14 @@ fn checked_read(dialect: &dyn Dialect, sql: &str) -> Result<String, ExportError>
 }
 
 /// The statements around the read: the engine's read-only transaction, always rolled back.
-pub(crate) fn barrier(engine: &str) -> Result<(&'static str, Option<&'static str>), ExportError> {
-    Ok(match engine {
+/// Refused on a server that accepts that transaction without enforcing it (SDB-169).
+pub(crate) fn barrier(
+    session: &Session,
+) -> Result<(&'static str, Option<&'static str>), ExportError> {
+    if let Some(reason) = session.read_only_transaction_refusal() {
+        return Err(ExportError::Invalid(reason));
+    }
+    Ok(match session.dialect().name() {
         "postgres" => ("begin read only", Some("rollback")),
         "mysql" => ("start transaction read only", Some("rollback")),
         "sqlserver" => ("begin transaction", Some("if @@trancount > 0 rollback")),
@@ -401,12 +407,26 @@ pub(crate) fn barrier(engine: &str) -> Result<(&'static str, Option<&'static str
         "duckdb" => ("begin transaction read only", Some("rollback")),
         // The export's own connection, closed afterwards.
         "sqlite" => ("pragma query_only = on", None),
+        // No transactions: the session's `readonly` setting, for the rest of the export's own
+        // session ([`enter`] sets it only where it is not set already).
+        "clickhouse" => (crate::readonly::CLICKHOUSE_READ_ONLY, None),
+        "trino" => ("start transaction read only", Some("rollback")),
         other => {
             return Err(ExportError::Invalid(format!(
                 "streaming exports are not available for {other}"
             )));
         }
     })
+}
+
+/// Runs the first statement of [`barrier`]: as it is, except ClickHouse's, which is set only
+/// where the session is not read-only already (a user whose profile is read-only cannot set it).
+pub(crate) async fn enter(session: &Session, begin: &str) -> Result<(), DriverError> {
+    if begin == crate::readonly::CLICKHOUSE_READ_ONLY {
+        session.clickhouse_read_only().await.map(|_| ())
+    } else {
+        drain(session, begin).await
+    }
 }
 
 async fn stream_read(
@@ -434,8 +454,8 @@ async fn stream_read(
     if cancel.is_cancelled() {
         return Err(ExportError::Cancelled);
     }
-    let (begin, end) = barrier(session.dialect().name())?;
-    drain(session, begin).await?;
+    let (begin, end) = barrier(session)?;
+    enter(session, begin).await?;
     let result = write_stream(session, sql, path, export, cancel, progress).await;
     match (&result, end) {
         // A cancelled export's session is closed by its owner, which ends the transaction;
@@ -708,8 +728,8 @@ mod tests {
 
     #[test]
     fn only_single_reads_pass() {
-        use spelaion_driver_postgres::PostgresDialect;
-        use spelaion_driver_sqlserver::SqlServerDialect;
+        use spelaion_dialect::PostgresDialect;
+        use spelaion_dialect::SqlServerDialect;
         let pg = PostgresDialect;
         assert_eq!(checked_read(&pg, " select 1 ; ").unwrap(), "select 1");
         for sql in [
@@ -752,7 +772,7 @@ mod tests {
         ] {
             assert!(checked_read(&mssql, sql).is_err(), "T-SQL: {sql}");
         }
-        use spelaion_driver_mysql::MysqlDialect;
+        use spelaion_dialect::MysqlDialect;
         let mysql = MysqlDialect;
         for sql in [
             "select * from t /*!50000 into outfile '/tmp/x' */",
@@ -763,7 +783,7 @@ mod tests {
         ] {
             assert!(checked_read(&mysql, sql).is_err(), "MySQL: {sql}");
         }
-        use spelaion_driver_duckdb::DuckdbDialect;
+        use spelaion_dialect::DuckdbDialect;
         for sql in [
             "copy t to 'x.csv'",
             "select * from read_csv('x.csv')",
@@ -772,7 +792,7 @@ mod tests {
         ] {
             assert!(checked_read(&DuckdbDialect, sql).is_err(), "DuckDB: {sql}");
         }
-        use spelaion_driver_sqlite::SqliteDialect;
+        use spelaion_dialect::SqliteDialect;
         for sql in [
             "select writefile('x', 'y')",
             "select load_extension('x')",

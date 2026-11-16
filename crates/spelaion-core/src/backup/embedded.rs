@@ -64,7 +64,33 @@ pub fn embedded_dump_path(
     let extension = match resolved.engine {
         Engine::Sqlite => ".sqlite",
         Engine::Duckdb => "",
-        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => {
+        Engine::Postgres
+        | Engine::Mysql
+        | Engine::Mariadb
+        | Engine::Sqlserver
+        | Engine::Mongodb
+        | Engine::Clickhouse
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto
+        | Engine::Oracle
+        | Engine::Libsql
+        | Engine::Cassandra
+        | Engine::Tdengine
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql
+        | Engine::Neo4j
+        | Engine::Elasticsearch
+        | Engine::Opensearch
+        | Engine::Solr
+        | Engine::Meilisearch
+        | Engine::Databend
+        | Engine::Spanner
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala => {
             return Err(BackupError::Invalid(format!(
                 "{} databases are backed up with a client tool",
                 resolved.engine.as_str()
@@ -166,7 +192,33 @@ pub async fn embedded_dump(
                 DuckdbExportFormat::Csv => "csv",
             }
         ),
-        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => {
+        Engine::Postgres
+        | Engine::Mysql
+        | Engine::Mariadb
+        | Engine::Sqlserver
+        | Engine::Mongodb
+        | Engine::Clickhouse
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto
+        | Engine::Oracle
+        | Engine::Libsql
+        | Engine::Cassandra
+        | Engine::Tdengine
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql
+        | Engine::Neo4j
+        | Engine::Elasticsearch
+        | Engine::Opensearch
+        | Engine::Solr
+        | Engine::Meilisearch
+        | Engine::Databend
+        | Engine::Spanner
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala => {
             unreachable!("embedded_dump_path refused it")
         }
     };

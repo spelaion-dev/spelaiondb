@@ -471,10 +471,78 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
+        // ClickHouse logs in as `default` when no user is given; Trino and Presto take any
+        // name (the plugin sends `spelaiondb`). The database is optional on all three.
+        Engine::Clickhouse
+        | Engine::Trino
+        | Engine::Presto
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala
+        | Engine::Databend => [(
+            "host",
+            file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+        )]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
+        // The service name is the database; the thin driver has no operating-system login,
+        // so a user is always needed (ADR-059).
+        Engine::Oracle => [
+            (
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            ),
+            ("database", file.database.is_none()),
+            ("user", file.user.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
+        // A Spanner database is named by its path; the access token is the password.
+        Engine::Spanner => [
+            (
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            ),
+            ("database", file.database.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
+        // A libSQL server serves one database per address; its token is the password.
+        Engine::Libsql => [(
+            "host",
+            file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+        )]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
         Engine::Sqlite | Engine::Duckdb => [("database", file.database.is_none())]
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
             .collect(),
+        // MongoDB, Redis, Cassandra and Neo4j may need no login, and the database can be chosen
+        // in the explorer.
+        Engine::Mongodb
+        | Engine::Redis
+        | Engine::Cassandra
+        | Engine::Tdengine
+        | Engine::Neo4j
+        | Engine::Elasticsearch
+        | Engine::Opensearch
+        | Engine::Solr
+        | Engine::Meilisearch => [(
+            "host",
+            file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+        )]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
     };
     if !missing.is_empty() {
         return Err(ConfigError::new(
@@ -508,6 +576,63 @@ pub(crate) fn validate_connection(
             ),
         ));
     }
+    // A folder of files (SDB-316): read through DuckDB, whose session the core sets up so that
+    // only that folder can be read. Nothing of the connection may change that session.
+    if file.file_folder {
+        if file.engine != Engine::Duckdb {
+            return Err(ConfigError::new(
+                path,
+                "file_folder is for DuckDB: a folder of CSV, TSV and Parquet files read through DuckDB",
+            ));
+        }
+        if file.database.as_deref().map(str::trim) == Some(":memory:") {
+            return Err(ConfigError::new(
+                path,
+                "file_folder needs database to name a folder, not :memory:",
+            ));
+        }
+        if !file.session.is_default() {
+            return Err(ConfigError::new(
+                path,
+                "a folder of files takes no [session] table: its session is set up to read only that folder",
+            ));
+        }
+    }
+    // ADR-059, point 2: Oracle's read-only mode waits for a barrier that stands up to tests
+    // that try to get around it (a function with an autonomous transaction writes from inside
+    // a SELECT, even in a read-only transaction).
+    if file.engine == Engine::Oracle && file.read_only {
+        return Err(ConfigError::new(
+            path,
+            "Oracle has no read-only mode in SpelaionDB yet: remove `read_only`",
+        ));
+    }
+    // ADR-058, point 4: libSQL has no session barrier; a read-only token is the server's.
+    if file.engine == Engine::Libsql && file.read_only {
+        return Err(ConfigError::new(
+            path,
+            "libSQL has no read-only mode in SpelaionDB yet: use a read-only token, and remove `read_only`",
+        ));
+    }
+    // ADR-056, point 6: an engine whose language is not SQL has no read-only mode yet, and
+    // its sessions run no SQL. Opening it anyway would let writes through or fail later.
+    // ADR-020: no barrier of ours, no read-only mode (the Flight SQL engines too, ADR-041).
+    if !file.engine.has_read_barrier() && file.read_only {
+        let label = engine_label(file.engine);
+        return Err(ConfigError::new(
+            path,
+            format!("{label} has no read-only mode in SpelaionDB yet: remove `read_only`"),
+        ));
+    }
+    if !file.engine.is_sql() {
+        let label = engine_label(file.engine);
+        if !file.session.is_default() {
+            return Err(ConfigError::new(
+                path,
+                format!("{label} sessions run no setup statements: remove `[session]`"),
+            ));
+        }
+    }
     if file.tls.cert.is_some() != file.tls.key.is_some() {
         return Err(ConfigError::new(
             path,
@@ -516,7 +641,22 @@ pub(crate) fn validate_connection(
     }
     if file.tls.cert.is_some() {
         match file.engine {
-            Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
+            // MongoDB reads both from one PEM file: the plugin says so if they differ.
+            Engine::Postgres
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Mongodb
+            | Engine::Redis
+            | Engine::Libsql
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
+            | Engine::Databend
+            | Engine::Spanner => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,
@@ -527,6 +667,36 @@ pub(crate) fn validate_connection(
                 return Err(ConfigError::new(
                     path,
                     "a local file has no client certificate",
+                ));
+            }
+            Engine::Clickhouse => {
+                return Err(ConfigError::new(
+                    path,
+                    "ClickHouse connections log in with a password: client certificates are not supported yet",
+                ));
+            }
+            Engine::Trino | Engine::Presto => {
+                return Err(ConfigError::new(
+                    path,
+                    "Trino and Presto connections log in with a user and, over TLS, a password: client certificates are not supported yet",
+                ));
+            }
+            Engine::Oracle => {
+                return Err(ConfigError::new(
+                    path,
+                    "Oracle connections log in with a password: client certificates (wallets) are not supported yet",
+                ));
+            }
+            Engine::Flightsql | Engine::Dremio | Engine::Gizmosql => {
+                return Err(ConfigError::new(
+                    path,
+                    "Flight SQL connections log in with a user and a password: client certificates are not supported yet",
+                ));
+            }
+            Engine::Hive | Engine::Spark | Engine::Kyuubi | Engine::Impala => {
+                return Err(ConfigError::new(
+                    path,
+                    "HiveServer2 connections log in with a user and a password: client certificates are not supported",
                 ));
             }
         }
@@ -793,6 +963,29 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Sqlserver => "SQL Server",
         Engine::Sqlite => "SQLite",
         Engine::Duckdb => "DuckDB",
+        Engine::Mongodb => "MongoDB",
+        Engine::Clickhouse => "ClickHouse",
+        Engine::Redis => "Redis",
+        Engine::Trino => "Trino",
+        Engine::Presto => "Presto",
+        Engine::Oracle => "Oracle",
+        Engine::Libsql => "libSQL",
+        Engine::Cassandra => "Cassandra",
+        Engine::Tdengine => "TDengine",
+        Engine::Flightsql => "Arrow Flight SQL",
+        Engine::Dremio => "Dremio",
+        Engine::Gizmosql => "GizmoSQL",
+        Engine::Neo4j => "Neo4j",
+        Engine::Hive => "Apache Hive",
+        Engine::Spark => "Spark's Thrift server",
+        Engine::Kyuubi => "Apache Kyuubi",
+        Engine::Impala => "Apache Impala",
+        Engine::Databend => "Databend",
+        Engine::Spanner => "Cloud Spanner",
+        Engine::Elasticsearch => "Elasticsearch",
+        Engine::Opensearch => "OpenSearch",
+        Engine::Solr => "Solr",
+        Engine::Meilisearch => "Meilisearch",
     }
 }
 

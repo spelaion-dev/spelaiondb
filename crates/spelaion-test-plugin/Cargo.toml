@@ -1,0 +1,42 @@
+[package]
+name = "spelaion-test-plugin"
+description = "A made-up engine served as a plugin, for the tests of SpelaionDB's plugin protocol. Never shipped"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The tests of the protocol live here, next to the program they start
+# (`CARGO_BIN_EXE_spelaion-test-plugin`). Releases build `spelaion-cli` and the desktop app,
+# never this crate.
+[[bin]]
+name = "spelaion-test-plugin"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+spelaion-driver-api.workspace = true
+spelaion-plugin-protocol.workspace = true
+spelaion-plugin-sdk.workspace = true
+arrow.workspace = true
+async-stream = "0.3"
+async-trait.workspace = true
+serde_json = "1"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "io-std", "io-util"] }
+
+[dev-dependencies]
+# tests/pins.rs: the core's pins, tried with this plugin's program.
+spelaion-core.workspace = true
+spelaion-plugin-host.workspace = true
+futures-util.workspace = true
+# tests/catalogue.rs signs its own catalogues as minisign does (Ed25519 over the BLAKE2b-512
+# of the file) with a key of the test, and packs this plugin's program as a release does.
+ed25519-dalek = "3"
+blake2 = "0.11"
+base64 = "0.22"
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
+
+[lints]
+workspace = true

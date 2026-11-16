@@ -253,6 +253,8 @@ interface AppStore {
   snippetsOpen: boolean;
   snippetsRevision: number;
   settingsOpen: boolean;
+  /** The Settings page shown (`plugins` from the connection picker); null for the first. */
+  settingsCategory: string | null;
   /** The add/edit connection wizard, if open. */
   connectionDialog: ConnectionDialog | null;
   /** Connection waiting for the user to confirm its deletion. */
@@ -319,7 +321,8 @@ interface AppStore {
   /** The saved queries panel takes the place of the history panel, and vice versa. */
   setSnippetsOpen(open: boolean): void;
   refreshSnippets(): void;
-  openSettings(): void;
+  /** Opens Settings, on `category` when given (else its first page). */
+  openSettings(category?: string): void;
   closeSettings(): void;
   setConnectionDialog(dialog: ConnectionDialog | null): void;
   setDeletingConnection(connection: ConnectionItem | null): void;
@@ -355,6 +358,7 @@ export const useApp = create<AppStore>((set) => ({
   snippetsOpen: false,
   snippetsRevision: 0,
   settingsOpen: false,
+  settingsCategory: null,
   connectionDialog: null,
   deletingConnection: null,
   movingConnection: null,
@@ -533,7 +537,7 @@ export const useApp = create<AppStore>((set) => ({
   setConnectionDialog: (connectionDialog) => set({ connectionDialog }),
   setDeletingConnection: (deletingConnection) => set({ deletingConnection }),
   setMovingConnection: (movingConnection) => set({ movingConnection }),
-  openSettings: () => set({ settingsOpen: true }),
+  openSettings: (category) => set({ settingsOpen: true, settingsCategory: category ?? null }),
   closeSettings: () => set({ settingsOpen: false }),
   refreshHistory: () => set((s) => ({ historyRevision: s.historyRevision + 1 })),
   setHistorySaving: (connection, saving) => set((s) => ({

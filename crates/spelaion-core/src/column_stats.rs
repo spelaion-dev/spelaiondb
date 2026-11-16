@@ -20,7 +20,7 @@ use futures_util::StreamExt;
 use spelaion_driver_api::{Dialect, LogicalType, Value};
 
 use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comments};
-use crate::export_stream::{ExportCancel, barrier, drain};
+use crate::export_stream::{ExportCancel, barrier, drain, enter};
 use crate::filter::FilterOp;
 use crate::generate::qualified;
 use crate::masking::MASK;
@@ -225,9 +225,8 @@ async fn read_rows(
     if cancel.is_cancelled() {
         return Err(ColumnStatsError::Cancelled);
     }
-    let (begin, end) =
-        barrier(session.dialect().name()).map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
-    drain(session, begin)
+    let (begin, end) = barrier(session).map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
+    enter(session, begin)
         .await
         .map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
     // Parsed here, and masked by `column_stats` for a masked column (ADR-051): the statements'
@@ -441,11 +440,11 @@ mod tests {
     /// The real dialect of each engine (its splitter and quoting).
     fn d(engine: &str) -> Box<dyn Dialect> {
         match engine {
-            "postgres" => Box::new(spelaion_driver_postgres::PostgresDialect),
-            "mysql" => Box::new(spelaion_driver_mysql::MysqlDialect),
-            "sqlserver" => Box::new(spelaion_driver_sqlserver::SqlServerDialect),
-            "duckdb" => Box::new(spelaion_driver_duckdb::DuckdbDialect),
-            _ => Box::new(spelaion_driver_sqlite::SqliteDialect),
+            "postgres" => Box::new(spelaion_dialect::PostgresDialect),
+            "mysql" => Box::new(spelaion_dialect::MysqlDialect),
+            "sqlserver" => Box::new(spelaion_dialect::SqlServerDialect),
+            "duckdb" => Box::new(spelaion_dialect::DuckdbDialect),
+            _ => Box::new(spelaion_dialect::SqliteDialect),
         }
     }
 
@@ -591,7 +590,7 @@ mod tests {
 
     #[test]
     fn only_selects_pass_the_second_check() {
-        let sqlite = spelaion_driver_sqlite::SqliteDialect;
+        let sqlite = spelaion_dialect::SqliteDialect;
         assert!(checked(&sqlite, "SELECT 1").is_ok());
         assert!(checked(&sqlite, "SELECT 1; SELECT 2").is_err());
         assert!(checked(&sqlite, "DELETE FROM t").is_err());

@@ -4,16 +4,35 @@
 #                                                                          mysql:3306
 #                                                                          mariadb:3306
 #                                                                          sqlserver:1433
+#                                                                          clickhouse:8123
+#                                                                          trino:8080, presto:8080
+#                                                                          oracle:1521
+#                                                                          oracle-tls:2484
+#                                                                          libsql:8080
+#                                                                          gizmosql:31337
+#                                                                          neo4j:7474
+#                                                                          databend:8000
+#                                                                          spanner:9020
+#                                                                          hive:10000
 #
 #   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
 #
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
-# Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307 and SQL
-# Server on 11433, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307, SQL
+# Server on 11433, ClickHouse on 18123, Trino on 18080, Presto on 18081, Oracle on 11521
+# (TCPS on 12484), libSQL on 18095, GizmoSQL on 31337, Neo4j on 17474, Hive on 11010, Databend
+# on 18320, Spanner's emulator on 19021 and InfluxDB 3 on 18181, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
+# MongoDB, whose language is not SQL (ADR-056), is on 27017.
 name: spelaion-test
+
+# The default phase's limits total 11,392 MiB; Trino/Presto/Hive run separately with bastions.
+# check-memory.py enforces an 11.5 GiB ceiling for each active phase and
+# 4 GB left on the CI host for kind, the compiler/tests and the operating system.
+# Keep engine caches below their container limit: a cgroup cap alone just moves an OOM.
 
 services:
   bastion1:
+    mem_limit: 64m
     build: ./bastion
     ports:
       - "127.0.0.1:2221:22"
@@ -22,6 +41,7 @@ services:
     networks: [public, mid]
 
   bastion2:
+    mem_limit: 64m
     build: ./bastion
     volumes:
       - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
@@ -31,6 +51,7 @@ services:
   # init script is hidden by the mount below: only `spelaion_gis` has the extension, so the
   # `spelaion` database's catalog is the same as on plain PostgreSQL.
   postgres:
+    mem_limit: 256m
     image: postgis/postgis:17-3.5-alpine
     environment:
       POSTGRES_USER: spelaion
@@ -55,7 +76,7 @@ services:
         install -o postgres -g postgres -m 644 /certs/server.crt /var/lib/postgresql/server.crt
         install -o postgres -g postgres -m 644 /certs/ca.crt /var/lib/postgresql/ca.crt
         install -o postgres -g postgres -m 644 /certs/pg_hba.conf /var/lib/postgresql/pg_hba.conf
-        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key -c ssl_ca_file=/var/lib/postgresql/ca.crt -c hba_file=/var/lib/postgresql/pg_hba.conf
+        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key -c ssl_ca_file=/var/lib/postgresql/ca.crt -c hba_file=/var/lib/postgresql/pg_hba.conf -c shared_buffers=64MB -c work_mem=1MB -c maintenance_work_mem=16MB -c max_parallel_workers_per_gather=0
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U spelaion -d spelaion"]
       interval: 2s
@@ -67,6 +88,7 @@ services:
   # MySQL 8.4 LTS and MariaDB 11.4 LTS with TLS (not required). Like PostgreSQL, the key is
   # copied inside with the owner and permissions the server accepts.
   mysql:
+    mem_limit: 1g
     image: mysql:8.4
     environment:
       MYSQL_ROOT_PASSWORD: spelaion-root
@@ -86,7 +108,7 @@ services:
         install -o mysql -g mysql -m 600 /certs/mysql.key /etc/mysql-tls/server.key
         install -o mysql -g mysql -m 644 /certs/mysql.crt /etc/mysql-tls/server.crt
         install -o mysql -g mysql -m 644 /certs/ca.crt /etc/mysql-tls/ca.crt
-        exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --log-bin-trust-function-creators=1
+        exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --log-bin-trust-function-creators=1 --innodb-buffer-pool-size=64M --performance-schema-max-table-instances=200 --performance-schema-max-table-handles=200 --performance-schema-max-thread-instances=100 --performance-schema-digests-size=100 --performance-schema-events-statements-history-long-size=100
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uspelaion -pspelaion --silent"]
       interval: 2s
@@ -94,6 +116,7 @@ services:
     networks: [data, direct]
 
   mariadb:
+    mem_limit: 256m
     image: mariadb:11.4
     environment:
       MARIADB_ROOT_PASSWORD: spelaion-root
@@ -113,7 +136,7 @@ services:
         install -o mysql -g mysql -m 600 /certs/mysql.key /etc/mysql-tls/server.key
         install -o mysql -g mysql -m 644 /certs/mysql.crt /etc/mysql-tls/server.crt
         install -o mysql -g mysql -m 644 /certs/ca.crt /etc/mysql-tls/ca.crt
-        exec docker-entrypoint.sh mariadbd --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key
+        exec docker-entrypoint.sh mariadbd --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --innodb-buffer-pool-size=64M
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s
@@ -123,6 +146,7 @@ services:
   # A server holding a SQLite file (ADR-018): it lets the client run commands and has
   # sqlite3, unlike the bastions. Only bastion1 reaches it: tests go through two hops.
   sqlitehost:
+    mem_limit: 64m
     build: ./sqlitehost
     volumes:
       - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
@@ -132,6 +156,7 @@ services:
   # databases, which the host does not: a tunnel can reach them through the proxy alone or
   # run its first SSH hop through it.
   proxy:
+    mem_limit: 64m
     build: ./proxy
     ports:
       - "127.0.0.1:11080:1080"
@@ -141,11 +166,14 @@ services:
   # SQL Server 2022 (Developer edition, free for development and testing). It encrypts with a
   # self-signed certificate of its own. Tests log in as `sa` and create the `spelaion` database.
   sqlserver:
+    mem_limit: 2g
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_PID: Developer
       MSSQL_SA_PASSWORD: Spelaion-test-1
+      # SQL Server needs a 2 GiB container; leave native allocations outside its pool.
+      MSSQL_MEMORY_LIMIT_MB: "1280"
     ports:
       - "127.0.0.1:11433:1433"
     healthcheck:
@@ -154,6 +182,380 @@ services:
       retries: 60
       start_period: 10s
     networks: [data, direct]
+
+  # MongoDB 8.0, reached through its plugin (SpelaionDB's ADR-056). The user `spelaion`
+  # (password `spelaion`) is in `admin`. 127.0.0.1:27017 (SPELAION_TEST_MONGO).
+  mongodb:
+    mem_limit: 512m
+    image: mongo:8.0
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.25"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: spelaion
+      MONGO_INITDB_ROOT_PASSWORD: spelaion
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      retries: 60
+      start_period: 5s
+    networks: [data, direct]
+
+  # ClickHouse 25.8 (an LTS release), the first engine that is only a plugin (ADR-041). Its
+  # HTTP interface is published on 127.0.0.1:18123; through the tunnels it is clickhouse:8123.
+  # TLS is tested in its plugin's repository. User, password and database: `spelaion`.
+  clickhouse:
+    mem_limit: 512m
+    image: clickhouse/clickhouse-server:25.8
+    volumes:
+      - ./clickhouse/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+    environment:
+      CLICKHOUSE_USER: spelaion
+      CLICKHOUSE_PASSWORD: spelaion
+      CLICKHOUSE_DB: spelaion
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:18123:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1"]
+      interval: 2s
+      retries: 60
+    networks: [data, direct]
+
+  redis:
+    mem_limit: 32m
+    image: redis:7.4
+    command: ["redis-server", "--requirepass", "spelaion"]
+    ports:
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "spelaion", "--no-auth-warning", "ping"]
+      interval: 2s
+      retries: 60
+    networks: [data, direct]
+
+  # Trino 479 and Presto 0.295, one plugin for both, with the catalogs their images ship
+  # (`memory`, `tpch`…). Published on 127.0.0.1:18080 and 18081; through the tunnels they are
+  # trino:8080 and presto:8080. No password: they take one only over TLS.
+  trino:
+    profiles: [warehouse]
+    mem_limit: 1536m
+    image: trinodb/trino:479
+    volumes:
+      - ./trino/jvm.config:/etc/trino/jvm.config:ro
+      - ./trino/config.properties:/etc/trino/config.properties:ro
+    ports:
+      - "127.0.0.1:18080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/info | grep -q '\"starting\":false'"]
+      interval: 3s
+      retries: 80
+    networks: [data, direct]
+
+  # GizmoSQL 1.42.3 (DuckDB behind Arrow Flight SQL), served by the Flight SQL plugin as
+  # `gizmosql` and as the generic `flightsql`. 127.0.0.1:31337; through the tunnels
+  # gizmosql:31337. User `spelaion`, password `spelaion`. Dremio is tested in the plugin's own
+  # repository.
+  gizmosql:
+    mem_limit: 256m
+    image: gizmodata/gizmosql@sha256:88e9d292d6cfe2f41e28d3baab24230691bf07af671b2329d226689fe5634150
+    environment:
+      GIZMOSQL_USERNAME: spelaion
+      GIZMOSQL_PASSWORD: spelaion
+      TLS_ENABLED: "0"
+    ports:
+      - "127.0.0.1:31337:31337"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/31337' || exit 1"]
+      interval: 2s
+      retries: 60
+    networks: [data, direct]
+
+  # Apache Hive 4.0.1's HiveServer2 with its embedded metastore, served by the HiveServer2
+  # plugin as `hive`. 127.0.0.1:11010; through the tunnels hive:10000. No authentication (any
+  # user and password). Spark's Thrift server, Kyuubi and Impala are tested in the plugin's own
+  # repository. Its JVM is bounded: CI's runner is tight (SDB-345).
+  hive:
+    profiles: [warehouse]
+    image: apache/hive@sha256:5194161ef50b80875f937dff04936df047cbe894e9727ab8f0606349345b1bd3
+    environment:
+      SERVICE_NAME: hiveserver2
+      SERVICE_OPTS: >-
+        -Xms256m -Xmx768m -XX:MaxDirectMemorySize=128m
+        -XX:ActiveProcessorCount=2 -XX:ReservedCodeCacheSize=64m
+    mem_limit: 1536m
+    ports:
+      - "127.0.0.1:11010:10000"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/10000' || exit 1"]
+      interval: 3s
+      retries: 100
+    networks: [data, direct]
+
+  presto:
+    profiles: [warehouse]
+    mem_limit: 1536m
+    image: prestodb/presto:0.295
+    volumes:
+      - ./presto/jvm.config:/opt/presto-server/etc/jvm.config:ro
+      - ./presto/config.properties:/opt/presto-server/etc/config.properties:ro
+    ports:
+      - "127.0.0.1:18081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/info | grep -q '\"starting\":false'"]
+      interval: 3s
+      retries: 80
+    networks: [data, direct]
+
+  # Oracle Database Free (the lite image), served only by its plugin (ADR-059). Its listener is
+  # published on 127.0.0.1:11521; through the tunnels it is oracle:1521. User and password
+  # `spelaion`, service FREEPDB1 (`oracle/startup` makes the user on every start).
+  oracle:
+    # Oracle is native, not a JVM. Size its SGA/PGA before the very first startup,
+    # leaving native allocations and startup work room inside the container limit.
+    mem_limit: 2g
+    # 26ai lite. The pre-start hook uses this image's START_FILE interface and spfile layout.
+    image: container-registry.oracle.com/database/free@sha256:cf540c3fa190d7cffad08c491652ac07fc70314e510f6b87890449517d565e94
+    environment:
+      ORACLE_PWD: spelaion-test-Pw1
+      START_FILE: start-ci.sh
+    ports:
+      - "127.0.0.1:11521:1521"
+    volumes:
+      - ./oracle/startup:/opt/oracle/scripts/startup:ro
+      - ./oracle/start-ci.sh:/opt/oracle/start-ci.sh:ro
+    healthcheck:
+      test: ["CMD", "/opt/oracle/checkDBStatus.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 60s
+    networks: [data, direct]
+
+  # Oracle's TCPS: the lite image has no `orapki` to set TLS up in the database, so a TLS proxy
+  # in front of its listener carries the TCPS session (certificate `keys/oracle.pem`, for
+  # "localhost" and "oracle-tls"). Published on 127.0.0.1:12484; through the tunnels it is
+  # oracle-tls:2484.
+  oracle-tls:
+    mem_limit: 32m
+    image: haproxy:3.2-alpine
+    depends_on:
+      oracle:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:12484:2484"
+    volumes:
+      - ./oracle/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./keys/oracle.pem:/usr/local/etc/haproxy/server.pem:ro
+    networks: [data, direct]
+
+  # libSQL's server (sqld 0.24.33), served only by its plugin (ADR-058): Hrana over HTTP,
+  # published on 127.0.0.1:18095 without authentication; through the tunnels and the proxies it
+  # is libsql:8080. Tokens and TLS are tested in its plugin's repository.
+  libsql:
+    mem_limit: 64m
+    image: ghcr.io/tursodatabase/libsql-server:v0.24.33
+    ports:
+      - "127.0.0.1:18095:8080"
+    networks: [data, direct]
+
+  # Cassandra 5 (ADR-056), through its plugin, on 127.0.0.1:19142 with no login. CI's runner
+  # holds every engine at once: a small heap, what the JVM may take off the heap bounded too
+  # (by default it may reserve gigabytes of direct memory, touches the whole heap at start and
+  # runs a GC thread per CPU), and a hard cap, so this container can never push another out.
+  cassandra:
+    image: cassandra:5
+    mem_limit: 1g
+    environment:
+      MAX_HEAP_SIZE: 256M
+      HEAP_NEWSIZE: 64M
+      JVM_EXTRA_OPTS: >-
+        -XX:MaxDirectMemorySize=128M -XX:-AlwaysPreTouch -XX:ParallelGCThreads=2
+        -XX:ConcGCThreads=1 -XX:CICompilerCount=2 -XX:ActiveProcessorCount=2
+    ports:
+      - "127.0.0.1:19142:9042"
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "DESCRIBE KEYSPACES"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 30s
+
+  # Neo4j 5.26 (community), served only by its plugin over its HTTP Query API (ADR-056),
+  # published on 127.0.0.1:17474 (user neo4j, password spelaion-test); through the tunnels and
+  # the proxies it is neo4j:7474. TLS is tested in its plugin's repository.
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/spelaion-test
+      # Heap, page cache and direct buffers leave room for metaspace and native threads.
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 384m
+      NEO4J_server_memory_pagecache_size: 128m
+      NEO4J_server_jvm_additional: -XX:MaxDirectMemorySize=64m -XX:ActiveProcessorCount=2
+    mem_limit: 768m
+    ports:
+      - "127.0.0.1:17474:7474"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7474 >/dev/null || exit 1"]
+      interval: 3s
+      retries: 60
+    networks: [data, direct]
+
+  # TDengine 3.3.6 (ADR-056), through its plugin over taosAdapter's REST API, on 127.0.0.1:16141
+  # with the image's own login (`root`, `taosdata`). Its memory is capped: CI's runner holds every
+  # engine at once (SDB-345).
+  tdengine:
+    image: tdengine/tdengine:3.3.6.13
+    mem_limit: 256m
+    ports:
+      - "127.0.0.1:16141:6041"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -u root:taosdata -d 'select server_version()' http://127.0.0.1:6041/rest/sql"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+    networks: [data, direct]
+
+  # InfluxDB 3 Core 3.12.2 (by digest), a `flightsql` connection whose database the plugin sends
+  # as a `database` header; Flight SQL and its HTTP API share 127.0.0.1:18181. No authentication,
+  # data in memory. Bounded for CI's runners (SDB-345): 1 GB.
+  influxdb:
+    profiles: [warehouse]
+    image: influxdb@sha256:f349b303abfc33e5be9ab67f475d544c4ef53ed5b3b68267842aedb112756b82
+    command: [influxdb3, serve, --node-id, spelaion, --object-store, memory, --without-auth]
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:18181:8181"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8181/health > /dev/null || exit 1"]
+      interval: 2s
+      retries: 60
+    networks: [direct]
+
+  # Databend 1.2.881, served only by its plugin over its HTTP query API (SDB-351), published on
+  # 127.0.0.1:18320 (user spelaion, password spelaion-test, which replaces the image's root);
+  # through the tunnels and the proxies it is databend:8000. TLS is tested in its plugin's
+  # repository. Bounded for CI's runners (SDB-345): 1 GB.
+  databend:
+    # The readiness shim relies on this image's PATH and /usr/bin/databend-query.
+    image: datafuselabs/databend@sha256:847b20b0cfbadaa8dd87fc5c023db1d07042e9be6231dfc8303e75feefd94bf8
+    mem_limit: 1g
+    volumes:
+      - ./databend/databend-query:/usr/local/bin/databend-query:ro
+    environment:
+      QUERY_DEFAULT_USER: spelaion
+      QUERY_DEFAULT_PASSWORD: spelaion-test
+    ports:
+      - "127.0.0.1:18320:8000"
+    # No client in the image: the port answering is enough.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
+      interval: 2s
+      retries: 60
+    networks: [data, direct]
+
+  # Google's Spanner emulator 1.5.28, served only by its plugin over its REST API (SDB-352),
+  # published on 127.0.0.1:19021 (no login); through the tunnels and the proxies it is
+  # spanner:9020. Its image has no shell for a healthcheck: tests/spanner.rs creates the
+  # instance and the database it needs. TLS is tested in its plugin's repository. Bounded for
+  # CI's runners (SDB-345): 1 GB.
+  spanner:
+    image: gcr.io/cloud-spanner-emulator/emulator:1.5.28
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:19021:9020"
+    networks: [data, direct]
+
+  # GreptimeDB 1.3.1, a MySQL connection through the MySQL plugin (SDB-344), on 127.0.0.1:18402
+  # (SPELAION_TEST_GREPTIME_MYSQL); its PostgreSQL port, 127.0.0.1:18403
+  # (SPELAION_TEST_GREPTIME_PG), only for the barrier regression test (SDB-343). No login, data
+  # in the container. In CI's second phase, with the warehouses. Bounded for CI's runners
+  # (SDB-345): 1 GB.
+  greptime:
+    profiles: [warehouse]
+    image: greptime/greptimedb:v1.3.1
+    command:
+      - standalone
+      - start
+      - --mysql-addr
+      - 0.0.0.0:4002
+      - --postgres-addr
+      - 0.0.0.0:4003
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:18402:4002"
+      - "127.0.0.1:18403:4003"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:4000/health"]
+      interval: 2s
+      retries: 60
+    networks: [direct]
+
+  # HTTP search engines run in a separate CI phase to bound memory.
+  elasticsearch:
+    profiles: [search]
+    mem_limit: 768m
+    networks: [data, direct]
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: 'false'
+      ES_JAVA_OPTS: -Xms256m -Xmx256m
+    ports: ['127.0.0.1:19200:9200']
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9200 >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 60
+  opensearch:
+    profiles: [search]
+    mem_limit: 768m
+    networks: [data, direct]
+    image: opensearchproject/opensearch:2.19.1
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: 'true'
+      DISABLE_INSTALL_DEMO_CONFIG: 'true'
+      OPENSEARCH_JAVA_OPTS: -Xms256m -Xmx256m
+    ports: ['127.0.0.1:19201:9200']
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9200 >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 60
+  solr:
+    profiles: [search]
+    mem_limit: 512m
+    networks: [data, direct]
+    image: solr:9.8.1
+    command: ['solr-precreate', 'orders']
+    environment:
+      SOLR_HEAP: 256m
+    ports: ['127.0.0.1:18983:8983']
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:8983/solr/admin/info/system >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 60
+  meilisearch:
+    profiles: [search]
+    mem_limit: 1g
+    networks: [data, direct]
+    image: getmeili/meilisearch:v1.13.2
+    environment:
+      MEILI_NO_ANALYTICS: 'true'
+      MEILI_ENV: development
+    ports: ['127.0.0.1:17700:7700']
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:7700/health >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 60
 
 networks:
   public: {}

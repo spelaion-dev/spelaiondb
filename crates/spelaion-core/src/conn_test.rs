@@ -598,8 +598,17 @@ async fn connection_steps(
     interaction: Arc<dyn Interaction>,
 ) -> Result<Option<String>, Failure> {
     run.start(0);
-    run.ok_running();
     let mut params = resolved.connect_params(options.password.clone());
+    crate::mongodb_srv::resolve(resolved, &mut params)
+        .await
+        .map_err(|error| open_failure(&error))?;
+    if let Some(step) = plan.target {
+        run.steps.lock().expect("lock poisoned")[step].kind = StepKind::Target {
+            host: params.host.clone(),
+            port: params.port,
+        };
+    }
+    run.ok_running();
     let timeout = params.connect_timeout();
     let mut tunnel = None;
     if let (Some(layout), Some(resolved_tunnel)) = (&plan.tunnel, &resolved.tunnel) {
@@ -673,6 +682,26 @@ async fn connection_steps(
         .server_version()
         .await
         .map_err(|e| driver_failure(&e))?;
+    // A read-only connection to a server of PostgreSQL's or MySQL's protocol that would not
+    // keep it from writing cannot open (SDB-169, SDB-170): the test says so at the login, as
+    // opening would.
+    if resolved.params.read_only
+        && let Some(dialect) = crate::dialect_of(resolved.engine)
+        && let Some(family) =
+            crate::server_family::read_family(connection.as_ref(), dialect.name()).await
+        && let Some(reason) = family.read_only_sessions_refusal()
+    {
+        return Err((FailureKind::Other, reason));
+    }
+    // A folder of files: set up as opening would, so a path that is not a folder, or one
+    // DuckDB cannot be limited to, fails here (SDB-316).
+    if let Some(folder) = &resolved.file_folder
+        && let Some(dialect) = crate::dialect_of(resolved.engine)
+    {
+        crate::file_folder::prepare(connection.as_ref(), dialect.as_ref(), folder)
+            .await
+            .map_err(|message| (FailureKind::Other, message))?;
+    }
     drop(connection);
     run.ok_running();
     Ok(Some(version))
@@ -869,7 +898,9 @@ fn open_failure(error: &OpenError) -> Failure {
         }
         OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
         // The test logs in without the session setup; only an opened session runs it.
-        OpenError::Setup(_) => (FailureKind::Other, error.to_string()),
+        OpenError::Setup(_) | OpenError::NoReadOnlyBarrier(_) | OpenError::FileFolder(_) => {
+            (FailureKind::Other, error.to_string())
+        }
     }
 }
 

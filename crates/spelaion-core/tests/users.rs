@@ -4,6 +4,8 @@
 //! unlocked and dropped; and the password is looked for, and never found, in the history, the
 //! audit, the store's file and the errors the core returned.
 
+mod engines;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,7 +32,7 @@ fn server(var: &str) -> Option<(String, u16)> {
 /// An engine with an administrator's login, and how a new account logs in.
 struct Engine {
     label: &'static str,
-    driver: Box<dyn Driver>,
+    driver: Arc<dyn Driver>,
     admin: ConnectParams,
     /// The database a new account connects to.
     database: &'static str,
@@ -55,7 +57,11 @@ impl Engine {
         let Ok(conn) = self.driver.connect(&self.params(user, password)).await else {
             return false;
         };
-        let session = Session::new(conn, self.driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            conn,
+            spelaion_dialect::for_engine(self.driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let events: Vec<CoreEvent> = session.run_script("SELECT 1").collect().await;
         !events
             .iter()
@@ -68,7 +74,11 @@ async fn session(driver: &dyn Driver, params: &ConnectParams) -> Session {
         .connect(params)
         .await
         .unwrap_or_else(|e| panic!("connecting: {e}"));
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 fn engines() -> Vec<Engine> {
@@ -85,7 +95,7 @@ fn engines() -> Vec<Engine> {
     if let Some((host, port)) = server("SPELAION_TEST_PG") {
         out.push(Engine {
             label: "postgres",
-            driver: Box::new(spelaion_driver_postgres::PostgresDriver),
+            driver: engines::postgres(),
             admin: login(host, port, "spelaion", "spelaion", "spelaion"),
             database: "spelaion",
         });
@@ -96,13 +106,13 @@ fn engines() -> Vec<Engine> {
     ] {
         if let Some((host, port)) = server(var) {
             let driver = if label == "mysql" {
-                spelaion_driver_mysql::MysqlDriver::mysql()
+                engines::mysql()
             } else {
-                spelaion_driver_mysql::MysqlDriver::mariadb()
+                engines::mariadb()
             };
             out.push(Engine {
                 label,
-                driver: Box::new(driver),
+                driver,
                 admin: login(host, port, "root", "spelaion-root", "spelaion"),
                 database: "",
             });
@@ -111,7 +121,7 @@ fn engines() -> Vec<Engine> {
     if let Some((host, port)) = server("SPELAION_TEST_MSSQL") {
         out.push(Engine {
             label: "sqlserver",
-            driver: Box::new(spelaion_driver_sqlserver::SqlServerDriver),
+            driver: engines::sqlserver(),
             admin: ConnectParams {
                 tls: TlsMode::Require,
                 ..login(host, port, "sa", "Spelaion-test-1", "tempdb")
@@ -262,9 +272,22 @@ async fn accounts_are_created_logged_in_given_a_new_password_locked_and_dropped(
             Err(ObjectError::NeedsConfirmation),
             "{label}"
         );
-        apply(&admin, &drop, None)
-            .await
-            .unwrap_or_else(|e| panic!("{label}: drop: {e}"));
+        // SQL Server ends a session a moment after its client closed the connection, and
+        // refuses to drop a login that still has one: the account's last login, a few lines
+        // above, may not be gone from the server yet (through a plugin it takes a little
+        // longer). The drop is tried again while that is the server's answer, for at most
+        // five seconds: a login that never leaves still fails the test, as any other error.
+        let mut tries = 0;
+        loop {
+            match apply(&admin, &drop, None).await {
+                Ok(_) => break,
+                Err(e) if tries < 100 && e.to_string().contains("currently logged in") => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(e) => panic!("{label}: drop: {e}"),
+            }
+        }
         assert!(!engine.logs_in(&name, SECOND).await, "{label}: dropped");
         assert!(
             matches!(
@@ -458,7 +481,7 @@ async fn a_contained_database_user_logs_in_with_its_own_password_and_it_never_le
     .await;
     let contained = Engine {
         label: "sqlserver",
-        driver: Box::new(spelaion_driver_sqlserver::SqlServerDriver),
+        driver: engines::sqlserver(),
         admin: ConnectParams {
             database: database.into(),
             ..engine.admin.clone()

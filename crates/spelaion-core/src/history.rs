@@ -1428,7 +1428,6 @@ mod tests {
     use std::sync::Arc;
 
     use spelaion_driver_api::{ConnectParams, Driver};
-    use spelaion_driver_sqlite::SqliteDriver;
 
     use super::*;
     use crate::ResultStore;
@@ -1530,7 +1529,10 @@ mod tests {
                 state: state.clone(),
                 capabilities: Default::default(),
             }),
-            SqliteDriver::default().dialect(),
+            spelaion_dialect::for_engine(
+                crate::open::test_driver(spelaion_config::Engine::Sqlite).engine(),
+            )
+            .expect("a dialect"),
             Arc::new(ResultStore::new()),
         ));
         (history, session, state, path)
@@ -1547,7 +1549,7 @@ mod tests {
     #[tokio::test]
     async fn mysql_history_preserves_row_count() {
         real_mysql_history_preserves_row_count(
-            spelaion_driver_mysql::MysqlDriver::mysql(),
+            crate::open::test_driver(spelaion_config::Engine::Mysql),
             "SPELAION_TEST_MYSQL",
         )
         .await;
@@ -1556,16 +1558,13 @@ mod tests {
     #[tokio::test]
     async fn mariadb_history_preserves_row_count() {
         real_mysql_history_preserves_row_count(
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
+            crate::open::test_driver(spelaion_config::Engine::Mariadb),
             "SPELAION_TEST_MARIADB",
         )
         .await;
     }
 
-    async fn real_mysql_history_preserves_row_count(
-        driver: spelaion_driver_mysql::MysqlDriver,
-        variable: &str,
-    ) {
+    async fn real_mysql_history_preserves_row_count(driver: Arc<dyn Driver>, variable: &str) {
         let Ok(address) = std::env::var(variable) else {
             eprintln!("{variable} not set: test skipped");
             return;
@@ -1582,7 +1581,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let session = Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            connection,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let (history, _, _, _) = context_history(variable);
         let sql = |table: &str| {
             format!(
@@ -1737,7 +1740,7 @@ mod tests {
             return;
         };
         let (host, port) = address.rsplit_once(':').unwrap();
-        let driver = spelaion_driver_sqlserver::SqlServerDriver;
+        let driver = crate::open::test_driver(spelaion_config::Engine::Sqlserver);
         let connection = driver
             .connect(&ConnectParams {
                 host: host.into(),
@@ -1750,7 +1753,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let session = Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            connection,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let (history, _, _, _) = context_history("sqlserver-snapshot");
         let setup:Vec<_>=session.run_script("CREATE TABLE #history_context(v int); INSERT INTO #history_context VALUES(1),(3); UPDATE #history_context SET v=v+1;").collect().await;
         assert!(
@@ -1942,7 +1949,7 @@ mod tests {
     #[tokio::test]
     async fn duckdb_history_follows_an_attached_catalog_after_use() {
         let (history, _, _, _) = context_history("duckdb-context");
-        let driver = spelaion_driver_duckdb::DuckdbDriver::default();
+        let driver = crate::open::test_driver(spelaion_config::Engine::Duckdb);
         let connection = driver
             .connect(&ConnectParams {
                 database: ":memory:".into(),
@@ -1950,7 +1957,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let session = Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            connection,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let events: Vec<_> = history
             .run_script_in_context(
                 &session,
@@ -2570,7 +2581,7 @@ mod tests {
         let (requests, receiver) = mpsc::channel(1);
         drop(receiver);
         let history = QueryHistory { requests };
-        let driver = SqliteDriver::default();
+        let driver = crate::open::test_driver(spelaion_config::Engine::Sqlite);
         let connection = driver
             .connect(&ConnectParams {
                 database: ":memory:".into(),
@@ -2578,7 +2589,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let session = Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            connection,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let events: Vec<_> = history
             .run_script(
                 &session,

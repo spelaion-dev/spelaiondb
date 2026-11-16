@@ -681,10 +681,10 @@ async fn session_is_mariadb(session: &Session) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_mysql::MysqlDialect;
-    use spelaion_driver_postgres::PostgresDialect;
-    use spelaion_driver_sqlite::SqliteDialect;
-    use spelaion_driver_sqlserver::SqlServerDialect;
+    use spelaion_dialect::MysqlDialect;
+    use spelaion_dialect::PostgresDialect;
+    use spelaion_dialect::SqlServerDialect;
+    use spelaion_dialect::SqliteDialect;
 
     fn target(kind: PrincipalKind, name: &str) -> PrincipalTarget {
         PrincipalTarget {

@@ -3,6 +3,7 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+mod app_log;
 pub mod audit;
 pub mod backup;
 mod catalog;
@@ -16,6 +17,7 @@ mod edit;
 mod er;
 mod export;
 mod export_stream;
+mod file_folder;
 mod filter;
 mod find;
 mod generate;
@@ -27,13 +29,16 @@ mod import;
 pub mod kube;
 mod locks;
 pub mod masking;
+mod mongodb_srv;
 mod objects;
 mod observe;
 mod open;
 mod open_tabs;
+mod panics;
 mod params;
 mod pending;
 pub mod plan;
+pub mod plugins;
 mod processes;
 mod progress;
 mod query_page;
@@ -43,12 +48,14 @@ mod results;
 mod save_name;
 mod script;
 mod selection_stats;
+mod server_family;
 mod server_settings;
 mod session;
 mod session_setup;
 mod sort;
 mod sql_file;
 mod sql_mode;
+mod startup;
 mod table_data;
 mod table_stats;
 mod temporal;
@@ -59,6 +66,7 @@ mod value_pick;
 mod value_view;
 mod write;
 
+pub use app_log::{AppLog, MAX_LOG_BYTES};
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use chart::{
     ChartAggregate, ChartData, ChartError, ChartImageFormat, ChartKind, ChartLabel, ChartReduction,
@@ -105,6 +113,7 @@ pub use export_stream::{
     StreamExport, TableSource, TablesError, export_query, export_table, export_tables, file_name,
     follow_session_context, rerun_check,
 };
+pub use file_folder::{FolderReport, FolderView, MAX_VIEWS as MAX_FOLDER_VIEWS, SkippedFile};
 pub use filter::{ColumnFilter, FilterOp};
 pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
@@ -144,9 +153,10 @@ pub use objects::{
 };
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
-    open_connection, open_route, test_tunnel,
+    create_file_database, dialect_of, open_connection, open_route, test_tunnel,
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
+pub use panics::{INTERNAL_ERROR, Panicked, catch_panic, install_panic_log};
 pub use params::{ParamError, bind_params, script_params};
 pub use pending::{
     Block, BulkAction, CellEdit, EditOutcome, MAX_PASTE_BYTES, MAX_UNDO_STEPS, PendingEdit,
@@ -168,6 +178,7 @@ pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
 };
+pub use server_family::ServerFamily;
 pub use server_settings::{ServerSetting, SettingKind, server_settings};
 pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
@@ -192,6 +203,7 @@ pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
     content_hash, read_sql_file, write_sql_file,
 };
+pub use startup::{StartOverError, StartupAction, StartupDialog, StartupFailure, start_over};
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, cell_filter_value,
     count_table_rows, key_filter, order_with_key, table_count_sql, table_export_sql,
@@ -212,21 +224,5 @@ pub use value_view::{
 };
 pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
-    agent_view, check_write,
+    agent_view, check_write, has_read_barrier, runs_agent_writes,
 };
-
-/// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file
-/// is never touched.
-pub fn create_file_database(
-    engine: spelaion_config::Engine,
-    path: &std::path::Path,
-) -> Result<(), spelaion_driver_api::DriverError> {
-    use spelaion_config::Engine;
-    match engine {
-        Engine::Sqlite => spelaion_driver_sqlite::create_database(path),
-        Engine::Duckdb => spelaion_driver_duckdb::create_database(path),
-        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => Err(
-            spelaion_driver_api::DriverError::Other(format!("{} is not a file", engine.as_str())),
-        ),
-    }
-}

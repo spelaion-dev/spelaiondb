@@ -35,7 +35,10 @@ doc = false
 
 [dev-dependencies]
 futures-util.workspace = true
-spelaion-driver-postgres.workspace = true
+# The tunnel tests reach PostgreSQL with the driver the core opens (built in or its plugin):
+# a dependency of the tests only, since the core depends on this crate.
+spelaion-config.workspace = true
+spelaion-core.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]

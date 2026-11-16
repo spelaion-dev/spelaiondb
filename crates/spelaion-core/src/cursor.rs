@@ -31,7 +31,7 @@ pub fn statement_at(dialect: &dyn Dialect, script: &str, offset: usize) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_sqlite::SqliteDialect;
+    use spelaion_dialect::SqliteDialect;
 
     fn at(script: &str, marker: &str) -> Option<String> {
         let offset = script.find(marker).expect("marker");

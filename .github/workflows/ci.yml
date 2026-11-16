@@ -65,6 +65,39 @@ jobs:
       SPELAION_TEST_MYSQL: 127.0.0.1:13306
       SPELAION_TEST_MARIADB: 127.0.0.1:13307
       SPELAION_TEST_MSSQL: 127.0.0.1:11433
+      # MongoDB (ADR-056), through its pinned plugin.
+      SPELAION_TEST_MONGO: 127.0.0.1:27017
+      SPELAION_TEST_CLICKHOUSE: 127.0.0.1:18123
+      # Oracle Database Free (ADR-059), through its pinned plugin.
+      SPELAION_TEST_ORACLE: 127.0.0.1:11521
+      # libSQL's server (ADR-058), through its pinned plugin.
+      SPELAION_TEST_LIBSQL: 127.0.0.1:18095
+      # Neo4j (ADR-056), through its pinned plugin.
+      SPELAION_TEST_NEO4J: 127.0.0.1:17474
+      SPELAION_TEST_ELASTICSEARCH: 127.0.0.1:19200
+      SPELAION_TEST_OPENSEARCH: 127.0.0.1:19201
+      SPELAION_TEST_SOLR: 127.0.0.1:18983
+      SPELAION_TEST_MEILISEARCH: 127.0.0.1:17700
+      # Databend (SDB-351), through its pinned plugin.
+      SPELAION_TEST_DATABEND: 127.0.0.1:18320
+      # Google's Spanner emulator (SDB-352), through its pinned plugin.
+      SPELAION_TEST_SPANNER: 127.0.0.1:19021
+      # Redis (ADR-056), through its pinned plugin.
+      SPELAION_TEST_REDIS: 127.0.0.1:16379
+      SPELAION_TEST_TRINO: 127.0.0.1:18080
+      SPELAION_TEST_PRESTO: 127.0.0.1:18081
+      # Cassandra (ADR-056), through its pinned plugin.
+      SPELAION_TEST_CASSANDRA: 127.0.0.1:19142
+      # TDengine (ADR-056), through its pinned plugin.
+      SPELAION_TEST_TDENGINE: 127.0.0.1:16141
+      SPELAION_TEST_INFLUXDB: 127.0.0.1:18181
+      # GreptimeDB (SDB-344), a MySQL connection through the MySQL plugin; its PostgreSQL port
+      # only for the barrier test (SDB-343). Second phase, with the warehouses.
+      SPELAION_TEST_GREPTIME_MYSQL: 127.0.0.1:18402
+      SPELAION_TEST_GREPTIME_PG: 127.0.0.1:18403
+      SPELAION_TEST_GIZMOSQL: 127.0.0.1:31337
+      # Apache Hive (SDB-176), through its pinned plugin.
+      SPELAION_TEST_HIVE: 127.0.0.1:11010
       SPELAION_TEST_SSH: 127.0.0.1:2221
       SPELAION_TEST_SSH_AGENT: "1"
       # The test proxies (ADR-027) from testing/docker/proxy.
@@ -131,15 +164,21 @@ jobs:
       - name: Start the test services in the background
         if: steps.scope.outputs.rust != 'false'
         run: |
+          export COMPOSE_PROFILES=
           bash testing/docker/gen-keys.sh
+          python3 testing/docker/check-memory-test.py
+          docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
+            | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')"
           (
             status=failed
-            if docker compose -f testing/docker/compose.yaml up -d --build --wait \
+            if timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --build --wait \
               && kind create cluster --name spelaion-test --wait 60s \
               && kubectl apply -f testing/k8s/postgres.yaml \
               && kubectl -n spelaion-test rollout status deployment/postgres --timeout=180s
             then
               status=ready
+            else
+              bash testing/docker/diagnostics.sh
             fi
             echo "$status" > "$RUNNER_TEMP/services.status"
           ) > "$RUNNER_TEMP/services.log" 2>&1 &
@@ -155,14 +194,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'push' }}
-      # libduckdb-sys unpacks DuckDB's sources into target/duckdb-sources/<hash>/ and reuses
-      # them only when its `.complete` marker is there. rust-cache's cleanup deletes every file
-      # in that folder but keeps the folder tree, so when the build script runs again (new
-      # DuckDB version or features) its unpack fails with DirectoryNotEmpty. Nothing reads the
-      # folder unless that build script runs, and then it unpacks it again.
-      - if: steps.scope.outputs.rust != 'false'
-        shell: bash
-        run: rm -rf target/duckdb-sources
       # A real SSH agent with the test key, for the agent authentication test.
       - if: steps.scope.outputs.rust != 'false'
         run: |
@@ -184,22 +215,66 @@ jobs:
       # Build the tests first: the services are only needed to run them.
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --workspace --locked --no-run
+      # The engines that are plugins (ADR-042): this repository never compiles one. The builds
+      # plugins.toml pins are downloaded and let in only with the pinned hashes, and the
+      # tests run through them. With nothing pinned this fetches nothing.
+      - name: Fetch the pinned plugins
+        if: steps.scope.outputs.rust != 'false'
+        run: cargo run -q --locked -p spelaion-plugin-fetch -- --into target/plugins >> "$GITHUB_ENV"
       - name: Wait for the test services
+        timeout-minutes: 12
         if: steps.scope.outputs.rust != 'false'
         run: |
           timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/services.status" ]; do sleep 1; done' || true
           cat "$RUNNER_TEMP/services.log"
-          test "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" = ready
+          if [ "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" != ready ]; then
+            bash testing/docker/diagnostics.sh
+            exit 1
+          fi
       - if: steps.scope.outputs.rust != 'false'
-        run: cargo test --workspace --locked
-      # The vendored crate is excluded from the workspace; run its protocol regression test.
+        # These suites run in the following phase, after the other servers release their RAM.
+        run: env -u SPELAION_TEST_HIVE -u SPELAION_TEST_TRINO -u SPELAION_TEST_PRESTO -u SPELAION_TEST_INFLUXDB -u SPELAION_TEST_GREPTIME_MYSQL -u SPELAION_TEST_GREPTIME_PG -u SPELAION_TEST_ELASTICSEARCH -u SPELAION_TEST_OPENSEARCH -u SPELAION_TEST_SOLR -u SPELAION_TEST_MEILISEARCH cargo test --workspace --locked
+      - name: Warehouse services and integration tests
+        timeout-minutes: 20
+        if: steps.scope.outputs.rust != 'false'
+        run: |
+          docker compose -f testing/docker/compose.yaml stop
+          services=(hive trino presto influxdb greptime bastion1 bastion2)
+          docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
+            | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')" "${services[@]}"
+          if ! timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --build --wait "${services[@]}"; then
+            bash testing/docker/diagnostics.sh
+            exit 1
+          fi
+          cargo test --locked -p spelaion-core --test hive --test trino --test influxdb --test mysql_family --test postgres_family
+      - name: Search services and integration tests
+        timeout-minutes: 20
+        if: steps.scope.outputs.rust != 'false'
+        run: |
+          docker compose -f testing/docker/compose.yaml stop
+          services=(elasticsearch opensearch solr meilisearch)
+          docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
+            | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')" "${services[@]}"
+          if ! timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --wait "${services[@]}"; then
+            bash testing/docker/diagnostics.sh
+            exit 1
+          fi
+          cargo test --locked -p spelaion-core --test search
+      # The app's own unit tests: its library says `test = false` because the test executable of
+      # a Tauri crate does not start on Windows, so `--workspace` skips them. Here, on Linux, it
+      # starts: named, they run.
       - if: steps.scope.outputs.rust != 'false'
-        run: cargo test --manifest-path vendor/mysql_async/Cargo.toml --lib result_count_tests
+        run: cargo test --locked -p spelaion-desktop --lib
       # The app's TS types are generated from Rust: the file in the repo must be up to date.
       - if: steps.scope.outputs.rust != 'false'
         run: cargo run -q --locked -p spelaion-desktop --features bindings --bin export-bindings
       - if: steps.scope.outputs.rust != 'false'
         run: git diff --exit-code apps/desktop/src/bindings.ts
+
+      - name: Diagnose test services after a failure
+        timeout-minutes: 2
+        if: failure() && steps.scope.outputs.rust != 'false'
+        run: bash testing/docker/diagnostics.sh
 
   frontend:
     name: App · strict TypeScript and build
@@ -255,12 +330,15 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'push' }}
-      # The DuckDB sources folder rust-cache leaves behind (see the Linux job).
-      - if: steps.scope.outputs.rust != 'false'
-        shell: bash
-        run: rm -rf target/duckdb-sources
       - if: steps.scope.outputs.rust != 'false'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The engines that are plugins (ADR-042): this repository never compiles one. The builds
+      # plugins.toml pins are downloaded and let in only with the pinned hashes, and the
+      # tests run through them. With nothing pinned this fetches nothing.
+      - name: Fetch the pinned plugins
+        if: steps.scope.outputs.rust != 'false'
+        shell: bash
+        run: cargo run -q --locked -p spelaion-plugin-fetch -- --into target/plugins >> "$GITHUB_ENV"
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --workspace --locked
 

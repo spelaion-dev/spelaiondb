@@ -21,7 +21,7 @@ import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./Connecti
 import { EngineIcon } from "./EngineIcon";
 import { TagInput } from "./TagInput";
 import { refreshConnections } from "./Sidebar";
-import { chooseOpenFile, chooseSavePath } from "../dialogs";
+import { chooseFolder, chooseOpenFile, chooseSavePath } from "../dialogs";
 import { confirmOpenTransactions, reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
@@ -31,6 +31,7 @@ import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./Connect
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
+import { openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -49,6 +50,9 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const editing = dialog.kind === "edit" ? dialog.id : null;
   const [engines, setEngines] = useState<EngineItem[]>([]);
   const [engine, setEngine] = useState<EngineItem | null>(null);
+  /** The server picked when it is a kind of another engine's connection (CockroachDB is a
+   *  PostgreSQL connection, SDB-169): it names the form, the connection is `engine`'s. */
+  const [kind, setKind] = useState<EngineItem | null>(null);
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
   const [importing, setImporting] = useState<ImportClientId | null>(null);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
@@ -84,6 +88,8 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         setInitial(draft);
         setSavedEngine(draft.engine);
         setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
+        // A folder of files (SDB-316) is shown as its catalog entry, like when it was added.
+        if (draft.fileFolder) setKind(catalog.find((e) => e.access === "folder") ?? null);
       } catch (e) {
         setLoadError(errorText(e));
       }
@@ -102,13 +108,13 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
       <div className="modal wizard" role="dialog" aria-modal="true" aria-label={t("title")}>
         <div className="wizard-header">
           <h2>
-            {engine && <EngineBadge engine={engine} />}
+            {engine && <EngineBadge engine={kind ?? engine} />}
             {editing
               ? t("editTitle", { name: initial?.name ?? editing })
               : importing
                 ? t("importer.title", { client: IMPORT_CLIENTS.find((c) => c.id === importing)?.label })
                 : engine
-                  ? t("formTitle", { engine: engine.name })
+                  ? t("formTitle", { engine: (kind ?? engine).name })
                   : t("title")}
           </h2>
           <button className="ghost" aria-label={t("close")} onClick={close}>
@@ -136,7 +142,8 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
                 initialPassword={carriedPassword}
                 revision={revision}
                 passwordStored={passwordStored}
-                engines={engines.filter((e) => e.available)}
+                // A kind (SDB-169) is its engine's connection: switching is between engines.
+                engines={engines.filter((e) => e.available && e.engine === e.id)}
                 savedEngine={savedEngine ?? engine.id}
                 engineChange={engineChange}
                 onChangeEngine={changeEngine}
@@ -150,9 +157,11 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : engine ? (
           <ConnectionForm
             engine={engine}
+            fileFolder={kind?.access === "folder"}
             prefill={prefill ?? undefined}
             onBack={() => {
               setEngine(null);
+              setKind(null);
               setPrefill(null);
             }}
             onCancel={close}
@@ -163,8 +172,25 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
             engines={engines}
             onImport={(client) => setImporting(client)}
             onPick={(picked, fields) => {
-              setPrefill(fields ?? null);
-              setEngine(picked);
+              const base = connectionEngine(engines, picked);
+              if (!base) return;
+              setKind(base === picked ? null : picked);
+              // A kind starts from its server's port, user and database; the rest is the form's.
+              setPrefill(
+                fields ??
+                  (base === picked
+                    ? null
+                    : {
+                        engine: base.id,
+                        host: "",
+                        port: picked.defaultPort,
+                        database: picked.defaultDatabase ?? "",
+                        user: picked.defaultUser ?? "",
+                        password: null,
+                        tlsMode: null,
+                      }),
+              );
+              setEngine(base);
             }}
           />
         )}
@@ -175,8 +201,15 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
 
 function EngineBadge({ engine }: { engine: EngineItem }) {
   return (
-    <EngineIcon engine={engine.id} />
+    <EngineIcon engine={engine.id} fallback={engine.engine} />
   );
+}
+
+/** The catalog entry whose form a picked entry opens: itself, or for a kind of another
+ *  engine's connection (SDB-169), that engine's. */
+function connectionEngine(engines: EngineItem[], picked: EngineItem): EngineItem | null {
+  if (!picked.engine || picked.engine === picked.id) return picked;
+  return engines.find((e) => e.id === picked.engine && e.available) ?? null;
 }
 
 function EnginePicker({
@@ -192,12 +225,17 @@ function EnginePicker({
   const [search, setSearch] = useState("");
   const [url, setUrl] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
+  // Which engines need a plugin that is not installed: the core's overview, only shown here.
+  const plugins = usePlugins((s) => s.overview);
+  useEffect(() => void usePlugins.getState().load(), []);
   async function applyUrl() {
     setUrlError(null);
     try {
       const fields = await call(commands.parseConnectionUrl(url));
       const engine = engines.find((e) => e.id === fields.engine && e.available);
-      if (engine) onPick(engine, fields);
+      const needed = engine ? pluginNeeded(plugins, engine.id) : null;
+      if (engine && needed) setUrlError(t("needsPluginNote", { engine: engine.name, plugin: needed.name }));
+      else if (engine) onPick(engine, fields);
       else setUrlError(t("url.unsupported"));
     } catch (e) {
       setUrlError(errorText(e));
@@ -260,19 +298,31 @@ function EnginePicker({
             <section key={category} aria-labelledby={`engines-${category}`}>
               <h3 id={`engines-${category}`}>{t(`categories.${category}`)}</h3>
               <div className="engine-grid">
-                {items.map((e) => (
-                  <button
-                    key={e.id}
-                    className="engine-card"
-                    disabled={!e.available}
-                    onClick={() => onPick(e)}
-                    title={e.available ? e.name : t("comingSoonHint", { engine: e.name })}
-                  >
-                    <EngineBadge engine={e} />
-                    <span className="engine-card-name">{e.name}</span>
-                    {!e.available && <span className="engine-card-soon">{t("comingSoon")}</span>}
-                  </button>
-                ))}
+                {items.map((e) => {
+                  const needed = e.available ? pluginNeeded(plugins, e.engine ?? e.id) : null;
+                  return (
+                    <button
+                      key={e.id}
+                      className="engine-card"
+                      disabled={!e.available}
+                      // An engine whose plugin is not installed sends to Settings > Plugins.
+                      onClick={() => (needed ? openPluginsPage() : onPick(e))}
+                      title={
+                        !e.available
+                          ? t("comingSoonHint", { engine: e.name })
+                          : needed
+                            ? t("needsPluginHint", { engine: e.name, plugin: needed.name })
+                            : e.name
+                      }
+                      data-needs-plugin={needed ? needed.name : undefined}
+                    >
+                      <EngineBadge engine={e} />
+                      <span className="engine-card-name">{e.name}</span>
+                      {!e.available && <span className="engine-card-soon">{t("comingSoon")}</span>}
+                      {needed && <span className="engine-card-soon">{t("needsPlugin")}</span>}
+                    </button>
+                  );
+                })}
               </div>
             </section>
           );
@@ -304,6 +354,12 @@ const SETUP_EXAMPLES: Record<string, string> = {
   mariadb: "SET time_zone = '+00:00';",
   sqlserver: "SET DATEFORMAT ymd;\nSET LOCK_TIMEOUT 5000;",
   duckdb: "SET TimeZone = 'UTC';",
+  clickhouse: "SET session_timezone = 'UTC';\nSET max_execution_time = 60;",
+  trino: "SET SESSION query_max_run_time = '10m';",
+  oracle: "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS';",
+  libsql: "PRAGMA foreign_keys = ON;",
+  presto: "SET SESSION query_max_run_time = '10m';",
+  databend: "SET timezone = 'UTC';",
   sqlite: "PRAGMA foreign_keys = ON;",
 };
 
@@ -367,6 +423,8 @@ function ConnectionForm(props: {
   passwordStored?: boolean;
   /** Values read from a pasted connection URL. */
   prefill?: UrlFields;
+  /** A new DuckDB connection to a folder of CSV, TSV and Parquet files (SDB-316). */
+  fileFolder?: boolean;
   /** A password typed before the engine was switched, kept in the new form. */
   initialPassword?: string;
   /** Editing: the engines it can switch to, the one on disk, and what the last switch did. */
@@ -392,6 +450,9 @@ function ConnectionForm(props: {
   const [tab, setTab] = useState<FormTab>("main");
   const [tunnels, setTunnels] = useState<TunnelItem[]>([]);
   const { initial, editing, prefill } = props;
+  // A folder of files is always read-only, never shown to agents and has no session setup:
+  // the core sets its session up to read that folder alone (SDB-316).
+  const fileFolder = initial ? initial.fileFolder : Boolean(props.fileFolder);
   const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network ? "password" : "none");
   const [cloudToken, setCloudToken] = useState<CloudToken>(
     initial && (CLOUD_TOKENS as string[]).includes(initial.passwordMode) ? (initial.passwordMode as CloudToken) : "awsRds",
@@ -433,6 +494,7 @@ function ConnectionForm(props: {
     host: prefill?.host || (network ? "localhost" : ""),
     port: prefill?.port ?? null,
     database: prefill?.database ?? "",
+    fileFolder,
     user: prefill?.user ?? "",
     passwordEnv: "",
     passwordOther: "",
@@ -440,7 +502,7 @@ function ConnectionForm(props: {
     tlsCa: "",
     tlsCert: "",
     tlsKey: "",
-    readOnly: false,
+    readOnly: fileFolder,
     mcpExposed: false,
     mcpWrites: false,
     sqlite3: "",
@@ -516,8 +578,9 @@ function ConnectionForm(props: {
     setSaveError(null);
   }, []);
 
-  // Agents write only on an exposed connection that is not read-only (ADR-019).
-  const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly;
+  // Agents write only on an exposed connection that is not read-only (ADR-019), on an engine
+  // whose writes the core can run (SDB-325).
+  const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly && engine.agentWrites;
   const selectedType = pickedType(connectionTypes, draft.env, savedType);
   // What the core receives: the form's choices mapped to the configuration format.
   const passwordMode: PasswordMode =
@@ -534,12 +597,23 @@ function ConnectionForm(props: {
               : "prompt";
   const request: ConnectionDraft = {
     ...draft,
-    mcpWrites: agentsWrite,
+    // The core makes a folder read-only and hides it from agents whatever the file says; the
+    // file says so too, so what is written is what happens.
+    readOnly: draft.readOnly || fileFolder,
+    mcpExposed: draft.mcpExposed && !fileFolder,
+    mcpWrites: agentsWrite && !fileFolder,
     passwordMode,
     tunnel: network && useKubernetes ? kubeProfile : tunnelsAllowed && useTunnel ? tunnel : "",
     sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
     localPort: network && useTunnel && !useKubernetes ? (draft.localPort ?? null) : null,
     kubernetes: network && useKubernetes ? kubernetes : null,
+    // ADR-056: nothing of what such an engine has not got yet is saved (the form hides it, but
+    // a connection whose engine was changed may still carry it).
+    ...(engine.sql
+      ? {}
+      : { readOnly: false, mcpExposed: false, mcpWrites: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }),
+    // Neither is offered where the core has no read barrier (Oracle, libSQL, Flight SQL).
+    ...(engine.readBarrier ? {} : { readOnly: false, mcpExposed: false, mcpWrites: false }),
   };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.running;
@@ -573,6 +647,11 @@ function ConnectionForm(props: {
   }
 
   async function browse(field: "database" | "tlsCa" | "tlsCert" | "tlsKey") {
+    if (field === "database" && fileFolder) {
+      const folder = await chooseFolder(t("fields.chooseFileFolder"), draft.database || null);
+      if (folder) update({ database: folder });
+      return;
+    }
     const path = await chooseOpenFile(
       undefined,
       field === "database"
@@ -685,11 +764,14 @@ function ConnectionForm(props: {
   }
 
   const onServer = remoteFile && useTunnel;
-  const tabs: FormTab[] = network
-    ? ["main", "ssl", "ssh", "kubernetes", "session", "options"]
+  // An engine whose language is not SQL runs no session setup (ADR-056).
+  const tabs: FormTab[] = (network
+    ? ["main", "ssl", "ssh", "kubernetes", "session", "options"] as FormTab[]
     : remoteFile
-      ? ["main", "ssh", "session", "options"]
-      : ["main", "session", "options"];
+      ? ["main", "ssh", "session", "options"] as FormTab[]
+      : ["main", "session", "options"] as FormTab[])
+    // A folder of files has no session setup either: the core sets its session up (SDB-316).
+    .filter((t) => (engine.sql && !fileFolder) || t !== "session");
   // Where the session setup may only read and change settings (ADR-037), as the core decides
   // when the session opens: a read-only connection or a type that confirms data changes.
   const setupRestricted = draft.readOnly || Boolean(selectedType?.safeguards.confirmDataChanges);
@@ -774,9 +856,12 @@ function ConnectionForm(props: {
                     />
                   </Field>
                 </div>
-                <Field label={t("fields.database")}>
-                  <input type="text" value={draft.database} onChange={(e) => update({ database: e.target.value })} />
-                </Field>
+                {/* A libSQL server serves one database per address (ADR-058). */}
+                {engine.id !== "libsql" && (
+                  <Field label={engine.id === "oracle" ? t("fields.serviceName") : t("fields.database")}>
+                    <input type="text" value={draft.database} placeholder={engine.id === "oracle" ? "FREEPDB1" : ""} onChange={(e) => update({ database: e.target.value })} />
+                  </Field>
+                )}
                 {useKubernetes && <p className="muted small">{t("kubernetes.mainHint")}</p>}
               </fieldset>
               <fieldset>
@@ -851,6 +936,20 @@ function ConnectionForm(props: {
               </fieldset>
             </>
           ) : (
+            fileFolder ? (
+            <fieldset>
+              <legend>{t("sections.fileFolder")}</legend>
+              <div className="form-pair">
+                <Field label={t("fields.fileFolder")} className="grow">
+                  <input type="text" value={draft.database} onChange={(e) => update({ database: e.target.value })} />
+                </Field>
+                <button type="button" onClick={() => void browse("database")}>
+                  {t("browse")}
+                </button>
+              </div>
+              <p className="muted small">{t("fields.fileFolderHint")}</p>
+            </fieldset>
+            ) : (
             <fieldset>
               <legend>{t("sections.file")}</legend>
               <div className="form-pair">
@@ -875,6 +974,7 @@ function ConnectionForm(props: {
               )}
               <p className="muted small">{onServer ? t("fields.serverFileHint") : t("fields.fileHint")}</p>
             </fieldset>
+            )
           )}
         </div>
 
@@ -1205,21 +1305,22 @@ function ConnectionForm(props: {
             </Field>
             <p className="muted small">{t("fields.statementTimeoutHint")}</p>
           </fieldset>
-          <fieldset>
+          {engine.readBarrier ? <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">
-              <input type="checkbox" checked={draft.readOnly} onChange={(e) => update({ readOnly: e.target.checked })} />
+              <input type="checkbox" checked={draft.readOnly || fileFolder} disabled={fileFolder} onChange={(e) => update({ readOnly: e.target.checked })} />
               {t("fields.readOnly")}
             </label>
             <label className="check">
-              <input type="checkbox" checked={draft.mcpExposed} onChange={(e) => update({ mcpExposed: e.target.checked })} />
+              <input type="checkbox" checked={draft.mcpExposed && !fileFolder} disabled={fileFolder} onChange={(e) => update({ mcpExposed: e.target.checked })} />
               {t("fields.mcpExposed")}
             </label>
+            {fileFolder && <p className="muted small">{t("fields.fileFolderSafety")}</p>}
             <Field label={t("fields.mcpAccess")}>
               <select
                 aria-label={t("fields.mcpAccess")}
                 value={agentsWrite ? "write" : "read"}
-                disabled={!draft.mcpExposed || draft.readOnly}
+                disabled={!draft.mcpExposed || draft.readOnly || fileFolder || !engine.agentWrites}
                 onChange={(e) => update({ mcpWrites: e.target.value === "write" })}
               >
                 <option value="read">{t("fields.mcpRead")}</option>
@@ -1229,8 +1330,16 @@ function ConnectionForm(props: {
             {agentsWrite && selectedType?.safeguards.confirmDataChanges && (
               <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
             )}
-            <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
-          </fieldset>
+            <p className="muted small">
+              {agentsWrite ? t("fields.mcpWriteHint") : engine.agentWrites ? t("fields.mcpHint") : t("fields.mcpWritesUnavailable")}
+            </p>
+          </fieldset> : (
+            <fieldset>
+              <legend>{t("sections.safety")}</legend>
+              {/* ADR-056: neither has a barrier on this engine yet, so neither is offered. */}
+              <p className="muted small">{engine.sql ? t("fields.noBarrierSafety") : t("fields.noSqlSafety")}</p>
+            </fieldset>
+          )}
           <fieldset>
             <legend>{t("sections.masking")}</legend>
             {/* ADR-051: one pattern per line; the core trims them and checks them. */}

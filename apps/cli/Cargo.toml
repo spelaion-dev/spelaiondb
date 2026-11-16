@@ -27,4 +27,3 @@ futures-util.workspace = true
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde_json = "1"
 spelaion-driver-api.workspace = true
-spelaion-driver-duckdb.workspace = true

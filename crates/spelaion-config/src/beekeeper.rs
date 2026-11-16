@@ -801,7 +801,34 @@ fn tls_of(row: &Row, engine: Option<Engine>) -> Option<ImportedTls> {
             (true, true) => Some(TlsModeConfig::VerifyFull),
             (true, false) => Some(TlsModeConfig::Require),
         },
-        Some(Engine::Sqlite | Engine::Duckdb) | None => None,
+        Some(
+            Engine::Sqlite
+            | Engine::Duckdb
+            | Engine::Mongodb
+            | Engine::Clickhouse
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
+            | Engine::Databend
+            | Engine::Spanner
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala,
+        )
+        | None => None,
     };
     let (ca, cert, key) = if ssl {
         (ca, cert, key)

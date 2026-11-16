@@ -1,72 +1,72 @@
 {
-  "$defs": {
-    "TunnelPreferences": {
-      "additionalProperties": false,
-      "description": "Personal settings of every SSH tunnel on this computer.",
-      "properties": {
-        "port_max": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "port_min": {
-          "description": "Local ports for tunnels are taken from `port_min` to `port_max` (both included), for\na firewall that only allows some; any free port when absent. Both or neither.",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "UserMasking": {
-      "additionalProperties": false,
-      "description": "The user's own masking patterns, for every connection (ADR-051).",
-      "properties": {
-        "always": {
-          "description": "Columns to mask, as a connection's `[masking] always` patterns. A personal\nconnection's `never` may leave one of them visible; a repository connection's cannot.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    }
-  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
+  "title": "UserFile",
   "description": "Personal configuration: `<user config>/spelaiondb/user.toml`. Never goes to git.",
+  "type": "object",
   "properties": {
-    "masking": {
-      "$ref": "#/$defs/UserMasking",
-      "description": "Columns masked on every connection on this computer (ADR-051)."
-    },
     "schema_version": {
-      "default": 1,
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer"
+      "default": 1
+    },
+    "vars": {
+      "description": "Values for `${user.<name>}` in the repository's connections.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
     },
     "tunnels": {
       "$ref": "#/$defs/TunnelPreferences"
     },
-    "vars": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Values for `${user.<name>}` in the repository's connections.",
-      "type": "object"
+    "masking": {
+      "description": "Columns masked on every connection on this computer (ADR-051).",
+      "$ref": "#/$defs/UserMasking"
     }
   },
-  "title": "UserFile",
-  "type": "object"
+  "additionalProperties": false,
+  "$defs": {
+    "TunnelPreferences": {
+      "description": "Personal settings of every SSH tunnel on this computer.",
+      "type": "object",
+      "properties": {
+        "port_min": {
+          "description": "Local ports for tunnels are taken from `port_min` to `port_max` (both included), for\na firewall that only allows some; any free port when absent. Both or neither.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "port_max": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false
+    },
+    "UserMasking": {
+      "description": "The user's own masking patterns, for every connection (ADR-051).",
+      "type": "object",
+      "properties": {
+        "always": {
+          "description": "Columns to mask, as a connection's `[masking] always` patterns. A personal\nconnection's `never` may leave one of them visible; a repository connection's cannot.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

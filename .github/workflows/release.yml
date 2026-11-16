@@ -5,6 +5,15 @@
 # update artifacts (`.sig` files and `latest.json`) are signed with the repository secret
 # `TAURI_SIGNING_PRIVATE_KEY` (ADR-021).
 #
+# Rehearsal: pushing a branch `release-test/<anything>` builds the same installers and CLI
+# archives, with the pinned plugins inside (their archives in the installers, ADR-057; their
+# programs next to `spelaiondb` in the CLI archives), and uploads them as this run's artifacts (and
+# checks each one with `scripts/check-release-plugins.sh`). A rehearsal can never publish:
+# the jobs that create, upload to or publish a release run only for a tag, and they are the
+# only ones with `contents: write`; the rehearsal jobs read the repository and nothing else,
+# never name a secret, and build without update artifacts (`tauri.rehearsal.conf.json`), so
+# nothing is signed and no `latest.json` is written.
+#
 # Versions: actions are pinned to a commit (the comment names the release) and Rust to a
 # version, the same ones as `ci.yml`, so a release is built with what CI tested: bump both
 # together.
@@ -13,9 +22,10 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: ["release-test/**"]
 
-permissions:
-  contents: write
+# Nothing by default: each job says what it needs.
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,6 +33,9 @@ env:
 jobs:
   create:
     name: Draft release
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,6 +60,9 @@ jobs:
   app:
     name: App · ${{ matrix.name }}
     needs: create
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -84,11 +100,6 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
-      # libduckdb-sys reuses its unpacked sources in target/duckdb-sources only when its
-      # `.complete` marker is there, and rust-cache's cleanup leaves that folder's tree without
-      # its files, so a rerun of its build script could not unpack (see ci.yml's Linux job).
-      - shell: bash
-        run: rm -rf target/duckdb-sources
       # WebKitGTK and friends for the app; libdbus for the keychain (Secret Service).
       - if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -102,12 +113,9 @@ jobs:
       #
       # The app and the CLI are built by one cargo command: the same `tauri build` (same
       # `--target`, same `-p` list) as tauri-action's below, so that one finds everything built
-      # but the app's own crate, which it builds again with the release config. Built apart,
-      # bundled DuckDB is compiled twice: cargo turns on the features of build dependencies
-      # from the packages of one command only, and the app's (Tauri's) turn on more of them
-      # than the CLI's, so libduckdb-sys gets a different hash in each command (CONTRIBUTING.md,
-      # "Release build"). Keep both `-p` lists the same, or every dependency whose features
-      # differ is built twice. This one runs without the release config, so it needs no CLI yet.
+      # but the app's own crate, which it builds again with the release config. Keep both `-p`
+      # lists the same: cargo turns on the features of build dependencies from the packages of
+      # one command only, so every dependency whose features differ is built twice. This one runs without the release config, so it needs no CLI yet.
       - name: Build the app and the CLI that ships with it
         shell: bash
         working-directory: apps/desktop
@@ -119,6 +127,15 @@ jobs:
           if [ -n "${{ matrix.args }}" ]; then out="../../target/${{ matrix.target }}/release"; fi
           mkdir -p src-tauri/binaries
           cp "$out/spelaiondb$ext" "src-tauri/binaries/spelaiondb-${{ matrix.target }}$ext"
+          # The engines that are plugins ship inside the installer too (ADR-042), as the
+          # release archives of the builds plugins.toml pins for this target (ADR-057): a signed
+          # app and an AppImage change the programs they carry, and nothing changes an archive.
+          # Each is let in only once it and its program have the pinned hashes;
+          # tauri.release.conf.json puts every one into the installer's resources, and the app
+          # installs them into the user's plugins at its first start, checked again.
+          cargo run -q --locked -p spelaion-plugin-fetch -- --platform "${{ matrix.target }}" \
+            --into "$RUNNER_TEMP/plugins" --archives-into src-tauri/plugins > /dev/null
+          ls -l src-tauri/binaries src-tauri/plugins
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -140,6 +157,9 @@ jobs:
   cli:
     name: CLI · ${{ matrix.target }}
     needs: create
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -163,9 +183,6 @@ jobs:
         with:
           key: cli-${{ matrix.target }}
           save-if: false
-      # The DuckDB sources folder rust-cache leaves behind (see the app job).
-      - shell: bash
-        run: rm -rf target/duckdb-sources
       - if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
@@ -179,6 +196,12 @@ jobs:
           name="spelaiondb-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$name"
           cp LICENSE "$name/"
+          # The engines that are plugins ship with the CLI too, next to it (ADR-042): without
+          # them `spelaiondb mcp` from this archive would have SQLite and nothing else. The
+          # builds plugins.toml pins for this target, let in only with the pinned hashes.
+          cargo run -q --locked -p spelaion-plugin-fetch -- \
+            --platform "${{ matrix.target }}" --into "$name" > /dev/null
+          ls -l "$name"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/spelaiondb.exe" "$name/"
             7z a "$name.zip" "$name" > /dev/null
@@ -193,8 +216,192 @@ jobs:
   publish:
     name: Publish
     needs: [app, cli]
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The rehearsal (a push to `release-test/**`, see the top of this file). Its jobs only read
+  # the repository: no `contents: write`, no secret, no release, no tag, no update artifacts.
+  # Their steps are the tagged jobs' own, with the release steps replaced by an upload of this
+  # run's artifacts and a check of what was built: keep them in step with the jobs above.
+  rehearsal-versions:
+    name: Rehearsal · versions
+    if: github.ref_type == 'branch' && startsWith(github.ref, 'refs/heads/release-test/')
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # No tag to compare with: the app and the crates must agree, and a missing release note
+      # is only a warning (it is often written after a rehearsal).
+      - run: |
+          app=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          crates=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "$app" = "$crates" || {
+            echo "app $app and crates $crates must match"; exit 1; }
+          test -f "docs/releases/v$app.md" ||
+            echo "::warning::docs/releases/v$app.md is missing: the tagged release would stop here"
+
+  rehearsal-app:
+    name: Rehearsal · App · ${{ matrix.name }}
+    needs: rehearsal-versions
+    if: github.ref_type == 'branch' && startsWith(github.ref, 'refs/heads/release-test/')
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: macOS Intel
+            platform: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - name: Linux
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libdbus-1-dev pkg-config libssl-dev libxdo-dev
+      - run: npm ci
+        working-directory: apps/desktop
+      # The app job's build step, as it is.
+      - name: Build the app and the CLI that ships with it
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          npm run tauri build -- --no-bundle ${{ matrix.args }} -- --locked -p spelaion-desktop -p spelaion-cli
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
+          out="../../target/release"
+          if [ -n "${{ matrix.args }}" ]; then out="../../target/${{ matrix.target }}/release"; fi
+          mkdir -p src-tauri/binaries
+          cp "$out/spelaiondb$ext" "src-tauri/binaries/spelaiondb-${{ matrix.target }}$ext"
+          cargo run -q --locked -p spelaion-plugin-fetch -- --platform "${{ matrix.target }}" \
+            --into "$RUNNER_TEMP/plugins" --archives-into src-tauri/plugins > /dev/null
+          ls -l src-tauri/binaries src-tauri/plugins
+      # What tauri-action runs in the app job (the same `tauri build` and arguments), with
+      # tauri.rehearsal.conf.json merged last: no update artifacts, so no signing key is wanted.
+      - name: Build the installers
+        working-directory: apps/desktop
+        run: npm run tauri build -- --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.rehearsal.conf.json ${{ matrix.args }} -- --locked -p spelaion-desktop -p spelaion-cli
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-${{ matrix.target }}
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/msi/*.msi
+            target/*/release/bundle/dmg/*.dmg
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+      # After the upload, so a failing check still leaves the installers to look at.
+      - name: Check the plugins inside the installers
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) scripts/check-release-plugins.sh --installer "${{ matrix.target }}" \
+                       target/release/bundle/nsis/*-setup.exe target/release/bundle/msi/*.msi ;;
+            macOS) scripts/check-release-plugins.sh --installer "${{ matrix.target }}" \
+                     target/${{ matrix.target }}/release/bundle/macos/*.app ;;
+            Linux) scripts/check-release-plugins.sh --installer "${{ matrix.target }}" \
+                     target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage ;;
+          esac
+
+  rehearsal-cli:
+    name: Rehearsal · CLI · ${{ matrix.target }}
+    needs: rehearsal-versions
+    if: github.ref_type == 'branch' && startsWith(github.ref, 'refs/heads/release-test/')
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: cli-${{ matrix.target }}
+          save-if: false
+      - if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - run: cargo build --release --locked -p spelaion-cli --target ${{ matrix.target }}
+      # The cli job's packaging, named after the version the tag would have (a branch name
+      # holds a `/`), and kept for the upload instead of going to a release.
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          name="spelaiondb-v${version}-${{ matrix.target }}"
+          mkdir "$name"
+          cp LICENSE "$name/"
+          cargo run -q --locked -p spelaion-plugin-fetch -- \
+            --platform "${{ matrix.target }}" --into "$name" > /dev/null
+          ls -l "$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/spelaiondb.exe" "$name/"
+            7z a "$name.zip" "$name" > /dev/null
+            archive="$name.zip"
+          else
+            cp "target/${{ matrix.target }}/release/spelaiondb" "$name/"
+            tar czf "$name.tar.gz" "$name"
+            archive="$name.tar.gz"
+          fi
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-${{ matrix.target }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Check the plugins inside the archive
+        shell: bash
+        run: scripts/check-release-plugins.sh "${{ matrix.target }}" "${{ steps.package.outputs.archive }}"

@@ -352,14 +352,14 @@ fn tool_error(message: impl Into<String>) -> Result<CallToolResult, ErrorData> {
 /// Who called which tool, for the audit log.
 struct Call {
     client: String,
-    tool: &'static str,
+    tool: std::borrow::Cow<'static, str>,
 }
 
 impl Call {
     fn new(peer: &Peer<RoleServer>, tool: &'static str) -> Self {
         Self {
             client: client_name(peer),
-            tool,
+            tool: tool.into(),
         }
     }
 }
@@ -460,11 +460,16 @@ impl SpelaionMcp {
         if let Err(reason) = &current {
             eprintln!("spelaiondb mcp: {reason}");
         }
+        // The plugins the app installed, under the last catalogue it accepted (ADR-055). This
+        // server never downloads one.
+        let engines = Engines::builtin_with(
+            &spelaion_core::plugins::installed::PluginStore::in_user_dir(&options.user_dir),
+        );
         Ok(Self {
             state: Arc::new(State {
                 current: Mutex::new(current),
                 options,
-                engines: Engines::builtin(),
+                engines,
                 tunnels: Arc::new(TunnelPool::new()),
                 store: Mutex::new(Some(store)),
                 audit_session: audit_session_id(),
@@ -482,7 +487,11 @@ impl SpelaionMcp {
     /// connection was lost.
     async fn begin(&self) -> Access {
         let access = Snapshot::load(&self.state.options);
-        *self.state.current.lock().expect("lock poisoned") = access.clone();
+        *self
+            .state
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = access.clone();
         let stale: Vec<Shared> = {
             let mut sessions = self.state.sessions.lock().await;
             let keys: Vec<(String, Use)> = sessions
@@ -540,9 +549,14 @@ impl SpelaionMcp {
     ) {
         let mut entry = AuditEntry::now(&call.client, connection, statement, decision);
         entry.session = Some(self.state.audit_session.clone());
-        entry.tool = Some(call.tool.into());
+        entry.tool = Some(call.tool.to_string());
         fill(&mut entry);
-        if let Some(store) = self.state.store.lock().expect("lock poisoned").as_ref()
+        if let Some(store) = self
+            .state
+            .store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
             && let Err(e) = store.record(&entry)
         {
             eprintln!("spelaiondb mcp: could not write the audit log: {e}");
@@ -608,10 +622,36 @@ impl SpelaionMcp {
                 ),
                 other => other.to_string(),
             })?;
+        // Agents get nothing on a server that accepts a read-only transaction without
+        // enforcing it (SDB-169): their reads are refused when the session opens, their writes
+        // here.
+        if let Some(reason) = open.session.read_only_transaction_refusal() {
+            open.close().await;
+            return Err(reason);
+        }
         let cached = Cached::new(open, definition);
         let open = cached.open.clone();
         sessions.insert(key, cached);
         Ok((open, max_rows))
+    }
+
+    /// Runs one tool call (`run`); if it panics, the call answers with an error and is recorded
+    /// as failed (SDB-163). Nothing of the panic's message reaches the agent or the audit.
+    async fn guarded<T: From<CallToolResult>>(
+        &self,
+        call: &Call,
+        connection: &str,
+        run: impl std::future::Future<Output = Result<T, ErrorData>>,
+    ) -> Result<T, ErrorData> {
+        match spelaion_core::catch_panic(run).await {
+            Ok(answer) => answer,
+            Err(panicked) => {
+                self.audit(call, connection, "", Decision::Failed, |e| {
+                    e.detail = Some(panicked.to_string())
+                });
+                tool_error(panicked.to_string()).map(Into::into)
+            }
+        }
     }
 
     /// Runs a tool that is not a query and records it (ADR-033): refused if the connection is
@@ -1308,6 +1348,32 @@ impl SpelaionMcp {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SpelaionMcp {
+    /// Every tool call, through the router. A tool that panics (SDB-163) would otherwise never
+    /// answer: rmcp runs each request in a task of its own, and the agent would wait until its
+    /// own timeout, with nothing in the audit. Instead the call answers with an error, is
+    /// recorded as failed, and the server keeps serving the next calls; where it happened goes
+    /// to standard error (the panic hook), never to the agent.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+        let call = Call {
+            client: client_name(&context.peer),
+            tool: request.name.to_string().into(),
+        };
+        let connection = request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("connection"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let tool_call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.guarded(&call, &connection, self.tool_router.call(tool_call))
+            .await
+    }
+
     fn get_info(&self) -> ServerConfig {
         let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info.name = "spelaiondb".into();

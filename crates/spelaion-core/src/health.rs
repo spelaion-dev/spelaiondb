@@ -17,7 +17,7 @@ use futures_util::StreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, InsertTarget,
     KeepAlive, NameFilter, ObjectInfo, ReferencingKey, Result, SchemaColumn, SchemaInfo,
-    SchemaObject, ServerObject, TableInfo, TransactionState,
+    SchemaObject, ServerObject, TableInfo, TextRows, TransactionState,
 };
 use spelaion_ssh::TunnelState;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, watch};
@@ -410,6 +410,22 @@ impl Connection for Tracked {
         })))
     }
 
+    async fn execute_request(
+        &self,
+        request: serde_json::Value,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        let busy = self.activity.begin().await;
+        let events = self.observe(self.inner.execute_request(request, opts).await)?;
+        let inner = self.inner.clone();
+        let health = self.health.clone();
+        Ok(Box::pin(events.map(move |event| {
+            let _busy = &busy;
+            observe(&*inner, &health, &event);
+            event
+        })))
+    }
+
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
         self.inner.cancel_handle()
     }
@@ -529,11 +545,7 @@ impl Connection for Tracked {
         self.observe(self.inner.list_columns(schema).await)
     }
 
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.insert_rows(target, rows).await)
     }

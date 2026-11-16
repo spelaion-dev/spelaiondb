@@ -12,6 +12,7 @@ mod error;
 mod filter;
 mod introspect;
 mod remote;
+mod rows;
 mod secret;
 pub mod thread_cancel;
 mod value;
@@ -26,7 +27,7 @@ use futures_util::stream::BoxStream;
 
 pub use column::{ColumnMeta, ColumnOrigin, ResultSchema};
 pub use database_context::{ContextDialect, DatabaseContext};
-pub use dialect::{Dialect, StatementSpan, code_ranges};
+pub use dialect::{Dialect, RequestClass, RequestError, StatementSpan, code_ranges};
 pub use error::DriverError;
 pub use filter::{LikeFilter, NameFilter, literal_pattern, pattern_matches};
 pub use introspect::{
@@ -35,6 +36,7 @@ pub use introspect::{
     ServerObjectKind, TableInfo, check_definition, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
+pub use rows::{TextRows, TextRowsBuilder};
 pub use secret::Secret;
 pub use value::{LogicalType, Value};
 
@@ -44,7 +46,7 @@ pub type Result<T, E = DriverError> = std::result::Result<T, E>;
 pub type EventStream = BoxStream<'static, Result<ExecEvent>>;
 
 /// What an engine can do. The UI and the core adapt to this, never to the engine's name.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Capabilities {
     pub transactions: bool,
     pub cancel: bool,
@@ -89,6 +91,10 @@ pub struct ConnectParams {
     /// How long connecting may take: the TCP connection, TLS and the login. `None` for
     /// [`ConnectParams::DEFAULT_CONNECT_TIMEOUT`] (ADR-032).
     pub connect_timeout: Option<std::time::Duration>,
+    /// The engine's own connection settings (MongoDB's `authSource`, `replicaSet`…), by name.
+    /// The core checks every key against that engine's own list before a connection opens
+    /// (ADR-056); never a secret, which travels only as `password`.
+    pub options: std::collections::BTreeMap<String, String>,
 }
 
 impl ConnectParams {
@@ -102,7 +108,8 @@ impl ConnectParams {
 }
 
 /// Connection encryption. Same names and meaning as libpq's `sslmode`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum TlsMode {
     /// No encryption.
     Disable,
@@ -166,7 +173,7 @@ pub enum ExecEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Notice {
     pub severity: String,
     pub message: String,
@@ -175,9 +182,47 @@ pub struct Notice {
 #[async_trait]
 pub trait Driver: Send + Sync {
     /// Stable engine identifier used in the configuration (`engine = "postgres"`).
-    fn engine(&self) -> &'static str;
-    fn dialect(&self) -> Arc<dyn Dialect>;
+    fn engine(&self) -> &str;
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>>;
+
+    /// Creates an empty database for an engine whose databases are files (SQLite, DuckDB).
+    /// `database` is what [`ConnectParams::database`] will be: the file's path. An existing
+    /// file is never touched. Every other engine refuses.
+    async fn create_database(&self, database: &str) -> Result<()> {
+        let _ = database;
+        Err(DriverError::Other(format!(
+            "{} is not a file",
+            self.engine()
+        )))
+    }
+
+    /// Called once when the program that serves this driver ends normally (a plugin whose
+    /// standard input closed), after every connection it made has been dropped. Returns once
+    /// whatever the driver keeps open past its connections is closed: a database file opened
+    /// once for several connections writes what it holds and lets go of the file. Nothing is
+    /// asked of the driver afterwards. Most drivers keep nothing, and do nothing.
+    async fn shutdown(&self) {}
+}
+
+/// A shared driver is a driver: what holds an `Arc<dyn Driver>` (the core's engines) can be
+/// used wherever one is asked for.
+#[async_trait]
+impl<D: Driver + ?Sized> Driver for Arc<D> {
+    fn engine(&self) -> &str {
+        (**self).engine()
+    }
+
+    async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
+        (**self).connect(params).await
+    }
+
+    async fn create_database(&self, database: &str) -> Result<()> {
+        (**self).create_database(database).await
+    }
+
+    async fn shutdown(&self) {
+        (**self).shutdown().await
+    }
 }
 
 #[async_trait]
@@ -210,6 +255,21 @@ pub trait Connection: Send + Sync {
     ) -> Result<EventStream> {
         Err(DriverError::Other(
             "this connection cannot bind parameters".into(),
+        ))
+    }
+
+    /// Executes **one** request of an engine whose language is not SQL (ADR-056): the
+    /// canonical request the core turned a statement into (a MongoDB command document, a Redis
+    /// argument list, an HTTP method, path and body). The driver runs exactly this request and
+    /// never the text it was typed as. Results and errors are those of
+    /// [`Connection::execute`]. Engines queried with SQL do not support it.
+    async fn execute_request(
+        &self,
+        _request: serde_json::Value,
+        _opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        Err(DriverError::Other(
+            "this engine does not run requests: it is queried with SQL".into(),
         ))
     }
 
@@ -349,14 +409,11 @@ pub trait Connection: Send + Sync {
     /// Inserts `rows` into a table (data imports, ADR-038). Every value travels as a bound
     /// parameter or as the data of the engine's bulk path (PostgreSQL's `COPY … FROM STDIN`),
     /// never written into SQL text: only the quoted table and column names are. Values are
-    /// text, or `None` for NULL, and the server converts them to each column's type. It runs
-    /// inside whatever transaction the session has open and opens none itself. Returns the
-    /// rows inserted.
-    async fn insert_rows(
-        &self,
-        _target: &InsertTarget,
-        _rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    /// text, or `None` for NULL, and the server converts them to each column's type. They come
+    /// as columns of text ([`TextRows`]), read in place: the same rows whether the driver is
+    /// compiled in or a plugin. It runs inside whatever transaction the session has open and
+    /// opens none itself. Returns the rows inserted.
+    async fn insert_rows(&self, _target: &InsertTarget, _rows: TextRows) -> Result<u64> {
         Err(DriverError::Other(
             "this connection cannot import rows".into(),
         ))
@@ -364,7 +421,7 @@ pub trait Connection: Send + Sync {
 }
 
 /// The table and columns [`Connection::insert_rows`] writes to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InsertTarget {
     /// Empty for the session's default schema.
     pub schema: String,
@@ -400,14 +457,15 @@ impl InsertTarget {
     }
 
     /// Every row has one value per column.
-    pub fn check_rows(&self, rows: &[Vec<Option<String>>]) -> Result<()> {
-        match rows.iter().find(|row| row.len() != self.columns.len()) {
-            Some(row) => Err(DriverError::Other(format!(
+    pub fn check_rows(&self, rows: &TextRows) -> Result<()> {
+        if rows.width() == self.columns.len() {
+            Ok(())
+        } else {
+            Err(DriverError::Other(format!(
                 "a row has {} values for {} columns",
-                row.len(),
+                rows.width(),
                 self.columns.len()
-            ))),
-            None => Ok(()),
+            )))
         }
     }
 
@@ -416,27 +474,29 @@ impl InsertTarget {
     /// `max_bytes` of data each (its packet size), and always at least one row.
     pub fn statement_chunks(
         &self,
-        rows: Vec<Vec<Option<String>>>,
+        rows: &TextRows,
         max_values: usize,
         max_rows: usize,
         max_bytes: usize,
-    ) -> Vec<Vec<Vec<Option<String>>>> {
+    ) -> Vec<TextRows> {
         let width = self.columns.len().max(1);
         let per_statement = (max_values / width).clamp(1, max_rows.max(1));
         let mut chunks = Vec::new();
-        let mut current = Vec::new();
+        // The chunk being filled: where it starts, and its bytes so far.
+        let mut start = 0usize;
         let mut bytes = 0usize;
-        for row in rows {
-            let size: usize = row.iter().map(|v| v.as_ref().map_or(1, String::len)).sum();
-            if !current.is_empty() && (current.len() >= per_statement || bytes + size > max_bytes) {
-                chunks.push(std::mem::take(&mut current));
+        for row in 0..rows.len() {
+            let size = rows.row_bytes(row);
+            let filled = row - start;
+            if filled > 0 && (filled >= per_statement || bytes + size > max_bytes) {
+                chunks.push(rows.slice(start, filled));
+                start = row;
                 bytes = 0;
             }
             bytes += size;
-            current.push(row);
         }
-        if !current.is_empty() {
-            chunks.push(current);
+        if start < rows.len() {
+            chunks.push(rows.slice(start, rows.len() - start));
         }
         chunks
     }
@@ -481,6 +541,8 @@ pub fn bound_placeholder(engine: &str, n: usize) -> String {
         "sqlserver" => format!("@P{n}"),
         "sqlite" => format!("?{n}"),
         "mysql" | "mariadb" => format!("@spelaion_p{n}"),
+        // A query parameter of the HTTP request, read as text.
+        "clickhouse" => format!("{{p{n}:String}}"),
         _ => format!("${n}"),
     }
 }
@@ -507,7 +569,8 @@ pub fn parameter_placeholder(name: &str, position: usize) -> String {
 }
 
 /// What [`Connection::keep_alive`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum KeepAlive {
     /// The server answered and no transaction is open.
     Alive,
@@ -516,7 +579,8 @@ pub enum KeepAlive {
 }
 
 /// What [`Connection::transaction_state`] found (ADR-031).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransactionState {
     /// No transaction is open: each statement commits as it runs.
     Idle,

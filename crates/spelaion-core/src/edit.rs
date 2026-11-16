@@ -137,7 +137,12 @@ pub async fn editable_query_table(
     };
     match object.kind {
         ObjectKind::Table | ObjectKind::PartitionedTable => {}
-        ObjectKind::View | ObjectKind::MaterializedView | ObjectKind::ForeignTable => {
+        ObjectKind::View
+        | ObjectKind::MaterializedView
+        | ObjectKind::ForeignTable
+        | ObjectKind::Collection
+        | ObjectKind::NodeLabel
+        | ObjectKind::RelationshipType => {
             return Ok(None);
         }
     }
@@ -692,7 +697,7 @@ mod tests {
 
     #[test]
     fn editable_query_requires_one_unambiguous_table_projection() {
-        let dialect = spelaion_driver_sqlite::SqliteDialect;
+        let dialect = spelaion_dialect::SqliteDialect;
         assert_eq!(
             editable_query_source(
                 &dialect,

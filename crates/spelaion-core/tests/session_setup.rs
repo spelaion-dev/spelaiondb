@@ -16,6 +16,7 @@ use spelaion_core::{
 use spelaion_driver_api::{Secret, Value};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
+mod engines;
 mod support;
 use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
 
@@ -298,7 +299,7 @@ async fn setup_and_default_schema_open_sessions_in_that_schema_on_every_engine_w
 async fn duckdb_opens_in_its_default_schema_and_sqlite_runs_its_setup() {
     let ws = Workspace::new();
     let duck = ws.file("setup.duckdb");
-    spelaion_driver_duckdb::create_database(std::path::Path::new(&duck)).unwrap();
+    engines::create_database(spelaion_config::Engine::Duckdb, std::path::Path::new(&duck)).await;
     let head = format!("schema_version = 1\nengine = \"duckdb\"\ndatabase = \"{duck}\"\n");
     let plain = ws.open("duck", &head, None, false).await.unwrap();
     run(

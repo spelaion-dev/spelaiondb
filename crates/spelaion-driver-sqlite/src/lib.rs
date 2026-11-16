@@ -4,8 +4,8 @@
 //! of the program talks to it through channels. That way a long query never blocks the async
 //! runtime.
 
-mod catalog;
-mod dialect;
+use spelaion_dialect::sqlite as dialect;
+use spelaion_sqlite_schema::catalog;
 mod exec;
 mod introspect;
 mod remote;
@@ -16,9 +16,9 @@ use async_trait::async_trait;
 use rusqlite::OpenFlags;
 use spelaion_driver_api::thread_cancel::{Canceller, Closer, Work};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo,
-    ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo, TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, Driver, DriverError, EventStream,
+    ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo, ReferencingKey,
+    Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo, TextRows, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -71,8 +71,11 @@ impl Driver for SqliteDriver {
         "sqlite"
     }
 
-    fn dialect(&self) -> Arc<dyn Dialect> {
-        Arc::new(SqliteDialect)
+    async fn create_database(&self, database: &str) -> Result<()> {
+        let path = std::path::PathBuf::from(database);
+        tokio::task::spawn_blocking(move || create_database(&path))
+            .await
+            .map_err(|e| DriverError::Other(e.to_string()))?
     }
 
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
@@ -158,7 +161,7 @@ enum Command {
     /// `sqlite3_get_autocommit`: no query (ADR-031).
     TransactionState(Reply<TransactionState>),
     /// Rows of an import (ADR-038): one prepared single-row INSERT, values bound.
-    Insert(u64, String, Vec<Vec<Option<String>>>, Reply<u64>),
+    Insert(u64, String, TextRows, Reply<u64>),
 }
 
 /// Loop of the connection thread. Ends when the `SqliteConnection` is dropped.
@@ -226,21 +229,16 @@ fn actor(
     }
 }
 
-fn insert(
-    conn: &rusqlite::Connection,
-    sql: &str,
-    rows: Vec<Vec<Option<String>>>,
-    work: &Work,
-) -> Result<u64> {
+fn insert(conn: &rusqlite::Connection, sql: &str, rows: TextRows, work: &Work) -> Result<u64> {
     let mut statement = conn.prepare_cached(sql).map_err(exec::map_error)?;
     let mut inserted = 0;
-    for (i, row) in rows.into_iter().enumerate() {
+    for row in 0..rows.len() {
         // Each row is a statement of its own, which an interrupt between two would miss.
-        if i % 1024 == 0 {
+        if row % 1024 == 0 {
             work.check()?;
         }
         inserted += statement
-            .execute(rusqlite::params_from_iter(row))
+            .execute(rusqlite::params_from_iter(rows.row(row)))
             .map_err(exec::map_error)? as u64;
     }
     Ok(inserted)
@@ -319,11 +317,7 @@ impl Connection for SqliteConnection {
     }
 
     /// One prepared single-row INSERT run for every row: in-process, that is SQLite's fast path.
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         target.check_rows(&rows)?;
         if rows.is_empty() {
             return Ok(0);

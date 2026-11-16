@@ -101,10 +101,11 @@ async function freePort() {
   return port;
 }
 
-function startApp() {
+function startApp(extraEnv = {}) {
   return spawn(exe, [demo], {
     env: {
       ...process.env,
+      ...extraEnv,
       SPELAION_USER_DIR: userDir,
       // Its window is kept out of the user's way (SDB-274, CONTRIBUTING.md): it opens without
       // taking the foreground and is moved left of every monitor at once, at its usual size, so the user's real
@@ -171,7 +172,23 @@ restoreDemoConnections();
 // The run changes the demo's shop.db (the column editor rebuilds product, among others), so
 // every run starts from a fresh one: a later run would otherwise find nothing to change.
 execFileSync(process.platform === "win32" ? "python" : "python3", [join(demo, "make-shop-db.py")], { stdio: "inherit" });
-let app = startApp();
+// The first start meets a local store it cannot open (SDB-283): the one 0.8.0 met, schema 10 by
+// its version with a development build's history table, without `cancelled`. The startup
+// dialog is answered "Start with a new local store" by SPELAION_E2E_STARTUP_CHOICE, so no
+// window reaches the user's screen; the first step checks the old file was kept beside the new
+// one and the log says why.
+mkdirSync(join(userDir, "db"), { recursive: true });
+execFileSync(process.platform === "win32" ? "python" : "python3", [
+  "-c",
+  [
+    "import sqlite3, sys",
+    "c = sqlite3.connect(sys.argv[1])",
+    "c.executescript('create table history (id integer primary key, at_ms integer not null, workspace text not null, connection text not null, statement text not null, duration_ms integer not null, rows integer not null, error text); create table personal_settings (key text primary key, value text not null); pragma user_version = 10;')",
+    "c.close()",
+  ].join("\n"),
+  join(userDir, "db", "state.db"),
+]);
+let app = startApp({ SPELAION_E2E_STARTUP_CHOICE: "start-over" });
 
 /** Runs `spelaiondb mcp` as an AI client would (stdio, JSON-RPC): `list_connections`, then each
  *  call, as the client "smoke-agent". Needs the CLI, built with the app (see the top). */
@@ -353,7 +370,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, scripts: 10, editor: 11, map: 12 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, map: 13 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -392,6 +409,14 @@ try {
 
   step("startup and untrusted repository");
   await page.locator(".activity-bar .settings-button").waitFor();
+  // The broken local store was moved aside, never deleted, and the app opened with a new one.
+  const movedStores = readdirSync(join(userDir, "db")).filter((name) => /^state\.db\.broken-\d{4}-\d{2}-\d{2}$/.test(name));
+  assert.equal(movedStores.length, 1, `the broken store is kept beside the new one: ${readdirSync(join(userDir, "db"))}`);
+  assert.ok(existsSync(join(userDir, "db", "state.db")), "a new local store was created");
+  const startupLog = readFileSync(join(userDir, "logs", "spelaion.log"), "utf8");
+  assert.match(startupLog, /could not open the local store .*state\.db: could not update the local database to schema 11: .*cancelled/);
+  assert.match(startupLog, /answered by SPELAION_E2E_STARTUP_CHOICE: Start with a new local store/);
+  assert.match(startupLog, /moved the local store to .*state\.db\.broken-/);
   assert.equal(await page.locator(".language-setting").count(), 0, "the language selector left the tab bar");
   assert.equal(await savedLanguage(), "system");
   await page.evaluate(() => {
@@ -414,6 +439,23 @@ try {
   await page.getByText("Shop (SQLite)").waitFor();
   await page.getByText("is not trusted").waitFor();
   await shot("01-start");
+
+  step("open object without a connection keeps focus and closes with Escape");
+  await page.keyboard.press("Control+Shift+D");
+  const emptyOpenObject = page.getByRole("dialog", { name: "Open object by name" });
+  await emptyOpenObject.getByText("Connect a connection in the explorer first: the search reads its catalog.").waitFor();
+  const closeEmptyOpenObject = emptyOpenObject.getByRole("button", { name: "Close" });
+  await page.waitForFunction(() => document.activeElement?.textContent === "Close" && document.activeElement.closest('.open-object-dialog'));
+  await page.keyboard.press("Tab");
+  assert.equal(await closeEmptyOpenObject.evaluate((button) => document.activeElement === button), true);
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await closeEmptyOpenObject.evaluate((button) => document.activeElement === button), true);
+  await page.keyboard.press("Escape");
+  await emptyOpenObject.waitFor({ state: "detached" });
+  await page.keyboard.press("Control+Shift+D");
+  await emptyOpenObject.waitFor();
+  await closeEmptyOpenObject.click();
+  await emptyOpenObject.waitFor({ state: "detached" });
 
   step("Kubernetes editor requires repository trust before listing");
   await (await connectionMenu("Shop (SQLite)")).getByRole("menuitem", { name: "Edit…" }).click();
@@ -495,6 +537,36 @@ try {
   await settingsDialog.getByText(/^Version \d+\.\d+\.\d+$/).waitFor();
   await settingsDialog.getByRole("status").filter({ hasText: "not available in this build" }).waitFor();
   assert.equal(await page.locator(".update-notice").count(), 0, "no update notice");
+  // Plugins (ADR-055): the engines' plugins came inside the installer (next to the app);
+  // with SPELAION_NO_UPDATES the catalogue is not read, and the page says so.
+  await settingsDialog.getByRole("button", { name: "Plugins", exact: true }).click();
+  await settingsDialog.getByRole("heading", { name: "Plugins" }).waitFor();
+  const pluginList = settingsDialog.getByRole("list", { name: "Plugins" });
+  for (const [plugin, engines] of [
+    ["spelaiondb-plugin-sqlserver", "SQL Server"],
+    ["spelaiondb-plugin-mysql", "MariaDB, MySQL"],
+    ["spelaiondb-plugin-postgres", "PostgreSQL"],
+    ["spelaiondb-plugin-duckdb", "DuckDB"],
+    ["spelaiondb-plugin-mongodb", "MongoDB"],
+    ["spelaiondb-plugin-clickhouse", "ClickHouse"],
+    ["spelaiondb-plugin-redis", "Redis"],
+    ["spelaiondb-plugin-trino", "Presto, Trino"],
+    ["spelaiondb-plugin-oracle", "Oracle"],
+    ["spelaiondb-plugin-libsql", "libSQL / Turso"],
+    ["spelaiondb-plugin-cassandra", "Cassandra"],
+    ["spelaiondb-plugin-flightsql", "Dremio, Arrow Flight SQL, GizmoSQL"],
+    ["spelaiondb-plugin-neo4j", "Neo4j"],
+    ["spelaiondb-plugin-databend", "Databend"],
+    ["spelaiondb-plugin-spanner", "Google Cloud Spanner"],
+    ["spelaiondb-plugin-hive", "Apache Hive, Apache Impala, Apache Kyuubi, Spark SQL (Thrift server)"],
+  ]) {
+    const row = pluginList.locator(`[data-plugin="${plugin}"]`);
+    await row.getByText(engines, { exact: true }).waitFor();
+    await row.getByText(/^Version \d+\.\d+\.\d+, inside the installer$/).waitFor();
+    assert.equal(await row.getByRole("button").count(), 0, `${plugin}: nothing to install, update or remove`);
+  }
+  await settingsDialog.getByRole("status").filter({ hasText: "the plugin catalogue is not read" }).waitFor();
+  await shot("01c-settings-plugins");
   await page.keyboard.press("Escape");
   await settingsDialog.waitFor({ state: "detached" });
   await page.locator(".activity-bar .settings-button").click();
@@ -1912,7 +1984,31 @@ try {
     await replaceQuery(panel, "orders orders orders");
     await page.keyboard.press("Control+Home");
     await page.keyboard.press("ArrowRight");
-    await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-selectionMatch').length === 3);
+    for (const theme of ["light", "dark"]) {
+      await setTheme(theme, theme);
+      await sqlEditor.focus();
+      await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-selectionMatch').length === 3);
+      const highlights = await panel.locator(".cm-selectionMatch").evaluateAll((marks) => marks.map((mark) => ({
+        main: mark.classList.contains("cm-selectionMatch-main"),
+        background: getComputedStyle(mark).backgroundColor,
+        outline: getComputedStyle(mark).outlineStyle,
+      })));
+      assert.equal(highlights.filter((mark) => mark.main).length, 1);
+      assert.equal(highlights.find((mark) => mark.main).background, "rgba(0, 0, 0, 0)");
+      assert.equal(highlights.find((mark) => mark.main).outline, "none");
+      assert.ok(highlights.filter((mark) => !mark.main).every((mark) => mark.background !== "rgba(0, 0, 0, 0)"));
+      await shot(`05e-editor-occurrences-${theme}`);
+      await page.keyboard.press("Control+Shift+L");
+      await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-selectionBackground').length === 3);
+      await page.keyboard.press("Control+f");
+      await panel.locator('.cm-search input[name="search"]').fill("orders");
+      await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-searchMatch').length === 3);
+      await page.keyboard.press("Escape");
+      await sqlEditor.focus();
+      await page.keyboard.press("Control+Home");
+      await page.keyboard.press("ArrowRight");
+    }
+    await setTheme("light", "light");
     await sqlEditor.focus();
     await page.keyboard.press("Shift+F10");
     await menu.waitFor();
@@ -3864,6 +3960,9 @@ try {
   // last events arrive, and Run does nothing while a run is still going (SDB-82): the run's
   // duration shows once it has ended (the statement's error follows it with no space between).
   await panel.locator(".statusline", { hasText: /\d ms/ }).waitFor();
+  // Its result had started (its column arrived) before the statement failed: once the run has
+  // ended it is not "(loading)" any more (SDB-275).
+  assert.doesNotMatch(await panel.locator(".statusline").innerText(), /loading/);
   // Running again does not reconnect on its own: it says why.
   await replaceQuery(panel, "select 'after reconnect' as marker;");
   await run(panel);
@@ -4232,8 +4331,20 @@ try {
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   {
     let wizard = page.locator(".modal.wizard");
+    // SDB-169: CockroachDB is a kind of PostgreSQL connection, starting from its own port,
+    // user and database; the form is PostgreSQL's.
+    await wizard.locator(".engine-card", { hasText: "CockroachDB" }).click();
+    await wizard.getByRole("heading", { name: "New CockroachDB connection" }).waitFor();
+    assert.equal(await wizard.getByLabel("Port", { exact: true }).inputValue(), "26257");
+    assert.equal(await wizard.getByLabel("User", { exact: true }).inputValue(), "root");
+    assert.equal(await wizard.getByLabel("Database", { exact: true }).inputValue(), "defaultdb");
+    assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Kubernetes", "Session", "Options"]);
+    await shot("sdb-169-cockroachdb-form");
+    await wizard.getByRole("button", { name: "Back", exact: true }).click();
     await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
     await wizard.getByRole("heading", { name: "New PostgreSQL connection" }).waitFor();
+    // Back to the picker cleared the kind: PostgreSQL starts empty.
+    assert.equal(await wizard.getByLabel("Port", { exact: true }).inputValue(), "");
     assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Kubernetes", "Session", "Options"]);
     await wizard.getByLabel("Name", { exact: true }).fill("PG session setup");
     await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
@@ -5366,8 +5477,16 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "MariaDB" }).isDisabled()));
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled()));
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "DuckDB" }).isDisabled()));
-  assert.ok(await wizard.locator(".engine-card", { hasText: "Oracle" }).isDisabled());
-  await wizard.locator(".engine-card", { hasText: "Oracle" }).getByText("Coming soon").waitFor();
+  // Oracle is a plugin now (ADR-059); Snowflake is still planned.
+  assert.ok(!(await wizard.locator(".engine-card", { hasText: "Oracle" }).isDisabled()));
+  assert.ok(await wizard.locator(".engine-card", { hasText: "Snowflake" }).isDisabled());
+  await wizard.locator(".engine-card", { hasText: "Snowflake" }).getByText("Coming soon").waitFor();
+  // HTTP search engines have a verified official plugin pin.
+  for (const name of ["Elasticsearch", "OpenSearch", "Solr", "Meilisearch"]) {
+    const card = wizard.locator(".engine-card", { hasText: name });
+    assert.ok(!(await card.isDisabled()), `${name} has a verified official plugin pin`);
+  }
+  assert.equal(await wizard.locator(".engine-card", { hasText: "Open Distro" }).count(), 0);
   await shot("12a-add-connection-catalog");
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");
@@ -5383,6 +5502,23 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await shot("12a1-connection-url");
   await urlForm.getByRole("button", { name: "Back", exact: true }).click();
   wizard = page.getByRole("dialog", { name: "Add connection" });
+  // SDB-325: agents can only read on an engine whose writes the core cannot run (ClickHouse),
+  // and the form says so instead of offering writes that would all fail.
+  await wizard.getByRole("searchbox").fill("ClickHouse");
+  await wizard.locator(".engine-card", { hasText: "ClickHouse" }).click();
+  const clickhouseForm = page.locator(".modal.wizard");
+  await clickhouseForm.getByRole("heading", { name: "New ClickHouse connection" }).waitFor();
+  await clickhouseForm.getByRole("tab", { name: "Options" }).click();
+  await clickhouseForm.getByRole("checkbox", { name: "Expose to AI agents" }).check();
+  const clickhouseAgents = clickhouseForm.getByLabel("Agents can", { exact: true });
+  assert.equal(await clickhouseAgents.isDisabled(), true);
+  assert.equal(await clickhouseAgents.inputValue(), "read");
+  await clickhouseForm.getByText("Writes from agents are not available for this engine yet", { exact: false }).waitFor();
+  await shot("12a2-clickhouse-agents-read-only");
+  await clickhouseForm.getByRole("tab", { name: "Main" }).click();
+  await clickhouseForm.getByRole("button", { name: "Back", exact: true }).click();
+  wizard = page.getByRole("dialog", { name: "Add connection" });
+  await wizard.getByRole("searchbox").fill("");
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("redis://cache:6379");
   await wizard.getByRole("button", { name: "Use URL" }).click();
   await wizard.getByRole("alert").filter({ hasText: "not a connection URL" }).waitFor();
@@ -5775,6 +5911,180 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await sqlServerMonitor.getByRole("button", { name: "Cancel query" }).getAttribute("title"), "SQL Server can only end another session, not cancel its query separately.");
   assert.ok(await sqlServerMonitor.getByRole("button", { name: "End connection" }).isEnabled());
   await activities.getByRole("button", { name: "Connections", exact: true }).click();
+
+  step("MongoDB: a new connection, shell statements sent as commands, a collection opened from the explorer");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "MongoDB" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("MongoDB (Docker)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("27017");
+  await wizard.getByLabel("User", { exact: true }).fill("spelaion");
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+  await wizard.getByLabel("Database", { exact: true }).fill("spelaion_smoke");
+  // No session setup, read-only mode or agents (ADR-056): the form says why instead.
+  assert.equal(await wizard.getByRole("tab", { name: "Session" }).count(), 0);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByText(/^Read-only mode and agents are not available for this engine yet/).waitFor();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 8\./ }).waitFor();
+  await shot("12a5-mongodb-form");
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  {
+    const file = readFileSync(join(userDir, "connections", "mongodb-docker.toml"), "utf8");
+    assert.match(file, /engine = "mongodb"/);
+    assert.doesNotMatch(file, /read_only|\[session\]/);
+  }
+  // The core reads each line and sends its command document; the text is never run.
+  panel = await newQuery("MongoDB (Docker)", 'db.smoke.replaceOne({_id: 1}, {name: "ñandú", n: NumberLong(1)}, {upsert: true})\ndb.smoke.find({_id: 1})');
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for MongoDB (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await panel.locator(".grid-scroller").waitFor();
+  // What the core cannot read is refused where it is, and nothing is sent.
+  await replaceQuery(panel, "db.smoke.find({$where: function () { return true }})");
+  await run(panel);
+  await panel.getByText(/the shell's JavaScript is not run/).first().waitFor();
+  // The guard asks from the command, not the text.
+  await replaceQuery(panel, "db.smoke.drop()");
+  await run(panel);
+  risk = page.getByRole("dialog", { name: "Run these statements?" });
+  assert.equal(await risk.locator(".risk-list pre").innerText(), "db.smoke.drop()");
+  await page.keyboard.press("Enter");
+  await risk.waitFor({ state: "detached" });
+  // No SQL completion is loaded for a language that is not SQL, so nothing fails there.
+  assert.equal(await panel.getByText(/^Could not load completion metadata/).count(), 0);
+  // The explorer lists the database's collections; opening one runs a bounded find.
+  await page.locator('.connection-row:has-text("MongoDB (Docker)") .twisty').click();
+  // The password was not saved: the explorer's own session asks for it too.
+  await page.getByRole("dialog").getByText("Password for MongoDB (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  const mongoSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion_smoke", exact: true });
+  if ((await mongoSchema.getAttribute("aria-expanded")) !== "true") await mongoSchema.click();
+  const collections = mongoSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Collections", exact: true });
+  if ((await collections.getAttribute("aria-expanded")) !== "true") await collections.click();
+  const tabsBeforeCollection = await page.getByRole("tab").count();
+  await mongoSchema.locator("xpath=..").locator(".leaf-row", { hasText: /^smoke/ }).dblclick();
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length > count, tabsBeforeCollection);
+  const collectionPanel = page.locator(".tab-panel:not([hidden])");
+  await collectionPanel.locator(".cm-content", { hasText: 'db.getSiblingDB("spelaion_smoke").getCollection("smoke").find({}).limit(200)' }).waitFor();
+  await collectionPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await shot("12a5-mongodb");
+
+  step("Redis: a new connection, command lines sent as arguments, a key opened from the explorer");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "Redis" }).filter({ hasNotText: "Valkey" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("Redis (Docker)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("16379");
+  // Redis's default user: a password and no user name.
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+  assert.equal(await wizard.getByRole("tab", { name: "Session" }).count(), 0);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByText(/^Read-only mode and agents are not available for this engine yet/).waitFor();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 7\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  assert.match(readFileSync(join(userDir, "connections", "redis-docker.toml"), "utf8"), /engine = "redis"/);
+  panel = await newQuery("Redis (Docker)", 'SET spelaion:smoke "ñandú"\nGET spelaion:smoke');
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for Redis (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.equal(await panel.getByText(/^Could not load completion metadata/).count(), 0);
+  // The tab's database is chosen above the editor, never with SELECT.
+  await replaceQuery(panel, "SELECT 1");
+  await run(panel);
+  await panel.getByText(/choose the database above the editor/).first().waitFor();
+  // The guard asks from the command.
+  await replaceQuery(panel, "FLUSHDB");
+  await run(panel);
+  risk = page.getByRole("dialog", { name: "Run these statements?" });
+  assert.equal(await risk.locator(".risk-list pre").innerText(), "FLUSHDB");
+  await page.keyboard.press("Enter");
+  await risk.waitFor({ state: "detached" });
+  // The explorer lists database 0's keys; opening one runs a bounded command of its type.
+  await page.locator('.connection-row:has-text("Redis (Docker)") .twisty').click();
+  await page.getByRole("dialog").getByText("Password for Redis (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  const redisSchema = page.getByRole("button", { name: "Expand or collapse schema 0", exact: true });
+  if ((await redisSchema.getAttribute("aria-expanded")) !== "true") await redisSchema.click();
+  const keysFolder = redisSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Keys", exact: true });
+  if ((await keysFolder.getAttribute("aria-expanded")) !== "true") await keysFolder.click();
+  const tabsBeforeKey = await page.getByRole("tab").count();
+  await redisSchema.locator("xpath=..").locator(".leaf-row", { hasText: /^spelaion:smoke/ }).dblclick();
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length > count, tabsBeforeKey);
+  const keyPanel = page.locator(".tab-panel:not([hidden])");
+  await keyPanel.locator(".cm-content", { hasText: "GET spelaion:smoke" }).waitFor();
+  await keyPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await shot("12a6-redis");
+
+  step("Cassandra: a new connection, CQL split and guarded by the core, a table opened from the explorer");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "Cassandra" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("Cassandra (Docker)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("19142");
+  // The test Cassandra has no login: no password to store or ask for.
+  await wizard.getByLabel("Method", { exact: true }).selectOption("none");
+  assert.equal(await wizard.getByRole("tab", { name: "Session" }).count(), 0);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByText(/^Read-only mode and agents are not available for this engine yet/).waitFor();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 5\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  assert.match(readFileSync(join(userDir, "connections", "cassandra-docker.toml"), "utf8"), /engine = "cassandra"/);
+  // A batch is one statement: its semicolons stay inside it.
+  panel = await newQuery("Cassandra (Docker)", [
+    "CREATE KEYSPACE IF NOT EXISTS spelaion_cql_smoke WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};",
+    "CREATE TABLE IF NOT EXISTS spelaion_cql_smoke.people (id int PRIMARY KEY, name text);",
+    "BEGIN BATCH",
+    "  INSERT INTO spelaion_cql_smoke.people (id, name) VALUES (1, 'Ana; María');",
+    "APPLY BATCH;",
+    "SELECT name FROM spelaion_cql_smoke.people WHERE id = 1;",
+  ].join("\n"));
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.equal(await panel.getByText(/^Could not load completion metadata/).count(), 0);
+  // The keyspace is chosen above the editor, never with USE.
+  await replaceQuery(panel, "USE system;");
+  await run(panel);
+  await panel.getByText(/choose the keyspace above the editor/).first().waitFor();
+  // The guard reads CQL with its own lists.
+  await replaceQuery(panel, "TRUNCATE spelaion_cql_smoke.people;");
+  await run(panel);
+  risk = page.getByRole("dialog", { name: "Run these statements?" });
+  assert.equal(await risk.locator(".risk-list pre").innerText(), "TRUNCATE spelaion_cql_smoke.people");
+  await page.keyboard.press("Enter");
+  await risk.waitFor({ state: "detached" });
+  // A table opens with the core's bounded statement, not the table data tab.
+  await page.locator('.connection-row:has-text("Cassandra (Docker)") .twisty').click();
+  const cassandraSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion_cql_smoke", exact: true });
+  if ((await cassandraSchema.getAttribute("aria-expanded")) !== "true") await cassandraSchema.click();
+  const cassandraTables = cassandraSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Tables", exact: true });
+  if ((await cassandraTables.getAttribute("aria-expanded")) !== "true") await cassandraTables.click();
+  const tabsBeforeTable = await page.getByRole("tab").count();
+  await cassandraSchema.locator("xpath=..").locator(".leaf-row", { hasText: /^people/ }).dblclick();
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length > count, tabsBeforeTable);
+  const tablePanel = page.locator(".tab-panel:not([hidden])");
+  await tablePanel.locator(".cm-content", { hasText: "SELECT * FROM spelaion_cql_smoke.people LIMIT 200" }).waitFor();
+  await tablePanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await shot("12a7-cassandra");
   // The query ends in a word, which may open the completion list as it is typed: the next
   // dialog must not find it on top (the editor closes it when it loses focus).
 

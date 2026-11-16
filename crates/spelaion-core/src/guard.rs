@@ -13,11 +13,11 @@
 use std::ops::ControlFlow;
 
 use spelaion_config::Safeguards;
-use spelaion_driver_api::{Dialect, StatementSpan};
-use sqlparser::ast::{Statement, visit_statements};
+use spelaion_driver_api::{Dialect, RequestClass, StatementSpan};
+use sqlparser::ast::{BinaryOperator, Expr, Statement, Value as SqlValue, visit_statements};
 use sqlparser::dialect::{
-    Dialect as SqlDialect, DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect,
-    PostgreSqlDialect, SQLiteDialect,
+    BigQueryDialect, ClickHouseDialect, Dialect as SqlDialect, DuckDbDialect, GenericDialect,
+    HiveDialect, MsSqlDialect, MySqlDialect, OracleDialect, PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -65,10 +65,44 @@ pub fn script_risks(
         .into_iter()
         .enumerate()
         .filter_map(|(index, span)| {
-            statement_risk(dialect.name(), span.text(script), mode, safeguards)
-                .map(|risk| RiskyStatement { index, span, risk })
+            let text = span.text(script);
+            match request_risk(dialect, text, safeguards) {
+                Some(risk) => risk,
+                None => statement_risk(dialect.name(), text, mode, safeguards),
+            }
+            .map(|risk| RiskyStatement { index, span, risk })
         })
         .collect()
+}
+
+/// The risk of a statement of a language that is not SQL (ADR-056, point 4), read from the
+/// request the core makes of it, so every way of writing a command is judged alike: `None`
+/// for a language that is SQL. A drop, or a delete or update of every document, always asks;
+/// a write, and whatever the core cannot tell (never taken for a read), ask where the
+/// connection's type confirms data changes; every statement where it confirms execution. A
+/// statement the core cannot read asks as one it cannot tell: running it fails anyway.
+fn request_risk(
+    dialect: &dyn Dialect,
+    text: &str,
+    safeguards: &Safeguards,
+) -> Option<Option<Risk>> {
+    // The database does not change what a command is. A language shaped like SQL that
+    // `sqlparser` does not read (CQL) has lists of its own, read from its text.
+    let class = match dialect.to_request(text, "guard") {
+        Some(Ok(request)) => dialect.request_class(&request),
+        Some(Err(_)) => RequestClass::Unknown,
+        None => dialect.statement_class(text)?,
+    };
+    let risk = match class {
+        RequestClass::Drop => Some(Risk::Drop),
+        RequestClass::DeleteAll => Some(Risk::DeleteAll),
+        RequestClass::UpdateAll => Some(Risk::UpdateAll),
+        RequestClass::Write | RequestClass::Unknown if safeguards.confirm_data_changes => {
+            Some(Risk::DataChange)
+        }
+        RequestClass::Read | RequestClass::Write | RequestClass::Unknown => None,
+    };
+    Some(risk.or_else(|| safeguards.confirm_execution.then_some(Risk::Execution)))
 }
 
 fn statement_risk(
@@ -318,6 +352,17 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
     if first == "drop" {
         return Some(Risk::Drop);
     }
+    if engine == "clickhouse"
+        && first == "alter"
+        && let Some(risk) = clickhouse_alter_risk(sql)
+    {
+        return Some(risk);
+    }
+    if matches!(engine, "hive" | "spark" | "kyuubi" | "impala")
+        && let Some(risk) = hive_risk(sql)
+    {
+        return Some(risk);
+    }
     let parser = sql_dialect(engine);
     let Ok(statements) = Parser::parse_sql(parser.as_ref(), sql) else {
         let by_first_word = match first.as_str() {
@@ -327,6 +372,7 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
         };
         return match engine {
             "sqlserver" => by_first_word.or_else(|| tsql_unparsed_risk(sql)),
+            "oracle" => by_first_word.or_else(|| oracle_unparsed_risk(sql)),
             _ => by_first_word,
         };
     };
@@ -371,6 +417,193 @@ fn tsql_unparsed_risk(sql: &str) -> Option<Risk> {
             .find_map(|statement| destructive("sqlserver", statement));
     }
     risky_words(&tokens)
+}
+
+/// The risk of an Oracle statement sqlparser cannot read, which is how a PL/SQL block reads
+/// (ADR-059). Defining a procedure, function, package, trigger or type runs nothing: it asks
+/// nothing. An anonymous block (`DECLARE`, `BEGIN`) runs what it holds: a `DROP`, `TRUNCATE`,
+/// `DELETE` or `UPDATE` word in it asks (its `WHERE` could not be checked), and so does dynamic
+/// SQL (`EXECUTE IMMEDIATE`, `DBMS_SQL`), whose statement is a string the guard cannot read. An
+/// anonymous block the tokenizer cannot read either asks too, rather than nothing.
+fn oracle_unparsed_risk(sql: &str) -> Option<Risk> {
+    if !spelaion_dialect::oracle::is_plsql(sql, 0) {
+        return None;
+    }
+    let first = first_word(sql);
+    if !matches!(first.as_str(), "declare" | "begin") {
+        // A unit's definition, or a query with `WITH FUNCTION`: nothing runs as it is made.
+        return None;
+    }
+    let Ok(tokens) = Tokenizer::new(&OracleDialect {}, sql).tokenize() else {
+        return Some(Risk::UncheckedWrite);
+    };
+    let words: Vec<String> = tokens.iter().filter_map(plain_word).collect();
+    let dynamic = words
+        .windows(2)
+        .any(|w| w[0] == "execute" && w[1] == "immediate")
+        || words.iter().any(|w| w == "dbms_sql");
+    risky_words(&tokens).or(dynamic.then_some(Risk::UncheckedWrite))
+}
+
+/// The risk of a ClickHouse `ALTER TABLE`, which is also how it changes rows and wipes data,
+/// each as the closest risk the guard has:
+/// - drops: `… DROP COLUMN | PARTITION | INDEX …`, `… MOVE PARTITION … TO TABLE other` (the
+///   partition leaves the table; `TO DISK | VOLUME` only moves its files) and `… REPLACE
+///   PARTITION … FROM other` (the partition's rows give way to another table's);
+/// - a `DELETE` of every row: `… MODIFY TTL …` and `… MATERIALIZE TTL` (rows already past the
+///   new TTL expire), and the mutation `… DELETE WHERE 1` (a condition always true);
+/// - an `UPDATE` of every row: `… CLEAR COLUMN | INDEX | PROJECTION …` (a column emptied in every
+///   row), a column's TTL set with `… MODIFY COLUMN c … TTL …` (its expired values reset), and
+///   the mutation `… UPDATE … WHERE 1`.
+///
+/// Other mutations (`… DELETE WHERE …`, `… UPDATE … WHERE …`) always have a `WHERE` (the server
+/// requires it), like a `DELETE … WHERE`, and ask nothing. Words are read with sqlparser's
+/// tokenizer, so a name or a string that says `drop` is not one; an open quote reads nothing.
+fn clickhouse_alter_risk(sql: &str) -> Option<Risk> {
+    let tokens: Vec<Token> = Tokenizer::new(&ClickHouseDialect {}, sql)
+        .tokenize()
+        .ok()?
+        .into_iter()
+        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .collect();
+    let words: Vec<String> = tokens
+        .iter()
+        .map(|token| plain_word(token).unwrap_or_default())
+        .collect();
+    let has = |word: &str| words.iter().any(|w| w == word);
+    let pair =
+        |first: &str, second: &str| words.windows(2).any(|w| w[0] == first && w[1] == second);
+    if has("drop") || (has("move") && pair("to", "table")) || pair("replace", "partition") {
+        return Some(Risk::Drop);
+    }
+    // One `ALTER` may hold several commands, separated by commas outside brackets.
+    let commands = clickhouse_alter_commands(&tokens);
+    let mutation_of_every_row = |kind: &str| {
+        commands
+            .iter()
+            .any(|command| clickhouse_mutation_of_every_row(&tokens[command.clone()], kind))
+    };
+    if pair("modify", "ttl") || pair("materialize", "ttl") || mutation_of_every_row("delete") {
+        return Some(Risk::DeleteAll);
+    }
+    let column_ttl = commands.iter().any(|command| {
+        let words = &words[command.clone()];
+        words
+            .windows(2)
+            .any(|w| w[0] == "modify" && w[1] == "column")
+            && words
+                .iter()
+                .enumerate()
+                .any(|(i, w)| w == "ttl" && (i == 0 || words[i - 1] != "remove"))
+    });
+    if has("clear") || column_ttl || mutation_of_every_row("update") {
+        return Some(Risk::UpdateAll);
+    }
+    None
+}
+
+/// The token ranges of an `ALTER`'s commands: split at its commas outside brackets.
+fn clickhouse_alter_commands(tokens: &[Token]) -> Vec<std::ops::Range<usize>> {
+    let mut commands = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.saturating_sub(1),
+            Token::Comma if depth == 0 => {
+                commands.push(start..i);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    commands.push(start..tokens.len());
+    commands
+}
+
+/// Whether one command of an `ALTER` is the mutation `kind` (`delete` or `update`) with a
+/// `WHERE` that is always true (`WHERE 1`, `WHERE true`, `WHERE 1 = 1`…), so every row changes.
+/// The condition runs to the command's end, its `SETTINGS` or a `;`.
+fn clickhouse_mutation_of_every_row(command: &[Token], kind: &str) -> bool {
+    let mut depth = 0usize;
+    let mut found_kind = false;
+    let mut condition = None;
+    for (i, token) in command.iter().enumerate() {
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.saturating_sub(1),
+            _ if depth == 0 => match plain_word(token).as_deref() {
+                Some(word) if word == kind => found_kind = true,
+                Some("where") if found_kind => {
+                    condition = Some(i + 1);
+                    break;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    let Some(start) = condition else {
+        return false;
+    };
+    let condition: Vec<String> = command[start..]
+        .iter()
+        .take_while(|token| {
+            !matches!(token, Token::SemiColon | Token::EOF)
+                && plain_word(token).as_deref() != Some("settings")
+        })
+        .map(Token::to_string)
+        .collect();
+    Parser::new(&ClickHouseDialect {})
+        .try_with_sql(&condition.join(" "))
+        .and_then(|mut parser| parser.parse_expr())
+        .is_ok_and(|expr| always_true(&expr))
+}
+
+/// A condition true for every row whatever the row holds: a non-zero number, `true`, a literal
+/// equal to itself, and those combined with `AND`, `OR` or brackets.
+fn always_true(expr: &Expr) -> bool {
+    match expr {
+        Expr::Value(value) => match &value.value {
+            SqlValue::Boolean(b) => *b,
+            SqlValue::Number(n, _) => n.parse::<f64>().is_ok_and(|n| n != 0.0),
+            _ => false,
+        },
+        Expr::Nested(inner) => always_true(inner),
+        Expr::BinaryOp { left, op, right } => match op {
+            BinaryOperator::Or => always_true(left) || always_true(right),
+            BinaryOperator::And => always_true(left) && always_true(right),
+            BinaryOperator::Eq => match (left.as_ref(), right.as_ref()) {
+                // `NULL = NULL` is not true.
+                (Expr::Value(l), Expr::Value(r)) => l.value != SqlValue::Null && l.value == r.value,
+                _ => false,
+            },
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// The risk of a statement of HiveServer2's engines (Hive, Spark SQL, Impala) that replaces data
+/// without saying `DELETE`, `TRUNCATE` or `DROP` first: `OVERWRITE` anywhere (`INSERT OVERWRITE
+/// TABLE | DIRECTORY …`, `LOAD DATA … OVERWRITE INTO TABLE …`, Hive's `FROM … INSERT OVERWRITE`)
+/// empties the table, the partition or the directory before writing, like a `TRUNCATE`; and
+/// `ALTER TABLE … DROP` drops partitions (their rows) or columns. Words are read with sqlparser's
+/// tokenizer, so a name or a string that says `overwrite` is not one; an open quote reads
+/// nothing.
+fn hive_risk(sql: &str) -> Option<Risk> {
+    let tokens = Tokenizer::new(&HiveDialect {}, sql).tokenize().ok()?;
+    let words: Vec<String> = tokens.iter().filter_map(plain_word).collect();
+    if words.iter().any(|word| word == "overwrite") {
+        Some(Risk::Truncate)
+    } else if words.first().is_some_and(|word| word == "alter")
+        && words.iter().any(|word| word == "drop")
+    {
+        Some(Risk::Drop)
+    } else {
+        None
+    }
 }
 
 /// A word token outside quotes (`[drop]` and `"drop"` are names), in lower case.
@@ -503,6 +736,14 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
         "mysql" | "mariadb" => Box::new(MySqlDialect {}),
         "duckdb" => Box::new(DuckDbDialect {}),
         "sqlserver" => Box::new(MsSqlDialect {}),
+        "clickhouse" => Box::new(ClickHouseDialect {}),
+        "oracle" => Box::new(OracleDialect {}),
+        // libSQL reads SQL as SQLite does.
+        "libsql" => Box::new(SQLiteDialect {}),
+        // GoogleSQL, which BigQuery shares.
+        "spanner" => Box::new(BigQueryDialect {}),
+        // HiveServer2's engines: backquoted names, strings in both quotes.
+        "hive" | "spark" | "kyuubi" | "impala" => Box::new(HiveDialect {}),
         _ => Box::new(GenericDialect {}),
     }
 }
@@ -532,8 +773,8 @@ fn first_word(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_sqlite::SqliteDialect;
-    use spelaion_driver_sqlserver::SqlServerDialect;
+    use spelaion_dialect::SqlServerDialect;
+    use spelaion_dialect::SqliteDialect;
 
     const NONE: Safeguards = Safeguards {
         confirm_execution: false,
@@ -891,5 +1132,219 @@ mod tests {
         );
         // Other engines keep their first-word fallback.
         assert_eq!(destructive("sqlite", "select 1 drop table t"), None);
+    }
+
+    /// ClickHouse drops columns and partitions, and wipes columns, with `ALTER TABLE`.
+    #[test]
+    fn clickhouse_alter_table_drops_and_clears_ask() {
+        let ch = |sql: &str| destructive("clickhouse", sql);
+        assert_eq!(ch("alter table t drop column c"), Some(Risk::Drop));
+        assert_eq!(ch("ALTER TABLE t DROP PARTITION 202401"), Some(Risk::Drop));
+        assert_eq!(ch("alter table t drop index i"), Some(Risk::Drop));
+        assert_eq!(ch("alter table t clear column c"), Some(Risk::UpdateAll));
+        assert_eq!(ch("drop table t"), Some(Risk::Drop));
+        assert_eq!(ch("truncate table t"), Some(Risk::Truncate));
+        // Mutations always have their WHERE.
+        assert_eq!(ch("alter table t delete where id = 1"), None);
+        assert_eq!(ch("alter table t update a = 1 where id = 1"), None);
+        assert_eq!(ch("alter table t add column c UInt8"), None);
+        // A name or a string that says drop is not a DROP.
+        assert_eq!(ch("alter table t comment column `drop` 'drop it'"), None);
+        assert_eq!(ch("select 1"), None);
+    }
+
+    /// ClickHouse also takes data out of a table with `ALTER TABLE` by moving or replacing a
+    /// partition, by a TTL, and by a mutation whose `WHERE` holds for every row: each asks as
+    /// the closest risk.
+    #[test]
+    fn clickhouse_alter_table_moves_replaces_ttls_and_whole_mutations_ask() {
+        let ch = |sql: &str| destructive("clickhouse", sql);
+        // The partition leaves the table, or gives way to another table's rows.
+        assert_eq!(
+            ch("ALTER TABLE t MOVE PARTITION 202401 TO TABLE archive"),
+            Some(Risk::Drop)
+        );
+        assert_eq!(
+            ch("alter table t move partition id '202401' to table db.archive"),
+            Some(Risk::Drop)
+        );
+        assert_eq!(
+            ch("ALTER TABLE t REPLACE PARTITION 202401 FROM t2"),
+            Some(Risk::Drop)
+        );
+        // Rows already past a new TTL expire.
+        assert_eq!(
+            ch("ALTER TABLE t MODIFY TTL d + INTERVAL 1 DAY"),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(ch("alter table t materialize ttl"), Some(Risk::DeleteAll));
+        // A column's expired values reset to their default.
+        assert_eq!(
+            ch("alter table t modify column c String TTL d + interval 1 day"),
+            Some(Risk::UpdateAll)
+        );
+        // Mutations over every row.
+        assert_eq!(ch("ALTER TABLE t DELETE WHERE 1"), Some(Risk::DeleteAll));
+        assert_eq!(
+            ch("alter table t delete where true;"),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(
+            ch("alter table t delete where (1 = 1)"),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(
+            ch(
+                "alter table t on cluster c delete in partition 1 where 1 settings mutations_sync = 2"
+            ),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(
+            ch("alter table t update a = 0 where 1"),
+            Some(Risk::UpdateAll)
+        );
+        assert_eq!(
+            ch("alter table t update a = 0 where id = 1, update b = 0 where 1 or id = 2"),
+            Some(Risk::UpdateAll)
+        );
+        // Mutations whose WHERE picks rows, and moves and TTLs that keep the data.
+        assert_eq!(ch("alter table t delete where 0"), None);
+        assert_eq!(ch("alter table t delete where null = null"), None);
+        assert_eq!(ch("alter table t delete where id = 1"), None);
+        assert_eq!(ch("alter table t delete where a = 1 and 1"), None);
+        assert_eq!(ch("alter table t update a = 1 where id in (1, 2)"), None);
+        assert_eq!(
+            ch("alter table t move partition 202401 to disk 'cold'"),
+            None
+        );
+        assert_eq!(
+            ch("alter table t move partition 202401 to volume 'slow'"),
+            None
+        );
+        assert_eq!(ch("alter table t remove ttl"), None);
+        assert_eq!(ch("alter table t modify column c remove ttl"), None);
+        assert_eq!(ch("alter table t attach partition 202401 from t2"), None);
+        assert_eq!(
+            ch("alter table t modify column c String default replace(x, 'a', 'b')"),
+            None
+        );
+        // A name or a string that holds those words is not one.
+        assert_eq!(
+            ch("alter table t comment column `move` 'move partition 1 to table x'"),
+            None
+        );
+        assert_eq!(
+            ch("alter table t comment column c 'replace partition 1 from t2, modify ttl d'"),
+            None
+        );
+        assert_eq!(ch("alter table t modify column `ttl` UInt8"), None);
+        assert_eq!(
+            ch("alter table `replace` modify column `ttl` String comment 'delete where 1'"),
+            None
+        );
+        assert_eq!(ch("alter table t update c = 'where 1' where id = 1"), None);
+        assert_eq!(ch("alter table t delete where c = 'x where 1'"), None);
+    }
+
+    /// HiveServer2's engines replace data with `OVERWRITE` and drop partitions with `ALTER TABLE`;
+    /// the rest is read as for every engine, with Hive's quoting.
+    #[test]
+    fn hive_overwrites_and_partition_drops_ask() {
+        for engine in ["hive", "spark", "kyuubi", "impala"] {
+            let hive = |sql: &str| destructive(engine, sql);
+            assert_eq!(
+                hive("insert overwrite table t select * from s"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("INSERT OVERWRITE TABLE t PARTITION (dt = '2026-01-01') SELECT 1"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("insert overwrite directory '/tmp/out' select * from t"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("load data inpath '/x' overwrite into table t"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("from s insert overwrite table t select a"),
+                Some(Risk::Truncate),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("alter table t drop partition (dt = '2026-01-01')"),
+                Some(Risk::Drop),
+                "{engine}"
+            );
+            assert_eq!(
+                hive("alter table t drop if exists partition (p = 1)"),
+                Some(Risk::Drop)
+            );
+            assert_eq!(
+                hive("drop database d cascade"),
+                Some(Risk::Drop),
+                "{engine}"
+            );
+            assert_eq!(hive("truncate table t"), Some(Risk::Truncate), "{engine}");
+            assert_eq!(hive("delete from t"), Some(Risk::DeleteAll), "{engine}");
+            assert_eq!(hive("delete from `t` where id = 1"), None, "{engine}");
+            // Appending, adding and reading ask nothing.
+            assert_eq!(hive("insert into t select * from s"), None, "{engine}");
+            assert_eq!(
+                hive("alter table t add partition (p = 1)"),
+                None,
+                "{engine}"
+            );
+            assert_eq!(hive("select * from t"), None, "{engine}");
+            // A name or a string that says overwrite or drop is not one.
+            assert_eq!(
+                hive("select `overwrite`, 'overwrite', \"drop\" from t"),
+                None,
+                "{engine}"
+            );
+            assert_eq!(hive("alter table t set tblproperties ('drop' = 'x')"), None);
+        }
+    }
+
+    /// Oracle (ADR-059): what sqlparser reads is checked as for every engine; a PL/SQL block
+    /// it cannot read asks when it holds a risky word or dynamic SQL, and defining a unit asks
+    /// nothing, since nothing runs then.
+    #[test]
+    fn oracle_blocks_ask_for_what_they_run() {
+        let ora = |sql: &str| destructive("oracle", sql);
+        assert_eq!(ora("delete from t"), Some(Risk::DeleteAll));
+        assert_eq!(ora("update t set a = 1"), Some(Risk::UpdateAll));
+        assert_eq!(ora("truncate table t"), Some(Risk::Truncate));
+        assert_eq!(ora("drop table t purge"), Some(Risk::Drop));
+        assert_eq!(ora("delete from t where id = 1"), None);
+        assert_eq!(ora("select * from t"), None);
+        assert_eq!(
+            ora("begin delete from t; end;"),
+            Some(Risk::UncheckedWrite),
+            "a DELETE in a block"
+        );
+        assert!(ora("declare n number; begin update t set a = 1; end;").is_some());
+        assert_eq!(
+            ora("begin execute immediate 'dr' || 'op table t'; end;"),
+            Some(Risk::UncheckedWrite),
+            "dynamic SQL cannot be read"
+        );
+        assert_eq!(
+            ora("declare c integer := dbms_sql.open_cursor; begin null; end;"),
+            Some(Risk::UncheckedWrite)
+        );
+        assert_eq!(ora("begin dbms_output.put_line('drop it'); end;"), None);
+        assert_eq!(ora("begin null; end;"), None);
+        // Defining a unit runs nothing.
+        assert_eq!(
+            ora("create or replace procedure p as begin delete from t; end;"),
+            None
+        );
     }
 }

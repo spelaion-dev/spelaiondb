@@ -1,14 +1,15 @@
 //! Sessions over in-memory SQLite: they always run, with nothing external.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver};
-use spelaion_driver_sqlite::SqliteDriver;
 
 async fn session() -> Session {
-    let driver = SqliteDriver::default();
+    let driver = engines::sqlite();
     let conn = driver
         .connect(&ConnectParams {
             database: ":memory:".into(),
@@ -16,7 +17,11 @@ async fn session() -> Session {
         })
         .await
         .expect("opening :memory:");
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 #[tokio::test]

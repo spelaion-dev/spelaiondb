@@ -42,8 +42,13 @@ docker compose -f testing/docker/compose.yaml up -d --build --wait
 ```
 
 ```bash
-SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433 SPELAION_TEST_SSH=127.0.0.1:2221 cargo test --workspace
+SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433 SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123 SPELAION_TEST_ORACLE=127.0.0.1:11521 SPELAION_TEST_LIBSQL=127.0.0.1:18095 SPELAION_TEST_NEO4J=127.0.0.1:17474 SPELAION_TEST_DATABEND=127.0.0.1:18320 SPELAION_TEST_SPANNER=127.0.0.1:19021 SPELAION_TEST_GIZMOSQL=127.0.0.1:31337 SPELAION_TEST_SSH=127.0.0.1:2221 SPELAION_TEST_MONGO=127.0.0.1:27017 SPELAION_TEST_REDIS=127.0.0.1:16379 SPELAION_TEST_CASSANDRA=127.0.0.1:19142 SPELAION_TEST_TDENGINE=127.0.0.1:16141 cargo test --workspace
 ```
+
+Hive, Trino, Presto and InfluxDB run in a separate phase to leave memory for the compiler. After the
+default workspace tests, follow the isolated warehouse phase in
+[the test environment](testing/docker/README.md#ci-memory-budget); the workspace pass alone
+does not test these engines.
 
 - If dependencies change: `cargo deny check`.
 - If the desktop app changes: `npm run build` in `apps/desktop` with no type errors and, if the
@@ -54,17 +59,16 @@ SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TE
   request.
 
 ### Memory and jobs
-DuckDB is compiled into the app from its C++ sources (`libduckdb-sys`, bundled), and that is
-what decides how much memory a build needs:
+The core compiles SQLite (bundled, from its C sources) and no other engine, and a full build
+still needs a lot of memory:
 
-- **Debug builds** (`cargo clippy`, `cargo test`, `npm run tauri dev`) peak near 8 GB with 8
-  jobs (`-j 8`).
-- **Release builds** compile DuckDB with optimizations, and each C++ compiler job then holds
-  about 2 GB. With cargo's default of one job per thread, a 16 GB machine runs out of memory
-  (8 jobs went past 9 GB). On 16 GB use **3 jobs** (`CARGO_BUILD_JOBS=3`): the build below
-  built everything, DuckDB included, with a peak of 4.8 GB in 23 minutes on a 16-thread laptop.
+- **Debug builds** (`cargo clippy`, `cargo test`, `npm run tauri dev`) peaked near 8 GB with 8
+  jobs (`-j 8`) when DuckDB was compiled in; they now need less, but the figure has not been
+  measured again.
+- **Release builds** optimize everything, and a 16 GB machine can run out of memory with
+  cargo's default of one job per thread. On 16 GB use **3 jobs** (`CARGO_BUILD_JOBS=3`).
 
-`CARGO_BUILD_JOBS` (or `-j`) caps cargo's jobs and the C++ compiler jobs together, because the
+`CARGO_BUILD_JOBS` (or `-j`) caps cargo's jobs and the C compiler jobs together, because the
 build script shares cargo's job slots. On Linux, cap the build's memory too, so that the kernel
 stops the compiler and not your desktop:
 
@@ -77,17 +81,26 @@ The smoke test needs both the app and the `spelaiondb` CLI. Build them **in one 
 `apps/desktop`:
 
 ```bash
-CARGO_BUILD_JOBS=3 npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli
+CARGO_BUILD_JOBS=3 npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli -p spelaion-plugin-fetch
 ```
 
 The app ends up in `target/release/spelaion-desktop` and the CLI in `target/release/spelaiondb`.
-Building them separately (`npx tauri build`, then `cargo build --release -p spelaion-cli`)
-compiles DuckDB twice, about 20 minutes each with 3 jobs: DuckDB's build script has build
-dependencies of its own (`serde`, `serde_json`, `flate2`…), cargo turns on their features from
-all the packages of the same command only, and the app's build dependencies (Tauri's) turn on
-more of them than the CLI's. Each set of packages therefore gets its own DuckDB, and so does
-`cargo build --release -p spelaion-driver-duckdb` alone. Build both again with the same command
-after a change and only what changed is rebuilt.
+
+The engines that are plugins (ADR-042) are not compiled here: a release build starts only the
+builds `plugins.toml` pins, and only from the folder the app is in, where the installer puts
+them. Put them there the same way, from the repository's root (it downloads each pinned
+release and lets a program in only with the pinned hashes):
+
+```bash
+target/release/spelaion-fetch-plugins --into target/release
+```
+
+Without them, the smoke test fails at the first engine that is no longer compiled in.
+Building the app and the CLI separately (`npx tauri build`, then
+`cargo build --release -p spelaion-cli`) builds every dependency whose features differ between
+the two twice: cargo turns on the features of build dependencies from the packages of the same
+command only. Build both again with the same command after a change and only what changed is
+rebuilt.
 
 ### The smoke test
 Both drive the release build in `target/release` with `examples/demo` and a temporary personal
@@ -103,7 +116,10 @@ every run, since the run changes that database) and the Docker services up
   mouse and keyboard cannot reach it. A real pointer crossing the window used to cancel hover
   delays and clicks mid-run. The test keeps the hidden window drawing with Chromium's occlusion
   flags, and tells the page it has the focus. Set `SPELAION_E2E_SHOW_WINDOW=1` to open the window
-  on screen and watch a run. Like the Linux pass, it replaces your clipboard while it runs.
+  on screen and watch a run. Like the Linux pass, it replaces your clipboard while it runs. Its
+  first start meets a local store the app cannot open, and answers the startup error dialog with
+  `SPELAION_E2E_STARTUP_CHOICE=start-over` instead of a click, so that dialog never appears on
+  your screen either (SDB-283).
 - **Linux**: `node e2e/smoke-linux.mjs` (from `apps/desktop`). WebKitGTK has no debugging port,
   so this pass speaks WebDriver to `tauri-driver` (which it starts itself), in front of
   WebKitWebDriver. It is shorter: start, repository trust, a query on SQLite, DuckDB, PostgreSQL,

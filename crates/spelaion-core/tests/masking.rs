@@ -8,6 +8,8 @@
 //! reads, edits that would write the mask back, filtering by a masked cell and following a
 //! masked key. Only revealing one cell gives the value.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -49,7 +51,12 @@ async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
         .connect(&params)
         .await
         .unwrap_or_else(|e| panic!("connecting: {e}"));
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new())).with_masking(policy())
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
+    .with_masking(policy())
 }
 
 fn server(var: &str) -> Option<(String, u16)> {
@@ -71,13 +78,13 @@ async fn engines() -> Vec<(&'static str, Session, &'static str, Option<ConnectPa
     let mut out = vec![
         (
             "sqlite",
-            session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+            session(&*engines::sqlite(), memory()).await,
             "main",
             None,
         ),
         (
             "duckdb",
-            session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+            session(&*engines::duckdb(), memory()).await,
             "main",
             None,
         ),
@@ -95,22 +102,14 @@ async fn engines() -> Vec<(&'static str, Session, &'static str, Option<ConnectPa
         let params = login(host, port, "spelaion", "spelaion", "spelaion");
         out.push((
             "postgres",
-            session(&spelaion_driver_postgres::PostgresDriver, params.clone()).await,
+            session(&*engines::postgres(), params.clone()).await,
             "public",
             Some(params),
         ));
     }
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         if let Some((host, port)) = server(var) {
             let params = login(host, port, "spelaion", "spelaion", "spelaion");
@@ -129,7 +128,7 @@ async fn engines() -> Vec<(&'static str, Session, &'static str, Option<ConnectPa
         };
         out.push((
             "sqlserver",
-            session(&spelaion_driver_sqlserver::SqlServerDriver, params.clone()).await,
+            session(&*engines::sqlserver(), params.clone()).await,
             "dbo",
             Some(params),
         ));
@@ -729,7 +728,7 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
 
 #[tokio::test]
 async fn a_session_without_rules_masks_nothing() {
-    let driver = spelaion_driver_sqlite::SqliteDriver::default();
+    let driver = engines::sqlite();
     let conn = driver
         .connect(&ConnectParams {
             database: ":memory:".into(),
@@ -737,7 +736,11 @@ async fn a_session_without_rules_masks_nothing() {
         })
         .await
         .unwrap();
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     setup("sqlite", &session).await;
     let id = run(
         "sqlite",

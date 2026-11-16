@@ -256,7 +256,7 @@ fn broken_files_are_reported_with_position_and_do_not_hide_others() {
     );
     fx.write(
         "repo/.spelaion/connections/engine.toml",
-        "schema_version = 1\nengine = \"oracle\"\n",
+        "schema_version = 1\nengine = \"snowflake\"\n",
     );
 
     let config = load(Some(&fx.repo()), &fx.user());
@@ -278,7 +278,7 @@ fn broken_files_are_reported_with_position_and_do_not_hide_others() {
             .message
             .contains("database, user")
     );
-    assert!(problem("engine.toml").message.contains("oracle"));
+    assert!(problem("engine.toml").message.contains("snowflake"));
 }
 
 #[test]
@@ -528,6 +528,7 @@ fn creates_new_connection_files() {
         host: None,
         port: None,
         database: Some("data/analytics.db".into()),
+        file_folder: false,
         user: None,
         password: None,
         tunnel: None,
@@ -633,6 +634,7 @@ fn postgres_draft() -> ConnectionDraft {
         host: " db.internal ".into(),
         port: Some(5432),
         database: "orders".into(),
+        file_folder: false,
         user: "app".into(),
         password: PasswordChoice::Keychain,
         tls_mode: TlsModeConfig::VerifyFull,
@@ -1455,6 +1457,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         host: String::new(),
         port: Some(5432),
         database: "orders".into(),
+        file_folder: false,
         user: "app".into(),
         password: PasswordChoice::Prompt,
         tls_mode: TlsModeConfig::Disable,

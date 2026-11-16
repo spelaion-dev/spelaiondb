@@ -1,6 +1,7 @@
 //! The MCP server page (ADR-033): a thin adapter. The core finds the clients' files, computes
 //! and writes the change, and decides what agents may do; these commands only carry it.
 
+use spelaion_desktop_macros::command;
 use std::path::PathBuf;
 
 use spelaion_config::TrustStore;
@@ -52,8 +53,7 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// Every AI client: its file, whether our server is there, and its manual configuration.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn mcp_clients() -> CmdResult<McpClientsItem> {
     blocking(|| {
         let env = env()?;
@@ -106,8 +106,7 @@ pub async fn mcp_clients() -> CmdResult<McpClientsItem> {
 }
 
 /// The change that installs our server in one client, to show before writing it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn mcp_plan_install(client_id: String) -> CmdResult<McpInstallPlanItem> {
     blocking(move || {
         let client = client(&client_id)?;
@@ -126,8 +125,7 @@ pub async fn mcp_plan_install(client_id: String) -> CmdResult<McpInstallPlanItem
 }
 
 /// Writes the change the user was shown, and nothing else (the core checks the fingerprint).
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn mcp_apply_install(
     client_id: String,
     fingerprint: String,
@@ -144,8 +142,7 @@ pub async fn mcp_apply_install(
     .await
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn mcp_settings(state: State<'_, AppState>) -> CmdResult<McpSettingsItem> {
     let (read_only, format) = state
         .history
@@ -159,8 +156,7 @@ pub async fn mcp_settings(state: State<'_, AppState>) -> CmdResult<McpSettingsIt
 }
 
 /// Read-only mode for every agent (ADR-033): `spelaiondb mcp` reads it on every call.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn set_mcp_read_only(read_only: bool, state: State<'_, AppState>) -> CmdResult<()> {
     state
         .history
@@ -169,8 +165,7 @@ pub async fn set_mcp_read_only(read_only: bool, state: State<'_, AppState>) -> C
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn set_mcp_output_format(
     format: ToolOutputItem,
     state: State<'_, AppState>,
@@ -183,8 +178,7 @@ pub async fn set_mcp_output_format(
 }
 
 /// What agents can do on each connection, as the core decides it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn mcp_access(state: State<'_, AppState>) -> CmdResult<Vec<McpAccessItem>> {
     state.reload().await;
     let (all_read_only, _) = state
@@ -218,8 +212,7 @@ pub async fn mcp_access(state: State<'_, AppState>) -> CmdResult<Vec<McpAccessIt
 }
 
 /// The MCP activity the filter keeps, newest first (ADR-033); secrets masked by the core.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn audit_events(
     filter: AuditFilterItem,
     offset: u32,
@@ -237,15 +230,13 @@ pub async fn audit_events(
     })
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn audit_tools(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     state.history.audit_tools().await.map_err(|e| e.to_string())
 }
 
 /// The latest `spelaiondb mcp` processes and their calls.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn audit_sessions(state: State<'_, AppState>) -> CmdResult<Vec<AuditSessionItem>> {
     state
         .history
@@ -257,8 +248,7 @@ pub async fn audit_sessions(state: State<'_, AppState>) -> CmdResult<Vec<AuditSe
 
 /// Writes the activity the filter keeps to a file the user chose; the core masks secrets and
 /// writes it. Returns how many events were written.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn export_audit(
     filter: AuditFilterItem,
     format: AuditFormatItem,
@@ -285,8 +275,7 @@ pub async fn export_audit(
 }
 
 /// Empties the MCP activity log, leaving a record that it was cleared (done by the core).
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn clear_audit(state: State<'_, AppState>) -> CmdResult<u32> {
     state
         .history

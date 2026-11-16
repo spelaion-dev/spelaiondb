@@ -15,21 +15,20 @@
 
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
 use async_trait::async_trait;
-use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ColumnMeta, Connection, Dialect, DriverError, EventStream,
-    ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey, Remote,
-    RemoteControl, RemoteProcess, Result, ResultSchema, SchemaColumn, SchemaInfo, SchemaObject,
-    TableInfo,
+    CancelHandle, Capabilities, Connection, Dialect, DriverError, EventStream, ExecEvent,
+    ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey, Remote, RemoteControl,
+    RemoteProcess, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::catalog::{self, Row};
+use spelaion_sqlite_schema::catalog::{self, Row};
+use spelaion_sqlite_schema::typing::{is_dml, is_query};
+use spelaion_sqlite_schema::{ResultBuilder, ResultColumn, SqlValue};
+
 use crate::dialect::{self, Skipped, SqliteDialect};
-use crate::exec::{self, Affinity, Builder, Seen};
 
 /// Oldest `sqlite3` with `-safe`.
 const SAFE_MODE_SINCE: &str = "3.37";
@@ -443,7 +442,7 @@ impl Process {
         let marker = self.marker.clone();
         let mut names: Option<Vec<String>> = None;
         let mut first: Vec<Row> = Vec::new();
-        let mut current: Option<(Arc<ResultSchema>, Vec<Builder>, usize)> = None;
+        let mut current: Option<ResultBuilder> = None;
         let mut total: u64 = 0;
         let mut changes = None;
         let mut errors = Vec::new();
@@ -495,15 +494,11 @@ impl Process {
                             first.push(values);
                             if first.len() == batch_size {
                                 match start(names.as_deref().unwrap_or_default(), &mut first) {
-                                    Ok(started) => {
+                                    Ok(mut started) => {
                                         listening =
-                                            send(Ok(ExecEvent::Columns(started.0.clone()))).await;
-                                        current = Some(started);
-                                        if listening
-                                            && let Some((schema, builders, pending)) =
-                                                current.as_mut()
-                                        {
-                                            match flush(schema, builders, pending) {
+                                            send(Ok(ExecEvent::Columns(started.schema()))).await;
+                                        if listening {
+                                            match started.take_batch() {
                                                 Ok(batch) => {
                                                     listening =
                                                         send(Ok(ExecEvent::Batch(batch))).await
@@ -511,19 +506,19 @@ impl Process {
                                                 Err(e) => errors.push(e.to_string()),
                                             }
                                         }
+                                        current = Some(started);
                                     }
                                     Err(e) => errors.push(e.to_string()),
                                 }
                             }
                         }
-                        Some((schema, builders, pending)) => {
-                            if let Err(e) = append(schema, builders, &values, total) {
+                        Some(result) => {
+                            if let Err(e) = result.push_row(&values) {
                                 errors.push(e.to_string());
                                 continue;
                             }
-                            *pending += 1;
-                            if *pending == batch_size {
-                                match flush(schema, builders, pending) {
+                            if result.pending() == batch_size {
+                                match result.take_batch() {
                                     Ok(batch) => {
                                         listening = send(Ok(ExecEvent::Batch(batch))).await
                                     }
@@ -545,7 +540,7 @@ impl Process {
         if current.is_none() && !first.is_empty() {
             match start(names.as_deref().unwrap_or_default(), &mut first) {
                 Ok(started) => {
-                    if !send(Ok(ExecEvent::Columns(started.0.clone()))).await {
+                    if !send(Ok(ExecEvent::Columns(started.schema()))).await {
                         return;
                     }
                     current = Some(started);
@@ -556,10 +551,10 @@ impl Process {
                 }
             }
         }
-        if let Some((schema, builders, pending)) = current.as_mut()
-            && *pending > 0
+        if let Some(result) = current.as_mut()
+            && result.pending() > 0
         {
-            match flush(schema, builders, pending) {
+            match result.take_batch() {
                 Ok(batch) => {
                     if !send(Ok(ExecEvent::Batch(batch))).await {
                         return;
@@ -573,9 +568,9 @@ impl Process {
         }
         // As in the local driver: rows for queries, `changes()` for INSERT/UPDATE/DELETE.
         // A query with no rows prints no header: its columns are not known.
-        let rows_affected = if names.is_some() || exec::is_query(sql) {
+        let rows_affected = if names.is_some() || is_query(sql) {
             Some(total)
-        } else if exec::is_dml(sql) {
+        } else if is_dml(sql) {
             changes
         } else {
             None
@@ -584,71 +579,18 @@ impl Process {
     }
 }
 
-/// The schema from the header and the first batch, with the first batch already added.
-fn start(
-    names: &[String],
-    first: &mut Vec<Row>,
-) -> Result<(Arc<ResultSchema>, Vec<Builder>, usize)> {
-    let mut seen = vec![Seen::default(); names.len()];
-    for row in first.iter() {
-        for (s, v) in seen.iter_mut().zip(row) {
-            s.add(v);
-        }
-    }
-    let columns: Vec<ColumnMeta> = names
+/// The result typed from the header and the first batch, with the first batch already added.
+/// The shell prints no declared types: every column is typed as one declared without a type.
+fn start(names: &[String], first: &mut Vec<Row>) -> Result<ResultBuilder> {
+    let columns = names
         .iter()
-        .zip(&seen)
-        .map(|(name, seen)| ColumnMeta {
+        .map(|name| ResultColumn {
             name: name.clone(),
-            // No declared types through the shell: as a column without one.
-            logical: exec::decide(Affinity::Blob, *seen),
-            native_type: seen.storage_class().to_string(),
-            native_id: None,
+            declared: None,
             origin: None,
         })
         .collect();
-    let schema = Arc::new(ResultSchema::new(columns));
-    let mut builders: Vec<Builder> = schema
-        .columns
-        .iter()
-        .map(|c| Builder::new(c.logical))
-        .collect();
-    let rows = std::mem::take(first);
-    let pending = rows.len();
-    for (n, row) in rows.iter().enumerate() {
-        append(&schema, &mut builders, row, n as u64 + 1)?;
-    }
-    Ok((schema, builders, pending))
-}
-
-fn append(schema: &ResultSchema, builders: &mut [Builder], row: &Row, number: u64) -> Result<()> {
-    for (i, builder) in builders.iter_mut().enumerate() {
-        let value = row.get(i).unwrap_or(&SqlValue::Null);
-        builder.append(exec::as_ref(value)).map_err(|found| DriverError::Decode {
-            type_name: schema.columns[i].native_type.clone(),
-            message: format!(
-                "column \"{}\" mixes types: value {found} at row {number}, in a column read as {}. \
-                 SQLite allows it; use CAST(\"{}\" AS TEXT) to see it in full",
-                schema.columns[i].name,
-                schema.columns[i].logical.as_str(),
-                schema.columns[i].name
-            ),
-        })?;
-    }
-    Ok(())
-}
-
-fn flush(
-    schema: &ResultSchema,
-    builders: &mut [Builder],
-    pending: &mut usize,
-) -> Result<RecordBatch> {
-    *pending = 0;
-    RecordBatch::try_new(
-        schema.arrow.clone(),
-        builders.iter_mut().map(Builder::finish).collect(),
-    )
-    .map_err(|e| DriverError::Other(e.to_string()))
+    ResultBuilder::new(columns, &std::mem::take(first))
 }
 
 /// A marker no output will contain by chance.

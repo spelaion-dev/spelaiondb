@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type FoundObjectItem } from "../api";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
 import { usePreferences } from "../preferences";
+import { topDialog } from "../modalFocus";
 import { useApp } from "../store";
 
 function errorText(e: unknown): string {
@@ -18,7 +19,17 @@ export async function openFound(connectionId: string, found: FoundObjectItem) {
   const app = useApp.getState();
   const { schema, name } = found.object;
   const database = explorerDatabase(connectionId, schema);
-  if (found.kind === "relation") {
+  const sql = app.connections.find((c) => c.id === connectionId)?.sql ?? true;
+  if (found.kind === "relation" && (found.object.kind === "collection" || !sql)) {
+    // An engine whose language is not SQL (ADR-056): the core's statement for it, run in a tab.
+    // Its tables too (CQL's): the table data tab writes SQL.
+    const statement = await call(commands.browseStatement(session, schema, name, found.object.kind, found.object.comment ?? null));
+    if (statement !== null) {
+      const tab = app.addTab(connectionId, statement);
+      app.updateTab(tab, { runOnOpen: true });
+      connectTabFromExplorer(tab, session, database);
+    }
+  } else if (found.kind === "relation") {
     connectTabFromExplorer(app.addTableTab(connectionId, schema, name), session, database);
   } else {
     const sql = await call(commands.objectDefinition(session, found.object));
@@ -97,7 +108,7 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
         aria-modal="true"
         aria-label={t("openByName.title")}
         onKeyDown={(e) => {
-          if (e.key === "Escape") {
+          if (e.key === "Escape" && topDialog() === e.currentTarget) {
             e.preventDefault();
             e.stopPropagation();
             onClose();
@@ -115,7 +126,12 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
       >
         <h2>{t("openByName.title")}</h2>
         {choices.length === 0 ? (
-          <p className="muted small">{t("openByName.noneConnected")}</p>
+          <>
+            <p className="muted small">{t("openByName.noneConnected")}</p>
+            <div className="modal-actions">
+              <button autoFocus onClick={onClose}>{t("app:tabs.close")}</button>
+            </div>
+          </>
         ) : (
           <>
             <div className="open-object-search">

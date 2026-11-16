@@ -41,6 +41,7 @@ async fn open(read_only: bool) -> Option<OpenConnection> {
         tunnel: None,
         kubernetes: None,
         sqlite3: None,
+        file_folder: None,
         local_port: LocalPort::Any,
         keepalive: None,
         statement_timeout: Some(Duration::from_secs(10)),

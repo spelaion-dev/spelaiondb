@@ -1,0 +1,167 @@
+# The plugin catalogue (ADR-055): when the pins in `plugins.toml` change on `dev`, or by hand,
+# writes the next catalogue from them (`spelaion-write-catalogue`, which only adds), signs it
+# with the catalogue's own minisign key and publishes it as the one asset
+# `plugins-catalogue.signed` of the release tagged `plugins-catalogue`.
+#
+# - Never on a pull request: it holds a signing key. The secrets live in the
+#   `plugins-catalogue` environment, which only `dev` may use; the job also refuses any other
+#   ref. The update key (ADR-021) signs nothing here.
+# - `--first` only when the release itself does not exist. A release that exists but whose
+#   file cannot be downloaded fails the run: a failed download must never start the serial
+#   again.
+# - Nothing new in the pins: nothing is signed or published.
+# - What is published is first checked with the key compiled into this commit's build, as the
+#   app checks it (`spelaion-write-catalogue --check`): a file the app would refuse fails that
+#   step, before publishing.
+# - Everything it runs is pinned: actions by commit (the same as `ci.yml`), Rust by version,
+#   minisign by the SHA-256 of its release archive (0.12, whose signature was checked against
+#   its author's published key when it was pinned).
+name: Plugin catalogue
+
+on:
+  push:
+    branches: [dev]
+    paths: [plugins.toml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two runs must never write from the same published catalogue: the second waits.
+concurrency:
+  group: plugins-catalogue
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: plugins-catalogue
+  ASSET: plugins-catalogue.signed
+  MINISIGN_URL: https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+  MINISIGN_SHA256: 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
+
+jobs:
+  publish:
+    name: Sign and publish
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    environment: plugins-catalogue
+    permissions:
+      # Creating the release once and replacing its one asset.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No cache: what builds the tool in a job that signs comes only from this checkout and
+      # the locked crates.
+      - name: Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: 1.99.1
+      # The core links the system keychain, which on Linux is D-Bus's: its headers are needed
+      # to build any tool on top of the core.
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Build the catalogue tool
+        run: cargo build -q --locked -p spelaion-plugin-fetch --bin spelaion-write-catalogue
+
+      - name: Download the published catalogue
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          dir="$RUNNER_TEMP/published"
+          mkdir -p "$dir"
+          if gh api "repos/$GH_REPO/releases/tags/$TAG" > /dev/null 2> "$RUNNER_TEMP/release.err"; then
+            # The release exists: its file must come down, or the run fails.
+            gh release download "$TAG" --pattern "$ASSET" --dir "$dir"
+            test -s "$dir/$ASSET" || { echo "::error::$ASSET of $TAG is empty"; exit 1; }
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/release.err"; then
+            # Only a release that is not there at all makes this the first catalogue.
+            echo "No release $TAG yet: this is the first catalogue."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$RUNNER_TEMP/release.err"
+            echo "::error::could not tell whether the release $TAG exists"
+            exit 1
+          fi
+
+      - name: Write the next catalogue
+        id: write
+        env:
+          EXISTS: ${{ steps.published.outputs.exists }}
+        run: |
+          out="$RUNNER_TEMP/plugins-catalogue.toml"
+          case "$EXISTS" in
+            true) from=(--published "$RUNNER_TEMP/published/$ASSET") ;;
+            false) from=(--first) ;;
+            *) echo "::error::the download step said nothing"; exit 1 ;;
+          esac
+          target/debug/spelaion-write-catalogue "${from[@]}" --out "$out"
+          if [ -f "$out" ]; then
+            echo "written=true" >> "$GITHUB_OUTPUT"
+            echo "serial=$(sed -n 's/^serial = \([0-9]*\)$/\1/p' "$out")" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing new in plugins.toml: nothing to sign or publish."
+            echo "written=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install minisign
+        if: steps.write.outputs.written == 'true'
+        run: |
+          dir="$RUNNER_TEMP/minisign"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --output "$dir/minisign.tar.gz" "$MINISIGN_URL"
+          echo "$MINISIGN_SHA256  $dir/minisign.tar.gz" | sha256sum --check --strict
+          tar -xzf "$dir/minisign.tar.gz" -C "$dir" minisign-linux/x86_64/minisign
+          echo "$dir/minisign-linux/x86_64" >> "$GITHUB_PATH"
+
+      - name: Sign
+        if: steps.write.outputs.written == 'true'
+        env:
+          KEY: ${{ secrets.PLUGINS_CATALOGUE_KEY }}
+          PASSWORD: ${{ secrets.PLUGINS_CATALOGUE_KEY_PASSWORD }}
+          SERIAL: ${{ steps.write.outputs.serial }}
+        run: |
+          test -n "$KEY" || { echo "::error::the secret PLUGINS_CATALOGUE_KEY is not set"; exit 1; }
+          test -n "$PASSWORD" || { echo "::error::the secret PLUGINS_CATALOGUE_KEY_PASSWORD is not set"; exit 1; }
+          key="$RUNNER_TEMP/catalogue.key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$KEY" > "$key")
+          text="$RUNNER_TEMP/plugins-catalogue.toml"
+          # The password on standard input (printf is a shell builtin: it never shows in the
+          # process list), never as an argument. Pre-hashed, minisign's default.
+          printf '%s\n' "$PASSWORD" | minisign -S -s "$key" -m "$text" -x "$text.minisig" \
+            -t "plugins-catalogue serial $SERIAL from $GITHUB_SHA" > /dev/null
+          # As `signed_catalogue` joins them: the signature file's four lines, each without
+          # trailing spaces, then the text byte for byte.
+          test "$(wc -l < "$text.minisig")" -eq 4 || { echo "::error::the signature is not four lines"; exit 1; }
+          { sed 's/[[:space:]]*$//' "$text.minisig"; cat "$text"; } > "$RUNNER_TEMP/$ASSET"
+
+      - name: Check what will be published
+        if: steps.write.outputs.written == 'true'
+        run: |
+          target/debug/spelaion-write-catalogue --check "$RUNNER_TEMP/$ASSET" \
+            --text "$RUNNER_TEMP/plugins-catalogue.toml"
+
+      - name: Publish
+        if: steps.write.outputs.written == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EXISTS: ${{ steps.published.outputs.exists }}
+          SERIAL: ${{ steps.write.outputs.serial }}
+        run: |
+          if [ "$EXISTS" = "true" ]; then
+            gh release upload "$TAG" "$RUNNER_TEMP/$ASSET" --clobber
+          else
+            # Created once, with its file. Never the latest release (the updater reads that
+            # one, ADR-021) and never a pre-release.
+            gh release create "$TAG" "$RUNNER_TEMP/$ASSET" --target "$GITHUB_SHA" \
+              --latest=false --title "Plugin catalogue" \
+              --notes "The signed catalogue of SpelaionDB's plugins (ADR-055). Written from plugins.toml on dev and replaced each time the pins change; the app reads only its file."
+          fi
+          echo "Published $ASSET, serial $SERIAL."

@@ -2,6 +2,7 @@
 //! the types, writes every statement, checks read-only and the connection type's safeguards,
 //! and loads the rows; these commands only carry the user's choices to it and its answers back.
 
+use spelaion_desktop_macros::command;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -381,8 +382,7 @@ pub enum ImportOutcome {
 
 /// Reads the start of the source and detects its columns' types for the engine of `session`.
 /// `options: None` guesses them from the source.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn import_preview(
     session: String,
     source: ImportSourceItem,
@@ -426,8 +426,7 @@ pub async fn import_preview(
 
 /// The statements an import will run, written by the core and checked against the table (read
 /// on `session`, the explorer's), and what the guard asks to confirm.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn import_plan(
     session: String,
     request: ImportRequestItem,
@@ -494,7 +493,7 @@ async fn open_import_session(
     };
     match open_connection(
         source_open.resolved.clone(),
-        &state.engines,
+        &state.engines(),
         options,
         state.results.clone(),
     )
@@ -518,8 +517,7 @@ async fn open_import_session(
 /// Runs an import in a session of its own: the core writes the plan again, refuses a
 /// read-only connection and an unconfirmed plan that needs a confirmation, and loads the rows
 /// in transactions, reporting progress on `on_progress`.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn run_import(
     source: String,
     import_id: u32,
@@ -597,8 +595,7 @@ pub async fn run_import(
 }
 
 /// Stops a running import: the batch it is in is rolled back; committed batches stay.
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub async fn cancel_import(import_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
     let cancel = state
         .imports

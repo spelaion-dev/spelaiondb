@@ -12,9 +12,13 @@ mod import;
 mod interaction;
 mod library;
 mod mcp;
+mod panics;
 mod plans;
+mod plugins;
+mod startup;
 mod update;
 
+use spelaion_desktop_macros::command;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,9 +33,10 @@ use spelaion_config::{
     default_user_dir, load,
 };
 use spelaion_core::{
-    Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect, OpenConnection,
-    OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth, SortKey,
-    StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
+    AppLog, Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect,
+    OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth,
+    SortKey, StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text,
+    open_connection, start_over,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -51,7 +56,11 @@ struct AppState {
     workspace: RwLock<Option<PathBuf>>,
     workspace_version: AtomicU64,
     config: RwLock<Config>,
-    engines: Engines,
+    /// The engines the next connection uses. Swapped whole when the plugins change (ADR-055):
+    /// a connection already open keeps the plugin process it has. Read with `engines()`.
+    engines: std::sync::RwLock<Arc<Engines>>,
+    /// The Plugins page's operations (`plugins.rs`).
+    plugins: plugins::PluginOps,
     tunnels: Arc<TunnelPool>,
     results: Arc<ResultStore>,
     plans: Arc<spelaion_core::plan::PlanStore>,
@@ -116,6 +125,11 @@ impl ConnectionTests {
 type CmdResult<T> = Result<T, String>;
 
 impl AppState {
+    /// The engines a connection opened now uses (ADR-055: they change when the plugins do).
+    fn engines(&self) -> Arc<Engines> {
+        self.engines.read().expect("lock poisoned").clone()
+    }
+
     /// Every change to the trust store goes through `TrustStore::update`, one at a time, so
     /// none saves over another it did not see (SDB-276).
     fn change_trust<T, E: From<spelaion_config::ConfigError> + ToString>(
@@ -203,20 +217,17 @@ fn last_workspace_file(user_dir: &std::path::Path) -> PathBuf {
     user_dir.join("desktop-last-workspace.txt")
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn workspace_info(state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
     state.info().await
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_language(state: State<'_, AppState>) -> CmdResult<String> {
     state.history.language().await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_language(language: String, state: State<'_, AppState>) -> CmdResult<()> {
     state
         .history
@@ -225,14 +236,12 @@ async fn set_language(language: String, state: State<'_, AppState>) -> CmdResult
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_theme(state: State<'_, AppState>) -> CmdResult<String> {
     state.history.theme().await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
     state
         .history
@@ -241,8 +250,7 @@ async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_explorer_preferences(
     state: State<'_, AppState>,
 ) -> CmdResult<ExplorerPreferencesItem> {
@@ -254,8 +262,7 @@ async fn get_explorer_preferences(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_explorer_preferences(
     preferences: ExplorerPreferencesItem,
     state: State<'_, AppState>,
@@ -267,8 +274,7 @@ async fn set_explorer_preferences(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_editor_preferences(state: State<'_, AppState>) -> CmdResult<EditorPreferencesItem> {
     state
         .history
@@ -277,8 +283,7 @@ async fn get_editor_preferences(state: State<'_, AppState>) -> CmdResult<EditorP
         .map(Into::into)
         .map_err(|e| e.to_string())
 }
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_editor_preferences(
     preferences: EditorPreferencesItem,
     state: State<'_, AppState>,
@@ -290,8 +295,7 @@ async fn set_editor_preferences(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_grid_preferences(state: State<'_, AppState>) -> CmdResult<GridPreferencesItem> {
     state
         .history
@@ -301,8 +305,7 @@ async fn get_grid_preferences(state: State<'_, AppState>) -> CmdResult<GridPrefe
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_grid_preferences(
     preferences: GridPreferencesItem,
     state: State<'_, AppState>,
@@ -315,8 +318,7 @@ async fn set_grid_preferences(
 }
 
 /// The map view's background (ADR-045): tiles from the user's tile server, off by default.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_map_preferences(state: State<'_, AppState>) -> CmdResult<MapPreferencesItem> {
     state
         .history
@@ -327,8 +329,7 @@ async fn get_map_preferences(state: State<'_, AppState>) -> CmdResult<MapPrefere
 }
 
 /// Saves the map's preferences; the core checks the tile server first.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_map_preferences(
     preferences: MapPreferencesItem,
     state: State<'_, AppState>,
@@ -342,8 +343,7 @@ async fn set_map_preferences(
 
 /// Every geometry of a result's column, in the current view, for one map (ADR-045): GeoJSON
 /// from the core, at most `MAP_MAX_SHAPES` shapes.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn column_map(
     result: u32,
     column: u32,
@@ -368,8 +368,7 @@ async fn column_map(
 /// A system notification that a long run finished in the background (ADR-035). The app sends
 /// it only when the user turned it on; its text names the tab and counts statements, never SQL,
 /// data or error text.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn notify_run_finished(title: String, body: String, app: tauri::AppHandle) -> CmdResult<()> {
     use tauri_plugin_notification::NotificationExt;
     app.notification()
@@ -382,8 +381,7 @@ async fn notify_run_finished(title: String, body: String, app: tauri::AppHandle)
 
 /// How scripts run from the editor: the default error mode and the opt-in notification
 /// (ADR-035).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_script_preferences(state: State<'_, AppState>) -> CmdResult<ScriptPreferencesItem> {
     state
         .history
@@ -393,8 +391,7 @@ async fn get_script_preferences(state: State<'_, AppState>) -> CmdResult<ScriptP
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_script_preferences(
     preferences: ScriptPreferencesItem,
     state: State<'_, AppState>,
@@ -406,8 +403,7 @@ async fn set_script_preferences(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
     state
         .history
@@ -416,8 +412,7 @@ async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResult<()> {
     state
         .history
@@ -426,8 +421,7 @@ async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResul
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
     let version = state.workspace_version.load(Ordering::Acquire);
     if !version.is_multiple_of(2)
@@ -464,8 +458,7 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
 }
 
 /// Trusts the open repository (ADR-009). The UI asks for it after showing what it implies.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn trust_workspace(root: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
     let config = state.config.read().await;
     if config.workspace_root.as_deref() != Some(Path::new(&root)) {
@@ -478,8 +471,7 @@ async fn trust_workspace(root: String, state: State<'_, AppState>) -> CmdResult<
 
 /// Saves values for `${user.…}` variables in the user's `user.toml` (ADR-022) and reloads
 /// the configuration. Only those entries change; the rest of the file stays as it was.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_user_vars(
     values: HashMap<String, String>,
     state: State<'_, AppState>,
@@ -492,8 +484,7 @@ async fn set_user_vars(
 
 /// Every connection type (ADR-029): built-in, the team's (from a trusted repository) and the
 /// user's, with every layer applied.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_connection_types(state: State<'_, AppState>) -> CmdResult<Vec<ConnectionTypeItem>> {
     state.reload().await;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
@@ -508,8 +499,7 @@ async fn list_connection_types(state: State<'_, AppState>) -> CmdResult<Vec<Conn
 /// Saves the user's definition of a connection type (a new one, or their changes to a
 /// built-in or team type) in their `connection-types.toml`. Safeguards only add up: the core
 /// keeps what other layers turn on.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn save_connection_type(
     id: String,
     draft: ConnectionTypeDraft,
@@ -523,8 +513,7 @@ async fn save_connection_type(
 
 /// Removes the user's definition of a connection type: a type of their own goes, and a
 /// built-in or team one goes back to how the others define it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn delete_connection_type(id: String, state: State<'_, AppState>) -> CmdResult<()> {
     spelaion_config::remove_personal_type(&state.user_dir, &id).map_err(|e| e.to_string())?;
     state.reload().await;
@@ -532,8 +521,7 @@ async fn delete_connection_type(id: String, state: State<'_, AppState>) -> CmdRe
 }
 
 /// The personal range of local ports for SSH tunnels (`[tunnels]` in `user.toml`), if set.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn tunnel_ports(state: State<'_, AppState>) -> CmdResult<Option<TunnelPortsItem>> {
     let config = state.config.read().await;
     Ok(config
@@ -547,8 +535,7 @@ async fn tunnel_ports(state: State<'_, AppState>) -> CmdResult<Option<TunnelPort
 
 /// Sets (or clears, with null) the personal range of local ports for SSH tunnels. It applies
 /// to tunnels opened from then on.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_tunnel_ports(
     range: Option<TunnelPortsItem>,
     state: State<'_, AppState>,
@@ -560,8 +547,7 @@ async fn set_tunnel_ports(
 }
 
 /// The user's own column masking patterns (`[masking] always` in `user.toml`, ADR-051).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn user_masking(state: State<'_, AppState>) -> CmdResult<UserMaskingItem> {
     let config = state.config.read().await;
     Ok(UserMaskingItem {
@@ -571,8 +557,7 @@ async fn user_masking(state: State<'_, AppState>) -> CmdResult<UserMaskingItem> 
 }
 
 /// Sets the user's own column masking patterns. They apply to sessions opened from then on.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_user_masking(patterns: Vec<String>, state: State<'_, AppState>) -> CmdResult<()> {
     spelaion_config::set_user_masking(&state.user_dir, &patterns).map_err(|e| e.to_string())?;
     state.reload().await;
@@ -581,8 +566,7 @@ async fn set_user_masking(patterns: Vec<String>, state: State<'_, AppState>) -> 
 
 /// Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
 /// as it is now, and connecting can go on.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn accept_change(
     root: String,
     item: String,
@@ -607,8 +591,7 @@ async fn accept_change(
     state.change_trust(|trust| trust.accept_reviewed(&config, Path::new(&root), &change))
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<ConnectionItem>> {
     state.reload().await;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
@@ -648,13 +631,13 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             mcp_exposed: c.file.mcp.exposed,
             history_enabled,
             read_only: c.file.read_only,
+            sql: c.file.engine.is_sql(),
         });
     }
     Ok(items)
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_history(
     search: String,
     offset: u32,
@@ -672,8 +655,7 @@ async fn list_history(
 
 /// Saves the query under `name` for the open workspace (or personally outside one),
 /// replacing a saved query with that name. Returns its identifier.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn save_snippet(
     name: String,
     sql: String,
@@ -690,8 +672,7 @@ async fn save_snippet(
 }
 
 /// Saved queries of the open workspace and the personal ones, by name.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<Vec<SnippetItem>> {
     let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     state
@@ -702,8 +683,7 @@ async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> {
     let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     state
@@ -713,8 +693,7 @@ async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> 
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_history_enabled(
     connection: String,
     enabled: bool,
@@ -735,8 +714,7 @@ async fn set_history_enabled(
 }
 
 /// A connection's explorer filter (ADR-025), personal and per workspace.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_explorer_filter(
     connection: String,
     state: State<'_, AppState>,
@@ -750,8 +728,7 @@ async fn get_explorer_filter(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_explorer_filter(
     connection: String,
     filter: ExplorerFilterItem,
@@ -768,8 +745,7 @@ async fn set_explorer_filter(
 /// "Hide" or "Show only" on the schemas, objects or columns chosen in the explorer: their
 /// names, with their wildcard characters escaped, go into the connection's filter. Returns the
 /// new filter.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn filter_explorer_name(
     connection: String,
     kind: FilterKindItem,
@@ -805,8 +781,7 @@ async fn filter_explorer_name(
 
 /// The explorer's bookmarks (ADR-026) of the personal connections and of the open workspace's,
 /// for the connections that exist now.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkItem>> {
     let workspaces = {
         let config = state.config.read().await;
@@ -838,8 +813,7 @@ async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkIte
     Ok(all)
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn add_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> CmdResult<()> {
     let workspace = connection_workspace(&state, &bookmark.connection).await?;
     state
@@ -850,8 +824,7 @@ async fn add_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> Cmd
 }
 
 /// Whether the bookmark was there.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn remove_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> CmdResult<bool> {
     let workspace = connection_workspace(&state, &bookmark.connection).await?;
     state
@@ -873,20 +846,18 @@ async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<S
 
 /// Whether there is a system keychain. Without one (Linux with no Secret Service running) the
 /// forms cannot offer to save a password: it is asked when connecting.
-#[tauri::command]
-#[specta::specta]
-async fn keychain_available() -> bool {
+#[command]
+async fn keychain_available() -> CmdResult<bool> {
     // Over D-Bus on Linux: kept off the async runtime.
-    tokio::task::spawn_blocking(|| {
+    Ok(tokio::task::spawn_blocking(|| {
         spelaion_config::SecretBackend::keychain_available(&SystemBackend)
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(false))
 }
 
 /// Engines shown when adding a connection, including the ones not supported yet.
-#[tauri::command]
-#[specta::specta]
+#[command]
 fn engine_catalog() -> Vec<EngineItem> {
     spelaion_core::engine_catalog()
         .into_iter()
@@ -895,16 +866,14 @@ fn engine_catalog() -> Vec<EngineItem> {
 }
 
 /// Tunnels a new connection can use (from the repository and the personal directory).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_tunnels(state: State<'_, AppState>) -> CmdResult<Vec<TunnelItem>> {
     let config = state.config.read().await;
     Ok(config.tunnels.iter().map(TunnelItem::of).collect())
 }
 
 /// Every tunnel file as a network profile (ADR-027), for Settings → Network.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkProfileItem>> {
     let config = state.config.read().await;
     Ok(config
@@ -919,8 +888,7 @@ async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkPr
 /// written: neither the file nor the keychain. `editing` is the connection being edited, if
 /// any: its stored password is used when none is typed. `network_only` stops before logging
 /// in. The steps, their errors and the diagnostics come from the core, redacted.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn test_connection(
     draft: ConnectionDraftItem,
@@ -972,7 +940,7 @@ async fn test_connection(
         let _ = on_step.send(steps.iter().map(TestStepItem::from).collect());
     };
     let report =
-        spelaion_core::test_connection(resolved, &state.engines, options, &observer, stop).await;
+        spelaion_core::test_connection(resolved, &state.engines(), options, &observer, stop).await;
     state.tests.end(test);
     Ok(ConnectionTestOutcome::Tested {
         report: report.into(),
@@ -981,16 +949,14 @@ async fn test_connection(
 
 /// Stops a running connection or network profile test: the running step is dropped and
 /// whatever it opened is closed. Nothing is retried.
-#[tauri::command]
-#[specta::specta]
+#[command]
 fn stop_connection_test(test: u32, state: State<'_, AppState>) {
     state.tests.stop(test);
 }
 
 /// Saves a new connection file (and, for `keychain`, its password) and reloads the
 /// configuration. Returns the new connection's identifier.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn add_connection(
     draft: ConnectionDraftItem,
     password: Option<String>,
@@ -1032,8 +998,7 @@ fn check_setup_before_saving(
 }
 
 /// Checks whether an existing connection can be opened in the editor.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn connection_editor_access(
     connection: String,
     state: State<'_, AppState>,
@@ -1065,8 +1030,7 @@ async fn connection_editor_access(
 }
 
 /// The form of an existing connection, to edit it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn connection_draft(
     connection: String,
     state: State<'_, AppState>,
@@ -1094,8 +1058,7 @@ async fn connection_draft(
 
 /// Saves an edited connection (same file; for `keychain`, a typed password replaces the
 /// stored one) and reloads the configuration.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn update_connection(
     connection: String,
     draft: ConnectionDraftItem,
@@ -1129,8 +1092,7 @@ async fn update_connection(
 
 /// The form mapped to another engine (ADR-030): what still applies is kept, the rest is
 /// changed or dropped by the core; nothing is saved until the form is.
-#[tauri::command]
-#[specta::specta]
+#[command]
 fn change_connection_engine(
     draft: ConnectionDraftItem,
     engine: String,
@@ -1145,8 +1107,7 @@ fn change_connection_engine(
 
 /// Duplicates a connection next to the original (ADR-030). A stored password is copied to the
 /// copy's own keychain entry by the core; a repository connection must be as trusted.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn duplicate_connection(
     connection: String,
     state: State<'_, AppState>,
@@ -1174,8 +1135,7 @@ async fn duplicate_connection(
 /// file, its keychain password and, for a repository connection, what trust pinned for it,
 /// without adding any (ADR-022); its explorer filter, bookmarks, history setting and saved
 /// tabs follow. A connection in use is not moved: the UI disconnects it first.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn move_connection(
     connection: String,
     folder: String,
@@ -1224,8 +1184,7 @@ async fn move_connection(
 }
 
 /// The text Ctrl+C puts on the clipboard for a connection: without secrets or programs.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn copy_connection(
     connection: String,
     state: State<'_, AppState>,
@@ -1246,8 +1205,7 @@ async fn copy_connection(
 }
 
 /// A personal connection from clipboard text, checked by the core as untrusted input.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn paste_connection(text: String, state: State<'_, AppState>) -> CmdResult<PastedItem> {
     let pasted = {
         let config = state.config.read().await;
@@ -1266,13 +1224,12 @@ async fn paste_connection(text: String, state: State<'_, AppState>) -> CmdResult
 fn engine_display_name(engine: spelaion_config::Engine) -> String {
     spelaion_core::engine_catalog()
         .into_iter()
-        .find(|info| info.engine == Some(engine))
+        .find(|info| info.engine == Some(engine) && !info.is_kind())
         .map_or_else(|| engine.as_str().to_string(), |info| info.name.to_string())
 }
 
 /// The pattern new connections are named with (ADR-030).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn get_connection_name_pattern(state: State<'_, AppState>) -> CmdResult<String> {
     state
         .history
@@ -1282,8 +1239,7 @@ async fn get_connection_name_pattern(state: State<'_, AppState>) -> CmdResult<St
 }
 
 /// Sets the pattern (checked by the core) or, with null, goes back to the default.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_connection_name_pattern(
     pattern: Option<String>,
     state: State<'_, AppState>,
@@ -1296,8 +1252,7 @@ async fn set_connection_name_pattern(
 }
 
 /// Checks a pattern and shows what it gives for two sample connections, for Settings.
-#[tauri::command]
-#[specta::specta]
+#[command]
 fn preview_connection_name_pattern(pattern: String) -> NamePatternPreview {
     use spelaion_config::{Engine, NamePattern, NamePatternError, NameValues};
     let variables = spelaion_config::NAME_VARIABLES.map(String::from).to_vec();
@@ -1345,8 +1300,7 @@ fn preview_connection_name_pattern(pattern: String) -> NamePatternPreview {
 
 /// The name the user's pattern gives the connection being added, as the form is now; null
 /// when the pattern is empty (no suggestions).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn suggest_connection_name(
     draft: ConnectionDraftItem,
     state: State<'_, AppState>,
@@ -1370,8 +1324,7 @@ async fn suggest_connection_name(
 }
 
 /// Deletes a connection file and its stored password. The UI closes its sessions first.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn delete_connection(connection: String, state: State<'_, AppState>) -> CmdResult<()> {
     {
         let config = state.config.read().await;
@@ -1409,8 +1362,7 @@ fn tunnel_passwords(
 }
 
 /// The form of an existing tunnel, to edit it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn tunnel_draft(
     name: String,
     personal: bool,
@@ -1436,8 +1388,7 @@ async fn tunnel_draft(
 /// again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
 /// are used when none is typed. Steps go through `on_step`; `stop_connection_test(test)`
 /// stops it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn test_tunnel(
     draft: TunnelDraftItem,
@@ -1550,8 +1501,7 @@ async fn check_kube_editor(
 }
 
 /// The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn kube_contexts(
     form: KubernetesDraftItem,
     editor: KubeEditor,
@@ -1564,8 +1514,7 @@ async fn kube_contexts(
 }
 
 /// The namespaces of the chosen context.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn kube_namespaces(
     form: KubernetesDraftItem,
     editor: KubeEditor,
@@ -1578,8 +1527,7 @@ async fn kube_namespaces(
 }
 
 /// Names of one kind of resource (`svc`, `pod`, `deployment`) in the chosen namespace.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn kube_names(
     form: KubernetesDraftItem,
     kind: String,
@@ -1593,8 +1541,7 @@ async fn kube_names(
 }
 
 /// The ports of the chosen resource: a service's ports or its containers' ports.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn kube_ports(
     form: KubernetesDraftItem,
     editor: KubeEditor,
@@ -1608,8 +1555,7 @@ async fn kube_ports(
 }
 
 /// Saves a new tunnel (and its `keychain` passwords) and reloads the configuration.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn add_tunnel(
     draft: TunnelDraftItem,
     passwords: Vec<Option<String>>,
@@ -1645,8 +1591,7 @@ async fn add_tunnel(
 }
 
 /// Saves an edited tunnel (same file and name) and reloads the configuration.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn update_tunnel(
     name: String,
     personal: bool,
@@ -1678,8 +1623,7 @@ async fn update_tunnel(
 }
 
 /// Deletes a tunnel that no connection uses, with its stored passwords.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>) -> CmdResult<()> {
     {
         let config = state.config.read().await;
@@ -1692,8 +1636,7 @@ async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>)
 
 /// Opens a session (`session` is chosen by the UI). If a password is needed, it says so
 /// instead of failing, so the UI can ask for it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn connect(
     session: String,
     connection: String,
@@ -1738,28 +1681,28 @@ async fn connect(
         password: password.clone(),
         read_only_session: false,
     };
-    let open = match open_connection(resolved, &state.engines, options, state.results.clone()).await
-    {
-        Ok(open) => open,
-        Err(OpenError::PasswordRequired { save_to }) => {
-            return Ok(ConnectOutcome::PasswordRequired {
-                can_remember: save_to.is_some(),
-            });
-        }
-        // SQLSTATE 28xxx: authorization rejected (password or user). Only then does it make
-        // sense to ask for the password again; any other failure is shown as is.
-        Err(OpenError::Driver(DriverError::Database {
-            code: Some(code),
-            message,
-            ..
-        })) if code.starts_with("28") => {
-            return Ok(ConnectOutcome::AuthFailed {
+    let open =
+        match open_connection(resolved, &state.engines(), options, state.results.clone()).await {
+            Ok(open) => open,
+            Err(OpenError::PasswordRequired { save_to }) => {
+                return Ok(ConnectOutcome::PasswordRequired {
+                    can_remember: save_to.is_some(),
+                });
+            }
+            // SQLSTATE 28xxx: authorization rejected (password or user). Only then does it make
+            // sense to ask for the password again; any other failure is shown as is.
+            Err(OpenError::Driver(DriverError::Database {
+                code: Some(code),
                 message,
-                can_remember: save_to.is_some(),
-            });
-        }
-        Err(e) => return Err(e.to_string()),
-    };
+                ..
+            })) if code.starts_with("28") => {
+                return Ok(ConnectOutcome::AuthFailed {
+                    message,
+                    can_remember: save_to.is_some(),
+                });
+            }
+            Err(e) => return Err(e.to_string()),
+        };
     // Remember in the keychain only if it was asked for and the connection worked.
     if remember && let (Some(account), Some(secret)) = (save_to, &password) {
         let config = state.config.read().await;
@@ -1816,8 +1759,7 @@ async fn connect(
 
 /// Open an independent tab from an existing explorer session, reusing its in-memory
 /// credentials and exact resolved connection. Passwords never cross back into the UI.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn connect_from_session(
     source: String,
     session: String,
@@ -1853,7 +1795,7 @@ async fn connect_from_session(
     };
     let open = open_connection(
         source_open.resolved.clone(),
-        &state.engines,
+        &state.engines(),
         options,
         state.results.clone(),
     )
@@ -2005,8 +1947,7 @@ fn forward_transaction(app: &AppHandle, session: String, open: &Arc<OpenConnecti
 }
 
 /// An editor tab's transaction, as the core last read it (ADR-031).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn transaction_status(
     session: String,
     state: State<'_, AppState>,
@@ -2017,8 +1958,7 @@ async fn transaction_status(
 
 /// Turns an editor tab's auto-commit on or off; the core refuses to turn it on while a
 /// transaction is open (ADR-031).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_auto_commit(
     session: String,
     on: bool,
@@ -2032,8 +1972,7 @@ async fn set_auto_commit(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn commit_transaction(
     session: String,
     state: State<'_, AppState>,
@@ -2046,8 +1985,7 @@ async fn commit_transaction(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn rollback_transaction(
     session: String,
     state: State<'_, AppState>,
@@ -2063,8 +2001,7 @@ async fn rollback_transaction(
 /// Of these sessions, the ones whose closing must be confirmed: a transaction with work in it
 /// is open (ADR-031). The UI asks before closing a tab, switching its connection or
 /// disconnecting; the core decides who needs the question.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn sessions_to_confirm(
     sessions: Vec<String>,
     state: State<'_, AppState>,
@@ -2087,8 +2024,7 @@ async fn sessions_to_confirm(
 
 /// Quits: the UI found nothing to ask, or the user confirmed (`QuitRequested`). Nothing is
 /// committed, applied or saved; the servers roll back open transactions.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
     state.quitting.store(true, Ordering::SeqCst);
     app.exit(0);
@@ -2104,16 +2040,14 @@ const CLOSE_ASKING: u8 = 2;
 
 /// The UI got `QuitRequested` and is deciding: a later close request asks it again instead of
 /// quitting.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn quit_asking(state: State<'_, AppState>) -> CmdResult<()> {
     state.close_request.store(CLOSE_ASKING, Ordering::SeqCst);
     Ok(())
 }
 
 /// The user went back from the quit question: the next close request asks again.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn quit_cancelled(state: State<'_, AppState>) -> CmdResult<()> {
     state.close_request.store(CLOSE_IDLE, Ordering::SeqCst);
     Ok(())
@@ -2121,8 +2055,7 @@ async fn quit_cancelled(state: State<'_, AppState>) -> CmdResult<()> {
 
 /// The editor tabs with an open transaction, for the quit question: from what each session
 /// last read, with no round trip, so a server that does not answer cannot hold quitting.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn quit_open_transactions(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     Ok(open_transactions(&*state.sessions.lock().await))
 }
@@ -2164,8 +2097,7 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     let _ = QuitRequested {}.emit(window.app_handle());
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn disconnect(session: String, state: State<'_, AppState>) -> CmdResult<()> {
     let removed = state.sessions.lock().await.remove(&session);
     // A run waiting for an answer after an error stops: its tab is gone (ADR-035). A run
@@ -2179,8 +2111,7 @@ async fn disconnect(session: String, state: State<'_, AppState>) -> CmdResult<()
     Ok(())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_processes(
     session: String,
     state: State<'_, AppState>,
@@ -2209,8 +2140,7 @@ async fn list_processes(
     })
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn control_process(
     session: String,
     target: ProcessTargetItem,
@@ -2238,8 +2168,7 @@ async fn control_process(
 }
 
 /// The server's locks, waits and blocking tree, read once on the monitor's session.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_locks(session: String, state: State<'_, AppState>) -> CmdResult<LockSnapshotItem> {
     let open = state.session(&session).await?;
     let snapshot = spelaion_core::list_locks(&open.session).await?;
@@ -2279,8 +2208,7 @@ async fn list_locks(session: String, state: State<'_, AppState>) -> CmdResult<Lo
 }
 
 /// Every setting, variable, status counter or property the server exposes.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn server_settings(
     session: String,
     state: State<'_, AppState>,
@@ -2308,8 +2236,7 @@ async fn server_settings(
 
 /// A table's size on disk, index size and row estimate, from the catalog's statistics;
 /// `None` when the engine keeps none or the object is not a table.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn table_stats(
     session: String,
     schema: String,
@@ -2327,8 +2254,7 @@ async fn table_stats(
 }
 
 /// Runs a script and keeps sending events through the channel. Returns as soon as it starts.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn run_script(
     session: String,
     sql: String,
@@ -2342,8 +2268,7 @@ async fn run_script(
 
 /// Answers a run paused after an error (ADR-035). The core refuses a ticket that is not the
 /// pause it is waiting on.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn answer_script_error(
     session: String,
     ticket: u32,
@@ -2421,8 +2346,7 @@ async fn start_script(
 }
 
 /// Whether a SELECT matches the conservative rules for fetching pages.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn query_page_supported(
     session: String,
     sql: String,
@@ -2433,8 +2357,7 @@ async fn query_page_supported(
 }
 
 /// Run the first page, keeping the original SQL in the user's query history.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn run_query_page(
     session: String,
     sql: String,
@@ -2462,8 +2385,7 @@ async fn run_query_page(
 
 /// The UI requests subsequent pages of the read it already confirmed. The core only permits
 /// eligible read queries to be paged, and appends each page at the expected offset.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn append_query_page(
     session: String,
     result: u32,
@@ -2484,8 +2406,7 @@ async fn append_query_page(
     Ok(u32::try_from(added).unwrap_or(u32::MAX))
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn count_query_rows(
     session: String,
     sql: String,
@@ -2496,8 +2417,7 @@ async fn count_query_rows(
 }
 
 /// The `:name` placeholders of a script, in order, so the UI can ask for their values.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn script_params(
     session: String,
     sql: String,
@@ -2512,8 +2432,7 @@ async fn script_params(
 
 /// The script with its placeholders replaced by the values as literals, written by the core
 /// with the engine's quoting.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn bind_params(
     session: String,
     sql: String,
@@ -2531,8 +2450,7 @@ fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelaion_core::RiskyStateme
 
 /// Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
 /// without WHERE, DROP, TRUNCATE, and whatever the connection's type asks for (ADR-029).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn script_risks(
     session: String,
     sql: String,
@@ -2545,8 +2463,7 @@ async fn script_risks(
         .collect())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn cancel(session: String, state: State<'_, AppState>) -> CmdResult<()> {
     let open = state.session(&session).await?;
     open.session.cancel().await.map_err(|e| e.to_string())
@@ -2583,8 +2500,7 @@ async fn dialect_for(state: &AppState, session: &str) -> Arc<dyn Dialect> {
 /// A selection of a result as text (TSV, CSV, JSON or INSERT), formatted by the core from
 /// the typed data, for the clipboard. One cell copied as plain text is its value alone,
 /// without a line break after it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn copy_rows(
     result: u32,
     session: String,
@@ -2623,8 +2539,7 @@ async fn copy_rows(
 /// Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
 /// rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
 /// are the shown columns, in order.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn export_result(
     result: u32,
     session: String,
@@ -2685,8 +2600,7 @@ async fn export_result(
 /// Before offering to run a query (or a table data tab) again for an export: whether it may
 /// be (only a single read), and whether the tab has an open transaction whose uncommitted
 /// changes the export will not see (ADR-034).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn export_rerun_check(
     session: String,
     sql: Option<String>,
@@ -2754,7 +2668,7 @@ async fn open_export_session(
     };
     match open_connection(
         source_open.resolved.clone(),
-        &state.engines,
+        &state.engines(),
         options,
         state.results.clone(),
     )
@@ -2802,8 +2716,7 @@ fn progress_sender(
 
 /// Runs a query again in a new session and streams every row to `path` (ADR-034). Only a single
 /// read is run; a connection type that confirms execution needs `confirmed`.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn export_query(
     source: String,
@@ -2852,8 +2765,7 @@ async fn export_query(
 
 /// Streams every row of a table data tab's view (its filter and order, not just the loaded
 /// page) to `path`, through the core's own SELECT.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn export_table_data(
     source: String,
@@ -2889,8 +2801,7 @@ async fn export_table_data(
 
 /// Streams explorer tables and views, one file each, into `folder`, never over an existing
 /// file. Stops at a cancel or an error; the files written before stay.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn export_tables(
     source: String,
@@ -2955,8 +2866,7 @@ async fn export_tables(
 }
 
 /// Stops a running streaming export: its statement and its writer; no file is left.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn cancel_export(export_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
     let cancel = state
         .exports
@@ -2971,8 +2881,7 @@ async fn cancel_export(export_id: u32, state: State<'_, AppState>) -> CmdResult<
 }
 
 /// Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form.
-#[tauri::command]
-#[specta::specta]
+#[command]
 fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
     spelaion_config::parse_connection_url(&url)
         .map(UrlFields::from)
@@ -2981,45 +2890,37 @@ fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
 
 /// Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
 /// overwrites an existing file.
-#[tauri::command]
-#[specta::specta]
-async fn create_database(engine: String, path: String) -> CmdResult<()> {
+#[command]
+async fn create_database(
+    state: State<'_, AppState>,
+    engine: String,
+    path: String,
+) -> CmdResult<()> {
     let engine = engine_named(&engine)?;
-    tokio::task::spawn_blocking(move || {
-        spelaion_core::create_file_database(engine, Path::new(&path)).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    state
+        .engines()
+        .create_file_database(engine, Path::new(&path))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
 /// engine's dialect in the core like a script run, for Ctrl+Enter.
-#[tauri::command]
-#[specta::specta]
-async fn statement_at(
-    engine: String,
-    sql: String,
-    offset: u32,
-    state: State<'_, AppState>,
-) -> CmdResult<Option<TextSpan>> {
-    let driver = state
-        .engines
-        .get(engine_named(&engine)?)
-        .ok_or("no driver for this engine")?;
+#[command]
+async fn statement_at(engine: String, sql: String, offset: u32) -> CmdResult<Option<TextSpan>> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
     Ok(
-        spelaion_core::statement_at(driver.dialect().as_ref(), &sql, offset as usize).map(|span| {
-            TextSpan {
-                start: u32::try_from(span.start).unwrap_or(u32::MAX),
-                end: u32::try_from(span.end).unwrap_or(u32::MAX),
-            }
+        spelaion_core::statement_at(dialect.as_ref(), &sql, offset as usize).map(|span| TextSpan {
+            start: u32::try_from(span.start).unwrap_or(u32::MAX),
+            end: u32::try_from(span.end).unwrap_or(u32::MAX),
         }),
     )
 }
 
 /// Sorts a result by one column in the core (`None` restores the server's order). The
 /// grid then asks for its windows again.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn sort_result(
     result: u32,
     column: Option<u32>,
@@ -3047,8 +2948,7 @@ async fn sort_result(
 
 /// Filters a result by column conditions in the core (all must hold; an empty list removes
 /// them), on top of the text filter. The grid then asks for its windows again.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn filter_columns(
     result: u32,
     filters: Vec<ColumnFilterItem>,
@@ -3076,8 +2976,7 @@ async fn filter_columns(
 
 /// Searches a result's loaded rows in the core (Ctrl+F) and keeps the matches for
 /// `find_matches` and `find_step`. A newer search on the same result stops this one (`None`).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn find_in_result(
     result: u32,
     text: String,
@@ -3124,8 +3023,7 @@ async fn find_in_result(
 
 /// The matches of the last search in rows `[first_row, first_row + rows)`, to highlight
 /// what the grid shows.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn find_matches(
     result: u32,
     first_row: u32,
@@ -3152,8 +3050,7 @@ async fn find_matches(
 
 /// The next match after the cell (`row`, `column`), or the previous one with `backwards`,
 /// going round; `None` without matches (or once the rows moved).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn find_step(
     result: u32,
     row: u32,
@@ -3179,8 +3076,7 @@ async fn find_step(
 }
 
 /// Forgets a result's search (the find bar closed).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn clear_find(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
     if let Some(stored) = state.results.get(ResultId(result.into())) {
         stored
@@ -3195,8 +3091,7 @@ async fn clear_find(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
 /// bounds (rows of the current view and the columns it shows), never cell values, and the
 /// core computes over the stored result. A newer calculation on the same result, or
 /// `cancel_selection_stats`, stops this one (`None`).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn selection_stats(
     result: u32,
     range: CellRange,
@@ -3225,8 +3120,7 @@ async fn selection_stats(
 }
 
 /// Stops the selection calculation running on a result (the calc panel's Cancel).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn cancel_selection_stats(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
     if let Some(stored) = state.results.get(ResultId(result.into())) {
         stored
@@ -3240,8 +3134,7 @@ async fn cancel_selection_stats(result: u32, state: State<'_, AppState>) -> CmdR
 /// The points of a chart over a result (ADR-040): the UI names the X and Y columns, the core
 /// reads the current view of the stored result and sends at most `MAX_CHART_POINTS` points,
 /// never rows. A newer chart on the same result, or `cancel_chart`, stops this one (`None`).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn result_chart(
     result: u32,
     request: ChartRequestItem,
@@ -3266,8 +3159,7 @@ async fn result_chart(
 }
 
 /// Stops the chart being prepared on a result (the chart view closed or changed result).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn cancel_chart(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
     if let Some(stored) = state.results.get(ResultId(result.into())) {
         stored
@@ -3280,8 +3172,7 @@ async fn cancel_chart(result: u32, state: State<'_, AppState>) -> CmdResult<()> 
 
 /// Writes a chart image the UI drew to the file the user chose: an SVG's text, or a PNG in
 /// base64. The core refuses anything that is not such an image.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn save_chart_image(
     path: String,
     format: ChartImageFormatItem,
@@ -3300,8 +3191,7 @@ async fn save_chart_image(
 /// engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
 /// type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
 /// `stats_id` stops it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn column_stats(
     source: String,
@@ -3361,8 +3251,7 @@ async fn column_stats(
 
 /// Every column of a schema's relations, read with one catalog query on the explorer's
 /// session: metadata search keeps them with the schema (ADR-043).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_columns(
     session: String,
     schema: String,
@@ -3379,8 +3268,7 @@ async fn list_columns(
 }
 
 /// The data search's limits, for its form.
-#[tauri::command]
-#[specta::specta]
+#[command]
 fn data_search_limits() -> DataSearchLimitsItem {
     let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
     DataSearchLimitsItem {
@@ -3396,8 +3284,7 @@ fn data_search_limits() -> DataSearchLimitsItem {
 /// one read per table with the value bound as a parameter, in a new session opened for reads
 /// only, each table inside the engine's read-only transaction. Each table's start and end go to
 /// `on_event`; `cancel_data_search` with the same `search_id` stops it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn data_search(
     source: String,
     search_id: u32,
@@ -3433,8 +3320,7 @@ async fn data_search(
 }
 
 /// Stops a data search: the running statement and every table after it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn cancel_data_search(search_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
     let cancel = state
         .exports
@@ -3449,8 +3335,7 @@ async fn cancel_data_search(search_id: u32, state: State<'_, AppState>) -> CmdRe
 }
 
 /// Stops a column's statistics while they are counted: the running statement and the rest.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn cancel_column_stats(stats_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
     let cancel = state
         .exports
@@ -3466,8 +3351,7 @@ async fn cancel_column_stats(stats_id: u32, state: State<'_, AppState>) -> CmdRe
 
 /// A table data tab's filter with a condition the core wrote (one of the column statistics'
 /// most frequent values) added with AND. The page's SELECT is checked when it loads.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn add_table_condition(
     session: String,
     filter: String,
@@ -3481,8 +3365,7 @@ async fn add_table_condition(
 /// "Filter by this value" in a table data tab: the core writes the condition from the typed
 /// value (the cell at `row` of the page, or `value` typed for the column) and returns the
 /// tab's filter with it added. The page's SELECT is checked when it loads.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn table_filter_condition(
     session: String,
@@ -3520,8 +3403,7 @@ async fn table_filter_condition(
 
 /// Column names for the clipboard: plain, quoted for the engine, qualified with the table
 /// (a table data tab's) or one per line; written by the core.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn copy_column_names(
     result: u32,
     session: String,
@@ -3549,8 +3431,7 @@ async fn copy_column_names(
 
 /// Every different value of a column (all its rows, in the current view) as an SQL `IN`
 /// list with the engine's literals; refused beyond the core's limit rather than cut.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn copy_column_in_list(
     result: u32,
     session: String,
@@ -3574,8 +3455,7 @@ async fn copy_column_in_list(
 }
 
 /// Every cell of one row as text (`None` for NULL), for the viewer's row view.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn row_values(
     result: u32,
     row: u32,
@@ -3607,8 +3487,7 @@ async fn row_values(
 
 /// Filters a result in the core: rows where some cell contains `text` (ignoring case);
 /// `None` shows every row again. The grid then asks for its windows again.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn filter_result(
     result: u32,
     text: Option<String>,
@@ -3635,8 +3514,7 @@ async fn filter_result(
 
 /// The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
 /// what fits, and the row may not be in its cache.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn cell_value(
     result: u32,
     row: u32,
@@ -3670,8 +3548,7 @@ async fn cell_value(
 
 /// The cell viewer's value, read from the stored result when the viewer opens: whole up to
 /// the core's limit, past it only with `load_anyway`. Images are recognised by their bytes.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn view_cell(
     result: u32,
     row: u32,
@@ -3697,8 +3574,7 @@ async fn view_cell(
 
 /// One masked cell's value, on the user's explicit request (ADR-051): read by the core from
 /// what it keeps aside, without running anything. Shown in a popover, never in the grid.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn reveal_cell(
     result: u32,
     row: u32,
@@ -3718,8 +3594,7 @@ async fn reveal_cell(
 
 /// Saves a cell's value to `path` (bytes as stored, other values as UTF-8 text); returns the
 /// bytes written.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn save_cell_value(
     result: u32,
     row: u32,
@@ -3745,8 +3620,7 @@ async fn save_cell_value(
 
 /// The value picker the cell panel offers for `column` of `schema.table` in an editable result
 /// (a date and time, the allowed values, a foreign key's search), read from the catalog now.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn value_picker(
     session: String,
     schema: String,
@@ -3762,23 +3636,20 @@ async fn value_picker(
 }
 
 /// The text a picked date and time is written as (and shown as once saved).
-#[tauri::command]
-#[specta::specta]
+#[command]
 fn pick_time(picker: TemporalPickerItem, picked: PickedTimeItem) -> CmdResult<String> {
     spelaion_core::picked_time_text(&picker.into(), &picked.into()).map_err(|e| e.to_string())
 }
 
 /// The text of the values picked from a column's allowed values.
-#[tauri::command]
-#[specta::specta]
+#[command]
 fn pick_choices(picker: ChoicePickerItem, chosen: Vec<String>) -> CmdResult<String> {
     spelaion_core::picked_choice_text(&picker.into(), &chosen).map_err(|e| e.to_string())
 }
 
 /// A page of the table `column`'s foreign key references, keeping the rows that contain
 /// `search`: the key is read from the catalog again and the core writes the page's filter.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn search_referenced(
     session: String,
     schema: String,
@@ -3797,15 +3668,13 @@ async fn search_referenced(
 }
 
 /// Frees a result the UI no longer shows.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn release_result(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
     state.results.remove(ResultId(result.into()));
     Ok(())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn current_database(
     session: String,
     state: State<'_, AppState>,
@@ -3819,8 +3688,7 @@ async fn current_database(
 }
 
 /// The databases this tab's session can switch to (MySQL, MariaDB, SQL Server).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_databases(session: String, state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     let open = state.session(&session).await?;
     open.session
@@ -3830,8 +3698,7 @@ async fn list_databases(session: String, state: State<'_, AppState>) -> CmdResul
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn select_database(
     session: String,
     database: String,
@@ -3845,8 +3712,7 @@ async fn select_database(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_schemas(
     session: String,
     filter: Option<NameFilterItem>,
@@ -3874,8 +3740,7 @@ async fn list_schemas(
         .collect())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_objects(
     session: String,
     schema: String,
@@ -3897,8 +3762,7 @@ async fn list_objects(
     Ok(objects.into_iter().map(ObjectItem::from).collect())
 }
 
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn describe_table(
     session: String,
     schema: String,
@@ -3922,8 +3786,7 @@ async fn describe_table(
 }
 
 /// Functions, sequences, triggers, types… of a schema, for its folders (ADR-024).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_schema_objects(
     session: String,
     schema: String,
@@ -3953,8 +3816,7 @@ async fn list_schema_objects(
 }
 
 /// Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn list_server_objects(
     session: String,
     state: State<'_, AppState>,
@@ -3971,8 +3833,7 @@ async fn list_server_objects(
 
 /// The DDL of a table or view (`CREATE TABLE` with its constraints, indexes and comments),
 /// to open in a new tab (nothing runs).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn relation_definition(
     session: String,
     schema: String,
@@ -3988,8 +3849,7 @@ async fn relation_definition(
 }
 
 /// The SQL that calls a procedure (inputs as `:name`, outputs collected), to open in a new tab.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn procedure_call(
     session: String,
     object: SchemaObjectItem,
@@ -4004,8 +3864,7 @@ async fn procedure_call(
 }
 
 /// The DDL of an object, to open in a new tab (nothing runs).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn object_definition(
     session: String,
     object: SchemaObjectItem,
@@ -4020,8 +3879,7 @@ async fn object_definition(
 }
 
 /// The table a query's result can be edited as, or none: the core decides (ADR-014).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn editable_query_table(
     session: String,
     result: u32,
@@ -4045,8 +3903,7 @@ async fn editable_query_table(
 
 /// SQL for a table written by the core with the engine's quoting (preview, SELECT, INSERT,
 /// UPDATE or DELETE with `:named` placeholders), to open in a new tab.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn table_sql(
     session: String,
     schema: String,
@@ -4070,8 +3927,7 @@ async fn table_sql(
 
 /// A SELECT joining the tables chosen in the explorer on the foreign keys between them
 /// (`INNER JOIN … ON`, or the simple `FROM a, b WHERE`), to open in a new tab.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn join_sql(
     session: String,
     tables: Vec<TableRefItem>,
@@ -4101,8 +3957,7 @@ async fn join_sql(
 
 /// The SQL a table's menu can generate on this connection's engine (the core decides: an
 /// upsert or MERGE only where the engine has them).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn table_templates(
     session: String,
     state: State<'_, AppState>,
@@ -4117,8 +3972,7 @@ async fn table_templates(
 }
 
 /// The exact row count of a table or view, counted by the core on the explorer's session.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn count_rows(
     session: String,
     schema: String,
@@ -4132,8 +3986,7 @@ async fn count_rows(
 
 /// The SELECT of one page of a table, written and checked by the core: the filter and the
 /// order cannot turn it into another query.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn table_page_sql(
     session: String,
     page: TablePageItem,
@@ -4145,8 +3998,7 @@ async fn table_page_sql(
 }
 
 /// How many rows of a table the filter keeps (the table data tab's "Count").
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn count_table_rows(
     session: String,
     schema: String,
@@ -4161,8 +4013,7 @@ async fn count_table_rows(
 
 /// The foreign keys a table data tab can follow: the table's own, then those of other tables
 /// that point to it, from the catalog.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn table_keys(
     session: String,
     schema: String,
@@ -4178,8 +4029,7 @@ async fn table_keys(
 
 /// The foreign keys of other tables that point to `schema.table` (the explorer's and the table
 /// details' "References"), from the catalog.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn referencing_keys(
     session: String,
     schema: String,
@@ -4209,8 +4059,7 @@ async fn referencing_keys(
 /// Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
 /// of `schema.table`): the core finds the key in the catalog again, reads the row's typed
 /// values and writes the filter of the table data tab it leads to.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn follow_key(
     session: String,
@@ -4243,8 +4092,7 @@ async fn follow_key(
 /// The references panel of a table data tab: every foreign key of the row at `row` (the
 /// table's own and those that point to it), each with up to `limit` of the rows it leads to,
 /// read in turn on the tab's session.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn row_references(
     session: String,
@@ -4277,8 +4125,7 @@ async fn row_references(
 }
 
 /// An identifier quoted for the session's engine (for an ORDER BY the UI writes).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn quote_identifier(
     session: String,
     identifier: String,
@@ -4290,8 +4137,7 @@ async fn quote_identifier(
 
 /// Objects' names as the engine writes them (`schema.table`, quoted where it needs to be),
 /// for the explorer's "Copy qualified name".
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn qualified_names(
     session: String,
     paths: Vec<ObjectPathItem>,
@@ -4305,9 +4151,37 @@ async fn qualified_names(
         .collect())
 }
 
+/// The statement that shows an object of an engine whose language is not SQL, written by the
+/// core (ADR-056): the explorer opens it in an editor tab and runs it. `None` for SQL, whose
+/// objects open in a table data tab.
+#[command]
+async fn browse_statement(
+    session: String,
+    schema: String,
+    name: String,
+    kind: String,
+    comment: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    // The dialect decides: an engine queried with SQL browses nothing this way (its objects
+    // open in a table data tab), one whose language is not SQL browses any of its objects (CQL's
+    // tables too).
+    let Some(kind) = dto::object_kind_named(&kind) else {
+        return Err(format!("unknown kind of object: {kind}"));
+    };
+    let object = spelaion_driver_api::ObjectInfo {
+        schema,
+        name,
+        kind,
+        estimated_rows: None,
+        comment,
+    };
+    let open = state.session(&session).await?;
+    Ok(open.session.dialect().browse_statement(&object))
+}
+
 /// What the explorer may offer on this session's engine: the core decides (ADR-026).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn object_actions(
     session: String,
     state: State<'_, AppState>,
@@ -4330,8 +4204,7 @@ async fn object_actions(
 
 /// The SQL of a change to an object (rename, drop…), written by the core, to show before it
 /// runs or to open in the editor, and whether its object can be dropped in cascade.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn preview_object_change(
     session: String,
     change: ObjectChangeItem,
@@ -4351,8 +4224,7 @@ async fn preview_object_change(
 
 /// The statement that starts a new object (table, view, schema…), written by the core in the
 /// engine's types, to finish in a new tab: nothing runs (ADR-026).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn create_sql(
     session: String,
     kind: CreateKindItem,
@@ -4369,8 +4241,7 @@ async fn create_sql(
 
 /// An index or constraint on the columns chosen in the explorer, in their order, written by
 /// the core, to finish in a new tab: nothing runs (ADR-026).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn new_index_sql(
     session: String,
     schema: String,
@@ -4391,8 +4262,7 @@ async fn new_index_sql(
 }
 
 /// Prepares a table element in the editor without executing it (ADR-026).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn new_table_element_sql(
     session: String,
     schema: String,
@@ -4419,8 +4289,7 @@ async fn new_table_element_sql(
 
 /// "Open object by name": the objects whose name contains `text`, in the schemas and among the
 /// objects the explorer shows (its filter, and system schemas only with `show_system`).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn search_objects(
     session: String,
     text: String,
@@ -4445,8 +4314,7 @@ async fn search_objects(
 
 /// "Set as the editor's schema": where this tab's own session finds unqualified names from now
 /// on (the saved connection does not change).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn set_active_schema(
     session: String,
     schema: String,
@@ -4459,8 +4327,7 @@ async fn set_active_schema(
 }
 
 /// The schema where a session finds unqualified names ("Link with editor").
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn active_schema(session: String, state: State<'_, AppState>) -> CmdResult<Option<String>> {
     let open = state.session(&session).await?;
     spelaion_core::active_schema(&open.session).await
@@ -4469,8 +4336,7 @@ async fn active_schema(session: String, state: State<'_, AppState>) -> CmdResult
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 /// was shown. The core writes the statements again from the change, and refuses read-only
 /// connections (ADR-026). Returns how many statements ran.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn apply_object_change(
     session: String,
     change: ObjectChangeItem,
@@ -4492,8 +4358,7 @@ async fn apply_object_change(
 
 /// Which accounts the explorer may create, give a password, lock or drop on this session's
 /// engine (ADR-048): the core decides.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn principal_actions(
     session: String,
     state: State<'_, AppState>,
@@ -4504,8 +4369,7 @@ async fn principal_actions(
 
 /// The script an account change would run, written by the core with the password masked
 /// (ADR-048), and the statements the connection's safeguards ask to confirm. Nothing runs.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn preview_principal_change(
     session: String,
     change: PrincipalChangeItem,
@@ -4525,8 +4389,7 @@ async fn preview_principal_change(
 /// Runs an account change on the explorer's session, only as the masked script `sql` the user
 /// was shown (ADR-048). `password` is the new password when the change sets one: held as a
 /// secret, written only into the statement that runs, never recorded or returned.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn apply_principal_change(
     session: String,
     change: PrincipalChangeItem,
@@ -4553,8 +4416,7 @@ async fn apply_principal_change(
 
 /// The scopes an account can be granted on this session's engine, each with the names it asks
 /// and its privileges (ADR-048): the core decides.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn privilege_scopes(
     session: String,
     kind: PrincipalKindItem,
@@ -4586,8 +4448,7 @@ async fn privilege_scopes(
 }
 
 /// What an account has: its privileges on each scope and its roles, read from the catalog.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn principal_privileges(
     session: String,
     target: PrincipalTargetItem,
@@ -4606,8 +4467,7 @@ async fn principal_privileges(
 }
 
 /// The `GRANT` or `REVOKE` a privilege form would run, written by the core. Nothing runs.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn preview_privilege_change(
     session: String,
     change: PrivilegeChangeItem,
@@ -4626,8 +4486,7 @@ async fn preview_privilege_change(
 
 /// Grants or revokes on the explorer's session, only as the script `sql` the user was shown
 /// (ADR-048); refused on a read-only connection. Returns how many statements ran.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn apply_privilege_change(
     session: String,
     change: PrivilegeChangeItem,
@@ -4650,8 +4509,7 @@ async fn apply_privilege_change(
 }
 
 /// Whether an account is locked now, for the lock dialog (ADR-048); `None` when unknown.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn principal_locked(
     session: String,
     target: PrincipalTargetItem,
@@ -4665,8 +4523,7 @@ async fn principal_locked(
 
 /// A table's columns for its structure form (ADR-047), read from the catalog on the tab's
 /// session: each field as SQL the engine writes.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn table_structure(
     session: String,
     schema: String,
@@ -4682,8 +4539,7 @@ async fn table_structure(
 
 /// The script a structure form's changes would run, written by the core from the catalog as
 /// it is now, with the statements the connection's safeguards ask to confirm. Nothing runs.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn preview_table_alteration(
     session: String,
     alteration: TableAlterationItem,
@@ -4704,8 +4560,7 @@ async fn preview_table_alteration(
 /// Runs a structure form's changes on the tab's session, only as the script `sql` the user was
 /// shown: the core writes it again and refuses a table that changed, a read-only connection,
 /// and risky statements the user did not confirm (ADR-047). Returns how many statements ran.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn apply_table_alteration(
     session: String,
     alteration: TableAlterationItem,
@@ -4728,8 +4583,7 @@ async fn apply_table_alteration(
 }
 
 /// The script the create table form would run, written by the core (ADR-047). Nothing runs.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn preview_create_table(
     session: String,
     table: NewTableItem,
@@ -4748,8 +4602,7 @@ async fn preview_create_table(
 
 /// Creates the table of the form, only as the script `sql` the user was shown: refused on a
 /// read-only connection, and risky statements run only confirmed (ADR-047).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn apply_create_table(
     session: String,
     table: NewTableItem,
@@ -4773,8 +4626,7 @@ async fn apply_create_table(
 
 /// "Edit source": a view's, function's or procedure's definition written by the core as the
 /// statement that replaces it, to change and run in a new tab: nothing runs here (ADR-047).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn editable_source(
     session: String,
     target: SourceTargetItem,
@@ -4787,8 +4639,7 @@ async fn editable_source(
 }
 
 /// The pending edits of a table data page, as the core holds them (ADR-044).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn pending_edits(result: u32, state: State<'_, AppState>) -> CmdResult<PendingEditsItem> {
     let stored = state
         .results
@@ -4804,8 +4655,7 @@ async fn pending_edits(result: u32, state: State<'_, AppState>) -> CmdResult<Pen
 /// Does one thing to a table data page's pending edits: a cell typed, rows deleted or
 /// reverted, a new row, a bulk edit of the selection, a paste, Discard, undo or redo
 /// (ADR-044). Returns the edits now pending; nothing is written to the database.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn edit_pending(
     result: u32,
     edit: PendingEditItem,
@@ -4824,8 +4674,7 @@ async fn edit_pending(
 
 /// The statements the core would run for the pending edits of a table data page, to show
 /// before applying them (production asks for confirmation).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn preview_table_edits(
     session: String,
     result: u32,
@@ -4840,8 +4689,7 @@ async fn preview_table_edits(
 /// Applies the page's pending edits in one transaction (ADR-014): refused on read-only
 /// connections, and on production unless the user confirmed the statements. Once applied
 /// they are forgotten, with their undo history.
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn apply_table_edits(
     session: String,
     result: u32,
@@ -4900,8 +4748,7 @@ async fn table_edit_statements(
 
 /// The statement that loading the file at `path` into one cell of a table data page would
 /// run, shortened for the confirmation dialog (production asks before data changes).
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn preview_load_value_file(
     session: String,
@@ -4925,8 +4772,7 @@ async fn preview_load_value_file(
 /// Loads the file at `path` into one cell of a table data page: one UPDATE by primary key,
 /// applied like any edit (ADR-014): refused on read-only connections, and on production
 /// unless the user confirmed it.
-#[tauri::command]
-#[specta::specta]
+#[command]
 #[allow(clippy::too_many_arguments)]
 async fn load_value_file(
     session: String,
@@ -4998,8 +4844,7 @@ async fn load_file_statements(
 }
 
 /// The UI's answer to a tunnel dialog (unknown host, passphrase…).
-#[tauri::command]
-#[specta::specta]
+#[command]
 async fn answer_interaction(
     id: u32,
     accept: bool,
@@ -5148,6 +4993,12 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update::update_check,
             update::update_install,
             update::update_open_releases_page,
+            plugins::plugins_overview,
+            plugins::plugins_refresh_catalogue,
+            plugins::plugins_install,
+            plugins::plugins_cancel_install,
+            plugins::plugins_install_file,
+            plugins::plugins_remove,
             engine_catalog,
             keychain_available,
             list_tunnels,
@@ -5222,6 +5073,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             count_table_rows,
             quote_identifier,
             qualified_names,
+            browse_statement,
             object_actions,
             preview_object_change,
             apply_object_change,
@@ -5339,7 +5191,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             InteractionClosed,
             SessionLost,
             TransactionChanged,
-            QuitRequested
+            QuitRequested,
+            plugins::PluginInstallProgress,
+            plugins::PluginsChanged
         ])
 }
 
@@ -5421,6 +5275,34 @@ fn move_offscreen(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     ))
 }
 
+/// Opens the local store, asking the user what to do while it cannot be opened (SDB-283): quit,
+/// or start with a new store, the old file moved aside and never deleted.
+fn open_history(user_dir: &Path, log: &AppLog) -> QueryHistory {
+    let path = spelaion_config::state_db(user_dir);
+    loop {
+        let error = match QueryHistory::open(path.clone()) {
+            Ok(history) => return history,
+            Err(error) => error,
+        };
+        let failure = StartupFailure::store(path.clone(), &error);
+        match startup::ask(&failure, log) {
+            StartupAction::StartOver => match start_over(&failure, std::time::SystemTime::now()) {
+                Ok(moved) => startup::note(
+                    log,
+                    &format!(
+                        "moved the local store to {}; starting with a new one",
+                        moved.display()
+                    ),
+                ),
+                Err(e) => {
+                    startup::fail(log, &format!("Could not start with a new local store: {e}"))
+                }
+            },
+            StartupAction::Quit | StartupAction::OpenFolder => std::process::exit(1),
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = specta_builder();
@@ -5431,24 +5313,43 @@ pub fn run() {
         eprintln!("could not generate the TS types: {e}");
     }
 
+    // Nothing on the way to the window panics: what stops the start is shown in a native dialog
+    // and written to the log (SDB-283); what does not is only logged.
     // SPELAION_USER_DIR allows another personal directory (tests, profiles), as in the CLI.
+    let mut copy_failed = None;
     let user_dir = match std::env::var_os("SPELAION_USER_DIR") {
         Some(dir) => PathBuf::from(dir),
         None => {
-            let dir = default_user_dir().expect("user configuration directory");
+            let Some(dir) = default_user_dir() else {
+                startup::ask(&StartupFailure::NoUserDir, &AppLog::without_user_dir());
+                std::process::exit(1);
+            };
             // First start after the rename (ADR-023): the old personal folder is copied,
-            // never moved, so nothing is lost if this version is uninstalled.
+            // never moved, so nothing is lost if this version is uninstalled. Before anything
+            // is written to the new folder (the log included): an existing one is not copied to.
             if let Some(old) = spelaion_config::legacy_user_dir()
                 && let Err(e) = spelaion_config::migrate_user_dir(&old, &dir)
             {
-                eprintln!("could not copy the old personal folder: {e}");
+                copy_failed = Some(format!(
+                    "could not copy the old personal folder {}: {e}",
+                    old.display()
+                ));
             }
             dir
         }
     };
+    let log = AppLog::in_user_dir(&user_dir);
+    // From here on, where any panic happens goes to the log (SDB-163).
+    panics::install(log.clone());
+    if let Some(message) = copy_failed {
+        startup::note(&log, &message);
+    }
     // Query history and audit live there: other local users must not read them.
     if let Err(e) = spelaion_config::ensure_private_dir(&user_dir) {
-        eprintln!("could not make the personal folder private: {e}");
+        startup::note(
+            &log,
+            &format!("could not make the personal folder private: {e}"),
+        );
     }
     // Initial folder: command-line argument or the last one opened.
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -5480,16 +5381,18 @@ pub fn run() {
         })
         .filter(|p| p.is_dir());
     let config = load(workspace.as_deref(), &user_dir);
-    let history = QueryHistory::open(spelaion_config::state_db(&user_dir))
-        .expect("error while opening the local query history");
+    let history = open_history(&user_dir, &log);
     // Its writer runs on Tauri's runtime, which `block_on` starts here.
     let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
+    // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
+    let engines = plugins::engines_for(&user_dir);
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
         workspace_version: AtomicU64::new(0),
         config: RwLock::new(config),
-        engines: Engines::builtin(),
+        engines: std::sync::RwLock::new(engines),
+        plugins: plugins::PluginOps::default(),
         tunnels: Arc::new(TunnelPool::new()),
         results: Arc::new(ResultStore::new()),
         plans: Arc::new(spelaion_core::plan::PlanStore::new()),
@@ -5508,15 +5411,18 @@ pub fn run() {
     };
 
     let typed = builder.invoke_handler();
-    tauri::Builder::default()
+    let setup_log = log.clone();
+    let built = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .manage(update::PendingUpdate::default())
-        .invoke_handler(move |invoke| match invoke.message.command() {
-            "fetch_window" => raw_handler(invoke),
-            _ => typed(invoke),
+        .invoke_handler(move |invoke| {
+            panics::catch_sync(invoke, |invoke| match invoke.message.command() {
+                "fetch_window" => raw_handler(invoke),
+                _ => typed(invoke),
+            })
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -5525,22 +5431,34 @@ pub fn run() {
         })
         .setup(move |app| {
             builder.mount_events(app);
-            open_main_window(app)?;
+            // The window and its webview (WebView2 on Windows, WebKitGTK on Linux) open here:
+            // when they cannot, there is no page to tell it in. An error returned from `setup`
+            // would only be Tauri's panic.
+            if let Err(e) = open_main_window(app) {
+                startup::ask(&StartupFailure::window(&e), &setup_log);
+                std::process::exit(1);
+            }
             Ok(())
         })
-        .build(tauri::generate_context!())
-        .expect("error while starting SpelaionDB")
-        .run(|app, event| {
-            // Tauri exits without dropping the state: stop each `kubectl port-forward`
-            // first, or it would outlive the app (ADR-015).
-            if let tauri::RunEvent::Exit = event {
-                let state = app.state::<AppState>();
-                // The open tabs the core already has are written now, not in a second
-                // (ADR-036).
-                let tabs = state.tabs.clone();
-                let _ = tauri::async_runtime::block_on(tabs.flush());
-                let tunnels = state.tunnels.clone();
-                tauri::async_runtime::block_on(tunnels.close_all());
-            }
-        });
+        .build(tauri::generate_context!());
+    let app = match built {
+        Ok(app) => app,
+        Err(e) => {
+            startup::ask(&StartupFailure::window(&e), &log);
+            std::process::exit(1);
+        }
+    };
+    app.run(|app, event| {
+        // Tauri exits without dropping the state: stop each `kubectl port-forward`
+        // first, or it would outlive the app (ADR-015).
+        if let tauri::RunEvent::Exit = event {
+            let state = app.state::<AppState>();
+            // The open tabs the core already has are written now, not in a second
+            // (ADR-036).
+            let tabs = state.tabs.clone();
+            let _ = tauri::async_runtime::block_on(tabs.flush());
+            let tunnels = state.tunnels.clone();
+            tauri::async_runtime::block_on(tunnels.close_all());
+        }
+    });
 }

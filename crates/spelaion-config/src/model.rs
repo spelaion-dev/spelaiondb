@@ -40,6 +40,11 @@ pub struct ConnectionFile {
     /// Database; for SQLite and DuckDB, the file path (relative to the repository root).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
+    /// DuckDB only: `database` is a folder of CSV, TSV and Parquet files, opened as an
+    /// in-memory database with one view per file, always read-only (SDB-316). Nothing outside
+    /// the folder can be read and nothing is written to it; agents never see it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub file_folder: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     /// Reference to the secret, never the value: `{ secret = "keychain" }`.
@@ -153,9 +158,98 @@ pub enum Engine {
     Mariadb,
     Duckdb,
     Sqlserver,
+    /// MongoDB, and the servers that speak its protocol (FerretDB). Its language is not SQL:
+    /// the core reads it and sends requests (ADR-056).
+    Mongodb,
+    // ClickHouse, served only by its plugin (ADR-041, stage 3).
+    Clickhouse,
+    /// Redis, and the servers that speak its protocol (Valkey). Its language is not SQL: the
+    /// core reads each command line and sends its arguments (ADR-056).
+    Redis,
+    // Trino and Presto, one plugin for both (the same protocol).
+    Trino,
+    Presto,
+    /// Oracle Database, served only by its plugin, on Oracle's thin driver (ADR-059).
+    Oracle,
+    /// libSQL (`sqld`, Turso): SQLite's SQL behind Hrana over HTTP, served only by its plugin
+    /// (ADR-058).
+    Libsql,
+    /// Apache Cassandra, and the servers that speak its protocol (ScyllaDB). Its language,
+    /// CQL, is shaped like SQL but is not SQL: sent as text, read by the core's own lists
+    /// (ADR-056).
+    Cassandra,
+    /// TDengine, through taosAdapter's REST API. Its SQL is shaped like SQL but its own (super
+    /// tables, tags): sent as text, read by the core's own lists (ADR-056).
+    Tdengine,
+    // Arrow Flight SQL, one plugin: any server that speaks it, and Dremio and GizmoSQL by name.
+    Flightsql,
+    Dremio,
+    Gizmosql,
+    /// Neo4j, a graph database served only by its plugin over its HTTP Query API. Its language,
+    /// Cypher, is not SQL: the core reads each statement and sends it as a request (ADR-056).
+    Neo4j,
+    // HiveServer2's protocol, one plugin: Apache Hive, Spark's Thrift server, Apache Kyuubi and
+    // Apache Impala.
+    Hive,
+    Spark,
+    Kyuubi,
+    Impala,
+    /// Databend, served only by its plugin over its HTTP query API. It enforces no read-only
+    /// mode (SDB-350): no read-only connection and no agents.
+    Databend,
+    /// Google Cloud Spanner (GoogleSQL), served only by its plugin over its REST API. The
+    /// access token is the password. No read-only mode and no agents yet.
+    Spanner,
+    Elasticsearch,
+    Opensearch,
+    Solr,
+    Meilisearch,
 }
 
 impl Engine {
+    /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
+    /// with no `_`, so a new engine fails there until it is listed here.
+    pub const ALL: [Engine; 29] = [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mariadb,
+        Engine::Duckdb,
+        Engine::Sqlserver,
+        Engine::Mongodb,
+        Engine::Clickhouse,
+        Engine::Redis,
+        Engine::Trino,
+        Engine::Presto,
+        Engine::Oracle,
+        Engine::Libsql,
+        Engine::Cassandra,
+        Engine::Tdengine,
+        Engine::Flightsql,
+        Engine::Dremio,
+        Engine::Gizmosql,
+        Engine::Neo4j,
+        Engine::Hive,
+        Engine::Spark,
+        Engine::Kyuubi,
+        Engine::Impala,
+        Engine::Databend,
+        Engine::Spanner,
+        Engine::Elasticsearch,
+        Engine::Opensearch,
+        Engine::Solr,
+        Engine::Meilisearch,
+    ];
+
+    /// The engine a connection file names (`as_str`'s text). Read through the same names the
+    /// file format uses, so a new engine is named here as soon as it exists.
+    pub fn parse(name: &str) -> Option<Engine> {
+        use serde::de::IntoDeserializer;
+        let name: serde::de::value::StrDeserializer<'_, serde::de::value::Error> =
+            name.into_deserializer();
+        Engine::deserialize(name).ok()
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Engine::Postgres => "postgres",
@@ -164,6 +258,103 @@ impl Engine {
             Engine::Mariadb => "mariadb",
             Engine::Duckdb => "duckdb",
             Engine::Sqlserver => "sqlserver",
+            Engine::Mongodb => "mongodb",
+            Engine::Clickhouse => "clickhouse",
+            Engine::Redis => "redis",
+            Engine::Trino => "trino",
+            Engine::Presto => "presto",
+            Engine::Oracle => "oracle",
+            Engine::Libsql => "libsql",
+            Engine::Cassandra => "cassandra",
+            Engine::Tdengine => "tdengine",
+            Engine::Flightsql => "flightsql",
+            Engine::Dremio => "dremio",
+            Engine::Gizmosql => "gizmosql",
+            Engine::Neo4j => "neo4j",
+            Engine::Hive => "hive",
+            Engine::Spark => "spark",
+            Engine::Kyuubi => "kyuubi",
+            Engine::Impala => "impala",
+            Engine::Databend => "databend",
+            Engine::Spanner => "spanner",
+            Engine::Elasticsearch => "elasticsearch",
+            Engine::Opensearch => "opensearch",
+            Engine::Solr => "solr",
+            Engine::Meilisearch => "meilisearch",
+        }
+    }
+
+    /// Whether the engine is queried with SQL. One that is not (ADR-056) has no read-only mode
+    /// and no agents until its own barrier exists, and none has one yet.
+    pub fn is_sql(self) -> bool {
+        match self {
+            Engine::Postgres
+            | Engine::Sqlite
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Duckdb
+            | Engine::Sqlserver
+            | Engine::Clickhouse
+            | Engine::Trino
+            | Engine::Presto
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala
+            | Engine::Databend
+            | Engine::Spanner => true,
+            Engine::Mongodb
+            | Engine::Redis
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch => false,
+        }
+    }
+
+    /// Whether SpelaionDB has a read barrier of its own for the engine (ADR-020: its dialect,
+    /// and a barrier the engine enforces): only then is there a read-only mode and do agents
+    /// see it. An engine whose language is not SQL has none yet; nor have the Flight SQL ones,
+    /// which may be any server (ADR-041: an engine with no barrier of ours gets neither).
+    pub fn has_read_barrier(self) -> bool {
+        match self {
+            Engine::Postgres
+            | Engine::Sqlite
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Duckdb
+            | Engine::Sqlserver
+            | Engine::Clickhouse
+            | Engine::Trino
+            | Engine::Presto => true,
+            Engine::Mongodb
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Redis
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
+            | Engine::Databend
+            | Engine::Spanner
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => false,
         }
     }
 
@@ -171,7 +362,33 @@ impl Engine {
     pub fn is_file(self) -> bool {
         match self {
             Engine::Sqlite | Engine::Duckdb => true,
-            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => false,
+            Engine::Postgres
+            | Engine::Mysql
+            | Engine::Mariadb
+            | Engine::Sqlserver
+            | Engine::Mongodb
+            | Engine::Clickhouse
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
+            | Engine::Databend
+            | Engine::Spanner
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => false,
         }
     }
 
@@ -181,6 +398,34 @@ impl Engine {
             Engine::Sqlite | Engine::Duckdb => None,
             Engine::Mysql | Engine::Mariadb => Some(3306),
             Engine::Sqlserver => Some(1433),
+            Engine::Mongodb => Some(27017),
+            // The HTTP interface; 8443 with TLS.
+            Engine::Clickhouse => Some(8123),
+            Engine::Redis => Some(6379),
+            Engine::Trino | Engine::Presto => Some(8080),
+            // The listener; TCPS is often on 2484.
+            Engine::Oracle => Some(1521),
+            // sqld's HTTP port; Turso is HTTPS on 443.
+            Engine::Libsql => Some(8080),
+            Engine::Cassandra => Some(9042),
+            Engine::Tdengine => Some(6041),
+            // A generic Flight SQL server has no usual port.
+            Engine::Flightsql => None,
+            Engine::Dremio => Some(32010),
+            Engine::Gizmosql => Some(31337),
+            // The HTTP port (the Query API); 7473 with TLS.
+            Engine::Neo4j => Some(7474),
+            // HiveServer2's binary port; Kyuubi's own; Impala's HiveServer2 port.
+            Engine::Hive | Engine::Spark => Some(10000),
+            Engine::Kyuubi => Some(10009),
+            Engine::Impala => Some(21050),
+            // The HTTP query handler; 443 on Databend Cloud.
+            Engine::Databend => Some(8000),
+            // Google's REST endpoint; the emulator's is 9020.
+            Engine::Spanner => Some(443),
+            Engine::Elasticsearch | Engine::Opensearch => Some(9200),
+            Engine::Solr => Some(8983),
+            Engine::Meilisearch => Some(7700),
         }
     }
 }
@@ -315,8 +560,34 @@ impl IsolationLevel {
         match engine {
             Engine::Postgres | Engine::Mysql | Engine::Mariadb => self != IsolationLevel::Snapshot,
             Engine::Sqlserver => true,
-            // A file engine has one level: SQLite serializes, DuckDB uses snapshots.
-            Engine::Sqlite | Engine::Duckdb => false,
+            // A file engine has one level: SQLite serializes, DuckDB uses snapshots. MongoDB,
+            // Redis and Cassandra have no session isolation level.
+            Engine::Sqlite
+            | Engine::Duckdb
+            | Engine::Mongodb
+            | Engine::Redis
+            | Engine::Cassandra
+            | Engine::Tdengine => false,
+            // ClickHouse has no transactions to isolate; Trino and Presto set none per session.
+            Engine::Clickhouse
+            | Engine::Trino
+            | Engine::Presto
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
+            | Engine::Databend
+            | Engine::Spanner
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => false,
         }
     }
 
@@ -330,7 +601,31 @@ impl Engine {
     pub fn has_session_schema(self) -> bool {
         match self {
             Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Duckdb => true,
-            Engine::Sqlserver | Engine::Sqlite => false,
+            Engine::Sqlserver
+            | Engine::Sqlite
+            | Engine::Mongodb
+            | Engine::Clickhouse
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql
+            | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch
+            | Engine::Databend
+            | Engine::Spanner
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala => false,
         }
     }
 }

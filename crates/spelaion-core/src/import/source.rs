@@ -491,6 +491,15 @@ impl RowReader {
                 }
             }
         };
+        // Only in this crate's tests: a cell with this text makes the reader panic, to check
+        // that an import whose reader panics ends as an error (SDB-163).
+        #[cfg(test)]
+        if row
+            .as_ref()
+            .is_some_and(|r| r.iter().any(|v| v.as_deref() == Some(TEST_PANIC_CELL)))
+        {
+            panic!("the test asked the import reader to panic");
+        }
         Ok(row.map(|mut row: Vec<Option<String>>| {
             row.resize(width, None);
             self.rows += 1;
@@ -498,6 +507,10 @@ impl RowReader {
         }))
     }
 }
+
+/// See [`RowReader::next_row`]: compiled only into this crate's tests.
+#[cfg(test)]
+pub(crate) const TEST_PANIC_CELL: &str = "spelaion-test-panic-here";
 
 fn source_name(source: &ImportSource) -> String {
     match source {

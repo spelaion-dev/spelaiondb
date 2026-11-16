@@ -50,6 +50,29 @@ try {
     }
     throw Error(`Missing completion: ${label}; ${await panel.innerText()}`);
   }
+  // Accept the selected table and column with Enter.
+  for (const [input, label] of [["SELECT * FROM ord", "orders"], ["SELECT * FROM orders o WHERE o.", "customer_id"]]) {
+    await expectCompletion(input, label);
+    const option = page.locator(".cm-tooltip-autocomplete li").filter({ has: page.getByText(label, { exact: true }) });
+    for (let n = 0; n < 30 && await option.getAttribute("aria-selected") !== "true"; n++) await page.keyboard.press("ArrowDown");
+    assert.equal(await option.getAttribute("aria-selected"), "true", `selected ${label}`);
+    await page.keyboard.press("Enter");
+    assert.equal(await content.innerText(), input + label.slice(input.endsWith("ord") ? 3 : 0));
+    assert.equal(await page.locator(".cm-tooltip-autocomplete").count(), 0);
+  }
+  await expectCompletion("SELECT * FROM orders o WHERE o.", "customer_id");
+  const selectedBefore = await page.locator('.cm-tooltip-autocomplete li[aria-selected="true"] .cm-completionLabel').innerText();
+  await page.keyboard.press("ArrowDown");
+  const selectedAfter = await page.locator('.cm-tooltip-autocomplete li[aria-selected="true"] .cm-completionLabel').innerText();
+  assert.notEqual(selectedAfter, selectedBefore, "the arrow selects another column");
+  await page.keyboard.press("Enter");
+  assert.equal(await content.innerText(), `SELECT * FROM orders o WHERE o.${selectedAfter}`);
+  await expectCompletion("SELECT * FROM ord", "orders");
+  await page.keyboard.press("Tab");
+  assert.equal(await content.innerText(), "SELECT * FROM orders", "Tab still accepts completion");
+  await page.keyboard.press("Enter");
+  await page.keyboard.insertText("next");
+  assert.equal(await content.innerText(), "SELECT * FROM orders\nnext", "Enter inserts a line when completion is closed");
   await expectCompletion("SELECT * FROM orders o WHERE o.", "customer_id");
   await expectCompletion("WITH x AS(SELECT customer_id AS customer FROM orders) SELECT x.", "customer");
   await expectCompletion("SELECT * FROM (SELECT customer_id AS buyer FROM orders) q WHERE q.", "buyer");

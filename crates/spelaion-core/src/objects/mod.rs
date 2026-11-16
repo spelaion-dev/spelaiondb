@@ -46,8 +46,10 @@ use crate::session::Session;
 /// in the SQL the explorer generates; an empty schema means a name outside every schema (a
 /// schema itself).
 pub fn qualified_name(dialect: &dyn Dialect, schema: &str, names: &[String]) -> String {
-    let main =
-        matches!(dialect.name(), "sqlite" | "duckdb") && schema == "main" && !names.is_empty();
+    // Spanner's default schema has no name: the explorer shows it as `default`.
+    let main = (matches!(dialect.name(), "sqlite" | "duckdb") && schema == "main"
+        || dialect.name() == "spanner" && schema == "default")
+        && !names.is_empty();
     let schema = (!schema.is_empty() && !main).then_some(schema);
     schema
         .into_iter()
@@ -174,7 +176,8 @@ pub async fn set_active_schema(session: &Session, schema: &str) -> Result<(), Ob
         message,
     };
     let statement = match dialect.name() {
-        "mysql" => {
+        // Databend's schemas are its databases, as MySQL's: the driver selects one.
+        "mysql" | "databend" => {
             return session
                 .connection()
                 .select_database(schema)
@@ -204,8 +207,16 @@ pub async fn set_active_schema(session: &Session, schema: &str) -> Result<(), Ob
 
 /// The schema where this session finds unqualified names (for "Link with editor").
 pub async fn active_schema(session: &Session) -> Result<Option<String>, String> {
-    let sql = match session.dialect().name() {
-        "mysql" => {
+    // An engine whose language is not SQL (ADR-056) cannot be asked in SQL: its schema is its
+    // current database, as on MySQL.
+    let engine = if !session.dialect().is_sql() {
+        "mysql"
+    } else {
+        session.dialect().name()
+    };
+    let sql = match engine {
+        // Databend's databases are its schemas too, and the session (the driver's) holds which.
+        "mysql" | "databend" => {
             return session
                 .connection()
                 .current_database()
@@ -213,6 +224,8 @@ pub async fn active_schema(session: &Session) -> Result<Option<String>, String> 
                 .map_err(|e| e.to_string());
         }
         "sqlite" => return Ok(Some("main".into())),
+        // Unqualified names are in Spanner's default schema, shown as `default`.
+        "spanner" => return Ok(Some("default".into())),
         "sqlserver" => "SELECT SCHEMA_NAME()",
         _ => "SELECT current_schema()",
     };
@@ -602,6 +615,25 @@ pub struct ObjectActions {
 }
 
 pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
+    // The core writes no SQL for an engine whose language is not SQL (ADR-056): none of these.
+    if !dialect.is_sql() {
+        return ObjectActions {
+            rename_views: false,
+            drop_schemas: false,
+            drop_constraints: false,
+            rebuild_drops: false,
+            routine_source: false,
+            routine_calls: false,
+            create: Vec::new(),
+            new_index: Vec::new(),
+            active_schema: false,
+            add_constraints: false,
+            add_triggers: false,
+            before_triggers: false,
+            trigger_function: false,
+            add_check_constraints: false,
+        };
+    }
     let engine = dialect.name();
     let create = match engine {
         "postgres" => vec![
@@ -901,6 +933,9 @@ fn rename(
             "only tables, views and columns can be renamed here".into(),
         )),
         ObjectTarget::Relation { schema, name, kind } => {
+            if !kind.is_relation() {
+                return Err(ObjectError::Unsupported(NOT_A_RELATION.into()));
+            }
             if name == new_name {
                 return Err(ObjectError::SameName);
             }
@@ -927,6 +962,11 @@ fn rename(
                         ObjectKind::View => "VIEW",
                         ObjectKind::MaterializedView => "MATERIALIZED VIEW",
                         ObjectKind::ForeignTable => "FOREIGN TABLE",
+                        ObjectKind::Collection
+                        | ObjectKind::NodeLabel
+                        | ObjectKind::RelationshipType => {
+                            return Err(ObjectError::Unsupported(NOT_A_RELATION.into()));
+                        }
                     };
                     Ok(format!("ALTER {what} {old} RENAME TO {}", quote(new_name)))
                 }
@@ -961,6 +1001,9 @@ fn rename(
     }
 }
 
+/// Why the core writes no SQL for an object that is not a relation (ADR-056).
+const NOT_A_RELATION: &str = "the core writes SQL only for tables and views: this object is read with its engine's own language";
+
 fn drop(
     dialect: &dyn Dialect,
     target: &ObjectTarget,
@@ -986,6 +1029,9 @@ fn drop(
                 ObjectKind::View => "VIEW",
                 ObjectKind::MaterializedView => "MATERIALIZED VIEW",
                 ObjectKind::ForeignTable => "FOREIGN TABLE",
+                ObjectKind::Collection | ObjectKind::NodeLabel | ObjectKind::RelationshipType => {
+                    return unsupported(NOT_A_RELATION);
+                }
             };
             format!("DROP {what} {}{cascade}", qualified(schema, name))
         }
@@ -1116,11 +1162,11 @@ fn drop_schema_object(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_duckdb::DuckdbDialect;
-    use spelaion_driver_mysql::MysqlDialect;
-    use spelaion_driver_postgres::PostgresDialect;
-    use spelaion_driver_sqlite::SqliteDialect;
-    use spelaion_driver_sqlserver::SqlServerDialect;
+    use spelaion_dialect::DuckdbDialect;
+    use spelaion_dialect::MysqlDialect;
+    use spelaion_dialect::PostgresDialect;
+    use spelaion_dialect::SqlServerDialect;
+    use spelaion_dialect::SqliteDialect;
 
     #[test]
     fn added_checks_require_a_server_that_enforces_them() {
@@ -1300,6 +1346,64 @@ mod tests {
 
     fn drop_sql(dialect: &dyn Dialect, target: ObjectTarget, cascade: bool) -> String {
         change_script(dialect, &ObjectChange::Drop { target, cascade }).unwrap()
+    }
+
+    #[test]
+    fn a_language_that_is_not_sql_is_offered_no_object_action() {
+        let actions = object_actions(&spelaion_dialect::MongodbDialect);
+        assert!(actions.create.is_empty() && actions.new_index.is_empty());
+        let cql = object_actions(&spelaion_dialect::CqlDialect);
+        assert!(cql.create.is_empty() && cql.new_index.is_empty() && !cql.drop_schemas);
+        assert!(!actions.drop_schemas && !actions.rename_views && !actions.active_schema);
+        assert!(!actions.add_triggers && !actions.add_constraints && !actions.routine_calls);
+    }
+
+    #[test]
+    fn no_sql_is_written_for_what_is_not_a_relation() {
+        // ADR-056: a collection or a graph's labels are read with their engine's own language;
+        // a SQL dialect's `ALTER TABLE` or `RENAME TABLE` must never be written for them.
+        let dialects: [&dyn Dialect; 5] = [
+            &PostgresDialect,
+            &MysqlDialect,
+            &SqliteDialect,
+            &SqlServerDialect,
+            &DuckdbDialect,
+        ];
+        for kind in [
+            ObjectKind::Collection,
+            ObjectKind::NodeLabel,
+            ObjectKind::RelationshipType,
+        ] {
+            assert!(!kind.is_relation());
+            for dialect in dialects {
+                let rename = ObjectChange::Rename {
+                    target: relation("s", "c", kind),
+                    new_name: "d".into(),
+                };
+                assert!(
+                    matches!(
+                        change_script(dialect, &rename),
+                        Err(ObjectError::Unsupported(_))
+                    ),
+                    "{kind:?} renamed on {}",
+                    dialect.name()
+                );
+                for cascade in [false, true] {
+                    let drop = ObjectChange::Drop {
+                        target: relation("s", "c", kind),
+                        cascade,
+                    };
+                    assert!(
+                        matches!(
+                            change_script(dialect, &drop),
+                            Err(ObjectError::Unsupported(_))
+                        ),
+                        "{kind:?} dropped on {}",
+                        dialect.name()
+                    );
+                }
+            }
+        }
     }
 
     fn object(

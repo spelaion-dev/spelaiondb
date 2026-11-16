@@ -21,12 +21,24 @@
 /crates/spelaion-ssh/src/auth.rs                @petilolz @frglez
 
 # Patched TLS libraries and dependency rules.
-/vendor/                                        @petilolz @frglez
 /deny.toml                                      @petilolz @frglez
+
+# Which plugin builds are tested, shipped and started (ADR-042, ADR-055).
+/plugins.toml                                   @petilolz @frglez
+/crates/spelaion-core/src/plugins/pins.rs       @petilolz @frglez
+/crates/spelaion-core/src/plugins/catalogue.rs  @petilolz @frglez
+/crates/spelaion-core/src/plugins/installed.rs  @petilolz @frglez
+/crates/spelaion-core/src/plugins/choice.rs     @petilolz @frglez
+/crates/spelaion-core/src/plugins/fetch.rs      @petilolz @frglez
+/crates/spelaion-plugin-fetch/src/write_catalogue.rs @petilolz @frglez
 
 # Automatic updates and their signing (ADR-021).
 /apps/desktop/src-tauri/src/update.rs           @petilolz @frglez
 /apps/desktop/src-tauri/tauri.release.conf.json @petilolz @frglez
+
+# The plugin catalogue's signing and publishing (ADR-055). Also under /.github/workflows/
+# below; named here so it stays protected if that line ever narrows.
+/.github/workflows/plugins-catalogue.yml        @petilolz @frglez
 
 # CI is the reviewer: weakening it, or this file, needs a person.
 /.github/workflows/                             @petilolz @frglez

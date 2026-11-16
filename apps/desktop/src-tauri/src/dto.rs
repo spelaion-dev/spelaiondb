@@ -207,6 +207,8 @@ impl TryFrom<ObjectTargetItem> for spelaion_core::ObjectTarget {
                     "partitioned_table" => ObjectKind::PartitionedTable,
                     "view" => ObjectKind::View,
                     "materialized_view" => ObjectKind::MaterializedView,
+                    // Not a relation's: the core writes no object actions for the kinds of
+                    // engines whose language is not SQL (ADR-056).
                     "foreign_table" => ObjectKind::ForeignTable,
                     other => return Err(format!("unknown kind of relation: {other}")),
                 },
@@ -1303,6 +1305,9 @@ pub struct ConnectionItem {
     pub mcp_exposed: bool,
     pub history_enabled: bool,
     pub read_only: bool,
+    /// Whether its engine is queried with SQL. One that is not (ADR-056) is read by the core in
+    /// its own language: what the app writes SQL for is not offered on it.
+    pub sql: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -1978,21 +1983,62 @@ pub struct SchemaItem {
 pub struct ObjectItem {
     pub schema: String,
     pub name: String,
-    /// `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`.
+    /// `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`, and for
+    /// engines whose language is not SQL `collection`, `node_label`, `relationship_type`.
     pub kind: String,
     pub estimated_rows: Option<f64>,
     pub comment: Option<String>,
 }
 
+/// The name the UI uses for a kind of object.
+pub fn object_kind_name(kind: ObjectKind) -> &'static str {
+    match kind {
+        ObjectKind::Table => "table",
+        ObjectKind::PartitionedTable => "partitioned_table",
+        ObjectKind::View => "view",
+        ObjectKind::MaterializedView => "materialized_view",
+        ObjectKind::ForeignTable => "foreign_table",
+        ObjectKind::Collection => "collection",
+        ObjectKind::NodeLabel => "node_label",
+        ObjectKind::RelationshipType => "relationship_type",
+    }
+}
+
+/// Every kind of object, for reading a name back ([`object_kind_named`]).
+const OBJECT_KINDS: [ObjectKind; 8] = [
+    ObjectKind::Table,
+    ObjectKind::PartitionedTable,
+    ObjectKind::View,
+    ObjectKind::MaterializedView,
+    ObjectKind::ForeignTable,
+    ObjectKind::Collection,
+    ObjectKind::NodeLabel,
+    ObjectKind::RelationshipType,
+];
+
+/// A new kind stops the build here until it is in [`OBJECT_KINDS`] too: no kind is dropped
+/// silently when the UI names it back.
+const _: fn(ObjectKind) = |kind| match kind {
+    ObjectKind::Table
+    | ObjectKind::PartitionedTable
+    | ObjectKind::View
+    | ObjectKind::MaterializedView
+    | ObjectKind::ForeignTable
+    | ObjectKind::Collection
+    | ObjectKind::NodeLabel
+    | ObjectKind::RelationshipType => {}
+};
+
+/// The kind of object the UI names `name`.
+pub fn object_kind_named(name: &str) -> Option<ObjectKind> {
+    OBJECT_KINDS
+        .into_iter()
+        .find(|kind| object_kind_name(*kind) == name)
+}
+
 impl From<ObjectInfo> for ObjectItem {
     fn from(o: ObjectInfo) -> Self {
-        let kind = match o.kind {
-            ObjectKind::Table => "table",
-            ObjectKind::PartitionedTable => "partitioned_table",
-            ObjectKind::View => "view",
-            ObjectKind::MaterializedView => "materialized_view",
-            ObjectKind::ForeignTable => "foreign_table",
-        };
+        let kind = object_kind_name(o.kind);
         Self {
             schema: o.schema,
             name: o.name,
@@ -2559,9 +2605,16 @@ pub enum SecretLabel {
 pub struct EngineItem {
     pub id: String,
     pub name: String,
+    /// The engine its connections are saved as (`postgres` for CockroachDB, SDB-169): the
+    /// same as `id` except for a server reached through another engine's protocol. `None`
+    /// while it is only planned.
+    pub engine: Option<String>,
+    /// What a new connection of a kind starts from: its server's usual user and database.
+    pub default_user: Option<String>,
+    pub default_database: Option<String>,
     /// `relational`, `analytical` or `nosql`.
     pub category: String,
-    /// `network` or `file`.
+    /// `network`, `file` or `folder` (a folder of files read through DuckDB, SDB-316).
     pub access: String,
     pub default_port: Option<u16>,
     pub available: bool,
@@ -2569,6 +2622,15 @@ pub struct EngineItem {
     pub session_schema: bool,
     /// Isolation levels a session can be set to (`read-committed`…); empty for one level.
     pub isolation_levels: Vec<String>,
+    /// Queried with SQL. An engine that is not (ADR-056) has no read-only mode, no agents and no
+    /// session setup yet: the form does not offer them.
+    pub sql: bool,
+    /// The core has a read barrier for this engine, so the form offers read-only connections and
+    /// agents (`has_read_barrier`): not on an engine that is not SQL, Oracle, libSQL or Flight SQL.
+    pub read_barrier: bool,
+    /// Agents' writes can run on this engine (`runs_agent_writes`): the form offers them only
+    /// here, and says they are not available on the others.
+    pub agent_writes: bool,
 }
 
 impl From<spelaion_core::EngineInfo> for EngineItem {
@@ -2576,15 +2638,22 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
         Self {
             id: info.id.into(),
             name: info.name.into(),
+            engine: info.engine.map(|engine| engine.as_str().to_string()),
+            default_user: info.default_user.map(str::to_string),
+            default_database: info.default_database.map(str::to_string),
             category: info.category.as_str().into(),
             access: match info.access {
                 spelaion_core::EngineAccess::Network => "network",
                 spelaion_core::EngineAccess::File => "file",
+                spelaion_core::EngineAccess::Folder => "folder",
             }
             .into(),
             default_port: info.default_port,
             available: info.engine.is_some(),
             session_schema: info.engine.is_some_and(|e| e.has_session_schema()),
+            sql: info.engine.is_none_or(|e| e.is_sql()),
+            read_barrier: info.engine.is_none_or(spelaion_core::has_read_barrier),
+            agent_writes: info.engine.is_some_and(spelaion_core::runs_agent_writes),
             isolation_levels: info
                 .engine
                 .map(|engine| {
@@ -2735,6 +2804,8 @@ pub struct ConnectionDraftItem {
     pub host: String,
     pub port: Option<u16>,
     pub database: String,
+    /// DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316).
+    pub file_folder: bool,
     pub user: String,
     pub password_mode: PasswordMode,
     pub password_env: String,
@@ -2796,6 +2867,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             host: item.host,
             port: item.port,
             database: item.database,
+            file_folder: item.file_folder,
             user: item.user,
             password: match item.password_mode {
                 PasswordMode::None => PasswordChoice::None,
@@ -2878,6 +2950,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             host: draft.host,
             port: draft.port,
             database: draft.database,
+            file_folder: draft.file_folder,
             user: draft.user,
             password_mode,
             password_env,
@@ -3409,16 +3482,69 @@ pub struct FindStepItem {
 
 /// The engine behind the id the UI uses (`postgres`, `mysql`…).
 pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
-    use spelaion_config::Engine;
-    Ok(match name {
-        "postgres" => Engine::Postgres,
-        "sqlite" => Engine::Sqlite,
-        "mysql" => Engine::Mysql,
-        "mariadb" => Engine::Mariadb,
-        "duckdb" => Engine::Duckdb,
-        "sqlserver" => Engine::Sqlserver,
-        other => return Err(format!("unsupported engine: {other}")),
-    })
+    spelaion_config::Engine::parse(name).ok_or_else(|| format!("unsupported engine: {name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::engine_named;
+
+    /// Every engine the "add connection" picker offers comes back from the id the form sends:
+    /// one missing here fails the form's test, save and engine change.
+    #[test]
+    fn every_engine_of_the_picker_is_named_by_its_id() {
+        for engine in spelaion_core::engine_catalog()
+            .into_iter()
+            .filter_map(|info| info.engine)
+        {
+            assert_eq!(engine_named(engine.as_str()), Ok(engine));
+        }
+    }
+
+    /// Every engine of the configuration, picker or not, is named by its text, so a new
+    /// engine cannot be missing from the form's names (`Engine::ALL` is checked to be complete
+    /// in `spelaion-config`'s `tests/engine_names.rs`).
+    #[test]
+    fn every_engine_is_named_by_its_text() {
+        for engine in spelaion_config::Engine::ALL {
+            assert_eq!(engine_named(engine.as_str()), Ok(engine));
+        }
+        assert!(engine_named("snowflake").is_err());
+    }
+
+    /// Every kind of object the UI names comes back as itself: `browse_statement` reads it.
+    #[test]
+    fn every_kind_of_object_is_named_back() {
+        for kind in super::OBJECT_KINDS {
+            assert_eq!(
+                super::object_kind_named(super::object_kind_name(kind)),
+                Some(kind)
+            );
+        }
+        assert_eq!(super::object_kind_named("nosuch"), None);
+    }
+
+    /// A Cassandra table opens with its bounded statement (it once came back as nothing, so the
+    /// explorer's double-click did nothing).
+    #[test]
+    fn a_cassandra_table_is_browsed_with_its_bounded_statement() {
+        let dialect = spelaion_core::dialect_of(spelaion_config::Engine::Cassandra).expect("CQL");
+        let object = spelaion_driver_api::ObjectInfo {
+            schema: "shop".into(),
+            name: "Orders".into(),
+            kind: super::object_kind_named("table").expect("a table"),
+            estimated_rows: None,
+            comment: None,
+        };
+        assert_eq!(
+            dialect.browse_statement(&object).as_deref(),
+            Some("SELECT * FROM shop.\"Orders\" LIMIT 200")
+        );
+        // An engine queried with SQL browses nothing this way: its tables open in a table data
+        // tab.
+        let postgres = spelaion_core::dialect_of(spelaion_config::Engine::Postgres).expect("SQL");
+        assert_eq!(postgres.browse_statement(&object), None);
+    }
 }
 
 /// What changing a connection's engine does to its settings (ADR-030), by the file's field
@@ -4552,6 +4678,8 @@ pub enum McpVisibilityItem {
     Visible,
     NotExposed,
     Untrusted,
+    /// The engine has no agents' barrier yet (ADR-056).
+    NoAgents,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Type)]
@@ -4568,6 +4696,8 @@ pub enum McpReadOnlyReasonItem {
     Connection,
     WritesDenied,
     ConfirmUnsupported,
+    /// The engine cannot run agents' writes yet (`runs_agent_writes`).
+    EngineWithoutWrites,
 }
 
 /// What agents can do on one connection, as the core decides it.
@@ -4595,6 +4725,9 @@ impl McpAccessItem {
         let (visibility, access, reason) = match view {
             AgentView::NotExposed => (McpVisibilityItem::NotExposed, None, None),
             AgentView::UntrustedRepository => (McpVisibilityItem::Untrusted, None, None),
+            AgentView::EngineWithoutBarrier | AgentView::FileFolder => {
+                (McpVisibilityItem::NoAgents, None, None)
+            }
             AgentView::Visible(AgentAccess::ReadWrite) => (
                 McpVisibilityItem::Visible,
                 Some(McpAccessKindItem::ReadWrite),
@@ -4609,6 +4742,9 @@ impl McpAccessItem {
                     ReadOnlyBecause::WritesDenied => McpReadOnlyReasonItem::WritesDenied,
                     ReadOnlyBecause::ConfirmUnsupported => {
                         McpReadOnlyReasonItem::ConfirmUnsupported
+                    }
+                    ReadOnlyBecause::EngineWithoutWrites => {
+                        McpReadOnlyReasonItem::EngineWithoutWrites
                     }
                 }),
             ),

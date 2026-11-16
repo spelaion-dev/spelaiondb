@@ -16,7 +16,6 @@ use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PublicKeyOrCertificate};
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, ExecOptions, Secret, TlsMode,
 };
-use spelaion_driver_postgres::PostgresDriver;
 use spelaion_ssh::{
     AuthMethod, HopSpec, HostInfo, Interaction, KnownHosts, LocalPort, NonInteractive, ProxyKind,
     ProxySpec, SecretRequest, SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
@@ -152,7 +151,10 @@ async fn pg_through(tunnel: &Tunnel) -> Box<dyn Connection> {
         tls: TlsMode::Disable,
         ..Default::default()
     };
-    PostgresDriver
+    // PostgreSQL's driver as the core opens it: built in or through its plugin.
+    spelaion_core::Engines::builtin()
+        .get(spelaion_config::Engine::Postgres)
+        .expect("PostgreSQL has a driver")
         .connect(&params)
         .await
         .expect("PostgreSQL through the tunnel")

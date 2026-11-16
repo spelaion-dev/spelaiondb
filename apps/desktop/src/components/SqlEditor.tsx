@@ -16,6 +16,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, co
 import { EDITOR_ACTIONS, EDITOR_SNIPPETS as snippets, quotedLines, type EditorActionId } from "../editorActions";
 import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
 import { sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase } from "../sqlCompletion";
+import { formatHttp, httpLanguage, isHttpLanguage } from "../httpLanguage";
 import { usePreferences } from "../preferences";
 import type { EditorPreferencesItem } from "../bindings";
 import { EditorMenu } from "./EditorMenu";
@@ -60,7 +61,7 @@ const theme = EditorView.theme({
   ".cm-scroller": { fontFamily: "var(--sql-font, var(--font-code))", lineHeight: "var(--sql-line-height, var(--leading-md))" },
   ".cm-gutters": { backgroundColor: "var(--editor-bg)", color: "var(--muted)", border: "none" },
   ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
-  ".cm-selectionMatch-main": { outline: "1px solid var(--accent)" },
+  ".cm-selectionMatch-main": { backgroundColor: "transparent" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--editor-active)" },
   "&.cm-focused .cm-cursor": { borderLeftColor: "var(--accent)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
@@ -203,14 +204,18 @@ async function formatIn(view: EditorView, engine: string | null, preferences: Ed
   if (!text.trim()) return null;
   let formatted: string;
   try {
-    const { format: formatSql } = await import("sql-formatter");
-    formatted = formatSql(text, {
-      language: (engine && FORMAT_LANGUAGES[engine]) || "sql",
-      keywordCase: preferences.keywordCase as "preserve" | "upper" | "lower",
-      tabWidth: preferences.indent,
-      linesBetweenQueries: 1,
-    });
-    if (preferences.commaPosition === "leading") formatted = leadingCommas(formatted, engine);
+    if (isHttpLanguage(engine)) {
+      formatted = formatHttp(text, preferences.indent);
+    } else {
+      const { format: formatSql } = await import("sql-formatter");
+      formatted = formatSql(text, {
+        language: (engine && FORMAT_LANGUAGES[engine]) || "sql",
+        keywordCase: preferences.keywordCase as "preserve" | "upper" | "lower",
+        tabWidth: preferences.indent,
+        linesBetweenQueries: 1,
+      });
+      if (preferences.commaPosition === "leading") formatted = leadingCommas(formatted, engine);
+    }
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
   }
@@ -227,6 +232,7 @@ async function formatIn(view: EditorView, engine: string | null, preferences: Ed
 }
 
 function language(engine: string | null, catalog: CompletionCatalog, keywordCase: KeywordCase) {
+  if (engine && isHttpLanguage(engine)) return httpLanguage(engine, catalog);
   return [sql({ dialect: sqlDialect(engine) }), autocompletion({ override: [sqlCompletionSource(catalog, engine, keywordCase)] })];
 }
 
@@ -374,6 +380,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
               { key: "Mod-Enter", run },
               { key: "Shift-Alt-f", run: format },
               ...EDITOR_ACTIONS.map(({ id, key }) => ({ key, run: (v: EditorView) => action(v, id) })),
+              { key: "Enter", run: acceptCompletion },
               { key: "Tab", run: tab },
               { key: "Shift-Tab", run: (v) => prevSnippetField(v) || indentLess(v) },
             ]),

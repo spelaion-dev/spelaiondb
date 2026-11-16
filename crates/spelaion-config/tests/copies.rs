@@ -445,7 +445,7 @@ fn pasted_text_cannot_create_what_the_form_could_not_or_read_secrets() {
         ("hello", "does not hold a connection"),
         ("", "does not hold a connection"),
         (
-            "schema_version = 1\nengine = \"oracle\"\nhost = \"h\"\n",
+            "schema_version = 1\nengine = \"snowflake\"\nhost = \"h\"\n",
             "valid connection",
         ),
         (

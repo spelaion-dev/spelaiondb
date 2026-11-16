@@ -1,12 +1,13 @@
 //! Sessions over a real SQL Server (testing/docker). Without
 //! `SPELAION_TEST_MSSQL=127.0.0.1:11433` they are skipped, which does not count as tested.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{CellInput, CoreEvent, EditError, ResultStore, RowChange, Session, TablePage};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
-use spelaion_driver_sqlserver::SqlServerDriver;
 
 async fn session(database: &str) -> Option<Session> {
     let Ok(addr) = std::env::var("SPELAION_TEST_MSSQL") else {
@@ -14,7 +15,7 @@ async fn session(database: &str) -> Option<Session> {
         return None;
     };
     let (host, port) = addr.rsplit_once(':').unwrap();
-    let driver = SqlServerDriver;
+    let driver = engines::sqlserver();
     let conn = driver
         .connect(&ConnectParams {
             host: host.into(),
@@ -29,7 +30,7 @@ async fn session(database: &str) -> Option<Session> {
         .expect("connecting to SQL Server");
     Some(Session::new(
         conn,
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -120,7 +121,7 @@ async fn process_monitor_shows_the_current_sqlserver_session_without_admin_right
         ))
         .collect()
         .await;
-    let driver = SqlServerDriver;
+    let driver = engines::sqlserver();
     let connected = driver
         .connect(&ConnectParams {
             host: host.into(),
@@ -134,7 +135,11 @@ async fn process_monitor_shows_the_current_sqlserver_session_without_admin_right
         .await;
     let result = match connected {
         Ok(conn) => {
-            let low = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+            let low = Session::new(
+                conn,
+                spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+                Arc::new(ResultStore::new()),
+            );
             let result = spelaion_core::list_processes(&low).await;
             drop(low);
             result

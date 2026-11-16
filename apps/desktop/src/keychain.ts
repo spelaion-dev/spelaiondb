@@ -12,8 +12,8 @@ export function useKeychainAvailable(): boolean | null {
   useEffect(() => {
     let live = true;
     void commands.keychainAvailable().then(
-      (value) => live && setAvailable(value),
-      // Unknown: the form behaves as before, and a failure is reported when saving.
+      // Unknown (an error): the form behaves as before, and a failure is reported when saving.
+      (result) => live && setAvailable(result.status === "ok" ? result.data : true),
       () => live && setAvailable(true),
     );
     return () => {

@@ -32,6 +32,9 @@ pub fn connection_entry(c: &ConnectionEntry, access: AgentAccess) -> String {
         AgentAccess::ReadOnly(ReadOnlyBecause::AllAgents) => {
             "Read-only (the user made every agent read-only)."
         }
+        AgentAccess::ReadOnly(ReadOnlyBecause::EngineWithoutWrites) => {
+            "Read-only (writes from agents are not available for this engine yet)."
+        }
         AgentAccess::ReadOnly(
             ReadOnlyBecause::Connection
             | ReadOnlyBecause::WritesDenied
@@ -572,6 +575,14 @@ mod tests {
                 AgentAccess::ReadOnly(ReadOnlyBecause::WritesDenied)
             ),
             "- prod/orders — Orders (sqlite). Read-only.\n  Tags: billing, eu\n  Description: Orders.\n"
+        );
+        // SDB-325: an engine where agents' writes cannot run says so, whatever `[mcp]` allows.
+        let events = entry(
+            "schema_version = 1\nname = \"Events\"\nengine = \"clickhouse\"\nhost = \"db\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
+        );
+        assert_eq!(
+            connection_entry(&events, spelaion_core::agent_access(&events.file, false)),
+            "- prod/orders — Events (clickhouse). Read-only (writes from agents are not available for this engine yet).\n"
         );
     }
 }

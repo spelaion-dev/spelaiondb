@@ -11,11 +11,9 @@ publish.workspace = true
 async-trait.workspace = true
 spelaion-config.workspace = true
 spelaion-driver-api.workspace = true
-spelaion-driver-mysql.workspace = true
-spelaion-driver-postgres.workspace = true
+spelaion-dialect.workspace = true
+spelaion-plugin-host.workspace = true
 spelaion-driver-sqlite.workspace = true
-spelaion-driver-duckdb.workspace = true
-spelaion-driver-sqlserver.workspace = true
 spelaion-ssh.workspace = true
 spelaion-store.workspace = true
 arrow.workspace = true
@@ -37,13 +35,26 @@ uuid = { version = "1", features = ["v4"] }
 specta = { version = "=2.0.0-rc.26", features = ["derive"], optional = true }
 # Content hashes of `.sql` files, to notice a change on disk (sql_file.rs, ADR-036).
 sha2 = "0.10"
+# plugins.toml, compiled in, is read when the engines are set up (plugins/pins.rs).
+toml = "1"
+# The signature of the plugin catalogue (plugins/catalogue.rs, ADR-055): the verifier the
+# app's updater already uses, with no dependencies of its own.
+minisign-verify = "0.3"
+# A plugin's archive, a `.tar.gz`, of which only the program is unpacked
+# (plugins/installed.rs). No extended attributes: nothing of an archive's is kept but bytes.
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
+# MongoDB Atlas seed hosts and its restricted TXT settings, resolved before opening a route.
+hickory-resolver = { version = "0.26.3", default-features = false, features = ["tokio", "system-config"] }
 # process + io-util: `kubectl port-forward` for Kubernetes tunnels (kube.rs) and the native
 # backup tools (backup/, ADR-049), whose files are written with fs.
 tokio = { workspace = true, features = ["sync", "time", "process", "io-util", "net", "macros", "fs"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
-toml = "1"
+# The startup tests write local stores in the states a real one was found in (SDB-283); the
+# version spelaion-store uses.
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 [lints]
 workspace = true

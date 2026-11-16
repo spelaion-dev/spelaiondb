@@ -4,6 +4,8 @@
 //! applied as shown, then tried by logging in as the account; what the account has is read back
 //! from the catalog, and each revoke takes the access away again.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -42,7 +44,11 @@ async fn session(driver: &dyn Driver, params: &ConnectParams) -> Session {
         .connect(params)
         .await
         .unwrap_or_else(|e| panic!("connecting: {e}"));
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 /// Runs statements written by the test; `tolerate` ignores failures (cleanups).
@@ -68,7 +74,11 @@ async fn can_run(driver: &dyn Driver, params: &ConnectParams, sql: &str) -> bool
     let Ok(conn) = driver.connect(params).await else {
         return false;
     };
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     let events: Vec<CoreEvent> = session.run_script(sql).collect().await;
     !events
         .iter()
@@ -169,7 +179,7 @@ async fn postgres_grants_on_a_database_a_schema_a_table_columns_a_role_and_later
     let Some((host, port)) = server("SPELAION_TEST_PG") else {
         return;
     };
-    let driver = spelaion_driver_postgres::PostgresDriver;
+    let driver = engines::postgres();
     let admin = session(
         &driver,
         &login(&host, port, "spelaion", "spelaion", "spelaion"),
@@ -443,9 +453,9 @@ async fn mysql_and_mariadb_grants_globally_on_a_database_a_table_columns_and_a_r
             continue;
         };
         let driver = if label == "mysql" {
-            spelaion_driver_mysql::MysqlDriver::mysql()
+            engines::mysql()
         } else {
-            spelaion_driver_mysql::MysqlDriver::mariadb()
+            engines::mariadb()
         };
         let admin = session(
             &driver,
@@ -627,7 +637,7 @@ async fn sql_server_grants_on_the_server_a_database_a_schema_an_object_columns_a
     let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
         return;
     };
-    let driver = spelaion_driver_sqlserver::SqlServerDriver;
+    let driver = engines::sqlserver();
     let tls = |params: ConnectParams| ConnectParams {
         tls: TlsMode::Require,
         ..params

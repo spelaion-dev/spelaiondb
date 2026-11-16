@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+# The vendor bootstrap starts Meta, sleeps one second, then launches Query. Under CI
+# load Meta can still be upgrading its store: Query exits once and is never restarted.
+# Keep the vendor's user/storage setup, but wait for its RPC listener before exec.
+for ((attempt = 0; attempt < 120; attempt++)); do
+  if (exec 3<>/dev/tcp/127.0.0.1/9191) 2>/dev/null; then
+    exec /usr/bin/databend-query "$@"
+  fi
+  sleep 1
+done
+echo 'Databend Meta did not listen on 9191 within 120 seconds' >&2
+exit 1

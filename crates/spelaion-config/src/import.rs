@@ -399,6 +399,8 @@ pub fn import_plan(
             },
             port: if file { None } else { connection.port },
             database: connection.database.clone(),
+            // No client this imports from has a folder of files as a connection.
+            file_folder: false,
             user: if file {
                 String::new()
             } else {

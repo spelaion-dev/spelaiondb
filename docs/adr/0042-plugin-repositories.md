@@ -1,6 +1,10 @@
 # ADR-042: Our plugins live in their own repositories, pinned by this one
 
-- **Status:** Accepted (not implemented: it changes how ADR-041's stages are carried out)
+- **Status:** Accepted (the part in this repository is implemented, 2026-11-13: see
+  "Implementation"; it changes how ADR-041's stages are carried out;
+  amended by ADR-055: what the app downloads is pinned by a signed catalogue, so a plugin fix no
+  longer waits for an app release; amended by ADR-057: the installers carry the pinned builds'
+  archives, installed into the user's store at the first start, not the programs)
 - **Date:** 2026-11-10
 - **Supersedes:** in ADR-041, "built from this repository" and "always the same build as the
   core" (point 5, "Ours") and the check of downloaded engines against the update key; in
@@ -55,6 +59,9 @@ hash, the exact plugin builds it ships and tests.**
      accepted only with the pinned hash. So the update key (ADR-021) stays in this repository
      only: a plugin's repository holds no secret.
    - A plugin fix reaches users with the app release that moves its pin, never by itself.
+     (Superseded by ADR-055: the pins of what is downloaded come from a signed catalogue, and an
+     entry of ours enters it only once it is pinned here. What goes inside the installers stays
+     pinned in the app.)
 5. **The gate of ADR-041 is the pull request that moves the pin.** Migrating an engine is one
    pull request here: it pins the plugin and removes the built-in driver. Its CI is the gate's
    part (a), the tests passing through the plugin; its description carries (b), the measured
@@ -87,6 +94,27 @@ Other people's plugins are as ADR-041 left them (point 5, stage 4).
 - Test servers are needed in two places: here for the core's tests, and in each plugin's
   repository for its type zoo.
 - Agents and people working on a plugin and the core need both checkouts.
+
+## Implementation (2026-11-13)
+- **The pins** (point 4): `plugins.toml`, at the root, is compiled into the core
+  (`plugins/pins.rs`), so nothing read at run time changes a pin. Only a pinned program next to
+  the app is ever a plugin, and its SHA-256 is checked every time its process is about to
+  start. Besides the archive's hash this ADR asked for, a pin carries **the hash of the program
+  inside**: the archive's is what a download is checked against, the program's is what is
+  checked before every start. Both files are under `.github/CODEOWNERS`.
+- **The fetch** (point 4): `spelaion-fetch-plugins` downloads the pinned releases and lets a
+  program in only with the pinned hashes. It is what CI, the release and a developer run; the
+  steps that run it in CI and put the programs in the installers come with the first pin.
+- **The library by tag** (point 2): `plugin-sdk-vX.Y.Z`. One tag pins the contract, the
+  dialects, the plugin's side of the protocol and the conformance set, which are one workspace
+  here. A plugin's repository takes them as git dependencies on that tag.
+- **A plugin's repository** (points 1 and 6) is one crate: the driver, a program that hands it
+  to the SDK, the engine's own tests with the server they need, the conformance set against
+  that program, and a `plugin.toml` with what the pin says besides the builds. Its CI and its
+  release are the template's shared workflows, called by commit; the release's notes carry the
+  pin in the form `plugins.toml` wants. A patched library (`vendor/`) goes with its driver.
+- **Working on both at once** (point 7): `SPELAION_DEV_PLUGIN_<ENGINE>` points a development
+  build at a plugin built on the same machine; a release build ignores it.
 
 ## Alternatives
 - **Plugins in this repository, with CI that builds and tests only the ones that changed:**

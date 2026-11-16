@@ -15,10 +15,10 @@
 //! and macOS keep `navigator.clipboard.readText()`; anywhere else this answers with an error.
 
 use crate::CmdResult;
+use spelaion_desktop_macros::command;
 
 /// The clipboard's text, `None` when it holds none (empty, an image, no owner).
-#[tauri::command]
-#[specta::specta]
+#[command]
 pub(crate) async fn read_clipboard_text(window: tauri::WebviewWindow) -> CmdResult<Option<String>> {
     #[cfg(target_os = "linux")]
     {

@@ -454,7 +454,7 @@ fn an_agent_writes_only_where_the_user_allowed_it() {
     );
 }
 
-/// Runs `script` on a DuckDB file, creating it, with the project's own driver.
+/// Runs `script` on a DuckDB file, creating it, with the driver the core opens.
 fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
     use futures_util::StreamExt;
     use spelaion_driver_api::{ConnectParams, Driver, ExecEvent, ExecOptions, Value};
@@ -463,16 +463,45 @@ fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let driver = spelaion_driver_duckdb::DuckdbDriver {
-            create_if_missing: true,
+        // The engine as the core opens it: built in or through its plugin.
+        let engines = spelaion_core::Engines::builtin();
+        if !path.exists() {
+            engines
+                .create_file_database(spelaion_config::Engine::Duckdb, path)
+                .await
+                .unwrap();
+        }
+        let driver = engines
+            .get(spelaion_config::Engine::Duckdb)
+            .expect("DuckDB has a driver");
+        // DuckDB lets one process at a time open a file. When its engine is a plugin, the one
+        // that had the file (a server this test just stopped, or this helper's last call)
+        // ends a moment after whoever started it, and holds the file until then. The open is
+        // tried again while the file is locked, for at most ten seconds; anything else fails.
+        let params = ConnectParams {
+            database: path.display().to_string(),
+            ..Default::default()
         };
-        let conn = driver
-            .connect(&ConnectParams {
-                database: path.display().to_string(),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
+        // How DuckDB says the file is another process's: its own lock on Linux and macOS, the
+        // system's refusal to open the file on Windows. Windows words that refusal in the
+        // system's language ("being used by another process" only in English), so on Windows
+        // DuckDB's own prefix is what is matched; a file that stays unopenable still fails,
+        // after the ten seconds.
+        let locked = |error: &str| {
+            error.contains("Could not set lock")
+                || (cfg!(windows) && error.contains("Cannot open file"))
+        };
+        let mut tries = 0;
+        let conn = loop {
+            match driver.connect(&params).await {
+                Ok(conn) => break conn,
+                Err(e) if tries < 100 && locked(&e.to_string()) => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(e) => panic!("opening {}: {e}", path.display()),
+            }
+        };
         let mut values = Vec::new();
         for sql in script {
             let mut events = conn.execute(sql, &ExecOptions::default()).await.unwrap();

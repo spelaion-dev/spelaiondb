@@ -1,10 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
-exclude = ["vendor"]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/spelaion-dev/spelaiondb"
@@ -12,27 +11,26 @@ publish = false
 
 [workspace.dependencies]
 spelaion-driver-api = { path = "crates/spelaion-driver-api" }
-spelaion-driver-postgres = { path = "crates/spelaion-driver-postgres" }
+spelaion-dialect = { path = "crates/spelaion-dialect" }
+spelaion-sqlite-schema = { path = "crates/spelaion-sqlite-schema" }
+spelaion-plugin-protocol = { path = "crates/spelaion-plugin-protocol" }
+spelaion-plugin-host = { path = "crates/spelaion-plugin-host" }
+spelaion-plugin-sdk = { path = "crates/spelaion-plugin-sdk" }
 spelaion-driver-sqlite = { path = "crates/spelaion-driver-sqlite" }
-spelaion-driver-mysql = { path = "crates/spelaion-driver-mysql" }
-spelaion-driver-duckdb = { path = "crates/spelaion-driver-duckdb" }
-spelaion-driver-sqlserver = { path = "crates/spelaion-driver-sqlserver" }
 spelaion-core = { path = "crates/spelaion-core" }
 spelaion-config = { path = "crates/spelaion-config" }
 spelaion-ssh = { path = "crates/spelaion-ssh" }
 spelaion-store = { path = "crates/spelaion-store" }
 spelaion-mcp = { path = "crates/spelaion-mcp" }
+spelaion-https = { path = "crates/spelaion-https" }
 
 anyhow = "1"
 arrow = { version = "60", default-features = false, features = ["ipc"] }
 async-trait = "0.1"
 futures-util = "0.3"
 insta = "1"
-postgres-protocol = "0.6"
-postgres-types = "0.2"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-tokio-postgres = "0.7"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -47,8 +45,3 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
-# tiberius with a fix to cancelling (see vendor/tiberius/PATCHED.md).
-[patch.crates-io]
-tokio-postgres = { path = "vendor/tokio-postgres" }
-tiberius = { path = "vendor/tiberius" }
-mysql_async = { path = "vendor/mysql_async" }

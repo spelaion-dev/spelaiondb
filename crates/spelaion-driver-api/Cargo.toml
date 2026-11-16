@@ -10,6 +10,12 @@ publish.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
+# The contract travels as messages to engines that run as their own program (ADR-041).
+serde = { version = "1", features = ["derive"] }
+# The canonical request of an engine whose language is not SQL (ADR-056). Its keys keep their
+# order: a MongoDB command is named by its first key. Every plugin builds on this crate, so this
+# feature reaches each one.
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror.workspace = true
 # AsyncRead/AsyncWrite for remote programs (remote.rs).
 tokio.workspace = true

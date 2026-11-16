@@ -3,6 +3,8 @@
 //!
 //!     cargo test --release -p spelaion-core --test grid_million -- --ignored --nocapture
 
+mod engines;
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -15,7 +17,7 @@ use spelaion_driver_api::{ConnectParams, Driver};
 #[tokio::test]
 #[ignore = "a measurement: run it in release with --ignored --nocapture"]
 async fn a_million_rows() {
-    let driver = spelaion_driver_duckdb::DuckdbDriver::default();
+    let driver = engines::duckdb();
     let conn = driver
         .connect(&ConnectParams {
             database: ":memory:".into(),
@@ -23,7 +25,11 @@ async fn a_million_rows() {
         })
         .await
         .unwrap();
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     let started = Instant::now();
     let events: Vec<CoreEvent> = session
         .run_script(

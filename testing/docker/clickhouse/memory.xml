@@ -1,0 +1,11 @@
+<clickhouse>
+    <!-- No production-sized caches or CPU-derived thread pools on a shared CI host. -->
+    <max_server_memory_usage>402653184</max_server_memory_usage>
+    <mark_cache_size>67108864</mark_cache_size>
+    <uncompressed_cache_size>16777216</uncompressed_cache_size>
+    <max_thread_pool_size>256</max_thread_pool_size>
+    <background_move_pool_size>2</background_move_pool_size>
+    <background_schedule_pool_size>4</background_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>2</background_message_broker_schedule_pool_size>
+    <background_distributed_schedule_pool_size>2</background_distributed_schedule_pool_size>
+</clickhouse>

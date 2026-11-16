@@ -44,6 +44,18 @@ extendedKeyUsage=serverAuth
   rm -f keys/mysql.csr keys/mysql.ext keys/ca.srl
 fi
 
+# Oracle's TCPS (its TLS proxy, `oracle-tls`): a certificate from the same authority, valid
+# for "localhost" and its name behind the bastions, with its key in one PEM file for haproxy.
+if [ ! -f keys/oracle.pem ]; then
+  openssl req -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -keyout keys/oracle.key -out keys/oracle.csr -subj "/CN=oracle-tls" 2>/dev/null
+  printf 'subjectAltName=DNS:localhost,DNS:oracle-tls\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n' > keys/oracle.ext
+  openssl x509 -req -in keys/oracle.csr -CA keys/ca.crt -CAkey keys/ca.key -CAcreateserial \
+    -out keys/oracle.crt -days 3650 -extfile keys/oracle.ext 2>/dev/null
+  cat keys/oracle.crt keys/oracle.key > keys/oracle.pem
+  rm -f keys/oracle.csr keys/oracle.ext keys/ca.srl
+fi
+
 # A client certificate from the same authority: PostgreSQL, MySQL and MariaDB let the user
 # "spelaion_cert" in with it instead of a password.
 if [ ! -f keys/client.crt ]; then

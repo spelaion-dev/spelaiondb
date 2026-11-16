@@ -10,6 +10,7 @@ import { PlanViewer } from "./PlanViewer";
 import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { connectionTooltip } from "../connectionInfo";
+import { endStatementResults } from "../runResults";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
@@ -26,6 +27,7 @@ import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
 import { toggleResultsMaximized } from "../tabActions";
 import { Icon } from "./Icons";
+import { MissingPlugin } from "./MissingPlugin";
 import { useCompletionCatalog } from "../useCompletionCatalog";
 import { mayChangeCompletionCatalog } from "../sqlCompletion";
 import { useEngineInfo } from "../engines";
@@ -101,7 +103,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [databaseRefresh, setDatabaseRefresh] = useState(0);
   const databaseBusyRef = useRef(false);
   const workspace = useApp((s) => s.workspace?.workspace ?? null);
-  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tab.status === "connected" && !tab.table && (!supportsDatabase || database !== null));
+  // SQL completion only where the language is SQL (ADR-056).
+  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tab.status === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null));
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   const lastRequest = useRef<RunRequest | null>(null);
@@ -959,7 +962,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           : { key: "messages.statementRows", values: { index: event.index + 1, count: event.rowsAffected, ...timing } };
         updateRun(tab.id, (r) => ({
           ...r,
-          results: r.results.map((x) => (x.statement === event.index ? { ...x, complete: true, ...(x.paging ? { paging: { ...x.paging, hasMore: x.rows === x.paging.pageSize } } : {}) } : x)),
+          results: endStatementResults(r.results, event.index, "finished"),
           messages: [...r.messages, { kind: "info", text: "", translation }],
         }));
         break;
@@ -972,6 +975,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
         const key = event.cancelled ? "messages.statementCancelled" : event.timedOut ? "messages.statementTimedOut" : "messages.statementFailed";
         updateRun(tab.id, (r) => ({
           ...r,
+          // A result it had started keeps its rows and is not "(loading)" any more (SDB-275).
+          results: endStatementResults(r.results, event.index, "failed"),
           error: { message: event.message, offset, diagnostic },
           messages: [...r.messages, { kind: "error", text: event.message, translation: { key, values: { index: event.index + 1, reason: event.message } } }],
         }));
@@ -1338,6 +1343,8 @@ function Results({
   /** Results shown as a chart instead of the grid, and what each chart draws (ADR-040). */
   const [chartShown, setChartShown] = useState<Record<number, boolean>>({});
   const [charts, setCharts] = useState<Record<number, ChartSettings | null>>({});
+  // A connection that could not open may need a plugin that is not installed.
+  const connectionEngine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? null);
   const maximizeButton = maximize && (
     <button
       className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
@@ -1449,6 +1456,7 @@ function Results({
         ) : (
           <div className="messages">
             {error && <pre className="error-box">{error}</pre>}
+            {run.error?.translation?.key === "messages.connectionFailed" && connectionEngine && <MissingPlugin engine={connectionEngine} />}
             {run.messages.map((m, i) => (
               <div key={i} className={`message message-${m.kind}`}>
                 {m.translation ? translated(m.translation, t, numbers) : m.text}
