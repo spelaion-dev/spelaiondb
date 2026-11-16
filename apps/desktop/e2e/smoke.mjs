@@ -5437,6 +5437,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "Oracle" }).isDisabled()));
   assert.ok(await wizard.locator(".engine-card", { hasText: "Snowflake" }).isDisabled());
   await wizard.locator(".engine-card", { hasText: "Snowflake" }).getByText("Coming soon").waitFor();
+  // HTTP search engines have a verified official plugin pin.
+  for (const name of ["Elasticsearch", "OpenSearch", "Solr", "Meilisearch"]) {
+    const card = wizard.locator(".engine-card", { hasText: name });
+    assert.ok(!(await card.isDisabled()), `${name} has a verified official plugin pin`);
+  }
+  assert.equal(await wizard.locator(".engine-card", { hasText: "Open Distro" }).count(), 0);
   await shot("12a-add-connection-catalog");
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");

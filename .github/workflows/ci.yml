@@ -74,6 +74,10 @@ jobs:
       SPELAION_TEST_LIBSQL: 127.0.0.1:18095
       # Neo4j (ADR-056), through its pinned plugin.
       SPELAION_TEST_NEO4J: 127.0.0.1:17474
+      SPELAION_TEST_ELASTICSEARCH: 127.0.0.1:19200
+      SPELAION_TEST_OPENSEARCH: 127.0.0.1:19201
+      SPELAION_TEST_SOLR: 127.0.0.1:18983
+      SPELAION_TEST_MEILISEARCH: 127.0.0.1:17700
       # Databend (SDB-351), through its pinned plugin.
       SPELAION_TEST_DATABEND: 127.0.0.1:18320
       # Google's Spanner emulator (SDB-352), through its pinned plugin.
@@ -229,7 +233,7 @@ jobs:
           fi
       - if: steps.scope.outputs.rust != 'false'
         # These suites run in the following phase, after the other servers release their RAM.
-        run: env -u SPELAION_TEST_HIVE -u SPELAION_TEST_TRINO -u SPELAION_TEST_PRESTO -u SPELAION_TEST_INFLUXDB -u SPELAION_TEST_GREPTIME_MYSQL -u SPELAION_TEST_GREPTIME_PG cargo test --workspace --locked
+        run: env -u SPELAION_TEST_HIVE -u SPELAION_TEST_TRINO -u SPELAION_TEST_PRESTO -u SPELAION_TEST_INFLUXDB -u SPELAION_TEST_GREPTIME_MYSQL -u SPELAION_TEST_GREPTIME_PG -u SPELAION_TEST_ELASTICSEARCH -u SPELAION_TEST_OPENSEARCH -u SPELAION_TEST_SOLR -u SPELAION_TEST_MEILISEARCH cargo test --workspace --locked
       - name: Warehouse services and integration tests
         timeout-minutes: 20
         if: steps.scope.outputs.rust != 'false'
@@ -243,6 +247,19 @@ jobs:
             exit 1
           fi
           cargo test --locked -p spelaion-core --test hive --test trino --test influxdb --test mysql_family --test postgres_family
+      - name: Search services and integration tests
+        timeout-minutes: 20
+        if: steps.scope.outputs.rust != 'false'
+        run: |
+          docker compose -f testing/docker/compose.yaml stop
+          services=(elasticsearch opensearch solr meilisearch)
+          docker compose -f testing/docker/compose.yaml --profile '*' config --format json \
+            | python3 testing/docker/check-memory.py "$(docker info --format '{{.MemTotal}}')" "${services[@]}"
+          if ! timeout --kill-after=30s 900 docker compose -f testing/docker/compose.yaml up -d --wait "${services[@]}"; then
+            bash testing/docker/diagnostics.sh
+            exit 1
+          fi
+          cargo test --locked -p spelaion-core --test search
       # The app's own unit tests: its library says `test = false` because the test executable of
       # a Tauri crate does not start on Windows, so `--workspace` skips them. Here, on Linux, it
       # starts: named, they run.

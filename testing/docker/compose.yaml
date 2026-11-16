@@ -496,6 +496,67 @@ services:
       retries: 60
     networks: [direct]
 
+  # HTTP search engines run in a separate CI phase to bound memory.
+  elasticsearch:
+    profiles: [search]
+    mem_limit: 768m
+    networks: [data, direct]
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: 'false'
+      ES_JAVA_OPTS: -Xms256m -Xmx256m
+    ports: ['127.0.0.1:19200:9200']
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9200 >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 60
+  opensearch:
+    profiles: [search]
+    mem_limit: 768m
+    networks: [data, direct]
+    image: opensearchproject/opensearch:2.19.1
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: 'true'
+      DISABLE_INSTALL_DEMO_CONFIG: 'true'
+      OPENSEARCH_JAVA_OPTS: -Xms256m -Xmx256m
+    ports: ['127.0.0.1:19201:9200']
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9200 >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 60
+  solr:
+    profiles: [search]
+    mem_limit: 512m
+    networks: [data, direct]
+    image: solr:9.8.1
+    command: ['solr-precreate', 'orders']
+    environment:
+      SOLR_HEAP: 256m
+    ports: ['127.0.0.1:18983:8983']
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:8983/solr/admin/info/system >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 60
+  meilisearch:
+    profiles: [search]
+    mem_limit: 256m
+    networks: [data, direct]
+    image: getmeili/meilisearch:v1.13.2
+    environment:
+      MEILI_NO_ANALYTICS: 'true'
+      MEILI_ENV: development
+    ports: ['127.0.0.1:17700:7700']
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:7700/health >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
 networks:
   public: {}
   direct: {}
