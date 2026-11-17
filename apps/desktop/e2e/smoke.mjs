@@ -3954,6 +3954,43 @@ try {
     await panel.getByRole("menuitem", { name: "Qualified with the table" }).click();
     assert.equal(await copied(before + 1), "orders.id");
   }
+  // Two header clicks before the core answers the first (SDB-409): each asks the core for its
+  // ORDER BY, and here the second click's answer is let through before the first one's. The
+  // table must end as the second click asked. From "id DESC" the first click takes the column
+  // out of the sort and the second sorts it ascending; the older answer, arriving last, used
+  // to put "no order" back.
+  {
+    await page.evaluate(() => {
+      const original = window.fetch;
+      const pending = [];
+      window.__sdb409 = { original, pending };
+      window.fetch = (url, ...args) => {
+        const result = original(url, ...args);
+        if (!String(url).endsWith("/table_order_by")) return result;
+        return new Promise((resolve, reject) => pending.push(() => result.then(resolve, reject)));
+      };
+    });
+    const orderBy = panel.getByRole("textbox", { name: "ORDER BY" });
+    assert.equal(await orderBy.inputValue(), "id DESC");
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.click(box.x + 52 + 20, box.y + 18);
+    await page.waitForFunction(() => window.__sdb409.pending.length === 1);
+    await page.mouse.click(box.x + 52 + 20, box.y + 18);
+    await page.waitForFunction(() => window.__sdb409.pending.length === 2);
+    // The second click's answer first: the table sorts ascending.
+    await page.evaluate(() => window.__sdb409.pending[1]());
+    await panel.locator('.grid-scroller[aria-label$="sorted by id, ascending"]').waitFor();
+    await page.waitForFunction(() => document.querySelector('.tab-panel:not([hidden]) input[aria-label="ORDER BY"]')?.value === "id");
+    // Then the first click's, late: it changes nothing.
+    await page.evaluate(() => window.__sdb409.pending[0]());
+    await page.waitForTimeout(500);
+    assert.equal(await orderBy.inputValue(), "id", "an older click's answer does not replace the newer sort");
+    await panel.locator('.grid-scroller[aria-label$="sorted by id, ascending"]').waitFor();
+    await page.evaluate(() => {
+      window.fetch = window.__sdb409.original;
+      delete window.__sdb409;
+    });
+  }
   // What is typed cannot turn the page into another statement.
   await panel.getByRole("textbox", { name: "WHERE" }).fill("1=1); drop table orders; select (1");
   await page.keyboard.press("Enter");

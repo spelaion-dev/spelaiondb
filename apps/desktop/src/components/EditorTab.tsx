@@ -14,6 +14,7 @@ import { afterRun, endStatementResults, markRefreshable, sameResultColumns, with
 import { ResultTabList } from "./ResultTabs";
 import { VariablesDialog } from "./VariablesDialog";
 import { byteToIndex } from "../text";
+import { latestOnly } from "../latestRequest";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
 import { defaultChart, ResultChart, type ChartSettings } from "./ResultChart";
@@ -508,6 +509,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   /** Header clicks in a table data tab: the core writes the ORDER BY from the table's own
    *  columns (the tab only names them), and the page is read again from the server. */
+  const latestSort = useRef(latestOnly());
   async function sortTable(sort: SortState[]) {
     const view = tab.table;
     if (!view) return;
@@ -515,9 +517,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const keys = sort.map((key) => ({ column: columns[key.column]?.name, descending: key.descending }));
     if (keys.some((key) => key.column === undefined)) return;
     try {
-      const orderBy = await call(commands.tableOrderBy(tab.id, view.schema, view.name,
-        keys.map((key) => ({ column: key.column ?? "", descending: key.descending }))));
-      changeView({ sort: sort.length > 0 ? sort : undefined, orderBy, page: 0 });
+      // Clicks can come faster than the core answers, and the answers in either order: only
+      // the last click's ORDER BY changes the view (SDB-409). An older answer that arrived
+      // late used to put its sort back over the newer one.
+      const answered = await latestSort.current(() => call(commands.tableOrderBy(tab.id, view.schema, view.name,
+        keys.map((key) => ({ column: key.column ?? "", descending: key.descending })))));
+      if (!answered.latest) return;
+      changeView({ sort: sort.length > 0 ? sort : undefined, orderBy: answered.value, page: 0 });
     } catch (e) {
       setNotice({ text: message(e), error: true });
     }
