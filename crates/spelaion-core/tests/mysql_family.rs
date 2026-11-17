@@ -782,6 +782,25 @@ async fn greptime_is_browsed_and_edited_by_its_time_index_and_cancelled() {
                 ),
                 "{update:?}"
             );
+            // GreptimeDB accepts BEGIN and ignores it: a delete followed by that update used
+            // to keep the delete although the app said it rolled back. Several changes at
+            // once are refused before anything runs (SDB-354).
+            let both = edits(&[
+                RowChange::Delete { row: 0 },
+                RowChange::Update {
+                    row: 1,
+                    values: vec![(2, CellInput::Text("1.0".into()))],
+                },
+            ]);
+            match apply_edits(&open.session, &both).await {
+                Err(EditError::NotAtomic(reason)) => {
+                    assert!(reason.contains("GreptimeDB"), "{reason}")
+                }
+                other => panic!("{other:?}"),
+            }
+            let id_kept = stored(&open, &format!("select * from {db}.cpu order by host, ts")).await;
+            assert_eq!(rows_of(&open, id_kept), expected, "nothing was applied");
+            open.session.results().remove(id_kept);
             open.session.results().remove(id);
 
             // The data search binds its value to a user variable, which GreptimeDB does not
