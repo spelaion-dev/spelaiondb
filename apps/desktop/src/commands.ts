@@ -6,7 +6,7 @@
 
 import { call, commands as core, type ConnectionItem, type ObjectItem, type SchemaObjectItem } from "./api";
 import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./commandRegistry";
-import { closeQueryTab, connectTabFromExplorer, explorerDatabase } from "./connect";
+import { closeQueryTab, connectTabFromExplorer, explorerDatabase, newQueryOnConnection } from "./connect";
 import { readClipboardText } from "./clipboardText";
 import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
@@ -389,9 +389,7 @@ export function objectActions(item: PaletteObject): PaletteObjectAction[] {
           id: "newQuery",
           label: "shell:newQuery",
           run: () => {
-            const app = useApp.getState();
-            const tab = app.addTab(connection.id);
-            if (app.explorerConnected.includes(connection.id)) connectTabFromExplorer(tab, `meta:${connection.id}`);
+            newQueryOnConnection(connection.id);
           },
         },
         { id: "showInExplorer", label: "app:palette.actions.showInExplorer", run: () => showInExplorer({ connectionId: connection.id }) },

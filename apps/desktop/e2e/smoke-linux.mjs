@@ -164,7 +164,7 @@ const dialog = (text) =>
   );
 const statusline = (text) => visibleText(`${P} .statusline`, text);
 
-async function newQuery(connection, sql) {
+async function newQuery(connection, sql, connect = async () => {}) {
   // Double-clicking a connection opens a new query on it.
   const label = await wd.element(
     (name) => [...document.querySelectorAll(".connection-row")].find((r) => r.querySelector(".label")?.textContent.trim() === name)?.querySelector(".label"),
@@ -172,6 +172,7 @@ async function newQuery(connection, sql) {
     { what: `the connection ${connection}` },
   );
   await wd.pointer(label, { count: 2 });
+  await connect();
   await wd.waitFor((p) => document.querySelector(`${p} .cm-content`) && !document.querySelector(`${p} .status-connecting`), [P], { what: "a new query tab" });
   await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
   await wd.insertText(sql);
@@ -241,6 +242,7 @@ try {
       "Shop (SQLite)",
       "select c.country, count(*) as orders, round(sum(o.total), 2) as total\nfrom orders o\njoin customer c on c.id = o.customer_id\ngroup by c.country\norder by total desc;",
     );
+    await wd.waitFor((p) => !!document.querySelector(`${p} .status-connected`), [P], { what: "the query tab to connect without opening the explorer" });
     await run();
     await statusline("6 rows");
     await shot("03-sqlite");
@@ -267,6 +269,17 @@ try {
     assert.equal(lines[0], "country\torders\ttotal", `the clipboard holds: ${JSON.stringify(text.slice(0, 200))}`);
     assert.equal(lines.length, 7, `a header and six rows: ${JSON.stringify(text.slice(0, 300))}`);
     assert.ok(lines.slice(1).every((line) => line.split("\t").length === 3), text);
+  });
+
+  await step("a new query also connects when the explorer is already open", async () => {
+    const expander = await wd.element(() => [...document.querySelectorAll('.connection-row')].find((row) => row.querySelector('.label')?.textContent.trim() === 'Shop (SQLite)')?.querySelector('button.twisty'));
+    await wd.click(expander);
+    await wd.waitFor((el) => el.getAttribute('aria-expanded') === 'true', [expander], { what: "the explorer to open" });
+    await wd.waitFor((el) => [...el.closest('.node').querySelectorAll('.children .row .label')].some((label) => label.textContent.trim() === 'main'), [expander], { what: "the explorer session and SQLite schema" });
+    await newQuery("Shop (SQLite)", "select 1;");
+    await wd.waitFor((p) => !!document.querySelector(`${p} .status-connected`), [P], { what: "the second query tab to connect" });
+    await run();
+    await statusline("1 row");
   });
 
   await step("DuckDB: a new database file made in the add-connection form, a query on it", async () => {
@@ -324,7 +337,12 @@ try {
   });
 
   await step("PostgreSQL: password asked in a dialog, a query over TLS", async () => {
-    await newQuery("Postgres (Docker)", "select ssl from pg_stat_ssl where pid = pg_backend_pid() and ssl;");
+    await newQuery("Postgres (Docker)", "select ssl from pg_stat_ssl where pid = pg_backend_pid() and ssl;", async () => {
+      const d = await dialog("Password for Postgres (Docker)");
+      await wd.press("Escape");
+      await wd.waitDetached(d, { what: "the cancelled password dialog to close" });
+    });
+    await wd.waitFor((p) => !!document.querySelector(`${p} .status-disconnected`) && !document.querySelector(`${p} [role="alert"]`), [P], { what: "the cancelled tab to stay disconnected without an error" });
     await run();
     await password("Postgres (Docker)", "spelaion");
     await statusline("1 row");
@@ -337,39 +355,39 @@ try {
   ]) {
     await step(`${connection.replace(" (Docker)", "")}: password asked, a query over TLS`, async () => {
       // Only an encrypted session has a cipher: the row exists only if TLS is on.
-      await newQuery(connection, `select 42 as answer, 'text ñ €' as txt, variable_value as cipher\nfrom ${cipher}\nwhere variable_name = 'Ssl_cipher' and variable_value <> '';`);
+      await newQuery(connection, `select 42 as answer, 'text ñ €' as txt, variable_value as cipher\nfrom ${cipher}\nwhere variable_name = 'Ssl_cipher' and variable_value <> '';`, () => password(connection, "spelaion"));
       await run();
-      await password(connection, "spelaion");
       await statusline("1 row");
     });
   }
 
   await step("SQL Server: password asked, a batch with two result sets", async () => {
-    await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b");
+    await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b", () => password("SQL Server (Docker)", "Spelaion-test-1"));
     await run();
-    await password("SQL Server (Docker)", "Spelaion-test-1");
+
     await visibleText(`${P} .result-tabs button`, "Result 2");
     await shot("08-sqlserver");
   });
 
   await step("SSH tunnel: PostgreSQL behind two bastions, each host key shown, TLS verify-full", async () => {
-    await newQuery("Postgres through the tunnel", "select ssl, version from pg_stat_ssl where pid = pg_backend_pid() and ssl;");
+    await newQuery("Postgres through the tunnel", "select ssl, version from pg_stat_ssl where pid = pg_backend_pid() and ssl;", async () => {
+      await password("Postgres through the tunnel", "spelaion");
+      for (let hop = 1; hop <= 2; hop++) {
+        await dialog(`(hop ${hop})`);
+        if (hop === 1) await shot("09-ssh-fingerprint");
+        await wd.click(await button("Trust and remember", '[role="dialog"], .modal'));
+      }
+    });
     await run();
-    await password("Postgres through the tunnel", "spelaion");
-    for (let hop = 1; hop <= 2; hop++) {
-      await dialog(`(hop ${hop})`);
-      if (hop === 1) await shot("09-ssh-fingerprint");
-      await wd.click(await button("Trust and remember", '[role="dialog"], .modal'));
-    }
     await statusline("1 row");
     await shot("10-tunnel");
   });
 
   await step("ClickHouse (a plugin only) behind the same two bastions", async () => {
     // The hosts were trusted by the step before: no fingerprint is asked again.
-    await newQuery("ClickHouse through the tunnel", "select currentDatabase() as db, 'ñandú' as t, toDate('2024-02-29') as d;");
+    await newQuery("ClickHouse through the tunnel", "select currentDatabase() as db, 'ñandú' as t, toDate('2024-02-29') as d;", () => password("ClickHouse through the tunnel", "spelaion"));
     await run();
-    await password("ClickHouse through the tunnel", "spelaion");
+
     await statusline("1 row");
     await shot("10b-clickhouse-tunnel");
   });
@@ -383,9 +401,9 @@ try {
 
   await step("Oracle (a plugin only) behind the same two bastions", async () => {
     // The hosts were trusted by an earlier step: no fingerprint is asked again.
-    await newQuery("Oracle through the tunnel", "select user as who, 'ñandú' as t, date '2024-02-29' as d from dual;");
+    await newQuery("Oracle through the tunnel", "select user as who, 'ñandú' as t, date '2024-02-29' as d from dual;", () => password("Oracle through the tunnel", "spelaion"));
     await run();
-    await password("Oracle through the tunnel", "spelaion");
+
     await statusline("1 row");
     await shot("10d-oracle-tunnel");
   });
@@ -398,17 +416,17 @@ try {
   });
 
   await step("Neo4j (a plugin only, Cypher) behind the same two bastions", async () => {
-    await newQuery("Neo4j through the tunnel", "RETURN 'ñandú' AS t, 1.5 AS r, date('2024-02-29') AS d;");
+    await newQuery("Neo4j through the tunnel", "RETURN 'ñandú' AS t, 1.5 AS r, date('2024-02-29') AS d;", () => password("Neo4j through the tunnel", "spelaion-test"));
     await run();
-    await password("Neo4j through the tunnel", "spelaion-test");
+
     await statusline("1 row");
     await shot("10d-neo4j-tunnel");
   });
 
   await step("Databend (a plugin only) behind the same two bastions", async () => {
-    await newQuery("Databend through the tunnel", "select 'ñandú' as t, 1.5 as r, '2024-02-29'::date as d;");
+    await newQuery("Databend through the tunnel", "select 'ñandú' as t, 1.5 as r, '2024-02-29'::date as d;", () => password("Databend through the tunnel", "spelaion-test"));
     await run();
-    await password("Databend through the tunnel", "spelaion-test");
+
     await statusline("1 row");
     await shot("10d-databend-tunnel");
   });

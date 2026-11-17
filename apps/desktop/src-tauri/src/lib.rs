@@ -1790,6 +1790,11 @@ async fn connect(
                     can_remember: save_to.is_some(),
                 });
             }
+            Err(OpenError::Tunnel(
+                spelaion_ssh::SshError::Cancelled | spelaion_ssh::SshError::HostKeyRejected { .. },
+            )) => {
+                return Ok(ConnectOutcome::Cancelled);
+            }
             // SQLSTATE 28xxx: authorization rejected (password or user). Only then does it make
             // sense to ask for the password again; any other failure is shown as is.
             Err(OpenError::Driver(DriverError::Database {

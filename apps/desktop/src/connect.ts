@@ -189,7 +189,7 @@ async function openSessionInner(session: string, connectionId: string): Promise<
     if (!answer) return null;
     outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember, editor));
   }
-  if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables") return null;
+  if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables" || outcome.kind === "cancelled") return null;
   // Setup statements the connection skipped (ADR-037) are said in the tab until dismissed.
   useApp.getState().updateTab(session, { setupSkipped: outcome.setupSkipped.length > 0 ? outcome.setupSkipped : undefined });
   return outcome.serverVersion;
@@ -221,6 +221,39 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
       });
     }
   })();
+}
+
+/** Open a query on a connection, independently of the explorer's expanded state. */
+export function newQueryOnConnection(connectionId: string): string {
+  const app = useApp.getState();
+  const tabId = app.addTab(connectionId);
+  if (app.explorerConnected.includes(connectionId)) {
+    connectTabFromExplorer(tabId, `meta:${connectionId}`);
+    return tabId;
+  }
+  useApp.getState().updateTab(tabId, { status: "connecting", serverVersion: null });
+  void (async () => {
+    try {
+      const version = await openSession(tabId, connectionId);
+      const tab = useApp.getState().tabs.find((item) => item.id === tabId);
+      if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") {
+        if (version !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
+        return;
+      }
+      useApp.getState().updateTab(tabId, version === null
+        ? { status: "disconnected" }
+        : { status: "connected", serverVersion: version, lost: undefined, idleClosed: undefined });
+    } catch (e) {
+      const tab = useApp.getState().tabs.find((item) => item.id === tabId);
+      if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") return;
+      const detail = e instanceof Error ? e.message : String(e);
+      useApp.getState().updateTab(tabId, {
+        status: "disconnected",
+        run: { running: false, results: tab.run?.results ?? [], activeResult: null, messages: [], error: { message: detail, offset: null, translation: { key: "messages.connectionFailed", values: { detail } } }, startedAt: 0, elapsedMs: null },
+      });
+    }
+  })();
+  return tabId;
 }
 
 /** Opens a table data tab on `schema.table` filtered by `filter` (a followed foreign key's,

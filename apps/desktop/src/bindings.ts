@@ -1599,6 +1599,8 @@ setupSkipped: SkippedSetupItem[] } |
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
 { kind: "authFailed"; message: string; canRemember: boolean } | 
+/**  The user declined an SSH question or cancelled an authentication prompt. */
+{ kind: "cancelled" } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" } | 
 /**
@@ -1624,6 +1626,8 @@ setupSkipped: SkippedSetupItem[] } |
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
 { kind: "authFailed"; message: string; canRemember: boolean } | 
+/**  The user declined an SSH question or cancelled an authentication prompt. */
+{ kind: "cancelled" } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" } | 
 /**
