@@ -568,7 +568,7 @@ try {
     assert.equal(await wd.evaluate((s) => document.querySelector(`${s} textarea`).getAttribute("wrap"), viewer), "off");
     const editor = await wd.element((s) => document.querySelector(`${s} textarea`), [viewer]);
     await fill(editor, '{"n":');
-    assert.equal(await wd.evaluate((el) => el.disabled, await button("Format JSON", viewer)), true);
+    await wd.waitFor((s) => [...document.querySelectorAll(`${s} button`)].some((b) => b.textContent.trim() === "Format JSON" && b.disabled), [viewer], { what: "invalid JSON to disable formatting" });
     await fill(editor, '{"n":12345678901234567890}');
     await visibleText(P, "No pending changes");
     await wd.click(await button("Format JSON", viewer));
@@ -579,6 +579,7 @@ try {
     await visibleText(P, "No pending changes");
     await replaceQuery("select name from customer where id = 1;"); await run(); await statusline("1 row");
     const target = await wd.evaluate((p) => { const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect(); return { x: r.x, y: r.y }; }, P);
+    clipboard.set("not copied");
     await wd.pointerAt(target.x + 65, target.y + 46); await wd.press("Control+c");
     let copied = "";
     for (let i = 0; i < 50 && !copied.includes("12345678901234567890"); i++) { await new Promise((resolve) => setTimeout(resolve, 100)); copied = clipboard.get(); }
