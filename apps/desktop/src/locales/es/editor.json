@@ -900,7 +900,9 @@
     "failed": "No se pudo leer el esquema: {{reason}}"
   },
   "completion": {
-    "loadFailed": "No se pudieron cargar los metadatos de las sugerencias: {{reason}}. Actualiza la conexión en el explorador para volver a intentarlo."
+    "loadFailed": "No se pudieron cargar los metadatos de las sugerencias: {{reason}}.",
+    "loading": "Cargando sugerencias SQL…",
+    "retry": "Reintentar"
   },
   "calc": {
     "title": "Números de la selección",

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EditorState } from "@codemirror/state";
 import { CompletionContext } from "@codemirror/autocomplete";
-import { completeSql, sqlCompletionSource, sqlDialect, mayChangeCompletionCatalog } from "../src/sqlCompletion.ts";
+import { completeSql, sqlCompletionSource, sqlDialect, mayChangeCompletionCatalog, referencedCompletionTables } from "../src/sqlCompletion.ts";
 import { CompletionCache, completionCacheKey } from "../src/completionCache.ts";
 
 const engines = ["postgres", "mysql", "mariadb", "sqlserver", "sqlite", "duckdb", "clickhouse"];
@@ -136,6 +136,10 @@ test("large scripts and deeply nested statements retain cached basic completion"
 });
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+test("metadata priority resolves aliases and ignores tables shadowed by CTEs", () => {
+  const sql = "WITH other AS (SELECT id FROM customers) SELECT o.id FROM orders o JOIN other x ON o.id = x.id";
+  assert.deepEqual(referencedCompletionTables(sql, catalog, "postgres").map((item) => item.name).sort(), ["customers", "orders"]);
+});
 test("catalog keys isolate workspaces, connections, databases, refresh generations and immutable source sessions", () => {
   // A same-engine profile edit can leave the old tab connected to a different server/file.
   const keys = [["a","c","db",0,"old-session"],["b","c","db",0,"old-session"],["a","d","db",0,"old-session"],["a","c","db2",0,"old-session"],["a","c","db",1,"old-session"],["a\u0000c","db",null,0,"old-session"],["a","c","db",0,"new-session"]].map((parts) => completionCacheKey(...parts));
@@ -158,6 +162,35 @@ test("metadata reads are serial, shared and released; stale readers cannot overw
   const next = [];
   const release3 = cache.acquire("old", {...reader, async describe(t){return {...t, columns:["fresh"]};}}, (snapshot) => next.push(snapshot));
   await tick(); assert.equal(next.at(-1).loading, false); assert.equal(next.at(-1).catalog.tables[0].columns[0], "fresh"); release3();
+});
+test("referenced tables move ahead of unrelated pending describes without interrupting an active read", async () => {
+  const cache = new CompletionCache(), calls = [];
+  let resume;
+  const gate = new Promise((resolve) => { resume = resolve; });
+  const tables = Array.from({ length: 30 }, (_, n) => ({ schema: "main", name: `t${n}`, columns: [], foreignKeys: [] }));
+  const reader = { async open(){}, async names(){return { tables, defaultSchema: "main" };},
+    async describe(table){ calls.push(table.name); if (table.name === "t0") await gate; return table; },
+    async cancel(){}, async close(){} };
+  const release = cache.acquire("test", reader, () => {});
+  await tick();
+  cache.prioritize("test", [tables[29]]);
+  resume(); await tick();
+  assert.deepEqual(calls.slice(0, 2), ["t0", "t29"]);
+  release();
+});
+test("one bulk lookup exposes active-schema columns while table descriptions are pending", async () => {
+  const cache = new CompletionCache(), snapshots = [], calls = [];
+  let resume;
+  const gate = new Promise((resolve) => { resume = resolve; });
+  const reader = { async open(){}, async names(){return structuredClone(catalog);},
+    async columns(schema){calls.push(schema); return [{ table: "customers", name: "bulk_column" }];},
+    async describe(table){ await gate; return table; }, async cancel(){}, async close(){} };
+  const release = cache.acquire("batch", reader, (s) => snapshots.push(s));
+  await tick();
+  assert.deepEqual(calls, ["main"]);
+  assert.deepEqual(snapshots.at(-1).catalog.tables[1].columns, ["bulk_column"]);
+  assert.equal(snapshots.at(-1).loading, true);
+  release(); resume();
 });
 test("a metadata error preserves names/loaded columns and is visible to the editor", async () => {
   const cache = new CompletionCache(), snapshots = [];
