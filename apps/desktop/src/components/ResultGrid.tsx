@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
+import { call, commands, type CopySpecialItem, type UpdateSourceItem, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
 import { readClipboardText } from "../clipboardText";
 import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, onPixelRatioChange, usePreferences } from "../preferences";
@@ -24,6 +24,7 @@ import { ReferencesPanel } from "./ReferencesPanel";
 import { CalcPanel } from "./CalcPanel";
 import { GroupPanel } from "./GroupPanel";
 import { ColumnStatsPopover } from "./ColumnStatsPopover";
+import { CopySpecialDialog } from "./CopySpecialDialog";
 import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES, PageControls } from "./TableDataBar";
@@ -135,6 +136,9 @@ function bounds(selection: Selection): Bounds {
 const inside = (b: Bounds, row: number, col: number) => row >= b.r0 && row <= b.r1 && col >= b.c0 && col <= b.c1;
 
 /** Copy menu entries: format and whether the column names go first. */
+/** The copy defaults "Copy special…" opens with (SDB-388), as the core keeps them. */
+const loadCopyDefaults = (): Promise<CopySpecialItem> => call(commands.copyDefaults());
+
 const COPY_ITEMS: { key: string; format: TextFormat; header: boolean }[] = [
   { key: "copy", format: "tsv", header: false },
   { key: "copyWithHeaders", format: "tsv", header: true },
@@ -405,6 +409,8 @@ export function ResultGrid({
   const menuRef = useRef<HTMLDivElement>(null);
   /** The custom filter dialog, starting from a column and a value. */
   const [customFilter, setCustomFilter] = useState<ColumnFilterItem | null>(null);
+  /** The selection "Copy special…" copies, while its dialog is open (SDB-388). */
+  const [copySpecial, setCopySpecial] = useState<CellRange | null>(null);
   /** `slow`: a sentence to read, kept on screen as long as an error. */
   const [notice, setNotice] = useState<{ text: string; error: boolean; slow?: boolean } | null>(null);
   const dragging = useRef(false);
@@ -1711,28 +1717,57 @@ export function ResultGrid({
     });
   }
 
+  /** The selected rows (the ones chosen one by one, or the block) and shown columns. */
+  function selectedRange(): CellRange | null {
+    if (!selection) return null;
+    const b = bounds(selection);
+    return { firstRow: b.r0, rows: selection.rows?.length ?? b.r1 - b.r0 + 1, columns: shownIn(b), selectedRows: selection.rows ?? null };
+  }
+
+  function copiedNotice(range: CellRange) {
+    setNotice({
+      text: t(range.columns.length === 1 ? "results.copiedOneColumn" : "results.copied", {
+        count: range.rows,
+        formattedCount: numbers.format(range.rows),
+        columns: numbers.format(range.columns.length),
+      }),
+      error: false,
+    });
+  }
+
   /** `displayed`: the cells as the grid shows them (SDB-385), only when the user picks it;
    *  every other copy is the database's own text. */
   async function copy(format: TextFormat, header: boolean, displayed = false) {
     setMenu(null);
-    if (!selection) return;
-    const b = bounds(selection);
-    const range: CellRange = { firstRow: b.r0, rows: selection.rows?.length ?? b.r1 - b.r0 + 1, columns: shownIn(b), selectedRows: selection.rows ?? null };
+    const range = selectedRange();
+    if (!range) return;
     try {
       const text = await call(commands.copyRows(result.id, session, range, format, header, displayed));
       // HTML goes to the clipboard as HTML (documents and spreadsheets paste a table) and as
       // its source for plain text.
       await writeClipboard(text, format === "html" ? text : undefined);
-      setNotice({
-        text: t(range.columns.length === 1 ? "results.copiedOneColumn" : "results.copied", {
-          count: range.rows,
-          formattedCount: numbers.format(range.rows),
-          columns: numbers.format(range.columns.length),
-        }),
-        error: false,
-      });
+      copiedNotice(range);
     } catch (e) {
       setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  /** Where the core reads the table of an UPDATE copy from (SDB-388): the table data tab's
+   *  table, or the statement the result came from. The core decides; it may refuse. */
+  const updateSource: UpdateSourceItem | null = tableData
+    ? { kind: "table", schema: tableData.schema, name: tableData.name }
+    : result.sql ? { kind: "query", sql: result.sql } : null;
+
+  async function copyUpdates() {
+    setMenu(null);
+    const range = selectedRange();
+    if (!range || !updateSource) return;
+    try {
+      const text = await call(commands.copyUpdates(result.id, session, range, updateSource));
+      await writeClipboard(text);
+      setNotice({ text: t("results.copiedUpdates", { count: range.rows, formattedCount: numbers.format(range.rows) }), error: false });
+    } catch (e) {
+      setNotice({ text: t("results.copyUpdatesRefused", { reason: e instanceof Error ? e.message : String(e) }), error: true });
     }
   }
 
@@ -2512,6 +2547,14 @@ export function ResultGrid({
                 {t("results.copyDisplayed")}
               </button>
             )}
+            {updateSource && (
+              <button role="menuitem" onClick={() => void copyUpdates()}>
+                {t("results.copyUpdate")}
+              </button>
+            )}
+            <button role="menuitem" onClick={() => { setMenu(null); setCopySpecial(selectedRange()); }}>
+              {t("results.copySpecial")}
+            </button>
           </GridSubmenu>
           {selection && !selection.rows && result.complete && (
             <button
@@ -2685,6 +2728,22 @@ export function ResultGrid({
         <div className={`grid-notice ${notice.error ? "error" : ""}`} role="status">
           {notice.text}
         </div>
+      )}
+      {copySpecial && (
+        <CopySpecialDialog
+          load={loadCopyDefaults}
+          copy={async (options) => {
+            const text = await call(commands.copySpecial(result.id, copySpecial, options));
+            await writeClipboard(text);
+            copiedNotice(copySpecial);
+            setCopySpecial(null);
+            scrollerRef.current?.focus();
+          }}
+          onClose={() => {
+            setCopySpecial(null);
+            scrollerRef.current?.focus();
+          }}
+        />
       )}
       {customFilter && (
         <CustomFilterDialog

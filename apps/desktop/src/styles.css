@@ -1882,6 +1882,13 @@ select {
 .display-format-row .field { display: flex; flex-direction: column; gap: var(--space-xs); flex: 1 1 0; min-width: 0; }
 .display-format-row .field > span { color: var(--muted); font-size: var(--text-sm); }
 .display-format-row select, .display-format-row input { width: 100%; min-width: 0; }
+/* "Copy special…" (SDB-388): two columns of options, the checkboxes under them. */
+.modal.copy-special { width: 400px; max-width: calc(100vw - var(--space-2xl)); }
+.copy-special-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-md) var(--space-lg); }
+.copy-special-fields .field { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
+.copy-special-fields .field > span { color: var(--muted); font-size: var(--text-sm); }
+.copy-special-fields select, .copy-special-fields input { width: 100%; min-width: 0; }
+.copy-special-checks { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-xs); }
 /* The variables dialog (SDB-383): rows of a name, its value and a remove button. */
 .modal.variables-dialog { width: 560px; max-width: calc(100vw - var(--space-2xl)); max-height: calc(100vh - var(--space-2xl)); overflow: auto; }
 .variables-heading { margin: var(--space-xl) 0 var(--space-xs); font-size: var(--text-md); font-weight: 600; }

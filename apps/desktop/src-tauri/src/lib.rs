@@ -3024,6 +3024,88 @@ async fn copy_rows(
     }
 }
 
+/// The rows a range selects, by position in the view: the rows chosen one by one, or the
+/// block (#315's selection). Refused past [`MAX_COPY_ROWS`].
+fn copied_rows(range: &CellRange) -> CmdResult<Vec<usize>> {
+    let rows: Vec<usize> = match &range.selected_rows {
+        Some(rows) => rows.iter().map(|&row| row as usize).collect(),
+        None => {
+            (range.first_row as usize..range.first_row as usize + range.rows as usize).collect()
+        }
+    };
+    if rows.len() > MAX_COPY_ROWS as usize {
+        return Err(format!(
+            "{} rows are too many to copy (at most {MAX_COPY_ROWS}): export them to a file",
+            rows.len()
+        ));
+    }
+    Ok(rows)
+}
+
+/// The copy defaults (SDB-388): what "Copy special…" chose last.
+#[command]
+async fn copy_defaults(state: State<'_, AppState>) -> CmdResult<CopySpecialItem> {
+    state
+        .history
+        .copy_defaults()
+        .await
+        .map(CopySpecialItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// "Copy special…" (SDB-388): a selection as delimited text, written by the core with the
+/// options given, which become the copy defaults once checked. The values are the database's
+/// own text, never the grid's display formats (a masked column's is the mask, ADR-051).
+#[command]
+async fn copy_special(
+    result: u32,
+    range: CellRange,
+    options: CopySpecialItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let rows = copied_rows(&range)?;
+    let options = options.into_options()?;
+    state
+        .history
+        .set_copy_defaults(options.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
+    spelaion_core::copy_special(&stored, &rows, &columns, &options).map_err(|e| e.to_string())
+}
+
+/// The selected rows as UPDATE statements, one per row by the table's primary key (SDB-388).
+/// The core decides the table and its key from the catalog, as it does for edits, and refuses
+/// anything else with the reason: a join, rows without the whole key, a masked column, rows
+/// read through another session.
+#[command]
+async fn copy_updates(
+    result: u32,
+    session: String,
+    range: CellRange,
+    source: UpdateSourceItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let rows = copied_rows(&range)?;
+    let open = state.session(&session).await?;
+    let update =
+        spelaion_core::update_copy_table(&open.session, ResultId(result.into()), source.into())
+            .await
+            .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
+    spelaion_core::copy_updates(&update, &stored, &rows, &columns).map_err(|e| e.to_string())
+}
+
 /// Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
 /// rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
 /// are the shown columns, in order.
@@ -5904,6 +5986,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update_tunnel,
             delete_tunnel,
             copy_rows,
+            copy_defaults,
+            copy_special,
+            copy_updates,
             copy_column_names,
             copy_column_in_list,
             find_in_result,

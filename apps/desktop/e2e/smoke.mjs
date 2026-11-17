@@ -925,6 +925,57 @@ try {
   const tuples = json.map((row) => `('${row.country.replaceAll("'", "''")}')`).join(",\n  ");
   assert.equal(await copied(6), `INSERT INTO table_name (country) VALUES ${tuples};\n`);
 
+  step("copy special: a custom delimiter, quote, row delimiter and row numbers, kept as the copy defaults (SDB-388)");
+  {
+    const openCopySpecial = async () => {
+      await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12);
+      await page.keyboard.press("Shift+ArrowDown");
+      await page.keyboard.press("Shift+ArrowRight");
+      await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12, { button: "right" });
+      await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
+      await panel.getByRole("menuitem", { name: "Copy special…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Copy special" });
+      await dialog.waitFor();
+      // The options arrive from the core's copy defaults.
+      await dialog.getByRole("combobox", { name: "Delimiter" }).waitFor();
+      return dialog;
+    };
+    let dialog = await openCopySpecial();
+    await dialog.getByRole("combobox", { name: "Delimiter" }).selectOption("other");
+    await dialog.getByRole("textbox", { name: "Character" }).fill("~");
+    await dialog.getByRole("combobox", { name: "Quote character" }).selectOption("'");
+    await dialog.getByRole("combobox", { name: "Row delimiter" }).selectOption("crLf");
+    await dialog.getByRole("textbox", { name: "NULL as" }).fill("NULL");
+    await dialog.getByRole("checkbox", { name: "Row numbers" }).check();
+    await shot("03b2-copy-special");
+    await dialog.getByRole("button", { name: "Copy", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    const lines = (await copied(7)).split("\r\n");
+    assert.deepEqual(lines[0].split("~"), ["#", "country", "orders"]);
+    assert.equal(lines.length, 4, lines.join("|"));
+    assert.equal(lines[1].split("~")[0], "1");
+    assert.equal(lines[2].split("~")[0], "2");
+    assert.equal(lines[3], "");
+    await panel.getByRole("status").filter({ hasText: "Copied 2 rows × 2 columns" }).waitFor();
+    // The choices are the copy defaults: the dialog opens with them. Options that could not be
+    // read back (the delimiter is the quote) are refused by the core, inside the dialog.
+    dialog = await openCopySpecial();
+    assert.equal(await dialog.getByRole("textbox", { name: "Character" }).inputValue(), "~");
+    assert.equal(await dialog.getByRole("combobox", { name: "Row delimiter" }).inputValue(), "crLf");
+    assert.ok(await dialog.getByRole("checkbox", { name: "Row numbers" }).isChecked());
+    await dialog.getByRole("textbox", { name: "Character" }).fill("'");
+    await dialog.getByRole("button", { name: "Copy", exact: true }).click();
+    await dialog.getByRole("alert").filter({ hasText: "the delimiter and the quote must be different characters" }).waitFor();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await dialog.waitFor({ state: "detached" });
+    // Copy as SQL UPDATE: a join is refused with its reason, nothing is copied.
+    await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12, { button: "right" });
+    await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
+    await panel.getByRole("menuitem", { name: "Copy as SQL UPDATE" }).click();
+    await panel.getByRole("status").filter({ hasText: "Could not copy as UPDATE: the result is not a plain SELECT of one table" }).waitFor();
+    assert.equal(await page.evaluate(() => window.__copied.length), 7);
+  }
+
   step("export: the loaded result, every row run again with CSV options, and a selection");
   // The native save dialog cannot be driven: src/dialogs.ts takes this path instead.
   const exportPath = (name) => join(userDir, name);

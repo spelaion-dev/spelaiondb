@@ -2673,6 +2673,95 @@ pub struct EditableTableItem {
     pub primary_key: Vec<String>,
 }
 
+/// Where rows copied as UPDATE statements come from (SDB-388): a table data tab's table, or
+/// the statement a query's result came from. The core decides the table and its key.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum UpdateSourceItem {
+    Table { schema: String, name: String },
+    Query { sql: String },
+}
+
+impl From<UpdateSourceItem> for spelaion_core::UpdateSource {
+    fn from(item: UpdateSourceItem) -> Self {
+        match item {
+            UpdateSourceItem::Table { schema, name } => Self::Table { schema, name },
+            UpdateSourceItem::Query { sql } => Self::Query { sql },
+        }
+    }
+}
+
+/// The line break between copied rows.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum RowDelimiterItem {
+    Lf,
+    CrLf,
+}
+
+/// "Copy special…" options, which are also the copy defaults (SDB-388). The core checks
+/// them: `delimiter` is one character, `quote` one or none (empty: never quoted).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CopySpecialItem {
+    pub delimiter: String,
+    pub quote: String,
+    pub row_delimiter: RowDelimiterItem,
+    pub null_text: String,
+    pub header: bool,
+    pub row_numbers: bool,
+}
+
+impl From<spelaion_core::CopySpecial> for CopySpecialItem {
+    fn from(options: spelaion_core::CopySpecial) -> Self {
+        Self {
+            delimiter: options.delimiter.to_string(),
+            quote: options.quote.map(String::from).unwrap_or_default(),
+            row_delimiter: match options.row_delimiter {
+                spelaion_core::RowDelimiter::Lf => RowDelimiterItem::Lf,
+                spelaion_core::RowDelimiter::CrLf => RowDelimiterItem::CrLf,
+            },
+            null_text: options.null_text,
+            header: options.header,
+            row_numbers: options.row_numbers,
+        }
+    }
+}
+
+impl CopySpecialItem {
+    /// The options as the core reads them, checked (`CopySpecial::check`).
+    pub fn into_options(self) -> Result<spelaion_core::CopySpecial, String> {
+        let one = |text: &str, what: &str| {
+            let mut chars = text.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Ok(c),
+                _ => Err(format!("the {what} is one character")),
+            }
+        };
+        let options = spelaion_core::CopySpecial {
+            delimiter: one(&self.delimiter, "delimiter")?,
+            quote: if self.quote.is_empty() {
+                None
+            } else {
+                Some(one(&self.quote, "quote")?)
+            },
+            row_delimiter: match self.row_delimiter {
+                RowDelimiterItem::Lf => spelaion_core::RowDelimiter::Lf,
+                RowDelimiterItem::CrLf => spelaion_core::RowDelimiter::CrLf,
+            },
+            null_text: self.null_text,
+            header: self.header,
+            row_numbers: self.row_numbers,
+        };
+        options.check()?;
+        Ok(options)
+    }
+}
+
 impl From<TableInfo> for TableDetails {
     fn from(t: TableInfo) -> Self {
         Self {
