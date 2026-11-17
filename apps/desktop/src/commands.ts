@@ -245,6 +245,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "results.close": { enabled: (c) => Boolean(activeResult(c)?.complete), run: editorCommand("resultClose") },
   "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
   "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },
+  "editor.variables": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("variables") },
   "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
   "editor.lineComment": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("lineComment") },

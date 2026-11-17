@@ -105,6 +105,10 @@ export interface Tab {
   serverVersion: string | null;
   sql: string;
   run: RunState | null;
+  /** This tab's `${name}` variables (SDB-383): in memory only, never saved with the tab. */
+  variables?: Record<string, string>;
+  /** The last value given to each `:name` parameter in this tab, offered again; memory only. */
+  params?: Record<string, string>;
   /** Name it was saved under (or opened from), offered again by Ctrl+S. */
   snippetName?: string;
   /** A table data tab (pages of one table) instead of an SQL editor. */
@@ -239,7 +243,7 @@ export interface ExplorerReveal {
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
-export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | ResultTabCommand | EditorActionId;
+export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | ResultTabCommand | EditorActionId;
 /** What a result tab's menu asks about the tab's active result (SDB-378). */
 export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "resultClose";
 

@@ -2501,6 +2501,106 @@ async fn bind_params(
         .map_err(|e| e.to_string())
 }
 
+/// The values a tab's `${name}` variables take (SDB-383): its connection's, from the local
+/// store, under the tab's own (`tab`), which win. Nothing else is ever read for a name.
+async fn variable_values(
+    state: &AppState,
+    session: &str,
+    tab: HashMap<String, String>,
+) -> CmdResult<(Arc<OpenConnection>, HashMap<String, String>)> {
+    let (open, workspace) = {
+        let sessions = state.sessions.lock().await;
+        let entry = sessions
+            .get(session)
+            .ok_or_else(|| format!("there is no open connection for {session}"))?;
+        (entry.open.clone(), entry.history_workspace.clone())
+    };
+    let mut values: HashMap<String, String> = state
+        .history
+        .connection_variables(workspace, open.resolved.id.to_string())
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+    values.extend(tab);
+    Ok((open, values))
+}
+
+/// The `${name}` variables of a script's statements, in order, and which of them have no
+/// value yet (neither the tab's nor its connection's), so the UI can ask for those.
+#[command]
+async fn script_variables(
+    session: String,
+    sql: String,
+    tab: HashMap<String, String>,
+    state: State<'_, AppState>,
+) -> CmdResult<ScriptVariablesItem> {
+    let (open, values) = variable_values(&state, &session, tab).await?;
+    let names = spelaion_core::script_variables(open.session.dialect().as_ref(), &sql);
+    let missing = names
+        .iter()
+        .filter(|name| !values.contains_key(*name))
+        .cloned()
+        .collect();
+    Ok(ScriptVariablesItem { names, missing })
+}
+
+/// The script with its variables' values written in, by the core, before anything else reads
+/// it: the guard, the read-only checks and the run are given this text. Refused when a value
+/// would change how the script is split or read.
+#[command]
+async fn substitute_variables(
+    session: String,
+    sql: String,
+    tab: HashMap<String, String>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let (open, values) = variable_values(&state, &session, tab).await?;
+    spelaion_core::substitute_variables(open.session.dialect().as_ref(), &sql, &values)
+        .map_err(|e| e.to_string())
+}
+
+/// A connection's variables, by name (SDB-383): local values, kept in the local store.
+#[command]
+async fn connection_variables(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<VariableItem>> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    Ok(state
+        .history
+        .connection_variables(workspace, connection)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(name, value)| VariableItem { name, value })
+        .collect())
+}
+
+/// Sets one of a connection's variables, or removes it (`null`). The store refuses a name or
+/// a value that cannot be one.
+#[command]
+async fn set_connection_variable(
+    connection: String,
+    name: String,
+    value: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    state
+        .history
+        .set_connection_variable(workspace, connection, name, value)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Whether a name and a value can be a variable's, as the core decides it (for a tab's own
+/// variables, which never leave the page's memory).
+#[command]
+async fn variable_is_valid(name: String, value: String) -> CmdResult<bool> {
+    Ok(spelaion_core::is_variable_name(&name) && spelaion_core::is_variable_value(&value))
+}
+
 fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelaion_core::RiskyStatement> {
     spelaion_core::run_risks(&open.session, sql, &open.resolved.safeguards())
 }
@@ -5292,6 +5392,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             script_risks,
             script_params,
             bind_params,
+            script_variables,
+            substitute_variables,
+            connection_variables,
+            set_connection_variable,
+            variable_is_valid,
             parse_connection_url,
             connection_import::scan_connections,
             kube_contexts,

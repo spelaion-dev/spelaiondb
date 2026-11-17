@@ -73,6 +73,7 @@ export const COMMANDS = [
   { id: "results.rename", category: "data", label: "editor:resultTabs.rename", menus: ["result"] },
   { id: "results.close", category: "data", label: "editor:resultTabs.close", menus: ["result"] },
   { id: "editor.cancel", category: "editor", label: "app:commands.cancelQuery" },
+  { id: "editor.variables", category: "editor", label: "editor:variables.command", menus: ["editor"] },
   { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor" },
   { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", menus: ["editor"] },
   { id: "editor.blockComment", category: "editor", label: "editor:actions.blockComment", shortcut: "Shift+Alt+A", scope: "editor", menus: ["editor"] },

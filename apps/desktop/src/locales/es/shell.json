@@ -293,6 +293,8 @@
     "runAll": "Ejecutar las {{count}}"
   },
   "params": {
+    "variablesTitle": "Valores de las variables",
+    "variablesExplanation": "Cada valor se escribe en la sentencia tal cual, antes de ejecutarla, y se conserva en esta pestaña. Guárdalo para la conexión en Variables… (el menú de acciones del editor).",
     "title": "Parámetros de la consulta",
     "explanation": "Los números, NULL, TRUE y FALSE se escriben tal cual; lo demás como texto, entrecomillado para esta base de datos.",
     "cancel": "Cancelar",

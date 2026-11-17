@@ -12,6 +12,7 @@ import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, open
 import { connectionTooltip } from "../connectionInfo";
 import { afterRun, endStatementResults, withoutResults, withStartedResult } from "../runResults";
 import { ResultTabList } from "./ResultTabs";
+import { VariablesDialog } from "./VariablesDialog";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
@@ -122,8 +123,38 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const startingRun = useRef(false);
   /** The text of each statement of the running script, by index: what an export runs again. */
   const statementTexts = useRef<Record<number, string>>({});
-  /** Values given to `:name` placeholders in this tab, offered again next time. */
-  const paramValues = useRef<Record<string, string>>({});
+  const [variablesOpen, setVariablesOpen] = useState(false);
+  /** This tab as the store has it now: its variables and remembered parameters (SDB-383). */
+  const tabNow = () => useApp.getState().tabs.find((item) => item.id === tab.id);
+
+  /** `text` with the tab's and its connection's `${name}` variables written in by the core
+   *  (SDB-383), before the parameters, the guard and the run read it. A variable without a
+   *  value is asked for and kept for this tab. `null` when the user cancels; throws what the
+   *  core refuses (a value that would change how the statement is split or read). */
+  async function withVariables(text: string): Promise<string | null> {
+    let values = tabNow()?.variables ?? {};
+    const used = await call(commands.scriptVariables(tab.id, text, values));
+    if (used.names.length === 0) return text;
+    if (used.missing.length > 0) {
+      const asked = await useDialogs.getState().askParams(used.missing, {}, true);
+      if (!asked) return null;
+      values = { ...values, ...asked };
+      updateTab(tab.id, { variables: values });
+    }
+    return call(commands.substituteVariables(tab.id, text, values));
+  }
+
+  /** `text` with its `:name` parameters written in as literals by the core. Each parameter's
+   *  last value in this tab is offered again. `null` when the user cancels. */
+  async function withParams(text: string): Promise<string | null> {
+    const names = await call(commands.scriptParams(tab.id, text));
+    if (names.length === 0) return text;
+    const remembered = tabNow()?.params ?? {};
+    const values = await useDialogs.getState().askParams(names, remembered);
+    if (!values) return null;
+    updateTab(tab.id, { params: { ...remembered, ...values } });
+    return call(commands.bindParams(tab.id, text, values));
+  }
   const editor = useRef<SqlEditorHandle>(null);
   const [plan, setPlan] = useState<PlanSummary | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
@@ -645,6 +676,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
         case "explain":
           if (!running && !runBlocked) void explainAction.current();
           break;
+        case "variables":
+          setVariablesOpen(true);
+          break;
         case "format":
           editor.current?.format();
           break;
@@ -908,20 +942,19 @@ export function EditorTab({ tab }: { tab: Tab }) {
     try {
     if (!(await ensureConnected())) return;
     setPlan(null); setPlanOpen(false);
-    // `:name` placeholders: the core lists them and writes the values in as literals.
-    let text = request.text;
-    const names = await call(commands.scriptParams(tab.id, text)).catch(() => [] as string[]);
-    if (names.length > 0) {
-      const values = await useDialogs.getState().askParams(names, paramValues.current);
-      if (!values) return;
-      paramValues.current = { ...paramValues.current, ...values };
-      try {
-        text = await call(commands.bindParams(tab.id, text, values));
-      } catch (e) {
-        const detail = message(e);
-        updateTab(tab.id, { run: failedRun(detail, { key: "messages.runFailed", values: { detail } }) });
-        return;
-      }
+    // `${name}` variables first, written in as they are, then `:name` placeholders, written
+    // in as literals: the core does both, and everything after reads the text that runs.
+    let text: string;
+    try {
+      const written = await withVariables(request.text);
+      if (written === null) return;
+      const bound = await withParams(written);
+      if (bound === null) return;
+      text = bound;
+    } catch (e) {
+      const detail = message(e);
+      updateTab(tab.id, { run: failedRun(detail, { key: "messages.runFailed", values: { detail } }) });
+      return;
     }
     // Positions in an error refer to the text that ran; with values written in, they no
     // longer match the editor, so nothing is underlined.
@@ -1000,14 +1033,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
       if (!support.estimated) { setNotice({ text: t("plan.unsupported", { engine: connection?.engine }), error: true }); return; }
       const request = await editor.current?.currentRequest();
       if (!request?.text.trim()) return;
-      let text = request.text;
-      const names = await call(commands.scriptParams(tab.id, text));
-      if (names.length) {
-        const values = await useDialogs.getState().askParams(names, paramValues.current);
-        if (!values) return;
-        paramValues.current = { ...paramValues.current, ...values };
-        text = await call(commands.bindParams(tab.id, text, values));
-      }
+      const written = await withVariables(request.text);
+      if (written === null) return;
+      const text = await withParams(written);
+      if (text === null) return;
       const analyze = analyzePlan && support.analyze;
       let options = { analyze, buffers: analyze && planBuffers && support.buffers, analyzeConfirmed: false, confirmed: false, timeoutSeconds: runOptionsOf(tab).timeoutSeconds };
       const check = await call(commands.explainPreflight(tab.id, text, options));
@@ -1195,6 +1224,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults")} title={t(maximized ? "restoreResults" : "maximizeResults")} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
+      {variablesOpen && !tab.table && (
+        <VariablesDialog tabId={tab.id} connectionId={tab.connectionId} connectionName={connection?.name ?? null} onClose={() => setVariablesOpen(false)} />
+      )}
       <div className="toolbar">
         <select
           value={tab.connectionId ?? ""}

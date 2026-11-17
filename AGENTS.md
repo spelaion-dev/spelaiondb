@@ -536,6 +536,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   writes last in both directions on every engine, in the `ORDER BY` and in the comparison that
   fetches the next page alike.
   `tests/query_pages.rs` writes between pages on every engine.
+  `variables.rs` (SDB-383) writes the editor's `${name}` variables into a script before
+  anything else reads it, so the guard, the read-only checks and masking see the text that
+  runs: values are written in as they are, only in code (`Dialect::code_ranges`), one
+  statement at a time after splitting, and a value that ends its statement, starts another or
+  opens a string or a comment it does not close is refused. A name is only looked up in the
+  values given (the tab's, over its connection's in `spelaion-store`'s `connection_variables`):
+  never the environment, and `${env:…}` is not a name. Agents have no variables. Like
+  `classify.rs`, any change there needs tests that try to get around it (`tests/variables.rs`,
+  on every dialect).
   `result_tabs.rs` (SDB-378) is each editor tab's result tabs over the `ResultStore`: which
   results a run replaces is decided there, never in the UI. A run frees the results that are
   not pinned, a run into a new tab frees none, a re-run of one result takes its place when

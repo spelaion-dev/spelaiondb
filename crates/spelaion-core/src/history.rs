@@ -232,6 +232,18 @@ enum Request {
         connection: String,
         reply: Reply<ExplorerFilter>,
     },
+    GetVariables {
+        workspace: String,
+        connection: String,
+        reply: Reply<Vec<(String, String)>>,
+    },
+    SetVariable {
+        workspace: String,
+        connection: String,
+        name: String,
+        value: Option<String>,
+        reply: Reply<()>,
+    },
     SetFilter {
         workspace: String,
         connection: String,
@@ -474,6 +486,27 @@ impl QueryHistory {
                             reply,
                         } => {
                             let _ = reply.send(store.explorer_filter(&workspace, &connection));
+                        }
+                        Request::GetVariables {
+                            workspace,
+                            connection,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.connection_variables(&workspace, &connection));
+                        }
+                        Request::SetVariable {
+                            workspace,
+                            connection,
+                            name,
+                            value,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.set_connection_variable(
+                                &workspace,
+                                &connection,
+                                &name,
+                                value.as_deref(),
+                            ));
                         }
                         Request::SetFilter {
                             workspace,
@@ -907,6 +940,39 @@ impl QueryHistory {
             workspace,
             from,
             to,
+            reply,
+        })
+        .await
+    }
+
+    /// A connection's `${name}` variables for the editor's scripts (SDB-383), by name. Local
+    /// values: they are only ever written into a statement the user runs from the editor.
+    pub async fn connection_variables(
+        &self,
+        workspace: String,
+        connection: String,
+    ) -> Result<Vec<(String, String)>, HistoryError> {
+        self.request(|reply| Request::GetVariables {
+            workspace,
+            connection,
+            reply,
+        })
+        .await
+    }
+
+    /// Sets one of a connection's variables, or removes it (`None`).
+    pub async fn set_connection_variable(
+        &self,
+        workspace: String,
+        connection: String,
+        name: String,
+        value: Option<String>,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetVariable {
+            workspace,
+            connection,
+            name,
+            value,
             reply,
         })
         .await

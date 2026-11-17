@@ -683,7 +683,12 @@ mod tests {
     fn appended_migration_preserves_old_entries_settings_and_opt_out() {
         let path = temp("library-migration");
         let conn = rusqlite::Connection::open(&path).unwrap();
-        let old = &crate::MIGRATIONS[..crate::MIGRATIONS.len() - 1];
+        // Every migration before this module's, wherever later ones are appended.
+        let at = crate::MIGRATIONS
+            .iter()
+            .position(|migration| *migration == MIGRATION)
+            .expect("the library migration is in the list");
+        let old = &crate::MIGRATIONS[..at];
         for migration in old {
             conn.execute_batch(migration).unwrap();
         }

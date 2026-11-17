@@ -1912,6 +1912,109 @@ try {
     assert.deepEqual(await tabNames(), ["Result 1", "Result 2", "the third"]);
   }
 
+  step("variables: ${name} of the tab and of the connection, asked when unset, and a remembered :name parameter (SDB-383)");
+  {
+    const scriptBefore = await sqlEditor.innerText();
+    const ended = () => panel.locator(".editor-action-run[data-run-target]").waitFor();
+    const cellIs = async (expected) => {
+      let cell = "";
+      for (let i = 0; i < 20 && cell !== expected; i++) {
+        cell = await firstCell();
+        if (cell !== expected) await page.waitForTimeout(250);
+      }
+      assert.equal(cell, expected);
+    };
+    const variables = page.getByRole("dialog", { name: "Variables", exact: true });
+    const openVariables = async () => {
+      await actions.getByRole("button", { name: "Editor actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Variables…", exact: true }).click();
+      await variables.waitFor();
+    };
+    const addVariable = async (name, value, scope) => {
+      await variables.locator('input[name="variableName"]').fill(name);
+      await variables.locator('input[name="variableValue"]').fill(value);
+      await variables.locator('select[name="variableScope"]').selectOption(scope);
+      await variables.getByRole("button", { name: "Add variable", exact: true }).click();
+    };
+    const valueOf = (scope, name) => variables.locator(`.variables-list[data-scope="${scope}"] li`, { hasText: `\${${name}}` }).locator("input");
+    // One variable for this tab, one saved for the connection; a name that is not one is
+    // refused by the core (the connection files' ${env:…} means nothing here).
+    await openVariables();
+    await addVariable("smoke_a", "40", "tab");
+    await valueOf("tab", "smoke_a").waitFor();
+    await addVariable("smoke_b", "2", "connection");
+    await valueOf("connection", "smoke_b").waitFor();
+    assert.equal(await valueOf("connection", "smoke_b").inputValue(), "2");
+    await addVariable("env:HOME", "x", "tab");
+    await variables.getByRole("alert").filter({ hasText: "A name is a letter or _" }).waitFor();
+    assert.equal(await variables.locator('.variables-list[data-scope="tab"] li').count(), 1);
+    await shot("05f-variables-light");
+    await variables.getByRole("button", { name: "Close", exact: true }).click();
+    await variables.waitFor({ state: "detached" });
+    await setTheme("dark", "dark");
+    await openVariables();
+    await shot("05f-variables-dark");
+    await variables.getByRole("button", { name: "Close", exact: true }).click();
+    await variables.waitFor({ state: "detached" });
+    await setTheme("light", "light");
+    // A variable without a value is asked for, then the :name parameter; in a string the
+    // ${name} is left as written.
+    await replaceQuery(panel, "select ${smoke_a} + ${smoke_b} + ${smoke_c} as total, :smoke_p as p, '${smoke_a}' as untouched");
+    const asksVariables = page.getByRole("dialog", { name: "Values for the variables", exact: true });
+    const asksParams = page.getByRole("dialog", { name: "Query parameters", exact: true });
+    await run(panel);
+    await asksVariables.waitFor();
+    assert.deepEqual(await asksVariables.locator(".params-list .field span").allInnerTexts(), ["${smoke_c}"]);
+    await asksVariables.locator(".params-list input").fill("100");
+    await asksVariables.getByRole("button", { name: "Run", exact: true }).click();
+    await asksParams.waitFor();
+    assert.deepEqual(await asksParams.locator(".params-list .field span").allInnerTexts(), [":smoke_p"]);
+    await asksParams.locator(".params-list input").fill("remembered");
+    await asksParams.getByRole("button", { name: "Run", exact: true }).click();
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await ended();
+    await cellIs("142");
+    // Run it again: the variable asked before is kept for the tab, and the parameter's last
+    // value is offered.
+    await run(panel);
+    await asksParams.waitFor();
+    assert.equal(await asksVariables.count(), 0);
+    assert.equal(await asksParams.locator(".params-list input").inputValue(), "remembered");
+    await asksParams.getByRole("button", { name: "Run", exact: true }).click();
+    await asksParams.waitFor({ state: "detached" });
+    await ended();
+    await cellIs("142");
+    // The dialog lists what the tab remembers; the saved value changes what the next run reads.
+    await openVariables();
+    await valueOf("tab", "smoke_c").waitFor();
+    assert.equal(await variables.locator('.variables-list[data-scope="params"] li').innerText().then((text) => text.replace(/\s+/g, " ").trim()), ":smoke_p remembered");
+    await valueOf("connection", "smoke_b").fill("3");
+    await valueOf("connection", "smoke_b").press("Enter");
+    await page.waitForFunction(() => document.querySelector('.variables-list[data-scope="connection"] input')?.defaultValue === "3");
+    // A value that would end the statement and start another is refused by the core.
+    await valueOf("tab", "smoke_c").fill("100; drop table kept_probe");
+    await valueOf("tab", "smoke_c").press("Enter");
+    await variables.getByRole("button", { name: "Close", exact: true }).click();
+    await run(panel);
+    await panel.locator(".messages", { hasText: "would end its statement or start another one" }).waitFor();
+    assert.equal(await asksParams.count(), 0, "nothing is asked, checked or run after a refused value");
+    // The guard reads the statement with its values: an empty filter makes a DELETE without WHERE.
+    await replaceQuery(panel, "delete from kept_probe ${smoke_filter}");
+    await run(panel);
+    await asksVariables.waitFor();
+    await asksVariables.getByRole("button", { name: "Run", exact: true }).click();
+    const variableRisk = page.getByRole("dialog", { name: "Run these statements?" });
+    await variableRisk.getByText("DELETE without WHERE: deletes every row").waitFor();
+    assert.equal(await variableRisk.locator(".risk-list pre").innerText(), "delete from kept_probe");
+    await page.keyboard.press("Enter");
+    await variableRisk.waitFor({ state: "detached" });
+    // The script of the steps that follow, and its three results.
+    await replaceQuery(panel, scriptBefore);
+    await run(panel);
+    await panel.locator(".result-tabs .result-tab").nth(2).waitFor();
+    await ended();
+  }
+
   step("run says what it will run: a statement, the selection or the script (SDB-379)");
   // The name and the tooltip come from the core's answer for the cursor and the selection.
   const runButton = actions.locator(".editor-action-run[data-run-target]");
