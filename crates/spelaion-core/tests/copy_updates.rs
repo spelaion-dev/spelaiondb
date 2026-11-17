@@ -330,7 +330,7 @@ async fn copied_updates_bring_every_row_back_on_every_engine() {
             run(label, &session, sql).await;
         }
         // MySQL's plugin forgets the session's database after a statement with a backslash in
-        // a string (a Backlog item): asked again, as the tab bar does after a run.
+        // a string (SDB-415): asked again, as the tab bar does after a run.
         let _ = session.connection().current_database().await;
         let original = run(label, &session, QUERY).await.expect("a result");
         let before = cells(&session, original);
