@@ -759,6 +759,35 @@ impl Default for GridPreferences {
     }
 }
 
+/// The copy defaults (SDB-388): what "Copy special…" chose last, for every workspace in this
+/// user directory. Kept as text; the core checks what they mean before they are saved and
+/// reads them leniently (`spelaion-core`'s `History::copy_defaults`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyPreferences {
+    /// One character.
+    pub delimiter: String,
+    /// One character, or empty: never quoted.
+    pub quote: String,
+    /// `lf` or `crlf`.
+    pub row_delimiter: String,
+    pub null_text: String,
+    pub header: bool,
+    pub row_numbers: bool,
+}
+
+impl Default for CopyPreferences {
+    fn default() -> Self {
+        Self {
+            delimiter: "\t".into(),
+            quote: "\"".into(),
+            row_delimiter: "lf".into(),
+            null_text: String::new(),
+            header: true,
+            row_numbers: false,
+        }
+    }
+}
+
 /// What a script run does by default when a statement fails (ADR-035); each run may choose
 /// another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1640,6 +1669,46 @@ impl Store {
         self.set_flag("grid.header_comment", header_comment)?;
         self.set_personal_setting("grid.font_size", &font_size.to_string())?;
         self.set_personal_setting("results.kept_tabs", &result_tabs.to_string())
+    }
+
+    /// The copy defaults (SDB-388), each at its default until it is changed.
+    pub fn get_copy_preferences(&self) -> Result<CopyPreferences, StoreError> {
+        let defaults = CopyPreferences::default();
+        let text = |key: &str, default: String| {
+            Ok::<_, StoreError>(self.personal_setting(key)?.unwrap_or(default))
+        };
+        Ok(CopyPreferences {
+            delimiter: text("copy.delimiter", defaults.delimiter)?,
+            quote: text("copy.quote", defaults.quote)?,
+            row_delimiter: text("copy.row_delimiter", defaults.row_delimiter)?,
+            null_text: text("copy.null_text", defaults.null_text)?,
+            header: self.get_flag("copy.header", defaults.header)?,
+            row_numbers: self.get_flag("copy.row_numbers", defaults.row_numbers)?,
+        })
+    }
+
+    /// Saves the copy defaults, all of them or nothing: a delimiter of one character, a quote
+    /// of at most one, a known row delimiter and a NULL text of one short line (the core has
+    /// checked what they mean together).
+    pub fn set_copy_preferences(&self, preferences: &CopyPreferences) -> Result<(), StoreError> {
+        let one_char = |text: &str| text.chars().count() == 1;
+        let valid = one_char(&preferences.delimiter)
+            && (preferences.quote.is_empty() || one_char(&preferences.quote))
+            && matches!(preferences.row_delimiter.as_str(), "lf" | "crlf")
+            && preferences.null_text.len() <= 128
+            && !preferences.null_text.chars().any(char::is_control);
+        if !valid {
+            return Err(StoreError::new("invalid copy preferences".into()));
+        }
+        let transaction = self.conn.unchecked_transaction()?;
+        self.set_personal_setting("copy.delimiter", &preferences.delimiter)?;
+        self.set_personal_setting("copy.quote", &preferences.quote)?;
+        self.set_personal_setting("copy.row_delimiter", &preferences.row_delimiter)?;
+        self.set_personal_setting("copy.null_text", &preferences.null_text)?;
+        self.set_flag("copy.header", preferences.header)?;
+        self.set_flag("copy.row_numbers", preferences.row_numbers)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// The user's read-only mode for every agent (ADR-033). Off until turned on; any value
@@ -2696,6 +2765,68 @@ mod tests {
         }
         assert_eq!(reopened.get_display_preferences().unwrap(), changed);
         // The grid's other preferences are kept apart.
+        assert_eq!(
+            reopened.get_grid_preferences().unwrap(),
+            GridPreferences::default()
+        );
+    }
+
+    #[test]
+    fn copy_preferences_start_at_their_defaults_and_persist() {
+        let path = temp("copy");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.get_copy_preferences().unwrap(),
+            CopyPreferences::default()
+        );
+        // Every field is saved on its own: each one changed from its default.
+        let changed = CopyPreferences {
+            delimiter: ";".into(),
+            quote: String::new(),
+            row_delimiter: "crlf".into(),
+            null_text: "NULL".into(),
+            header: false,
+            row_numbers: true,
+        };
+        store.set_copy_preferences(&changed).unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.get_copy_preferences().unwrap(), changed);
+        // What could not be read back is refused, and nothing of it is saved.
+        for refused in [
+            CopyPreferences {
+                delimiter: String::new(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                delimiter: ";;".into(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                quote: "''".into(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                row_delimiter: "cr".into(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                null_text: "a\nb".into(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                null_text: "x".repeat(129),
+                header: true,
+                ..changed.clone()
+            },
+        ] {
+            assert!(
+                reopened.set_copy_preferences(&refused).is_err(),
+                "{refused:?}"
+            );
+        }
+        assert_eq!(reopened.get_copy_preferences().unwrap(), changed);
+        // The grid's preferences are kept apart.
         assert_eq!(
             reopened.get_grid_preferences().unwrap(),
             GridPreferences::default()

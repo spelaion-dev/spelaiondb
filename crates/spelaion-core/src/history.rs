@@ -37,6 +37,9 @@ pub enum HistoryError {
     /// Display settings the core cannot use (SDB-385): nothing was saved.
     #[error("{0}")]
     Display(#[from] crate::DisplayError),
+    /// Copy defaults whose text could not be read back (SDB-388): nothing was saved.
+    #[error("{0}")]
+    CopyOptions(String),
     #[error("could not start query history: {0}")]
     Start(#[source] std::io::Error),
     #[error("unsupported language; expected system, en or es")]
@@ -190,6 +193,13 @@ enum Request {
     },
     GetDisplay {
         reply: Reply<spelaion_store::DisplayPreferences>,
+    },
+    GetCopy {
+        reply: Reply<spelaion_store::CopyPreferences>,
+    },
+    SetCopy {
+        preferences: spelaion_store::CopyPreferences,
+        reply: Reply<()>,
     },
     SetDisplay {
         preferences: spelaion_store::DisplayPreferences,
@@ -452,6 +462,12 @@ impl QueryHistory {
                         }
                         Request::GetDisplay { reply } => {
                             let _ = reply.send(store.get_display_preferences());
+                        }
+                        Request::GetCopy { reply } => {
+                            let _ = reply.send(store.get_copy_preferences());
+                        }
+                        Request::SetCopy { preferences, reply } => {
+                            let _ = reply.send(store.set_copy_preferences(&preferences));
                         }
                         Request::SetDisplay { preferences, reply } => {
                             let _ = reply.send(store.set_display_preferences(&preferences));
@@ -980,6 +996,33 @@ impl QueryHistory {
         self.request(|reply| Request::SetDisplay { preferences, reply })
             .await?;
         Ok(display)
+    }
+
+    /// The copy defaults (SDB-388): what "Copy special…" chose last. What was saved is read
+    /// leniently: options the core cannot read back are the defaults.
+    pub async fn copy_defaults(&self) -> Result<crate::CopySpecial, HistoryError> {
+        let saved = self.request(|reply| Request::GetCopy { reply }).await?;
+        Ok(copy_special_of(&saved))
+    }
+
+    /// Saves the copy defaults, after checking them (`CopySpecial::check`): options whose text
+    /// could not be read back are refused and nothing changes.
+    pub async fn set_copy_defaults(&self, options: crate::CopySpecial) -> Result<(), HistoryError> {
+        options.check().map_err(HistoryError::CopyOptions)?;
+        let preferences = spelaion_store::CopyPreferences {
+            delimiter: options.delimiter.to_string(),
+            quote: options.quote.map(String::from).unwrap_or_default(),
+            row_delimiter: match options.row_delimiter {
+                crate::RowDelimiter::Lf => "lf",
+                crate::RowDelimiter::CrLf => "crlf",
+            }
+            .into(),
+            null_text: options.null_text,
+            header: options.header,
+            row_numbers: options.row_numbers,
+        };
+        self.request(|reply| Request::SetCopy { preferences, reply })
+            .await
     }
 
     /// How the result grid draws its cells (zebra rows, NULL, booleans).
@@ -1693,6 +1736,39 @@ impl PendingEntry {
 
 /// The display settings as they were saved, with whatever cannot be used any more left at its
 /// default: the grid must always open.
+/// The copy defaults as saved, or the defaults where they cannot be used: a field that is not
+/// one character, an unknown row delimiter, or options that together could not be read back.
+fn copy_special_of(saved: &spelaion_store::CopyPreferences) -> crate::CopySpecial {
+    let defaults = crate::CopySpecial::default();
+    let one = |text: &str| {
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => Some(c),
+            _ => None,
+        }
+    };
+    let options = crate::CopySpecial {
+        delimiter: one(&saved.delimiter).unwrap_or(defaults.delimiter),
+        quote: if saved.quote.is_empty() {
+            None
+        } else {
+            one(&saved.quote).or(defaults.quote)
+        },
+        row_delimiter: match saved.row_delimiter.as_str() {
+            "crlf" => crate::RowDelimiter::CrLf,
+            _ => crate::RowDelimiter::Lf,
+        },
+        null_text: saved.null_text.clone(),
+        header: saved.header,
+        row_numbers: saved.row_numbers,
+    };
+    if options.check().is_ok() {
+        options
+    } else {
+        defaults
+    }
+}
+
 fn display_format_of(saved: &spelaion_store::DisplayPreferences) -> crate::DisplayFormat {
     let mut format = crate::DisplayFormat {
         as_stored: saved.as_stored,
@@ -1741,6 +1817,44 @@ mod tests {
 
     use super::*;
     use crate::ResultStore;
+
+    #[test]
+    fn copy_defaults_are_read_leniently() {
+        let saved = spelaion_store::CopyPreferences {
+            delimiter: ";".into(),
+            quote: String::new(),
+            row_delimiter: "crlf".into(),
+            null_text: "NULL".into(),
+            header: false,
+            row_numbers: true,
+        };
+        assert_eq!(
+            copy_special_of(&saved),
+            crate::CopySpecial {
+                delimiter: ';',
+                quote: None,
+                row_delimiter: crate::RowDelimiter::CrLf,
+                null_text: "NULL".into(),
+                header: false,
+                row_numbers: true,
+            }
+        );
+        // A field it cannot use is its default; options that together could not be read
+        // back (the NULL text holds the delimiter) are all the defaults.
+        let odd = spelaion_store::CopyPreferences {
+            delimiter: "ab".into(),
+            row_delimiter: "cr".into(),
+            ..saved.clone()
+        };
+        let read = copy_special_of(&odd);
+        assert_eq!(read.delimiter, '\t');
+        assert_eq!(read.row_delimiter, crate::RowDelimiter::Lf);
+        let clash = spelaion_store::CopyPreferences {
+            null_text: "a;b".into(),
+            ..saved
+        };
+        assert_eq!(copy_special_of(&clash), crate::CopySpecial::default());
+    }
 
     #[derive(Default)]
     struct ContextState {

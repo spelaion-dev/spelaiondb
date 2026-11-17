@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
 use spelaion_driver_api::{ColumnMeta, Dialect, LogicalType, Value};
 
+use crate::edit::{UpdateCopyError, UpdateTable};
+use crate::generate::qualified;
 use crate::results::StoredResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -820,6 +822,11 @@ pub enum CopyError {
     NoTable,
     #[error("the result has no column {0}")]
     NoSuchColumn(usize),
+    #[error("the result has no row {0}")]
+    NoSuchRow(usize),
+    /// "Copy special…" options whose text could not be read back (SDB-388).
+    #[error("{0}")]
+    Options(String),
     #[error(
         "the column holds more than {MAX_IN_LIST:} different values: too many for an IN list (filter the rows first)"
     )]
@@ -897,6 +904,244 @@ pub fn column_in_list(
         }
     }
     Ok(format!("({})", items.join(", ")))
+}
+
+/// The rows of the view at `rows` (positions, in display order, each once) as one `UPDATE`
+/// each (SDB-388): `SET` the selected `columns` that are not part of the primary key, `WHERE`
+/// every key column equals the row's value, with names quoted and values written as literals
+/// by the engine's dialect ([`sql_literal`], MySQL's backslash rule included). The table and
+/// its key are [`UpdateTable`]'s, from the catalog; the values are the stored, typed result's.
+/// A masked column, in the key or in the selection, is refused (ADR-051): the result holds
+/// the mask, and an UPDATE that left it out would not be the one the user selected.
+pub fn copy_updates(
+    update: &UpdateTable,
+    result: &StoredResult,
+    rows: &[usize],
+    columns: &[usize],
+) -> Result<String, UpdateCopyError> {
+    update.target.check(result)?;
+    let dialect = update.target.dialect();
+    let table = &update.table;
+    let metas = &result.schema().columns;
+    let position = |name: &str| metas.iter().position(|m| m.name == name);
+    let mut keys = Vec::with_capacity(table.primary_key.len());
+    for key in &table.primary_key {
+        let at = position(key).ok_or_else(|| UpdateCopyError::KeyNotInResult(key.clone()))?;
+        if result.is_masked(at) {
+            return Err(UpdateCopyError::Masked(key.clone()));
+        }
+        keys.push((at, key.as_str()));
+    }
+    let mut set: Vec<usize> = Vec::new();
+    for &column in columns {
+        let meta = metas
+            .get(column)
+            .ok_or_else(|| UpdateCopyError::Failed(format!("the result has no column {column}")))?;
+        if table.primary_key.contains(&meta.name) || set.contains(&column) {
+            continue;
+        }
+        if !table.columns.iter().any(|c| c.name == meta.name) {
+            return Err(UpdateCopyError::NotATableColumn(meta.name.clone()));
+        }
+        if result.is_masked(column) {
+            return Err(UpdateCopyError::Masked(meta.name.clone()));
+        }
+        set.push(column);
+    }
+    if set.is_empty() {
+        return Err(UpdateCopyError::OnlyKeyColumns);
+    }
+    let name = qualified(dialect, &table.object.schema, &table.object.name);
+    let engine = dialect.name();
+    let mut out = String::new();
+    let mut done = HashSet::new();
+    for &row in rows {
+        if !done.insert(row) {
+            continue;
+        }
+        let value = |column: usize| {
+            result
+                .value_at(row, column)
+                .ok_or(UpdateCopyError::NoSuchRow(row))
+        };
+        let mut assignments = Vec::with_capacity(set.len());
+        for &column in &set {
+            assignments.push(format!(
+                "{} = {}",
+                dialect.quote_identifier(&metas[column].name),
+                sql_literal(&value(column)?, engine)
+            ));
+        }
+        let mut conditions = Vec::with_capacity(keys.len());
+        for &(column, key) in &keys {
+            let value = value(column)?;
+            if value == Value::Null {
+                return Err(UpdateCopyError::NullKey(key.to_string()));
+            }
+            conditions.push(format!(
+                "{} = {}",
+                dialect.quote_identifier(key),
+                sql_literal(&value, engine)
+            ));
+        }
+        out.push_str(&format!(
+            "UPDATE {name} SET {} WHERE {};\n",
+            assignments.join(", "),
+            conditions.join(" AND ")
+        ));
+    }
+    Ok(out)
+}
+
+/// The line break between rows of [`CopySpecial`] text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowDelimiter {
+    /// `\n`.
+    Lf,
+    /// `\r\n`, what Windows programs and RFC 4180 expect.
+    CrLf,
+}
+
+impl RowDelimiter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RowDelimiter::Lf => "\n",
+            RowDelimiter::CrLf => "\r\n",
+        }
+    }
+}
+
+/// Most characters of [`CopySpecial::null_text`].
+pub const MAX_NULL_TEXT: usize = 32;
+
+/// How "Copy special…" writes a selection as delimited text (SDB-388); the user's choices are
+/// the copy defaults (`History::set_copy_defaults`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopySpecial {
+    /// Between fields: a punctuation mark, a space or a tab.
+    pub delimiter: char,
+    /// Around a field that holds the delimiter, the quote or a line break, doubled inside it;
+    /// `None` never quotes (such a field then reads as several).
+    pub quote: Option<char>,
+    pub row_delimiter: RowDelimiter,
+    /// What a NULL is written as.
+    pub null_text: String,
+    /// The column names as the first row.
+    pub header: bool,
+    /// A first column with each row's number as the grid shows it (`#` in the header).
+    pub row_numbers: bool,
+}
+
+impl Default for CopySpecial {
+    /// What the grid's plain copy writes: tab-separated with a header, `"` quoting, `\n`
+    /// between rows and NULL as an empty field.
+    fn default() -> Self {
+        Self {
+            delimiter: '\t',
+            quote: Some('"'),
+            row_delimiter: RowDelimiter::Lf,
+            null_text: String::new(),
+            header: true,
+            row_numbers: false,
+        }
+    }
+}
+
+impl CopySpecial {
+    /// Options whose text can be read back: a delimiter and a quote that are neither letters,
+    /// digits, line breaks nor each other, and a NULL text that holds neither of them.
+    pub fn check(&self) -> Result<(), String> {
+        let d = self.delimiter;
+        if matches!(d, '\r' | '\n') || d.is_alphanumeric() || (d.is_control() && d != '\t') {
+            return Err(format!(
+                "{d:?} cannot separate fields: use a punctuation mark, a space or a tab"
+            ));
+        }
+        if let Some(q) = self.quote {
+            if q.is_alphanumeric() || q.is_whitespace() || q.is_control() {
+                return Err(format!("{q:?} cannot quote fields: use a punctuation mark"));
+            }
+            if q == d {
+                return Err("the delimiter and the quote must be different characters".into());
+            }
+        }
+        if self.null_text.chars().count() > MAX_NULL_TEXT {
+            return Err(format!(
+                "the NULL text has at most {MAX_NULL_TEXT} characters"
+            ));
+        }
+        if self.null_text.chars().any(char::is_control) {
+            return Err("the NULL text cannot hold a tab or a line break".into());
+        }
+        if self.null_text.contains(d) || self.quote.is_some_and(|q| self.null_text.contains(q)) {
+            return Err("the NULL text cannot hold the delimiter or the quote".into());
+        }
+        Ok(())
+    }
+
+    fn field(&self, value: &str) -> String {
+        match self.quote {
+            Some(q) if value.contains([self.delimiter, q, '\r', '\n']) => {
+                let doubled: String = [q, q].iter().collect();
+                format!("{q}{}{q}", value.replace(q, &doubled))
+            }
+            _ => value.to_string(),
+        }
+    }
+}
+
+/// The rows of the view at `rows` (positions, in display order, each once) and the result's
+/// `columns` as delimited text, written as `options` say (SDB-388). The values are the
+/// database's own text (a masked column's is the mask, ADR-051); a NULL is
+/// [`CopySpecial::null_text`]. Every row ends with the row delimiter, except that one cell
+/// without a header or a row number is its value alone, as the grid's plain copy writes it.
+pub fn copy_special(
+    result: &StoredResult,
+    rows: &[usize],
+    columns: &[usize],
+    options: &CopySpecial,
+) -> Result<String, CopyError> {
+    options.check().map_err(CopyError::Options)?;
+    let metas = &result.schema().columns;
+    if let Some(&column) = columns.iter().find(|&&c| c >= metas.len()) {
+        return Err(CopyError::NoSuchColumn(column));
+    }
+    if let Some(&row) = rows.iter().find(|&&r| r >= result.rows()) {
+        return Err(CopyError::NoSuchRow(row));
+    }
+    let cell = |row: usize, column: usize| match result.value_at(row, column) {
+        Some(Value::Null) | None => options.null_text.clone(),
+        Some(value) => options.field(&value.to_string()),
+    };
+    if let ([row], [column], false, false) = (rows, columns, options.header, options.row_numbers) {
+        return Ok(cell(*row, *column));
+    }
+    let separator = options.delimiter.to_string();
+    let end = options.row_delimiter.as_str();
+    let mut out = String::new();
+    if options.header {
+        let mut fields: Vec<String> = Vec::with_capacity(columns.len() + 1);
+        if options.row_numbers {
+            fields.push(options.field("#"));
+        }
+        fields.extend(columns.iter().map(|&c| options.field(&metas[c].name)));
+        out.push_str(&fields.join(&separator));
+        out.push_str(end);
+    }
+    let mut done = HashSet::new();
+    for &row in rows {
+        if !done.insert(row) {
+            continue;
+        }
+        let mut fields: Vec<String> = Vec::with_capacity(columns.len() + 1);
+        if options.row_numbers {
+            fields.push((row + 1).to_string());
+        }
+        fields.extend(columns.iter().map(|&c| cell(row, c)));
+        out.push_str(&fields.join(&separator));
+        out.push_str(end);
+    }
+    Ok(out)
 }
 
 /// Text for an HTML cell: `&`, `<`, `>` and quotes escaped, line breaks as `<br>`.
@@ -2255,5 +2500,156 @@ mod tests {
             sql_literal(&Value::TimestampTz(micros), "mysql"),
             "'2024-03-04 10:00:00.5+00'"
         );
+    }
+
+    fn special(
+        result: &StoredResult,
+        rows: &[usize],
+        columns: &[usize],
+        options: &CopySpecial,
+    ) -> String {
+        copy_special(result, rows, columns, options).unwrap()
+    }
+
+    #[test]
+    fn copy_special_writes_the_chosen_delimiters_quotes_and_null() {
+        let result = copy_sample(&[
+            (Some("plain"), Some(1)),
+            (Some("a;b"), None),
+            (None, Some(3)),
+            (Some("say \"hi\"\nthere"), Some(4)),
+        ]);
+        let result = result.read().unwrap();
+        let options = CopySpecial {
+            delimiter: ';',
+            quote: Some('"'),
+            row_delimiter: RowDelimiter::CrLf,
+            null_text: "NULL".into(),
+            header: true,
+            row_numbers: false,
+        };
+        assert_eq!(
+            special(&result, &[0, 1, 2, 3], &[0, 1], &options),
+            "value;n\r\nplain;1\r\n\"a;b\";NULL\r\nNULL;3\r\n\"say \"\"hi\"\"\nthere\";4\r\n"
+        );
+        // Another quote, doubled inside; the old one is plain text then.
+        let single = CopySpecial {
+            quote: Some('\''),
+            row_delimiter: RowDelimiter::Lf,
+            header: false,
+            ..options.clone()
+        };
+        assert_eq!(
+            special(&result, &[1, 3], &[0], &single),
+            "'a;b'\n'say \"hi\"\nthere'\n"
+        );
+        // No quote: fields are written as they are.
+        let unquoted = CopySpecial {
+            quote: None,
+            ..single.clone()
+        };
+        assert_eq!(special(&result, &[1], &[0, 1], &unquoted), "a;b;NULL\n");
+        // Row numbers are the grid's, in the order given; a row twice is copied once.
+        let numbered = CopySpecial {
+            delimiter: '\t',
+            row_numbers: true,
+            header: true,
+            ..options.clone()
+        };
+        assert_eq!(
+            special(&result, &[2, 0, 2], &[1], &numbered),
+            "#\tn\r\n3\t3\r\n1\t1\r\n"
+        );
+        // One cell without a header or a number is its value alone.
+        let bare = CopySpecial {
+            header: false,
+            ..options.clone()
+        };
+        assert_eq!(special(&result, &[1], &[0], &bare), "\"a;b\"");
+        assert_eq!(special(&result, &[2], &[0], &bare), "NULL");
+        // Rows and columns outside the result are refused, never copied as something else.
+        assert_eq!(
+            copy_special(&result, &[4], &[0], &options),
+            Err(CopyError::NoSuchRow(4))
+        );
+        assert_eq!(
+            copy_special(&result, &[0], &[2], &options),
+            Err(CopyError::NoSuchColumn(2))
+        );
+    }
+
+    #[test]
+    fn copy_special_refuses_options_that_cannot_be_read_back() {
+        let result = copy_sample(&[(Some("x"), Some(1))]);
+        let result = result.read().unwrap();
+        let base = CopySpecial::default();
+        assert_eq!(base.check(), Ok(()));
+        for options in [
+            CopySpecial {
+                delimiter: '\n',
+                ..base.clone()
+            },
+            CopySpecial {
+                delimiter: 'a',
+                ..base.clone()
+            },
+            CopySpecial {
+                delimiter: '7',
+                ..base.clone()
+            },
+            CopySpecial {
+                delimiter: '"',
+                ..base.clone()
+            },
+            CopySpecial {
+                quote: Some(' '),
+                ..base.clone()
+            },
+            CopySpecial {
+                quote: Some('q'),
+                ..base.clone()
+            },
+            CopySpecial {
+                null_text: "a\tb".into(),
+                ..base.clone()
+            },
+            CopySpecial {
+                delimiter: ',',
+                null_text: "a,b".into(),
+                ..base.clone()
+            },
+            CopySpecial {
+                null_text: "\"N\"".into(),
+                ..base.clone()
+            },
+            CopySpecial {
+                null_text: "n".repeat(MAX_NULL_TEXT + 1),
+                ..base.clone()
+            },
+        ] {
+            assert!(options.check().is_err(), "{options:?}");
+            assert!(
+                matches!(
+                    copy_special(&result, &[0], &[0, 1], &options),
+                    Err(CopyError::Options(_))
+                ),
+                "{options:?}"
+            );
+        }
+        // A space, `|` and a quote other than `"` are fine.
+        for options in [
+            CopySpecial {
+                delimiter: ' ',
+                ..base.clone()
+            },
+            CopySpecial {
+                delimiter: '|',
+                quote: Some('\''),
+                null_text: "\\N".into(),
+                ..base.clone()
+            },
+        ] {
+            assert_eq!(options.check(), Ok(()), "{options:?}");
+        }
     }
 }
