@@ -87,6 +87,9 @@ struct AppState {
     backups: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::backup::BackupCancel>>>,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
+    /// Loads of query rows running ("Load every row", page and row jumps; SDB-386), by the id
+    /// the UI gave them.
+    loads: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::LoadCancel>>>,
 }
 
 struct DesktopSession {
@@ -2574,6 +2577,153 @@ async fn count_query_rows(
 ) -> CmdResult<f64> {
     let open = state.session(&session).await?;
     Ok(spelaion_core::count_query_rows(&open.session, &sql).await? as f64)
+}
+
+/// The transposed view of `rows` of a result (SDB-386): positions of its current view, shown
+/// as columns, one row per column of the result, numbered from `first_number` as the grid
+/// numbers them. A result of its own in the core, freed with `release_result`; the labels head
+/// its first two columns in the user's language.
+#[command]
+async fn transpose_rows(
+    result: u32,
+    rows: Vec<u32>,
+    first_number: u32,
+    column_label: String,
+    type_label: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TransposedItem> {
+    let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
+    spelaion_core::transpose(
+        &state.results,
+        ResultId(result.into()),
+        &rows,
+        first_number.into(),
+        &column_label,
+        &type_label,
+    )
+    .map(TransposedItem::from)
+    .map_err(|e| e.to_string())
+}
+
+/// How many rows "Load every row" would load and roughly how much memory they take: the rows
+/// counted on the server, the memory from what a loaded row of `result` takes now.
+#[command]
+async fn load_estimate(
+    session: String,
+    result: u32,
+    source: LoadSourceItem,
+    state: State<'_, AppState>,
+) -> CmdResult<LoadEstimateItem> {
+    let open = state.session(&session).await?;
+    let target = ResultId(result.into());
+    let estimate = match source {
+        LoadSourceItem::Query { sql } => {
+            spelaion_core::estimate_query_load(&open.session, target, &sql).await?
+        }
+        LoadSourceItem::Table {
+            schema,
+            name,
+            filter,
+        } => {
+            spelaion_core::estimate_table_load(&open.session, target, &schema, &name, &filter)
+                .await?
+        }
+    };
+    Ok(estimate.into())
+}
+
+/// Loads keyset pages of a paged query (ADR-054) into `result`, which holds `offset` rows,
+/// until it holds `until` rows (every row without it) or the query has no more. The rows held
+/// go to `on_progress` after each page; `cancel_load_rows` with the same `load_id` stops it,
+/// keeping the pages loaded before.
+#[allow(clippy::too_many_arguments)]
+#[command]
+async fn load_query_rows(
+    session: String,
+    load_id: u32,
+    result: u32,
+    sql: String,
+    offset: u32,
+    sort: Vec<SortKeyItem>,
+    until: Option<u32>,
+    on_progress: Channel<u32>,
+    state: State<'_, AppState>,
+) -> CmdResult<LoadedRowsItem> {
+    let open = state.session(&session).await?;
+    let cancel = Arc::new(spelaion_core::LoadCancel::new());
+    state
+        .loads
+        .lock()
+        .expect("lock poisoned")
+        .insert(load_id, cancel.clone());
+    let progress = move |rows: u64| {
+        let _ = on_progress.send(u32::try_from(rows).unwrap_or(u32::MAX));
+    };
+    let outcome = spelaion_core::load_query_rows(
+        &open.session,
+        ResultId(result.into()),
+        &sql,
+        offset.into(),
+        &sort_keys(sort),
+        until.map(u64::from),
+        spelaion_core::LOAD_PAGE_ROWS,
+        &cancel,
+        &progress,
+    )
+    .await;
+    state.loads.lock().expect("lock poisoned").remove(&load_id);
+    Ok(outcome?.into())
+}
+
+/// Stops a load of query rows: the page being read and every page after it.
+#[command]
+async fn cancel_load_rows(
+    session: String,
+    load_id: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let cancel = state
+        .loads
+        .lock()
+        .expect("lock poisoned")
+        .get(&load_id)
+        .cloned();
+    if let Some(cancel) = cancel {
+        let open = state.session(&session).await?;
+        cancel.cancel(&open.session).await;
+    }
+    Ok(())
+}
+
+/// Every row of a table data tab's table that its filter keeps, in its pages' order: "Load
+/// every row" (SDB-386). Written and checked by the core like a page.
+#[command]
+async fn table_rows_sql(
+    session: String,
+    schema: String,
+    name: String,
+    filter: String,
+    order_by: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    spelaion_core::table_rows_sql_by_key(&open.session, &schema, &name, &filter, &order_by).await
+}
+
+/// The last page of a table data tab: its rows counted now, and the page that holds the last.
+#[command]
+async fn last_table_page(
+    session: String,
+    schema: String,
+    name: String,
+    filter: String,
+    page_size: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<LastPageItem> {
+    let open = state.session(&session).await?;
+    spelaion_core::last_table_page(&open.session, &schema, &name, &filter, page_size.into())
+        .await
+        .map(LastPageItem::from)
 }
 
 /// The `:name` placeholders of a script, in order, so the UI can ask for their values.
@@ -5853,6 +6003,12 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             run_query_page,
             append_query_page,
             count_query_rows,
+            transpose_rows,
+            load_estimate,
+            load_query_rows,
+            cancel_load_rows,
+            table_rows_sql,
+            last_table_page,
             cancel,
             release_result,
             release_results,
@@ -6116,6 +6272,7 @@ pub fn run() {
         close_request: AtomicU8::new(CLOSE_IDLE),
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
+        loads: std::sync::Mutex::new(HashMap::new()),
         imports: std::sync::Mutex::new(HashMap::new()),
         backups: std::sync::Mutex::new(HashMap::new()),
         diagrams: std::sync::Mutex::new(HashMap::new()),

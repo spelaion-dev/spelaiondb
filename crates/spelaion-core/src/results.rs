@@ -188,6 +188,24 @@ impl StoredResult {
         self.complete
     }
 
+    /// Bytes the received rows take in memory: their Arrow arrays, and the originals a masked
+    /// result keeps aside (ADR-051). What "Load every row" estimates from (SDB-386).
+    pub fn memory_bytes(&self) -> usize {
+        let batches: usize = self
+            .batches
+            .iter()
+            .map(RecordBatch::get_array_memory_size)
+            .sum();
+        let originals: usize = self.masking.as_ref().map_or(0, |m| {
+            m.values
+                .iter()
+                .flatten()
+                .map(|array| array.get_array_memory_size())
+                .sum()
+        });
+        batches + originals
+    }
+
     /// The columns the rows are sorted by, the most significant first; none for the server's
     /// order.
     pub fn sort_keys(&self) -> &[SortKey] {

@@ -41,7 +41,12 @@ export interface ResultMeta {
   /** Pages fetched from one safe SELECT, appended to this result. */
   /** `sort`: the grid sort its pages were read from the server with (the header clicks of a
    *  paged query), by result column. */
-  paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number; sort?: SortState[] };
+  /** `progress`: the rows held while a load of many pages runs ("Load every row", or a page or
+   *  a row past the ones loaded; SDB-386). */
+  paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number; sort?: SortState[]; progress?: number };
+  /** "Go to row" (SDB-386): the row of the current view to select and show; `seq` changes for
+   *  every request, so asking for the same row again shows it again. */
+  goToRow?: { row: number; seq: number };
 }
 
 /** How a result's column conditions are read together (the core's `FilterMode`). */
@@ -185,6 +190,9 @@ export interface TableView {
   page: number;
   /** Rows the filter keeps, once counted ("Count"). */
   total?: number;
+  /** "Load every row" (SDB-386): the tab shows every row the filter keeps, in its pages'
+   *  order, instead of one page. */
+  all?: boolean;
 }
 
 /** Rows per page a table data tab starts with. */
@@ -276,6 +284,9 @@ export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "r
 export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";
 /** Undo or redo of a tab's pending table edits, from the command palette (`{ tab, command }`). */
 export const EDITS_COMMAND_EVENT = "spelaion:edits-command";
+/** A command for the grid of one result, from the palette (SDB-386: "Go to row"); its
+ *  detail is `{ result, command }`. */
+export const GRID_COMMAND_EVENT = "spelaion:grid-command";
 
 /** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
 export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;

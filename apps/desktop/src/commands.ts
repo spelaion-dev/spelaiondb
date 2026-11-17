@@ -12,7 +12,7 @@ import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
 import { openDiagram } from "./diagramTabs";
-import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type ResultMeta, type Tab } from "./store";
+import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, GRID_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type ResultMeta, type Tab } from "./store";
 import {
   closable,
   closeAllTabs,
@@ -245,6 +245,14 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "results.close": { enabled: (c) => Boolean(activeResult(c)?.complete), run: editorCommand("resultClose") },
   "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
   "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },
+  // The active result's grid opens its "Go to row" (SDB-386).
+  "results.goToRow": {
+    enabled: (c) => (activeResult(c)?.rows ?? 0) > 0,
+    run: (c) => {
+      const result = activeResult(c);
+      if (result) window.dispatchEvent(new CustomEvent(GRID_COMMAND_EVENT, { detail: { result: result.id, command: "goToRow" } }));
+    },
+  },
   "editor.variables": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("variables") },
   "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },

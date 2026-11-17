@@ -15,7 +15,7 @@ import { RowCache, type ValueKind } from "../grid/rowCache";
 import { printableGridKey } from "../gridTyping";
 import { formatsValues, useDisplayFormat } from "../displayFormat";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
-import { useDialogs, type FilterMode, type ResultMeta, type SortState } from "../store";
+import { GRID_COMMAND_EVENT, useDialogs, type FilterMode, type ResultMeta, type SortState } from "../store";
 import { commandSpec, matchesShortcut } from "../commandRegistry";
 import { useExport } from "./ExportDialog";
 import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
@@ -26,7 +26,7 @@ import { GroupPanel } from "./GroupPanel";
 import { ColumnStatsPopover } from "./ColumnStatsPopover";
 import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
-import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
+import { InsertRowDialog, PAGE_SIZES, PageControls } from "./TableDataBar";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 
 /** No sort: one list, so an unsorted result keeps the same value between renders. */
@@ -210,6 +210,8 @@ const FILL_DOWN_SHORTCUT = "Ctrl+D";
 const PASTE_SHORTCUT = "Ctrl+V";
 const SET_NULL_SHORTCUT = "Ctrl+Alt+N";
 const REVERT_SHORTCUT = "Ctrl+Alt+Z";
+/** "Go to row" (SDB-386): an app command the grid handles, as undo and redo. */
+const GO_TO_ROW_SHORTCUT = commandSpec("results.goToRow").shortcut ?? "";
 
 const EDITED_BG = "rgba(250, 204, 21, 0.30)";
 /** Cells the search found, and the one it is on. */
@@ -286,6 +288,12 @@ export function ResultGrid({
   onChart,
   refresh,
   restoringView,
+  rowOffset = 0,
+  onGoToRow,
+  onLoadRows,
+  onCancelLoad,
+  onSelectedRows,
+  onTranspose,
 }: {
   result: ResultMeta;
   session: string;
@@ -321,6 +329,22 @@ export function ResultGrid({
   /** The comments of the columns, by name, where they are known (a table's data): shown in
    *  the header when the user asks for it. */
   columnComments?: Record<string, string>;
+  /** Rows before the first one shown (a table data tab's page): row numbers start after it. */
+  rowOffset?: number;
+  /** "Go to row" (Ctrl+G, SDB-386) for a row this grid does not hold: another page of a table
+   *  data tab, or a paged query's rows past the ones loaded. `row` counts from 1, as the grid
+   *  numbers rows. */
+  onGoToRow?(row: number): void;
+  /** Loads a paged query's rows until it holds `until` (every row when `null`, after asking how
+   *  many and how much memory); resolves to the rows held, or `null` if nothing was loaded. */
+  onLoadRows?(until: number | null): Promise<number | null>;
+  /** Stops a load of a paged query's rows. */
+  onCancelLoad?(): void;
+  /** The rows selected (positions in the view; the current row without a selection), for the
+   *  results' Transpose button. */
+  onSelectedRows?(rows: number[]): void;
+  /** "Transpose selected rows": these rows of the view shown as columns. */
+  onTranspose?(rows: number[]): void;
 }) {
   // The sort the headers show: the table data tab's, else the core's sort of the loaded rows,
   // else the one a paged query's pages were read with.
@@ -582,6 +606,39 @@ export function ResultGrid({
 
   /** Ctrl+Shift+J: the column picker's search text (`null` when closed). */
   const [jump, setJump] = useState<string | null>(null);
+  /** Ctrl+G: "Go to row" is open (SDB-386). */
+  const [rowJump, setRowJump] = useState(false);
+
+  /** Selects a whole row of the view, shows it and gives the grid the focus. */
+  function selectRow(row: number) {
+    const cell = { row, col: firstVisible };
+    // The focus first: the grid's focus handler selects the first cell when it has no
+    // selection, and it would replace the row set here.
+    scrollerRef.current?.focus();
+    // The whole row, the active cell on its first column.
+    setSelection({ anchor: { row, col: lastVisible }, focus: { row, col: firstVisible } });
+    scrollIntoView(cell);
+  }
+
+  /** "Go to row" (SDB-386): `row` counts from 1 as the grid numbers rows. A row this grid
+   *  holds is selected here; another page of a table data tab, or a paged query's rows past the
+   *  ones loaded, are the tab's to bring (`onGoToRow`), never guessed. */
+  function goToRow(row: number) {
+    setRowJump(false);
+    const index = row - 1 - rowOffset;
+    const reachable = !!onGoToRow && (!!tableData || (!!result.paging?.hasMore && !pageViewChanged));
+    if (index >= 0 && index < result.rows) {
+      selectRow(index);
+      return;
+    }
+    if (reachable && onGoToRow) {
+      onGoToRow(row);
+      return;
+    }
+    if (result.rows === 0) return;
+    setNotice({ text: t("goToRow.past", { rows: numbers.format(rowOffset + result.rows), row: numbers.format(row) }), error: false });
+    selectRow(index < 0 ? 0 : result.rows - 1);
+  }
 
   const redraw = useCallback(() => {
     if (frame.current !== null) return;
@@ -629,7 +686,7 @@ export function ResultGrid({
     for (const w of widths) out.push((out[out.length - 1] ?? 0) + w);
     return out;
   }, [widths]);
-  const rowNumW = Math.max(52, numbers.format(result.rows).length * 8 + PAD * 2);
+  const rowNumW = Math.max(52, numbers.format(rowOffset + result.rows).length * 8 + PAD * 2);
   const totalW = rowNumW + (offsets[offsets.length - 1] ?? 0);
   const totalH = HEADER_H + result.rows * ROW_H;
   contentH.current = totalH;
@@ -649,27 +706,27 @@ export function ResultGrid({
     const describe = (value: string | null) => {
       if (!current) return;
       const text = value === null ? "NULL" : value.length > 500 ? t("results.accessibleTruncated", { value: value.slice(0, 500) }) : value;
-      target.textContent = t("results.accessibleCell", { row: numbers.format(activeRow + 1), column: column.name, type: column.nativeType, value: text }) +
+      target.textContent = t("results.accessibleCell", { row: numbers.format(rowOffset + activeRow + 1), column: column.name, type: column.nativeType, value: text }) +
         (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: FOLLOW_SHORTCUT })}` : "");
     };
-    target.textContent = t("results.accessibleCellLoading", { row: numbers.format(activeRow + 1), column: column.name });
+    target.textContent = t("results.accessibleCellLoading", { row: numbers.format(rowOffset + activeRow + 1), column: column.name });
     const key = `${activeRow}:${activeColumn}`;
     if (activeEdits && key in activeEdits) describe(activeEdits[key] ?? null);
     else void call(commands.cellValue(result.id, activeRow, activeColumn)).then(describe, () => {
-      if (current) target.textContent = t("results.accessibleCellError", { row: numbers.format(activeRow + 1), column: column.name });
+      if (current) target.textContent = t("results.accessibleCellError", { row: numbers.format(rowOffset + activeRow + 1), column: column.name });
     });
     return () => { current = false; };
-  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers, keyColumns]);
+  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers, keyColumns, rowOffset]);
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns });
-  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns, rowOffset });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns, rowOffset };
 
   function draw() {
     const canvas = canvasRef.current;
     const scroller = scrollerRef.current;
     if (!canvas || !scroller) return;
-    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns } = live.current;
+    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns, rowOffset } = live.current;
     const deletedRows = new Set(editing?.deleted ?? []);
     const range = selection ? bounds(selection) : null;
     const sparseRows = selection?.rows ? new Set(selection.rows) : null;
@@ -863,7 +920,7 @@ export function ResultGrid({
         ctx.fillRect(0, y, rowNumW, ROW_H);
       }
       ctx.fillStyle = c.muted;
-      ctx.fillText(numbers.format(row + 1), rowNumW - PAD, y + ROW_H / 2);
+      ctx.fillText(numbers.format(rowOffset + row + 1), rowNumW - PAD, y + ROW_H / 2);
     }
     ctx.textAlign = "left";
     ctx.fillStyle = c.line;
@@ -1009,6 +1066,29 @@ export function ResultGrid({
   useEffect(() => {
     if (result.refreshScrollRow !== undefined && result.rows > 0) scrollToContent(result.refreshScrollRow * ROW_H);
   }, [result.refreshScrollRow, result.id]);
+
+  // "Go to row" that needed another page or more rows (SDB-386): the row, once it is here.
+  useEffect(() => {
+    const target = result.goToRow;
+    if (target && target.row < result.rows) selectRow(target.row);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result.goToRow?.seq, result.id]);
+
+  // "Go to row" from the command palette, for this result's grid.
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const detail = (e as CustomEvent<{ result: number; command: "goToRow" }>).detail;
+      if (detail.result === result.id && detail.command === "goToRow" && result.rows > 0) setRowJump(true);
+    };
+    window.addEventListener(GRID_COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(GRID_COMMAND_EVENT, onCommand);
+  }, [result.id, result.rows]);
+
+  // The rows the results' Transpose button shows: the selected ones, or the current one.
+  useEffect(() => {
+    onSelectedRows?.(selection ? selectedRows() : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection]);
 
   /** The cell under the pointer; `"row"` as column for the row-number gutter. With `clamp`,
    *  positions outside the data snap to the nearest cell (while dragging). */
@@ -1731,6 +1811,11 @@ export function ResultGrid({
       setJump("");
       return;
     }
+    if (matchesShortcut(e, GO_TO_ROW_SHORTCUT) && result.rows > 0) {
+      e.preventDefault();
+      setRowJump(true);
+      return;
+    }
     if (mod && e.key.toLowerCase() === "a" && result.rows > 0) {
       e.preventDefault();
       setSelection({ anchor: { row: 0, col: firstVisible }, focus: { row: result.rows - 1, col: lastVisible } });
@@ -1882,6 +1967,42 @@ export function ResultGrid({
       return;
     }
     scrollToContent(next * ROW_H);
+  }
+
+  /** Page `page` (from 0) of a paged query: the rows loaded are scrolled to; a page past them
+   *  loads every page before it by keyset (ADR-054), never an offset (SDB-386). */
+  async function queryPageAt(page: number) {
+    if (!paging || pageBusy) return;
+    const start = page * paging.pageSize;
+    if (start < result.rows) {
+      scrollToContent(start * ROW_H);
+      return;
+    }
+    if (pageViewChanged || !pageCanLoad || !onLoadRows) return;
+    requestedPageScroll.current = start;
+    const rows = await onLoadRows(start + paging.pageSize);
+    if (rows === null || rows <= start) {
+      requestedPageScroll.current = null;
+      // Fewer rows than that: the last page there is.
+      if (rows !== null && rows > 0) scrollToContent(Math.floor((rows - 1) / paging.pageSize) * paging.pageSize * ROW_H);
+    }
+  }
+
+  /** The last page of a paged query: it is only known once every row is loaded, so it asks to
+   *  load them (how many and how much memory first), then shows the last page. */
+  async function lastQueryPage() {
+    if (!paging || pageBusy) return;
+    let rows: number | null = result.rows;
+    if (pageCanLoad) {
+      if (pageViewChanged || !onLoadRows) return;
+      rows = await onLoadRows(null);
+    }
+    if (rows === null || rows === 0) return;
+    requestedPageScroll.current = Math.floor((rows - 1) / paging.pageSize) * paging.pageSize;
+    if (rows <= result.rows) {
+      scrollToContent(requestedPageScroll.current * ROW_H);
+      requestedPageScroll.current = null;
+    }
   }
   function onResultShortcut(e: React.KeyboardEvent<HTMLDivElement>) {
     const target = e.target instanceof HTMLElement ? e.target : null;
@@ -2327,6 +2448,17 @@ export function ResultGrid({
               {t("calc.open")}
             </button>
           )}
+          {selection && onTranspose && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                onTranspose(selectedRows());
+              }}
+            >
+              {t("transpose.fromSelection")}
+            </button>
+          )}
           {selection && !selection.rows && onChart && (
             <button
               role="menuitem"
@@ -2456,6 +2588,18 @@ export function ResultGrid({
             } else return;
             e.preventDefault();
             e.stopPropagation();
+          }}
+        />
+      )}
+      {rowJump && (
+        <RowJump
+          rows={rowOffset + result.rows}
+          more={!!tableData || (!!result.paging?.hasMore && !pageViewChanged)}
+          current={selection ? rowOffset + selection.focus.row + 1 : null}
+          onGo={goToRow}
+          onClose={() => {
+            setRowJump(false);
+            scrollerRef.current?.focus();
           }}
         />
       )}
@@ -2594,16 +2738,37 @@ export function ResultGrid({
               <select aria-label={t("table.pageSize")} value={paging.pageSize} disabled={pageBusy} onChange={(e) => onQueryPageSize(Number(e.target.value))}>
                 {PAGE_SIZES.map((size) => <option key={size} value={size}>{t("table.perPage", { count: size, formattedCount: numbers.format(size) })}</option>)}
               </select>
-              <button type="button" className="ghost" aria-label={t("table.previous")} disabled={pageBusy || queryPage === 0} onClick={() => scrollToContent(Math.max(0, queryPage - 1) * paging.pageSize * ROW_H)}>◀</button>
-              <span className="small table-range" role="status">
-                {result.rows === 0 ? t("table.noRows") : t("table.range", { from: numbers.format(pageStart + 1), to: numbers.format(Math.min(result.rows, pageStart + paging.pageSize)) })}
-                {paging.total !== undefined && !pageViewChanged ? ` ${t("table.ofTotal", { total: numbers.format(paging.total) })}` : ""}
-              </span>
-              <button type="button" className="ghost" aria-label={t("table.next")} disabled={pageBusy || (pageStart + paging.pageSize >= result.rows && (!pageCanLoad || pageViewChanged))} onClick={() => void nextQueryPage()}>▶</button>
+              {paging.progress !== undefined ? (
+                <span className="load-rows small" role="status">
+                  {t("pages.loadingRows", { rows: numbers.format(paging.progress) })}
+                  <button type="button" onClick={() => onCancelLoad?.()}>{t("pages.cancelLoad")}</button>
+                </span>
+              ) : (
+                <PageControls
+                  page={queryPage}
+                  pages={paging.total !== undefined && !pageViewChanged ? Math.max(1, Math.ceil(paging.total / paging.pageSize)) : !pageCanLoad ? Math.max(1, Math.ceil(result.rows / paging.pageSize)) : undefined}
+                  locked={pageBusy}
+                  canNext={!(pageStart + paging.pageSize >= result.rows && (!pageCanLoad || pageViewChanged))}
+                  canLast={!(pageCanLoad && pageViewChanged)}
+                  hint={pageViewChanged ? t("queryPaging.clearView") : t("pages.queryHint")}
+                  lastHint={pageCanLoad ? t("pages.lastQueryHint") : undefined}
+                  onPage={(page) => {
+                    if (page === queryPage + 1) void nextQueryPage();
+                    else void queryPageAt(page);
+                  }}
+                  onLast={() => void lastQueryPage()}
+                  range={`${result.rows === 0 ? t("table.noRows") : t("table.range", { from: numbers.format(pageStart + 1), to: numbers.format(Math.min(result.rows, pageStart + paging.pageSize)) })}${paging.total !== undefined && !pageViewChanged ? ` ${t("table.ofTotal", { total: numbers.format(paging.total) })}` : ""}`}
+                />
+              )}
               <button type="button" className="ghost query-count" disabled={pageBusy || pageViewChanged} aria-label={t("table.count")} aria-busy={paging.loading} title={t(paging.loading ? "queryPaging.loading" : "queryPaging.countHint")} onClick={onCountQuery}>
                 <span className={paging.loading ? "query-count-label busy" : "query-count-label"}>{t("table.count")}</span>
-                {paging.loading && <span className="query-count-spinner" aria-hidden="true" />}
+                {paging.loading && paging.progress === undefined && <span className="query-count-spinner" aria-hidden="true" />}
               </button>
+              {pageCanLoad && onLoadRows && (
+                <button type="button" className="ghost query-load-all" disabled={pageBusy || pageViewChanged} title={pageViewChanged ? t("queryPaging.clearView") : t("pages.loadAllHint")} onClick={() => void onLoadRows(null)}>
+                  {t("pages.loadAll")}
+                </button>
+              )}
             </div>
           </>}
         </div>
@@ -2812,6 +2977,38 @@ export function ResultGrid({
         {result.columns[headerGhost.col]?.name}
       </div>
     )}
+    </div>
+  );
+}
+
+/** "Go to row" (Ctrl+G, SDB-386): a row number, from 1 as the grid numbers rows; Enter goes.
+ *  `rows` is what the grid numbers now, and `more` says rows past it can still be brought. */
+function RowJump(props: { rows: number; more: boolean; current: number | null; onGo(row: number): void; onClose(): void }) {
+  const { t, i18n } = useTranslation("editor");
+  const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
+  const [text, setText] = useState(props.current === null ? "" : String(props.current));
+  return (
+    <div className="row-jump" role="dialog" aria-label={t("goToRow.title")}>
+      <input
+        autoFocus
+        inputMode="numeric"
+        value={text}
+        placeholder={t("goToRow.placeholder")}
+        aria-label={t("goToRow.title")}
+        onFocus={(e) => e.currentTarget.select()}
+        onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ""))}
+        onBlur={props.onClose}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") props.onClose();
+          else if (e.key === "Enter") {
+            const row = Number.parseInt(text, 10);
+            if (Number.isFinite(row) && row >= 1) props.onGo(row);
+          } else return;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      />
+      <span className="small muted">{props.more ? "" : t("goToRow.of", { total: numbers.format(props.rows) })}</span>
     </div>
   );
 }

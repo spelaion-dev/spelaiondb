@@ -30,6 +30,7 @@ mod health;
 mod history;
 mod import;
 pub mod kube;
+mod load_rows;
 mod locks;
 pub mod masking;
 mod mongodb_srv;
@@ -67,6 +68,7 @@ mod temporal;
 #[cfg(all(test, unix))]
 mod test_files;
 mod transaction;
+mod transpose;
 mod value_pick;
 mod value_view;
 mod variables;
@@ -158,6 +160,10 @@ pub use import::{
     PreviewColumn, SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import,
     preview, run_import, suggested_table, text_format,
 };
+pub use load_rows::{
+    LOAD_PAGE_ROWS, LoadCancel, LoadEstimate, LoadOutcome, LoadedRows, MAX_LOADED_ROWS,
+    estimate_query_load, estimate_table_load, load_query_rows,
+};
 pub use locks::{BlockingNode, Lock, LockSnapshot, LockWait, blocking_tree, list_locks};
 pub use masking::{MASK, MaskPolicy};
 pub use objects::{
@@ -232,14 +238,15 @@ pub use sql_file::{
 };
 pub use startup::{StartOverError, StartupAction, StartupDialog, StartupFailure, start_over};
 pub use table_data::{
-    ColumnSort, ConditionError, MAX_PAGE_ROWS, OrderError, PageError, TablePage, add_condition,
-    cell_filter_value, count_table_rows, key_filter, order_by_columns, order_with_key,
-    table_count_sql, table_export_sql, table_order_by, table_page_sql, table_page_sql_by_key,
-    typed_value, value_condition,
+    ColumnSort, ConditionError, LastPage, MAX_PAGE_ROWS, OrderError, PageError, TablePage,
+    add_condition, cell_filter_value, count_table_rows, key_filter, last_page_of, last_table_page,
+    order_by_columns, order_with_key, table_count_sql, table_export_sql, table_order_by,
+    table_page_sql, table_page_sql_by_key, table_rows_sql_by_key, typed_value, value_condition,
 };
 pub use table_filters::{RefusedFilter, TableFilterError, TableFilters};
 pub use table_stats::{TableStats, table_stats};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
+pub use transpose::{MAX_TRANSPOSED_ROWS, TransposeError, Transposed, transpose};
 pub use value_pick::{
     ChoicePicker, ChoiceSource, KEY_LABEL_CHARS, KEY_LABEL_COLUMNS, KEY_PAGE_ROWS, KeyPicker,
     MAX_OFFSET_MINUTES, PickError, PickedTime, ReferencedPageSql, ReferencedRows, TemporalKind,

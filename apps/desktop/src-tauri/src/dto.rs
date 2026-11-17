@@ -7018,3 +7018,127 @@ impl GrantedPrivilegeItem {
         })
     }
 }
+
+/// The transposed view of rows of a result (SDB-386): a result of its own in the core.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TransposedItem {
+    pub result: u32,
+    pub columns: Vec<ColumnItem>,
+    pub rows: u32,
+}
+
+impl From<spelaion_core::Transposed> for TransposedItem {
+    fn from(t: spelaion_core::Transposed) -> Self {
+        Self {
+            result: u32::try_from(t.result.0).unwrap_or(u32::MAX),
+            columns: t
+                .columns
+                .into_iter()
+                .map(|c| ColumnItem {
+                    name: c.name,
+                    logical: c.logical.as_str().into(),
+                    native_type: c.native_type,
+                    masked: false,
+                })
+                .collect(),
+            rows: u32::try_from(t.rows).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// What "Load every row" would hold (SDB-386). Counts as `f64`: TypeScript numbers.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadEstimateItem {
+    pub loaded: f64,
+    pub total: f64,
+    /// Roughly, in bytes; `None` with no row loaded to measure.
+    pub bytes: Option<f64>,
+    pub too_many: bool,
+    /// Most rows a result may hold.
+    pub max_rows: f64,
+}
+
+impl From<spelaion_core::LoadEstimate> for LoadEstimateItem {
+    fn from(e: spelaion_core::LoadEstimate) -> Self {
+        Self {
+            loaded: e.loaded as f64,
+            total: e.total as f64,
+            bytes: e.bytes.map(|b| b as f64),
+            too_many: e.too_many,
+            max_rows: spelaion_core::MAX_LOADED_ROWS as f64,
+        }
+    }
+}
+
+/// What "Load every row" or a jump past the loaded rows estimates from: a paged query, or a
+/// table data tab's table and filter.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum LoadSourceItem {
+    Query {
+        sql: String,
+    },
+    Table {
+        schema: String,
+        name: String,
+        filter: String,
+    },
+}
+
+/// Where a load of query rows ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum LoadOutcomeItem {
+    Complete,
+    Reached,
+    Cancelled,
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadedRowsItem {
+    pub rows: u32,
+    pub outcome: LoadOutcomeItem,
+}
+
+impl From<spelaion_core::LoadedRows> for LoadedRowsItem {
+    fn from(loaded: spelaion_core::LoadedRows) -> Self {
+        Self {
+            rows: u32::try_from(loaded.rows).unwrap_or(u32::MAX),
+            outcome: match loaded.outcome {
+                spelaion_core::LoadOutcome::Complete => LoadOutcomeItem::Complete,
+                spelaion_core::LoadOutcome::Reached => LoadOutcomeItem::Reached,
+                spelaion_core::LoadOutcome::Cancelled => LoadOutcomeItem::Cancelled,
+                spelaion_core::LoadOutcome::Failed(message) => LoadOutcomeItem::Failed { message },
+            },
+        }
+    }
+}
+
+/// The last page of a table data tab, from its rows counted now (SDB-386).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LastPageItem {
+    pub total: f64,
+    pub page: u32,
+}
+
+impl From<spelaion_core::LastPage> for LastPageItem {
+    fn from(last: spelaion_core::LastPage) -> Self {
+        Self {
+            total: last.total as f64,
+            page: u32::try_from(last.page).unwrap_or(u32::MAX),
+        }
+    }
+}

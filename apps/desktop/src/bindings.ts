@@ -924,6 +924,34 @@ export const commands = {
 	 */
 	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number, sort: SortKeyItem[]) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset, sort })),
 	countQueryRows: (session: string, sql: string) => typedError<number | null, string>(__TAURI_INVOKE("count_query_rows", { session, sql })),
+	/**
+	 *  The transposed view of `rows` of a result (SDB-386): positions of its current view, shown
+	 *  as columns, one row per column of the result, numbered from `first_number` as the grid
+	 *  numbers them. A result of its own in the core, freed with `release_result`; the labels head
+	 *  its first two columns in the user's language.
+	 */
+	transposeRows: (result: number, rows: number[], firstNumber: number, columnLabel: string, typeLabel: string) => typedError<TransposedItem, string>(__TAURI_INVOKE("transpose_rows", { result, rows, firstNumber, columnLabel, typeLabel })),
+	/**
+	 *  How many rows "Load every row" would load and roughly how much memory they take: the rows
+	 *  counted on the server, the memory from what a loaded row of `result` takes now.
+	 */
+	loadEstimate: (session: string, result: number, source: LoadSourceItem) => typedError<LoadEstimateItem_Serialize, string>(__TAURI_INVOKE("load_estimate", { session, result, source })),
+	/**
+	 *  Loads keyset pages of a paged query (ADR-054) into `result`, which holds `offset` rows,
+	 *  until it holds `until` rows (every row without it) or the query has no more. The rows held
+	 *  go to `on_progress` after each page; `cancel_load_rows` with the same `load_id` stops it,
+	 *  keeping the pages loaded before.
+	 */
+	loadQueryRows: (session: string, loadId: number, result: number, sql: string, offset: number, sort: SortKeyItem[], until: number | null, onProgress: Channel<number>) => typedError<LoadedRowsItem, string>(__TAURI_INVOKE("load_query_rows", { session, loadId, result, sql, offset, sort, until, onProgress })),
+	/**  Stops a load of query rows: the page being read and every page after it. */
+	cancelLoadRows: (session: string, loadId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_load_rows", { session, loadId })),
+	/**
+	 *  Every row of a table data tab's table that its filter keeps, in its pages' order: "Load
+	 *  every row" (SDB-386). Written and checked by the core like a page.
+	 */
+	tableRowsSql: (session: string, schema: string, name: string, filter: string, orderBy: string) => typedError<string, string>(__TAURI_INVOKE("table_rows_sql", { session, schema, name, filter, orderBy })),
+	/**  The last page of a table data tab: its rows counted now, and the page that holds the last. */
+	lastTablePage: (session: string, schema: string, name: string, filter: string, pageSize: number) => typedError<LastPageItem, string>(__TAURI_INVOKE("last_table_page", { session, schema, name, filter, pageSize })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
 	/**  Frees a result the UI no longer shows: closing a result tab, pinned or not, frees it. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
@@ -3417,8 +3445,53 @@ export type KubernetesDraftItem = {
 	kubectl: string,
 };
 
+/**  The last page of a table data tab, from its rows counted now (SDB-386). */
+export type LastPageItem = {
+	total: number | null,
+	page: number,
+};
+
 /**  The line break a `.sql` file is written with. */
 export type LineEndingItem = "lf" | "crLf" | "cr";
+
+/**  What "Load every row" would hold (SDB-386). Counts as `f64`: TypeScript numbers. */
+export type LoadEstimateItem = LoadEstimateItem_Serialize | LoadEstimateItem_Deserialize;
+
+/**  What "Load every row" would hold (SDB-386). Counts as `f64`: TypeScript numbers. */
+export type LoadEstimateItem_Deserialize = {
+	loaded: number | null,
+	total: number | null,
+	/**  Roughly, in bytes; `None` with no row loaded to measure. */
+	bytes?: number | null,
+	tooMany: boolean,
+	/**  Most rows a result may hold. */
+	maxRows: number | null,
+};
+
+/**  What "Load every row" would hold (SDB-386). Counts as `f64`: TypeScript numbers. */
+export type LoadEstimateItem_Serialize = {
+	loaded: number | null,
+	total: number | null,
+	/**  Roughly, in bytes; `None` with no row loaded to measure. */
+	bytes: number | null,
+	tooMany: boolean,
+	/**  Most rows a result may hold. */
+	maxRows: number | null,
+};
+
+/**  Where a load of query rows ended. */
+export type LoadOutcomeItem = { kind: "complete" } | { kind: "reached" } | { kind: "cancelled" } | { kind: "failed"; message: string };
+
+/**
+ *  What "Load every row" or a jump past the loaded rows estimates from: a paged query, or a
+ *  table data tab's table and filter.
+ */
+export type LoadSourceItem = { kind: "query"; sql: string } | { kind: "table"; schema: string; name: string; filter: string };
+
+export type LoadedRowsItem = {
+	rows: number,
+	outcome: LoadOutcomeItem,
+};
 
 /**  One lock of the lock view (`spelaion_core::Lock`). */
 export type LockItem = LockItem_Serialize | LockItem_Deserialize;
@@ -5898,6 +5971,13 @@ export type TransactionStatusItem_Serialize = {
 	state: TransactionStateItem | null,
 	/**  Statements run in the open transaction. */
 	statements: number,
+};
+
+/**  The transposed view of rows of a result (SDB-386): a result of its own in the core. */
+export type TransposedItem = {
+	result: number,
+	columns: ColumnItem[],
+	rows: number,
 };
 
 export type TunnelDraftItem = TunnelDraftItem_Serialize | TunnelDraftItem_Deserialize;

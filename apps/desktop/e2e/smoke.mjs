@@ -1174,6 +1174,25 @@ try {
   await queryPages.getByRole("button", { name: "Previous page" }).click();
   await queryPages.getByText("rows 1–100").waitFor();
 
+  step("query pages: a page and a row past the ones loaded are read by keyset pages (SDB-386)");
+  {
+    // Page 9 holds rows 801–900: the pages before it are loaded first, in order.
+    const queryPageNumber = queryPages.getByRole("textbox", { name: "Page number" });
+    await queryPageNumber.fill("9");
+    await queryPageNumber.press("Enter");
+    await panel.locator(".statusline", { hasText: "900 rows" }).waitFor();
+    await queryPages.getByText("rows 801–900").waitFor();
+    // Row 1,050 (Ctrl+G): loaded up to it, then selected.
+    await panel.locator(".grid-scroller").focus();
+    await page.keyboard.press("Control+g");
+    await panel.getByRole("dialog", { name: "Go to row" }).getByRole("textbox", { name: "Go to row" }).fill("1050");
+    await page.keyboard.press("Enter");
+    await panel.locator(".statusline", { hasText: "1,050 rows" }).waitFor();
+    await panel.getByRole("grid").getByRole("gridcell", { name: /^Row 1,050, id \(INTEGER\): 1050$/ }).waitFor();
+    await queryPages.getByRole("button", { name: "First page" }).click();
+    await queryPages.getByText("rows 1–100").waitFor();
+  }
+
   step("query pages: a header sort reads the query again in that order, by two columns");
   {
     const pagedGrid = () => panel.locator(".grid-scroller");
@@ -3941,6 +3960,54 @@ try {
   await panel.getByRole("textbox", { name: "WHERE" }).fill("");
   await panel.getByRole("button", { name: "Apply", exact: true }).click();
   await range.filter({ hasText: "rows 1–500" }).waitFor();
+
+  step("table data: a page by its number, the last page, a row number and a row transposed (SDB-386)");
+  {
+    const pages = panel.locator(".table-bar").getByRole("group", { name: "Pages" });
+    const pageNumber = pages.getByRole("textbox", { name: "Page number" });
+    await pageNumber.fill("7");
+    await pageNumber.press("Enter");
+    await range.filter({ hasText: "rows 3,001–3,500" }).waitFor();
+    await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
+    // The last page is counted first, then read: exact for the rows as they were counted.
+    await pages.getByRole("button", { name: "Last page" }).click();
+    await range.filter({ hasText: "rows 49,501–50,000 of 50,000" }).waitFor();
+    await pages.getByText("of 100", { exact: true }).waitFor();
+    assert.equal(await pageNumber.inputValue(), "100");
+    await pages.getByRole("button", { name: "First page" }).click();
+    await range.filter({ hasText: "rows 1–500 of 50,000" }).waitFor();
+    // Go to row 1,234 (Ctrl+G): the page that holds it is read and the row is selected; the
+    // grid numbers the table's rows, not the page's.
+    await panel.locator(".grid-scroller").waitFor();
+    await panel.locator(".grid-scroller").focus();
+    await page.keyboard.press("Control+g");
+    const rowJump = panel.getByRole("dialog", { name: "Go to row" });
+    await rowJump.getByRole("textbox", { name: "Go to row" }).fill("1234");
+    await page.keyboard.press("Enter");
+    await range.filter({ hasText: "rows 1,001–1,500" }).waitFor();
+    await panel.getByRole("grid").getByRole("gridcell", { name: /^Row 1,234, id \(INTEGER\): 1234$/ }).waitFor();
+    // Transpose rows: the selected row as a column, one row per column of the table.
+    await panel.getByRole("button", { name: "Transpose rows" }).click();
+    const transposed = panel.locator(".transposed-view");
+    await transposed.getByText("Row 1,234 as a column", { exact: true }).waitFor();
+    const transposedGrid = transposed.locator(".grid-scroller");
+    await transposedGrid.waitFor();
+    let tbox = null;
+    for (let i = 0; i < 40 && !tbox; i++) {
+      tbox = await transposedGrid.boundingBox();
+      if (!tbox) await page.waitForTimeout(100);
+    }
+    await page.mouse.click(tbox.x + 52 + 10, tbox.y + 34 + 10);
+    await transposed.getByRole("gridcell", { name: /^Row 1, Column \(text\): id$/ }).waitFor();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowRight");
+    await transposed.getByRole("gridcell", { name: /^Row 1, 1234 \(text\): 1234$/ }).waitFor();
+    await shot("05j-transposed-row");
+    await panel.getByRole("button", { name: "Show rows" }).click();
+    await transposed.waitFor({ state: "detached" });
+    await pages.getByRole("button", { name: "First page" }).click();
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+  }
   // A header click sorts in the server: ORDER BY written with the engine's quoting.
   {
     // The new page mounts a new grid: wait until it is laid out.
