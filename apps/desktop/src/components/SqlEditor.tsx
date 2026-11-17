@@ -13,8 +13,9 @@ import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, Highlig
 import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess } from "@codemirror/commands";
 import { tags } from "@lezer/highlight";
 import { closeLintPanel, lintKeymap, openLintPanel, setDiagnostics } from "@codemirror/lint";
-import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, SearchCursor, searchKeymap, searchPanelOpen } from "@codemirror/search";
+import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen } from "@codemirror/search";
 import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, snippetCompletion, nextSnippetField, prevSnippetField, acceptCompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+import { occurrenceOrigin, selectAllOccurrences, selectNextOccurrence } from "../editorOccurrences";
 import { EDITOR_ACTIONS, SNIPPET_COMMANDS, quotedLines, type EditorActionId } from "../editorActions";
 import { allSnippets, lowerKeywords, snippetBefore, snippetsStarting, type EditorSnippet } from "../editorSnippets";
 import { useSnippets } from "../snippetStore";
@@ -168,35 +169,11 @@ const editorSetup = [
   highlightActiveLineGutter(), highlightSpecialChars(), history(), foldGutter(),
   drawSelection(), dropCursor(), EditorState.allowMultipleSelections.of(true), indentOnInput(),
   syntaxHighlighting(defaultHighlightStyle, { fallback: true }), bracketMatching(), closeBrackets(),
-  rectangleGesture,
+  rectangleGesture, occurrenceOrigin,
   EditorView.clickAddsSelectionRange.of((event) => (event.altKey && !event.shiftKey) || event.ctrlKey || event.metaKey),
   highlightActiveLine(), highlightSelectionMatches({ highlightWordAroundCursor: true }),
   keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, ...lintKeymap]),
 ];
-
-/** Select the current word, or the selected text, everywhere in the document. */
-function selectAllOccurrences(view: EditorView) {
-  const { state } = view;
-  const selected = state.selection.main;
-  const word = selected.empty ? state.wordAt(selected.head) : null;
-  const match = word ?? (selected.empty ? null : selected);
-  if (!match) return false;
-  const text = state.sliceDoc(match.from, match.to);
-  const ranges = [];
-  let main = 0;
-  for (const cursor = new SearchCursor(state.doc, text); !cursor.next().done;) {
-    const { from, to } = cursor.value;
-    if (word) {
-      const found = state.wordAt(from);
-      if (!found || found.from !== from || found.to !== to) continue;
-    }
-    if (from === match.from && to === match.to) main = ranges.length;
-    ranges.push(EditorSelection.range(from, to));
-  }
-  if (!ranges.length) return false;
-  view.dispatch({ selection: EditorSelection.create(ranges, main), userEvent: "select.search.matches" });
-  return true;
-}
 
 // Keep CodeMirror's light colors and add stable classes for the dark theme. CSS switches
 // them when the theme changes, without rebuilding the editor or its selection.
@@ -594,6 +571,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
         extensions: [
           Prec.highest(
             keymap.of([
+              { key: "Mod-d", run: selectNextOccurrence },
               { key: "Mod-Shift-Enter", run: runAll },
               { key: "Mod-Enter", run: (v) => run(v) },
               { key: "Shift-Alt-f", run: format },
