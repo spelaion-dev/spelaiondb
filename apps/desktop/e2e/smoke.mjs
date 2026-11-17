@@ -5823,8 +5823,22 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await page.getByRole("dialog").count(), 0);
   await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
   await panel.getByRole("button", { name: "Add row" }).waitFor();
+  // What loads a table's page again (Apply, saving the edits) replaces its grid: the one
+  // shown goes away and another is mounted when the new page arrives. A click or a key sent
+  // in between reaches no grid, so wait for the new one, ready to be edited (Add row is
+  // enabled again), before acting on it.
+  const pageReloadedBy = async (action) => {
+    const shownGrid = await panel.locator(".grid-scroller").elementHandle();
+    await action();
+    await page.waitForFunction((grid) => !grid.isConnected, shownGrid);
+    await panel.locator(".grid-scroller").waitFor();
+    await page.waitForFunction(() => {
+      const add = document.querySelector('.tab-panel:not([hidden]) button[aria-label="Add row"]');
+      return add !== null && !add.disabled;
+    });
+  };
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id");
-  await panel.getByRole("button", { name: "Apply", exact: true }).click();
+  await pageReloadedBy(() => panel.getByRole("button", { name: "Apply", exact: true }).click());
   await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
   {
     let box = null;
@@ -5885,8 +5899,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.getByText("Inserted: 2 · Deleted: 1 · Updated: 2").waitFor();
     assert.ok(await panel.getByRole("button", { name: "Next page" }).isDisabled());
     await shot("07d-editing-pending");
-    await panel.getByRole("button", { name: "Save changes" }).click();
-    await panel.getByRole("status").filter({ hasText: "Applied 5 changes" }).waitFor();
+    // The note that says what was applied is shown for a moment: wait for it from the start.
+    const appliedFive = panel.getByRole("status").filter({ hasText: "Applied 5 changes" }).waitFor();
+    await pageReloadedBy(() => panel.getByRole("button", { name: "Save changes" }).click());
+    await appliedFive;
     await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     for (let i = 0; i < 40 && !(box = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
     const before = await page.evaluate(() => window.__copied.length);
@@ -5901,8 +5917,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("saved by shortcut");
-    await editor.press("Control+s");
-    await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
+    const appliedOne = panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
+    await pageReloadedBy(() => editor.press("Control+s"));
+    await appliedOne;
     await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     assert.equal(await page.getByRole("dialog", { name: "Save query" }).count(), 0);
     let after = null;
@@ -8357,15 +8374,24 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await page.locator(".connection-row", { hasText: "Shop copy" }).count(), 0);
   assert.equal(await historySaving("Shop (SQLite)"), false);
   step("a repository connection changed since it was trusted is shown before it is used");
-  // History saving is still off for this connection: this first run is not recorded.
-  panel = await newQuery("Shop (SQLite)", "select 'history_resumed_marker' as resumed;");
-  await run(panel);
+  // A new query on a connection connects as it opens: the change is shown then, before
+  // anything of the connection is used. Until it is accepted the tab is not connected and
+  // nothing has run in it.
+  await page.locator('.connection-row:has-text("Shop (SQLite)") > .label').dblclick();
+  panel = page.locator(".tab-panel:not([hidden])");
   const change = page.getByRole("dialog", { name: "This changed since you trusted the repository" });
   await change.locator("tr", { hasText: "mcp.max_rows" }).filter({ hasText: "100" }).filter({ hasText: "50" }).waitFor();
   await change.getByText("the connection shop", { exact: false }).waitFor();
+  assert.equal(await panel.locator(".status-connected").count(), 0, "the connection is not used before its change is accepted");
+  assert.equal(await panel.locator(".grid-host").count(), 0);
   await shot("10a-repository-change");
   await change.getByRole("button", { name: "Accept the change" }).click();
   await change.waitFor({ state: "detached" });
+  await panel.locator(".status-connected").waitFor();
+  // History saving is still off for this connection: this first run is not recorded.
+  await panel.locator(".cm-content").click();
+  await page.keyboard.insertText("select 'history_resumed_marker' as resumed;");
+  await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   history = page.getByRole("complementary", { name: "Query history", exact: true });
@@ -8430,14 +8456,21 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 
   step("personal variables a connection needs are asked once and saved in user.toml");
   await page.getByRole("button", { name: "Close query history" }).click();
-  const varsPanel = await newQuery("Personal vars", "select count(*) as n from product;");
-  await run(varsPanel);
+  // A new query on a connection connects as it opens: its personal values are asked then,
+  // before it can connect.
+  await page.locator('.connection-row:has-text("Personal vars") > .label').dblclick();
+  const varsPanel = page.locator(".tab-panel:not([hidden])");
   const variables = page.getByRole("dialog", { name: "This connection needs some personal values" });
   await variables.getByText("${user.demo_db}", { exact: true }).waitFor();
+  assert.equal(await varsPanel.locator(".status-connected").count(), 0, "not connected before its values are given");
   await shot("11a-personal-variables");
   await variables.getByLabel("demo_db", { exact: true }).fill(join(demo, "data", "shop.db").replaceAll("\\", "/"));
   await variables.getByRole("button", { name: "Save and connect" }).click();
   await variables.waitFor({ state: "detached" });
+  await varsPanel.locator(".status-connected").waitFor();
+  await varsPanel.locator(".cm-content").click();
+  await page.keyboard.insertText("select count(*) as n from product;");
+  await run(varsPanel);
   await varsPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
   assert.match(readFileSync(join(userDir, "user.toml"), "utf8"), /demo_db = ".*shop\.db"/);
 
