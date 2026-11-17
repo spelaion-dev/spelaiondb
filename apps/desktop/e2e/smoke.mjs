@@ -950,11 +950,12 @@ try {
     await shot("03b2-copy-special-light");
     // The settings dialog cannot open over this one: the screenshot switches the theme directly.
     const themeBefore = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
-    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
     await shot("03b2-copy-special-dark");
     await page.evaluate((value) => {
       if (value === null) document.documentElement.removeAttribute("data-theme");
       else document.documentElement.dataset.theme = value;
+      window.dispatchEvent(new Event("spelaion-themechange"));
     }, themeBefore);
     await dialog.getByRole("button", { name: "Copy", exact: true }).click();
     await dialog.waitFor({ state: "detached" });

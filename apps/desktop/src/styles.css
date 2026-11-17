@@ -1887,7 +1887,7 @@ select {
 .copy-special-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-md) var(--space-lg); }
 .copy-special-fields .field { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
 .copy-special-fields .field > span { color: var(--muted); font-size: var(--text-sm); }
-.copy-special-fields select, .copy-special-fields input { width: 100%; min-width: 0; }
+.copy-special-fields select, .copy-special-fields input[type="text"] { width: 100%; min-width: 0; }
 .copy-special-checks { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-xs); }
 /* The variables dialog (SDB-383): rows of a name, its value and a remove button. */
 .modal.variables-dialog { width: 560px; max-width: calc(100vw - var(--space-2xl)); max-height: calc(100vh - var(--space-2xl)); overflow: auto; }
