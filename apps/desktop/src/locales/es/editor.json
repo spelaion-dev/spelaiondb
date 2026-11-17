@@ -837,10 +837,35 @@
     "selectStatement": "Seleccionar sentencia actual",
     "copyStatement": "Copiar sentencia actual",
     "selectOccurrences": "Seleccionar todas las coincidencias",
+    "openObject": "Ir a la tabla",
+    "revealInExplorer": "Mostrar en el explorador",
+    "nextStatement": "Sentencia siguiente",
+    "previousStatement": "Sentencia anterior",
+    "outline": "Esquema del script",
     "insertSelect": "Insertar fragmento SELECT",
     "insertInsert": "Insertar fragmento INSERT",
     "insertUpdate": "Insertar fragmento UPDATE",
     "failed": "No se pudo realizar la acción del editor: {{reason}}"
+  },
+  "names": {
+    "unknown": "El nombre bajo el cursor no es una tabla ni una columna que el explorador haya leído",
+    "nullable": "Puede ser NULL",
+    "notNull": "NOT NULL",
+    "columnOf": "Columna de {{table}}",
+    "columnsLoading": "Sus columnas se están leyendo todavía",
+    "moreColumns_one": "y {{count}} columna más",
+    "moreColumns_other": "y {{count}} columnas más",
+    "openHint": "Ctrl+clic o F12 abre sus detalles"
+  },
+  "outline": {
+    "title": "Esquema",
+    "close": "Cerrar el esquema",
+    "empty": "Sin sentencias",
+    "line": "Línea {{line}}",
+    "entry": "Línea {{line}}: {{summary}}",
+    "more_one": "y {{formattedCount}} sentencia más",
+    "more_other": "y {{formattedCount}} sentencias más",
+    "failed": "No se pudo leer el esquema: {{reason}}"
   },
   "completion": {
     "loadFailed": "No se pudieron cargar los metadatos de las sugerencias: {{reason}}. Actualiza la conexión en el explorador para volver a intentarlo."

@@ -87,8 +87,9 @@ pub use conn_test::{
     test_network_profile,
 };
 pub use cursor::{
-    PickedText, RunKind, RunPickError, RunTarget, from_cursor, pick_statements, run_target,
-    statement_at,
+    MAX_OUTLINE_ENTRIES, OUTLINE_SUMMARY_CHARS, Outline, OutlineEntry, PickedText, RunKind,
+    RunPickError, RunTarget, from_cursor, neighbour_statement, outline, pick_statements,
+    run_target, statement_at,
 };
 pub use data_search::{
     ColumnMatch, DEFAULT_ROWS_PER_TABLE, DataSearchError, DataSearchEvent, DataSearchOptions,

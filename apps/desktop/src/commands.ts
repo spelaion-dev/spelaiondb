@@ -259,6 +259,12 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "editor.selectStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("selectStatement") },
   "editor.copyStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("copyStatement") },
   "editor.selectOccurrences": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("selectOccurrences") },
+  // The table under the cursor is looked up in the tab's connection: without one there is none.
+  "editor.openObject": { enabled: (c) => editorTab(c)?.status === "connected", run: editorCommand("openObject") },
+  "editor.revealInExplorer": { enabled: (c) => editorTab(c)?.status === "connected", run: editorCommand("revealInExplorer") },
+  "editor.nextStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("nextStatement") },
+  "editor.previousStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("previousStatement") },
+  "editor.outline": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("outline") },
   "editor.insertSelect": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertSelect") },
   "editor.insertInsert": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertInsert") },
   "editor.insertUpdate": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertUpdate") },

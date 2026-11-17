@@ -156,7 +156,7 @@ test("global shortcuts find their command; AltGr characters and editor keys do n
 
 test("the editor menu and keymap derive actions from the central palette registry", () => {
   const editor = menuCommands("editor");
-  assert.equal(editor.length, 18);
+  assert.equal(editor.length, 23);
   // Run in a new result tab is the editor's own key, like its other actions (SDB-378).
   assert.ok(editor.some(command => command.id === "editor.runNewTab" && command.shortcut === "Alt+Enter"));
   assert.ok(editor.some(command => command.id === "editor.explain" && command.shortcut === undefined));

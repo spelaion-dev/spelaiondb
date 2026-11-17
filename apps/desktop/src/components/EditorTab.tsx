@@ -7,8 +7,8 @@ import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import type { EditableTableItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem } from "../bindings";
 import { PlanViewer } from "./PlanViewer";
-import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
+import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { connectionTooltip } from "../connectionInfo";
 import { afterRun, endStatementResults, withoutResults, withStartedResult } from "../runResults";
 import { ResultTabList } from "./ResultTabs";
@@ -22,7 +22,9 @@ import { summaryMessages, summaryShort } from "../scriptRun";
 import { saveTab, saveTabAs } from "../sqlFiles";
 import { notifyFinished } from "../notify";
 import { EditorActionsButton } from "./EditorMenu";
-import { SqlEditor, type RunLabel, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
+import { SqlEditor, type NameAction, type RunLabel, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
+import { ScriptOutline } from "./ScriptOutline";
+import type { ResolvedName } from "../sqlCompletion";
 import { commandSpec } from "../commandRegistry";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
@@ -132,6 +134,27 @@ export function EditorTab({ tab }: { tab: Tab }) {
   // A short message in the toolbar: a formatting error or "saved as …".
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [runLabel, setRunLabel] = useState<RunLabel | null>(null);
+  /** The outline of the script, beside the editor (Ctrl+Shift+O). */
+  const [outlineOpen, setOutlineOpen] = useState(false);
+
+  /** From a name in the SQL to its table (SDB-382): the table's details in a tab of its own,
+   *  opened like this tab's session, or its row in the explorer. The name was resolved from
+   *  the catalog already read; a column leads to its table. */
+  function showName(name: ResolvedName, action: NameAction) {
+    const connectionId = tab.connectionId;
+    if (!connectionId) return;
+    const { schema, name: table } = name.table;
+    const app = useApp.getState();
+    if (action === "reveal") {
+      app.setSidebarSection("connections");
+      app.revealInExplorer({ connectionId, schema, name: table, connect: true });
+      return;
+    }
+    const existing = app.tabs.some((other) => other.connectionId === connectionId && other.tableDetails?.schema === schema
+      && other.tableDetails.name === table && other.tableDetails.kind === "columns");
+    const details = app.addTableDetailsTab(connectionId, schema, table, "columns");
+    if (!existing) connectTabFromExplorer(details, tab.id, explorerDatabase(connectionId, schema) ?? database ?? undefined);
+  }
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), notice.error ? 6000 : 2500);
@@ -646,6 +669,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
         case "selectStatement":
         case "copyStatement":
         case "selectOccurrences":
+        case "openObject":
+        case "revealInExplorer":
+        case "nextStatement":
+        case "previousStatement":
+        case "outline":
         case "insertSelect":
         case "insertInsert":
         case "insertUpdate":
@@ -1345,8 +1373,18 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             catalog={completion.catalog}
             onRun={(r, newTab) => void run(r, false, queryPageSize, [], newTab ? { kind: "newTab" } : { kind: "replace" })}
             onRunLabel={(next) => setRunLabel((before) => (before?.kind === next.kind && before.statements === next.statements ? before : next))}
+            onName={showName}
+            onOutline={() => setOutlineOpen((open) => !open)}
             error={editorError}
           />
+          {outlineOpen && (
+            <ScriptOutline
+              sql={tab.sql}
+              engine={connection?.engine ?? null}
+              onShow={(index) => editor.current?.showAt(index)}
+              onClose={() => { setOutlineOpen(false); editor.current?.focus(); }}
+            />
+          )}
         </div>
         {!tab.table && completion.error && <div className="notice error" role="status">{t("completion.loadFailed", { reason: completion.error })}</div>}
         <div

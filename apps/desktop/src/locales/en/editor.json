@@ -837,10 +837,35 @@
     "selectStatement": "Select current statement",
     "copyStatement": "Copy current statement",
     "selectOccurrences": "Select all occurrences",
+    "openObject": "Go to table",
+    "revealInExplorer": "Reveal in explorer",
+    "nextStatement": "Next statement",
+    "previousStatement": "Previous statement",
+    "outline": "Outline of the script",
     "insertSelect": "Insert SELECT snippet",
     "insertInsert": "Insert INSERT snippet",
     "insertUpdate": "Insert UPDATE snippet",
     "failed": "Could not perform editor action: {{reason}}"
+  },
+  "names": {
+    "unknown": "The name at the cursor is not a table or a column the explorer has read",
+    "nullable": "May be NULL",
+    "notNull": "NOT NULL",
+    "columnOf": "Column of {{table}}",
+    "columnsLoading": "Its columns are still being read",
+    "moreColumns_one": "and {{count}} more column",
+    "moreColumns_other": "and {{count}} more columns",
+    "openHint": "Ctrl+click or F12 opens its details"
+  },
+  "outline": {
+    "title": "Outline",
+    "close": "Close the outline",
+    "empty": "No statements",
+    "line": "Line {{line}}",
+    "entry": "Line {{line}}: {{summary}}",
+    "more_one": "and {{formattedCount}} more statement",
+    "more_other": "and {{formattedCount}} more statements",
+    "failed": "The outline could not be read: {{reason}}"
   },
   "completion": {
     "loadFailed": "Could not load completion metadata: {{reason}}. Refresh the connection in the explorer to try again."

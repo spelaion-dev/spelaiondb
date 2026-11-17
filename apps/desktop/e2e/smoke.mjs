@@ -2466,6 +2466,159 @@ try {
     await replaceQuery(panel, "select 'unterminated");
   }
 
+  step("from SQL to the object: hover a column and a table, Ctrl+click a table name, the outline and next statement");
+  {
+    // A tab of its own, closed at the end: the tab the steps around use is shown again.
+    const tabBefore = await page.locator(".tabbar .tab").evaluateAll((tabs) => tabs.findIndex((tab) => tab.classList.contains("active")));
+    assert.ok(tabBefore >= 0);
+    // The tab connects when it first runs, and its catalog is read after that. (History
+    // saving is off for this connection here, so the run is not recorded.)
+    assert.equal(await historySaving("Shop (SQLite)"), false);
+    const namesPanel = await newQuery("Shop (SQLite)", "select o.id, o.total\nfrom orders o\njoin customer c on c.id = o.customer_id;\n\nselect name from customer;");
+    await run(namesPanel);
+    await namesPanel.locator(".result-tabs button", { hasText: "Result 2" }).waitFor();
+    await namesPanel.getByText(/^Connected/).first().waitFor();
+    const namesTab = await page.locator(".tabbar .tab.active").innerText();
+    const at = async (lineIndex, offset) => namesPanel.locator(".cm-line").nth(lineIndex).evaluate((line, index) => {
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      let remaining = index;
+      while (node && remaining > node.textContent.length) {
+        remaining -= node.textContent.length;
+        node = walker.nextNode();
+      }
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.setEnd(node, Math.min(node.textContent.length, remaining + 1));
+      const box = range.getBoundingClientRect();
+      return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+    }, offset);
+    const hover = page.locator(".sql-hover");
+    // The catalog is read in the background: until a table's columns are there, a hover over
+    // one of them shows nothing. Move away and back until it does.
+    const hoverUntil = async (lineIndex, offset, text) => {
+      for (let i = 0; i < 60; i++) {
+        const point = await at(lineIndex, offset);
+        await page.mouse.move(point.x + 120, point.y + 160);
+        await page.mouse.move(point.x, point.y, { steps: 3 });
+        const shown = await hover.filter({ hasText: text }).waitFor({ timeout: 1500 }).then(() => true, () => false);
+        if (shown) return;
+      }
+      throw new Error(`no hover with "${text}"`);
+    };
+    // `total` in `o.total`: its type and its table, through the alias.
+    await hoverUntil(0, 16, "Column of main.orders");
+    assert.match(await hover.innerText(), /total\s*REAL/i);
+    assert.match(await hover.innerText(), /NOT NULL/);
+    await shot("05f-editor-hover-column");
+    // `orders` in the FROM: the table's columns and types.
+    await hoverUntil(1, 7, "main.orders");
+    {
+      const text = await hover.innerText();
+      assert.match(text, /customer_id\s*INTEGER/i);
+      assert.match(text, /created\s*TEXT/i);
+      assert.match(text, /Ctrl\+click or F12 opens its details/);
+    }
+    // A bare column of one visible table: `name` is customer's.
+    await hoverUntil(4, 8, "Column of main.customer");
+    // A keyword shows nothing.
+    {
+      const point = await at(0, 2);
+      await page.mouse.move(point.x, point.y, { steps: 3 });
+      await page.waitForTimeout(700);
+      assert.equal(await hover.count(), 0);
+    }
+    const ctrlClick = async (lineIndex, offset) => {
+      const point = await at(lineIndex, offset);
+      await page.keyboard.down("Control");
+      await page.mouse.click(point.x, point.y);
+      await page.keyboard.up("Control");
+    };
+    const details = page.locator(".tab-panel:not([hidden]) .table-details-view");
+    const backToQuery = async () => {
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab", { hasText: namesTab }).click();
+      await namesPanel.locator(".cm-content").waitFor();
+    };
+    // Ctrl+click on the table's name opens its details in a tab of its own.
+    await ctrlClick(1, 7);
+    await details.waitFor();
+    await details.locator(".table-details-path", { hasText: "main / orders" }).waitFor();
+    await details.getByText("customer_id").first().waitFor();
+    await shot("05f-editor-ctrl-click-details");
+    await backToQuery();
+    // Through the alias too: `o` in `o.total`.
+    await ctrlClick(0, 13);
+    await details.locator(".table-details-path", { hasText: "main / orders" }).waitFor();
+    await backToQuery();
+    // On something that is not a table, Ctrl+click still adds a cursor.
+    await namesPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+Home");
+    await ctrlClick(2, 2);
+    await page.waitForFunction(() => document.querySelectorAll(".tab-panel:not([hidden]) .cm-cursor").length === 2);
+    await page.keyboard.press("Escape");
+    // The outline: one row per statement as the core splits the script; a row moves the cursor.
+    await namesPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+Shift+o");
+    const outline = namesPanel.getByRole("complementary", { name: "Outline" });
+    await outline.waitFor();
+    await outline.getByRole("button", { name: "Line 1: select o.id, o.total from orders o join customer c on c.id = o.customer_id" }).waitFor();
+    assert.equal(await outline.locator(".script-outline-entry").count(), 2);
+    const activeLine = (number) => page.waitForFunction((n) => document.querySelector(".tab-panel:not([hidden]) .cm-activeLineGutter")?.textContent === String(n), number);
+    await outline.getByRole("button", { name: "Line 5: select name from customer" }).click();
+    await activeLine(5);
+    // The panel keeps its width whatever the statements' length.
+    assert.ok((await outline.boundingBox()).width <= 260, "the outline is a narrow panel");
+    // Both looks, put on the page for the screenshots alone and put back.
+    {
+      const themeNow = await page.locator("html").getAttribute("data-theme");
+      const lookOf = (theme) =>
+        page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+          window.dispatchEvent(new Event("spelaion-themechange"));
+        }, theme);
+      for (const theme of ["light", "dark"]) {
+        await lookOf(theme);
+        await hoverUntil(1, 7, "main.orders");
+        await shot(`05f-editor-outline-and-hover-${theme}`);
+      }
+      await lookOf(themeNow);
+      const away = await at(4, 2);
+      await page.mouse.move(away.x, away.y + 200);
+    }
+    // Next and previous statement, from the keyboard.
+    await page.keyboard.press("Alt+PageUp");
+    await activeLine(1);
+    await page.keyboard.press("Alt+PageDown");
+    await activeLine(5);
+    // F12 on a keyword says there is no table there; on the table's name it opens it.
+    await page.keyboard.press("F12");
+    await namesPanel.getByText("The name at the cursor is not a table or a column the explorer has read").waitFor();
+    for (let i = 0; i < 18; i++) await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("F12");
+    await details.locator(".table-details-path", { hasText: "main / customer" }).waitFor();
+    await backToQuery();
+    // Reveal in explorer: the table's row in the tree. The cursor is still on `customer`
+    // (the focus goes back to the editor without a click, which would move it).
+    await namesPanel.locator(".cm-content").focus();
+    await page.keyboard.press("Shift+Alt+e");
+    await page.locator(".sidebar .revealed", { hasText: "customer" }).waitFor();
+    // The explorer as the next steps expect it: the schema and the connection folded again.
+    {
+      const mainNode = page.getByRole("button", { name: "Expand or collapse schema main" });
+      await mainNode.click();
+      await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
+      await mainNode.waitFor({ state: "detached" });
+    }
+    // The outline closes from its button, and the tab from the keyboard.
+    await outline.getByRole("button", { name: "Close the outline" }).click();
+    await outline.waitFor({ state: "detached" });
+    await namesPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab").nth(tabBefore).click();
+    await page.waitForFunction((index) => document.querySelectorAll(".tabbar .tab")[index]?.classList.contains("active"), tabBefore);
+  }
+
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");
   const queryTabCount = await page.locator(".tabbar .tab").count();
   await sqlEditor.click();

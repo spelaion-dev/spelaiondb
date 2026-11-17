@@ -519,7 +519,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`run_target`, the Run button's label) and writes the text of the statements picked from a
   selection or from the cursor to the end (`pick_statements`, `from_cursor`): the rest written
   over with spaces, and returned only if the engine's splitter reads in it exactly those
-  statements (`tests/run_from_cursor.rs`, on every dialect). `progress.rs` thins a run's row
+  statements (`tests/run_from_cursor.rs`, on every dialect); its `outline` (one entry per
+  statement, bounded) and `neighbour_statement` are the editor's outline panel and its next /
+  previous statement, from the same splitter. `progress.rs` thins a run's row
   counts to a few a second for the app (a big result streams hundreds of batches a second;
   every other event and the final count go through as they come). `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it, and the
@@ -746,7 +748,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   registered once in `src/commandRegistry.ts` and run through `src/commands.ts`: the tab and
   file menus, the activity bar, the global shortcuts and the command palette
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
-  menus against it. The palette's objects are only what the explorer already read (`catalog.ts`). Smoke test against the real app:
+  menus against it. The palette's objects are only what the explorer already read (`catalog.ts`).
+  In the SQL editor, completion, Ctrl+click and hover resolve a name with one reader of the
+  statement (`src/sqlCompletion.ts`: `completeSql` and `resolveName`, tested by
+  `scripts/sql-completion.test.mjs` and `scripts/sql-names.test.mjs`) over the catalog the tab
+  read in the background (`useCompletionCatalog.ts`): never a query per key or hover, and a
+  name that is not certainly one table or column shows nothing. They are hints: nothing is run
+  or decided from them. Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
   nothing is built twice: `npx tauri build --no-bundle -- -p spelaion-desktop -p
   spelaion-cli -p spelaion-plugin-fetch`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`,
