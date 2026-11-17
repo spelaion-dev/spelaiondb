@@ -110,6 +110,8 @@ jobs:
         with:
           # The merge commit and its parents: enough to list what a pull request changes.
           fetch-depth: 2
+      - name: Test the release updater manifest check
+        run: node --test scripts/check-updater-manifest.test.mjs
       # On a pull request that changes nothing the Rust checks read, every step below is
       # skipped and the job passes (see the top of this file). Anything but an explicit
       # `false` runs them, and a failure here fails the job: never skipped by accident.
