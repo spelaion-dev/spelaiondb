@@ -10,11 +10,13 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 mod aside;
 mod backup;
+mod editor_snippets;
 mod library;
 mod map;
 mod tabs;
 pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
+pub use editor_snippets::{EditorSnippet, is_snippet_name};
 pub use library::{HistoryFilter, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder};
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,

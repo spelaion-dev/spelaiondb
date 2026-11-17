@@ -715,6 +715,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   could not open (`MissingPlugin.tsx`), which send to the page when an engine's plugin is not
   installed.
 - `crates/spelaion-store`: local SQLite (audit, query history, saved queries, personal settings,
+  the user's editor snippets and the template of new scripts in `editor_snippets.rs`, kept as
+  personal settings and checked by `spelaion-core`'s `editor_snippets.rs` when saved and when
+  read: bounded, plain text by `spelaion-config::check_plain_text`, the rule of a connection's
+  description; they are text the editor inserts, never run),
   the explorer's filters and bookmarks, the editor's open tabs per workspace and recent files in
   `tabs.rs`; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.

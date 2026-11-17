@@ -14,8 +14,10 @@ import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockCo
 import { tags } from "@lezer/highlight";
 import { closeLintPanel, lintKeymap, openLintPanel, setDiagnostics } from "@codemirror/lint";
 import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, SearchCursor, searchKeymap, searchPanelOpen } from "@codemirror/search";
-import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, nextSnippetField, prevSnippetField, acceptCompletion } from "@codemirror/autocomplete";
-import { EDITOR_ACTIONS, EDITOR_SNIPPETS as snippets, quotedLines, type EditorActionId } from "../editorActions";
+import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, snippetCompletion, nextSnippetField, prevSnippetField, acceptCompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+import { EDITOR_ACTIONS, SNIPPET_COMMANDS, quotedLines, type EditorActionId } from "../editorActions";
+import { allSnippets, lowerKeywords, snippetBefore, snippetsStarting, type EditorSnippet } from "../editorSnippets";
+import { useSnippets } from "../snippetStore";
 import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
 import { resolveName, sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase, type ResolvedName } from "../sqlCompletion";
 import { formatHttp, httpLanguage, isHttpLanguage } from "../httpLanguage";
@@ -84,6 +86,8 @@ interface Props {
   onOutline(): void;
   /** Error to underline, with its JS index in the document. */
   error: { index: number; message: string; source: object } | null;
+  /** The editor opens with its cursor after the text instead of before it. */
+  cursorAtEnd?: boolean;
 }
 
 const theme = EditorView.theme({
@@ -304,9 +308,34 @@ function nameTooltip(name: ResolvedName, t: (key: string, values?: Record<string
   return root;
 }
 
-function language(engine: string | null, catalog: CompletionCatalog, keywordCase: KeywordCase) {
+/** A snippet's text as it is inserted: a built-in one follows the keyword case preference. */
+function snippetText(chosen: EditorSnippet): string {
+  return chosen.builtIn && usePreferences.getState().editor.keywordCase === "lower" ? lowerKeywords(chosen.body) : chosen.body;
+}
+
+/** Offers the snippets whose name starts with the word being typed, next to the SQL
+ *  completions: the built-in ones and the user's own. Read when asked, so a snippet saved in
+ *  Settings is offered at once. */
+function snippetCompletionSource(describe: (snippet: EditorSnippet) => string) {
+  return (context: CompletionContext): CompletionResult | null => {
+    const word = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*/);
+    if (!word || word.from === word.to) return null;
+    // Not after a dot (a column of an alias) or inside a longer word.
+    const before = context.state.sliceDoc(Math.max(0, word.from - 1), word.from);
+    if (/[A-Za-z0-9_.]/.test(before)) return null;
+    const offered = snippetsStarting(word.text, allSnippets(useSnippets.getState().snippets));
+    if (!offered.length) return null;
+    return {
+      from: word.from,
+      options: offered.map((chosen) => snippetCompletion(snippetText(chosen), { label: chosen.name, detail: describe(chosen), type: "text", boost: -1 })),
+      validFor: /^[A-Za-z0-9_]*$/,
+    };
+  };
+}
+
+function language(engine: string | null, catalog: CompletionCatalog, keywordCase: KeywordCase, describe: (snippet: EditorSnippet) => string) {
   if (engine && isHttpLanguage(engine)) return httpLanguage(engine, catalog);
-  return [sql({ dialect: sqlDialect(engine) }), autocompletion({ override: [sqlCompletionSource(catalog, engine, keywordCase)] })];
+  return [sql({ dialect: sqlDialect(engine) }), autocompletion({ override: [sqlCompletionSource(catalog, engine, keywordCase), snippetCompletionSource(describe)] })];
 }
 
 function editorPreferences(p: EditorPreferencesItem) {
@@ -317,7 +346,7 @@ function editorPreferences(p: EditorPreferencesItem) {
   ];
 }
 
-export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, onName, onOutline, error }: Props) {
+export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, onName, onOutline, error, cursorAtEnd }: Props) {
   const { t } = useTranslation("editor");
   const preferences = usePreferences((s) => s.editor);
   const settings = useRef(new Compartment());
@@ -329,6 +358,11 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   const callbacks = useRef({ onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t });
   callbacks.current = { onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t };
   const failed = (e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e));
+  // What a snippet is for, next to its name in the completion list: a built-in one's is
+  // translated, the user's is their own text.
+  const translate = useRef(t);
+  translate.current = t;
+  const describeSnippet = useRef((chosen: EditorSnippet) => (chosen.builtIn ? translate.current(chosen.description) : chosen.description)).current;
   // The Run button's label: the core says what Run will send. Asked once the cursor rests, so
   // typing never waits for it, and an answer to an older question is dropped.
   const label = useRef({ timer: undefined as number | undefined, asked: 0 });
@@ -422,12 +456,16 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       .catch((e: unknown) => console.error("statement_at", e));
     return true;
   };
-  const insertSnippet = (v: EditorView, id: keyof typeof snippets, from = v.state.selection.main.from) => {
+  // Inserts a snippet's text over the selection (or from `from`), its first field selected.
+  // A snippet is only ever text put into the editor: nothing runs.
+  const insertSnippet = (v: EditorView, chosen: EditorSnippet, from = v.state.selection.main.from) => {
     const to = v.state.selection.main.to;
-    const content = snippets[id];
-    const lower = usePreferences.getState().editor.keywordCase === "lower";
-    snippet(lower ? content.replace(/SELECT|FROM|INSERT INTO|VALUES|UPDATE|SET|WHERE/g, (word) => word.toLowerCase()) : content)(v, null, from, to);
+    snippet(snippetText(chosen))(v, null, from, to);
     return true;
+  };
+  const insertNamed = (v: EditorView, name: string) => {
+    const chosen = allSnippets(useSnippets.getState().snippets).find((candidate) => candidate.name === name);
+    return chosen ? insertSnippet(v, chosen) : false;
   };
   const currentStatement = (v: EditorView, copy: boolean) => {
     const doc = v.state.doc.toString();
@@ -501,15 +539,17 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       case "nextStatement": return moveStatement(v, true);
       case "previousStatement": return moveStatement(v, false);
       case "outline": callbacks.current.onOutline(); return true;
-      case "insertSelect": case "insertInsert": case "insertUpdate": return insertSnippet(v, id);
+      case "insertSelect": case "insertInsert": case "insertUpdate": return insertNamed(v, SNIPPET_COMMANDS[id]);
     }
   };
   const tab = (v: EditorView) => {
     if (nextSnippetField(v)) return true;
     const range = v.state.selection.main;
     if (range.empty) {
-      const prefix = /\b(sel|ins|upd)$/.exec(v.state.doc.lineAt(range.head).text.slice(0, range.head - v.state.doc.lineAt(range.head).from));
-      if (prefix) return insertSnippet(v, prefix[1] === "sel" ? "insertSelect" : prefix[1] === "ins" ? "insertInsert" : "insertUpdate", range.head - prefix[1]!.length);
+      // The name of a snippet just before the cursor (a built-in one or the user's) expands.
+      const line = v.state.doc.lineAt(range.head);
+      const named = snippetBefore(line.text.slice(0, range.head - line.from), allSnippets(useSnippets.getState().snippets));
+      if (named) return insertSnippet(v, named.snippet, range.head - named.start);
     }
     return acceptCompletion(v) || indentMore(v);
   };
@@ -549,6 +589,8 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       parent: host.current,
       state: EditorState.create({
         doc: value,
+        // A new script that starts with the user's template: typing goes on after it.
+        selection: cursorAtEnd ? { anchor: value.length } : undefined,
         extensions: [
           Prec.highest(
             keymap.of([
@@ -566,7 +608,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
           editorSetup,
           syntaxHighlighting(defaultHighlightStyle),
           syntaxHighlighting(sqlColors),
-          lang.current.of(language(engine, catalog, preferences.keywordCase as KeywordCase)),
+          lang.current.of(language(engine, catalog, preferences.keywordCase as KeywordCase, describeSnippet)),
           locale.current.of([
             EditorState.phrases.of(t("codeMirror", { returnObjects: true }) as Record<string, string>),
             EditorView.contentAttributes.of({ "aria-label": t("sqlEditor") }),
@@ -625,7 +667,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   }, []);
 
   useEffect(() => {
-    view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, catalog, preferences.keywordCase as KeywordCase)) });
+    view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, catalog, preferences.keywordCase as KeywordCase, describeSnippet)) });
   }, [engine, catalog, preferences.keywordCase]);
 
   // Asked at once when the editor opens and when its engine changes: another engine reads the

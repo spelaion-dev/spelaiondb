@@ -875,21 +875,41 @@ pub(crate) fn is_hidden_char(c: char) -> bool {
         || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
 }
 
-/// A description: plain text over lines and tabs, of a bounded length.
-fn check_description(description: &str) -> Result<(), String> {
-    if description.chars().count() > ConnectionFile::MAX_DESCRIPTION {
-        return Err(format!(
-            "description is at most {} characters",
-            ConnectionFile::MAX_DESCRIPTION
-        ));
+/// Why a text is not plain text of a bounded length ([`check_plain_text`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlainTextError {
+    /// More characters than allowed.
+    TooLong,
+    /// A hidden character other than a line break or a tab.
+    Hidden,
+}
+
+/// Plain text over lines and tabs, of at most `max` characters: nothing in it changes how the
+/// text around it is shown without being seen itself (control characters, bidirectional
+/// overrides, zero-width marks). The rule of a connection's description, and of whatever else
+/// the user types to be shown or inserted later (the editor's snippets).
+pub fn check_plain_text(text: &str, max: usize) -> Result<(), PlainTextError> {
+    if text.chars().count() > max {
+        return Err(PlainTextError::TooLong);
     }
-    if description
+    if text
         .chars()
         .any(|c| is_hidden_char(c) && !matches!(c, '\n' | '\r' | '\t'))
     {
-        return Err("description can only hold text, line breaks and tabs".into());
+        return Err(PlainTextError::Hidden);
     }
     Ok(())
+}
+
+/// A description: plain text over lines and tabs, of a bounded length.
+fn check_description(description: &str) -> Result<(), String> {
+    check_plain_text(description, ConnectionFile::MAX_DESCRIPTION).map_err(|e| match e {
+        PlainTextError::TooLong => format!(
+            "description is at most {} characters",
+            ConnectionFile::MAX_DESCRIPTION
+        ),
+        PlainTextError::Hidden => "description can only hold text, line breaks and tabs".into(),
+    })
 }
 
 /// The `[session]` table (ADR-037): bounded text without hidden characters, and only what the
