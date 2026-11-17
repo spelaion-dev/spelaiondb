@@ -567,7 +567,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
   the engine's read-only transaction (the export barrier) in a session of its own, sampled past
-  100,000 rows; `tests/column_stats.rs` runs it on every engine.
+  100,000 rows; `tests/column_stats.rs` runs it on every engine. `column_top_values` is the same
+  count of the most frequent values alone, for the custom filter's value picker: a masked
+  column is refused before anything is read (`tests/masking.rs`).
+  `table_filters.rs` is what a table data tab remembers (the filters used on a table, and the
+  default one its tab opens with): local data in the store, so every filter is checked like a
+  page's before it is kept and again each time it is read, and a stored default that no longer
+  passes is handed back as refused, never as a filter. Like `table_data.rs`, any change there
+  needs tests that try to get around it.
   Server observation (the process monitor's other views): `observe.rs` runs each statement
   only after `classify_read_only` accepts it, as session metadata; `locks.rs` reads each
   engine's locks and waits and builds the blocking tree (ending a blocker always goes through
@@ -728,7 +735,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   read: bounded, plain text by `spelaion-config::check_plain_text`, the rule of a connection's
   description; they are text the editor inserts, never run),
   the explorer's filters and bookmarks, the editor's open tabs per workspace and recent files in
-  `tabs.rs`; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
+  `tabs.rs`, each table's filter history and default filter in `table_filters.rs`; later the
+  schema cache). A new migration is appended to `MIGRATIONS` and its test finds it by its text,
+  never by "the last one". `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
   `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes

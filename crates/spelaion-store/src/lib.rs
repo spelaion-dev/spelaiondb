@@ -13,6 +13,7 @@ mod backup;
 mod editor_snippets;
 mod library;
 mod map;
+mod table_filters;
 mod tabs;
 pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
@@ -22,6 +23,7 @@ pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,
     check_tile_server,
 };
+pub use table_filters::{FilteredTable, TABLE_FILTER_HISTORY, TABLE_FILTER_MAX_CHARS};
 pub use tabs::{
     FileEncoding, LineEnding, MAX_RECENT_FILES, RecentFile, SavedFile, SavedTab, SavedTabs,
 };
@@ -219,6 +221,7 @@ const MIGRATIONS: &[&str] = &["create table audit (
         value       text not null,
         primary key (workspace, connection, name)
     );",
+    table_filters::MIGRATION,
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -1106,6 +1109,8 @@ impl Store {
             "explorer_filters",
             "explorer_bookmarks",
             "history_preferences",
+            "table_filter_history",
+            "table_filter_defaults",
         ] {
             transaction.execute(
                 &format!(

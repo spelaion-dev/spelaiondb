@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CellEditItem, ColumnItem } from "../api";
 import type { TableView } from "../store";
+import { TableFilterBox } from "./TableFilterBox";
 
 export const PAGE_SIZES = [100, 500, 1000, 5000];
 
@@ -19,6 +20,12 @@ export function TableDataBar(props: {
   editable: boolean | null;
   readOnlyConnection: boolean;
   pending: number;
+  /** For the filter box's memory (SDB-381): the tab's connection and session, the columns of
+   *  the page on screen, and whether that page loaded without an error. */
+  connectionId: string | null;
+  session: string;
+  columns: string[];
+  loaded: boolean;
 }) {
   const { view, shown, busy } = props;
   const { t, i18n } = useTranslation("editor");
@@ -48,10 +55,19 @@ export function TableDataBar(props: {
         });
       }}
     >
-      <label className="table-clause">
-        <span className="mono">WHERE</span>
-        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("table.filterPlaceholder")} spellCheck={false} aria-label="WHERE" />
-      </label>
+      <TableFilterBox
+        connectionId={props.connectionId}
+        session={props.session}
+        schema={view.schema}
+        name={view.name}
+        applied={view.filter}
+        loaded={props.loaded}
+        value={filter}
+        onChange={setFilter}
+        onApply={(next) => props.onChange({ filter: next.trim(), page: 0, ...(next.trim() !== view.filter ? { total: undefined } : {}) })}
+        columns={props.columns}
+        disabled={locked}
+      />
       <label className="table-clause">
         <span className="mono">ORDER BY</span>
         <input value={orderBy} onChange={(e) => setOrderBy(e.target.value)} placeholder={t("table.orderPlaceholder")} spellCheck={false} aria-label="ORDER BY" />

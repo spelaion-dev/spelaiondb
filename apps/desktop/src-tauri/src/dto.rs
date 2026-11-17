@@ -4105,6 +4105,84 @@ impl From<ColumnSortItem> for spelaion_core::ColumnSort {
     }
 }
 
+/// How a result's column conditions are read together: all of them or any, telling upper
+/// case from lower case in text or not.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterModeItem {
+    pub any: bool,
+    pub match_case: bool,
+}
+
+impl From<FilterModeItem> for spelaion_core::FilterMode {
+    fn from(item: FilterModeItem) -> Self {
+        Self {
+            any: item.any,
+            match_case: item.match_case,
+        }
+    }
+}
+
+/// A stored default filter the core refused when the tab opened.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedFilterItem {
+    pub filter: String,
+    pub reason: String,
+}
+
+/// What a table data tab remembers of its table's filters, every one checked by the core as
+/// it was read: the history newest first, and the default the tab opens with.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableFiltersItem {
+    pub history: Vec<String>,
+    pub default: Option<String>,
+    /// The stored default did not pass the check: the tab opens without it and says so.
+    pub refused_default: Option<RefusedFilterItem>,
+}
+
+impl From<spelaion_core::TableFilters> for TableFiltersItem {
+    fn from(filters: spelaion_core::TableFilters) -> Self {
+        Self {
+            history: filters.history,
+            default: filters.default,
+            refused_default: filters.refused_default.map(|refused| RefusedFilterItem {
+                filter: refused.filter,
+                reason: refused.reason,
+            }),
+        }
+    }
+}
+
+/// One of a column's most frequent values, offered as a filter's value.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PickableValueItem {
+    /// `None` for NULL.
+    pub value: Option<String>,
+    pub count: f64,
+}
+
+/// A column's most frequent values to pick a filter's value from. A masked column's are
+/// never read (ADR-051).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TopValuesOutcome {
+    Done {
+        values: Vec<PickableValueItem>,
+        /// Counted over the first `sample_rows` rows only.
+        sampled: bool,
+        sample_rows: f64,
+    },
+    Cancelled,
+    Masked,
+}
+
 /// A page of a table for the table data tab (see `spelaion_core::TablePage`).
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

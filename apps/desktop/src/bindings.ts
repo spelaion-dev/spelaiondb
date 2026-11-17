@@ -398,6 +398,26 @@ export const commands = {
 	 *  `stats_id` stops it.
 	 */
 	columnStats: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<ColumnStatsOutcome_Serialize, string>(__TAURI_INVOKE("column_stats", { source, statsId, table, result, column })),
+	/**
+	 *  A table data tab column's most frequent values, to pick a filter's value from: counted by
+	 *  the server like `column_stats` (a new session of the tab's connection, every statement a
+	 *  read), with the tab's filter. The core refuses a masked column before anything is read
+	 *  (ADR-051). `cancel_column_stats` with the same `stats_id` stops it.
+	 */
+	columnTopValues: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<TopValuesOutcome_Serialize, string>(__TAURI_INVOKE("column_top_values", { source, statsId, table, result, column })),
+	/**
+	 *  What a table data tab remembers of its table's filters (SDB-381): the history, newest
+	 *  first, and the default the tab opens with. Local data; the core checks each filter again
+	 *  as it reads it, and a default that no longer passes comes back as refused, never as a
+	 *  filter.
+	 */
+	tableFilters: (connection: string, schema: string, name: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("table_filters", { connection, schema, name })),
+	/**  Remembers a filter the tab just used, checked by the core first. */
+	recordTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("record_table_filter", { connection, schema, name, filter })),
+	/**  Takes one filter out of a table's history. */
+	forgetTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, schema, name, filter })),
+	/**  Saves the filter a table's tab opens with (checked by the core), or drops it (`None`). */
+	setTableDefaultFilter: (connection: string, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, schema, name, filter })),
 	/**  Stops a column's statistics while they are counted: the running statement and the rest. */
 	cancelColumnStats: (statsId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_column_stats", { statsId })),
 	/**
@@ -534,10 +554,11 @@ export const commands = {
 	 */
 	filterResult: (result: number, text: string | null) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_result", { result, text })),
 	/**
-	 *  Filters a result by column conditions in the core (all must hold; an empty list removes
-	 *  them), on top of the text filter. The grid then asks for its windows again.
+	 *  Filters a result by column conditions in the core (an empty list removes them), on top
+	 *  of the text filter: all of them must hold, or any when `mode` says so, and text tells
+	 *  upper case from lower case only when it asks. The grid then asks for its windows again.
 	 */
-	filterColumns: (result: number, filters: ColumnFilterItem[]) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_columns", { result, filters })),
+	filterColumns: (result: number, filters: ColumnFilterItem[], mode: FilterModeItem | null) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_columns", { result, filters, mode })),
 	/**  Every cell of one row as text (`None` for NULL), for the viewer's row view. */
 	rowValues: (result: number, row: number) => typedError<(string | null)[], string>(__TAURI_INVOKE("row_values", { result, row })),
 	/**
@@ -2730,6 +2751,15 @@ export type FilterActionItem = "hide" | "showOnly";
 
 export type FilterKindItem = "schemas" | "objects" | "columns";
 
+/**
+ *  How a result's column conditions are read together: all of them or any, telling upper
+ *  case from lower case in text or not.
+ */
+export type FilterModeItem = {
+	any: boolean,
+	matchCase: boolean,
+};
+
 /**  A column filter operator (see `spelaion_core::FilterOp`). */
 export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "contains" | "notContains" | "isNull" | "isNotNull";
 
@@ -4039,6 +4069,23 @@ export type PendingValueItem_Serialize = {
 
 export type PgFormatItem = "plain" | "custom" | "directory" | "tar";
 
+/**  One of a column's most frequent values, offered as a filter's value. */
+export type PickableValueItem = PickableValueItem_Serialize | PickableValueItem_Deserialize;
+
+/**  One of a column's most frequent values, offered as a filter's value. */
+export type PickableValueItem_Deserialize = {
+	/**  `None` for NULL. */
+	value?: string | null,
+	count: number | null,
+};
+
+/**  One of a column's most frequent values, offered as a filter's value. */
+export type PickableValueItem_Serialize = {
+	/**  `None` for NULL. */
+	value: string | null,
+	count: number | null,
+};
+
 /**
  *  Some statements of a script as text to run, written by the core: what is left out is
  *  blank, so a position in `text` is one in the script.
@@ -4686,6 +4733,12 @@ export type ReferencedRowsItem = {
 	hasMore: boolean,
 	/**  Rows a page holds. */
 	pageRows: number,
+};
+
+/**  A stored default filter the core refused when the tab opened. */
+export type RefusedFilterItem = {
+	filter: string,
+	reason: string,
 };
 
 /**  A table or view chosen in the explorer. */
@@ -5418,6 +5471,34 @@ export type TableExportItem = {
 };
 
 /**
+ *  What a table data tab remembers of its table's filters, every one checked by the core as
+ *  it was read: the history newest first, and the default the tab opens with.
+ */
+export type TableFiltersItem = TableFiltersItem_Serialize | TableFiltersItem_Deserialize;
+
+/**
+ *  What a table data tab remembers of its table's filters, every one checked by the core as
+ *  it was read: the history newest first, and the default the tab opens with.
+ */
+export type TableFiltersItem_Deserialize = {
+	history: string[],
+	default?: string | null,
+	/**  The stored default did not pass the check: the tab opens without it and says so. */
+	refusedDefault?: RefusedFilterItem | null,
+};
+
+/**
+ *  What a table data tab remembers of its table's filters, every one checked by the core as
+ *  it was read: the history newest first, and the default the tab opens with.
+ */
+export type TableFiltersItem_Serialize = {
+	history: string[],
+	default: string | null,
+	/**  The stored default did not pass the check: the tab opens without it and says so. */
+	refusedDefault: RefusedFilterItem | null,
+};
+
+/**
  *  A foreign key seen from a table: its own (outgoing) or another table's that points to it
  *  (incoming). `schema` and `table` are the other table.
  */
@@ -5656,6 +5737,28 @@ export type TopValueItem_Serialize = {
 	 */
 	condition: string | null,
 };
+
+/**
+ *  A column's most frequent values to pick a filter's value from. A masked column's are
+ *  never read (ADR-051).
+ */
+export type TopValuesOutcome = TopValuesOutcome_Serialize | TopValuesOutcome_Deserialize;
+
+/**
+ *  A column's most frequent values to pick a filter's value from. A masked column's are
+ *  never read (ADR-051).
+ */
+export type TopValuesOutcome_Deserialize = { kind: "done"; values: PickableValueItem_Deserialize[]; 
+/**  Counted over the first `sample_rows` rows only. */
+sampled: boolean; sampleRows: number | null } | { kind: "cancelled" } | { kind: "masked" };
+
+/**
+ *  A column's most frequent values to pick a filter's value from. A masked column's are
+ *  never read (ADR-051).
+ */
+export type TopValuesOutcome_Serialize = { kind: "done"; values: PickableValueItem_Serialize[]; 
+/**  Counted over the first `sample_rows` rows only. */
+sampled: boolean; sampleRows: number | null } | { kind: "cancelled" } | { kind: "masked" };
 
 /**
  *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the

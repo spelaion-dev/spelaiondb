@@ -3323,14 +3323,17 @@ async fn sort_result(
     .map_err(|e| e.to_string())?
 }
 
-/// Filters a result by column conditions in the core (all must hold; an empty list removes
-/// them), on top of the text filter. The grid then asks for its windows again.
+/// Filters a result by column conditions in the core (an empty list removes them), on top
+/// of the text filter: all of them must hold, or any when `mode` says so, and text tells
+/// upper case from lower case only when it asks. The grid then asks for its windows again.
 #[command]
 async fn filter_columns(
     result: u32,
     filters: Vec<ColumnFilterItem>,
+    mode: Option<FilterModeItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<FilterOutcome> {
+    let mode = spelaion_core::FilterMode::from(mode.unwrap_or_default());
     let stored = state
         .results
         .get(ResultId(result.into()))
@@ -3340,7 +3343,9 @@ async fn filter_columns(
         let mut stored = stored
             .write()
             .map_err(|_| "result lock poisoned".to_string())?;
-        let rows = stored.filter_columns(filters).map_err(|e| e.to_string())?;
+        let rows = stored
+            .filter_columns_as(filters, mode)
+            .map_err(|e| e.to_string())?;
         let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
         Ok(FilterOutcome {
             rows: n(rows),
@@ -3631,6 +3636,185 @@ async fn column_stats(
     };
     close_export_session(&state, stats_id, open).await;
     outcome
+}
+
+/// A table data tab column's most frequent values, to pick a filter's value from: counted by
+/// the server like `column_stats` (a new session of the tab's connection, every statement a
+/// read), with the tab's filter. The core refuses a masked column before anything is read
+/// (ADR-051). `cancel_column_stats` with the same `stats_id` stops it.
+#[command]
+#[allow(clippy::too_many_arguments)]
+async fn column_top_values(
+    source: String,
+    stats_id: u32,
+    table: ColumnStatsTarget,
+    result: u32,
+    column: u32,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<TopValuesOutcome> {
+    let (name, logical) = {
+        let stored = state
+            .results
+            .get(ResultId(result.into()))
+            .ok_or("result freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        let meta = stored
+            .schema()
+            .columns
+            .get(column as usize)
+            .ok_or("no such column")?;
+        (meta.name.clone(), meta.logical)
+    };
+    let request = spelaion_core::ColumnStatsRequest {
+        schema: table.schema,
+        table: table.name,
+        column: name,
+        logical,
+        filter: table.filter,
+        sample_rows: spelaion_core::STATS_SAMPLE_ROWS,
+        top: spelaion_core::TOP_VALUES,
+    };
+    // Checked before connecting: a masked column or a filter that would change the
+    // statements never opens a session.
+    {
+        let tab = state.session(&source).await?;
+        if tab
+            .session
+            .masking()
+            .masks_table_column(&request.table, &request.column)
+        {
+            return Ok(TopValuesOutcome::Masked);
+        }
+        spelaion_core::column_stats_sql(tab.session.dialect().as_ref(), &request, false)
+            .map_err(|e| e.to_string())?;
+    }
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, stats_id).await?;
+    let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
+    drop(tab);
+    let outcome = match context {
+        Err(message) => Err(message),
+        Ok(()) => match spelaion_core::column_top_values(&open.session, &request, &cancel).await {
+            Ok(top) => Ok(TopValuesOutcome::Done {
+                values: top
+                    .values
+                    .into_iter()
+                    .map(|value| PickableValueItem {
+                        value: value.value,
+                        count: value.count as f64,
+                    })
+                    .collect(),
+                sampled: top.sampled,
+                sample_rows: request.sample_rows as f64,
+            }),
+            Err(spelaion_core::ColumnStatsError::Cancelled) => Ok(TopValuesOutcome::Cancelled),
+            Err(spelaion_core::ColumnStatsError::Masked) => Ok(TopValuesOutcome::Masked),
+            Err(e) => Err(e.to_string()),
+        },
+    };
+    close_export_session(&state, stats_id, open).await;
+    outcome
+}
+
+/// The store's name for a table of a connection, and the dialect its filters are checked
+/// with (the connection's engine: the tab may not be connected yet).
+async fn filtered_table(
+    state: &AppState,
+    connection: String,
+    schema: String,
+    name: String,
+) -> CmdResult<(spelaion_core::FilteredTable, Arc<dyn Dialect>)> {
+    let id = parse_id(&connection);
+    let config = state.config.read().await;
+    let entry = config
+        .connection(&id)
+        .ok_or_else(|| format!("unknown connection: {connection}"))?;
+    let dialect =
+        spelaion_core::dialect_of(entry.file.engine).ok_or("no driver for this engine")?;
+    let workspace = history_workspace(&config, id.source);
+    Ok((
+        spelaion_core::FilteredTable {
+            workspace,
+            connection,
+            schema,
+            name,
+        },
+        dialect,
+    ))
+}
+
+/// What a table data tab remembers of its table's filters (SDB-381): the history, newest
+/// first, and the default the tab opens with. Local data; the core checks each filter again
+/// as it reads it, and a default that no longer passes comes back as refused, never as a
+/// filter.
+#[command]
+async fn table_filters(
+    connection: String,
+    schema: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TableFiltersItem> {
+    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    state
+        .history
+        .table_filters(dialect.as_ref(), table)
+        .await
+        .map(TableFiltersItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Remembers a filter the tab just used, checked by the core first.
+#[command]
+async fn record_table_filter(
+    connection: String,
+    schema: String,
+    name: String,
+    filter: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TableFiltersItem> {
+    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    state
+        .history
+        .record_table_filter(dialect.as_ref(), table, &filter)
+        .await
+        .map(TableFiltersItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Takes one filter out of a table's history.
+#[command]
+async fn forget_table_filter(
+    connection: String,
+    schema: String,
+    name: String,
+    filter: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TableFiltersItem> {
+    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    state
+        .history
+        .forget_table_filter(dialect.as_ref(), table, &filter)
+        .await
+        .map(TableFiltersItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the filter a table's tab opens with (checked by the core), or drops it (`None`).
+#[command]
+async fn set_table_default_filter(
+    connection: String,
+    schema: String,
+    name: String,
+    filter: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<TableFiltersItem> {
+    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    state
+        .history
+        .set_table_default_filter(dialect.as_ref(), table, filter.as_deref())
+        .await
+        .map(TableFiltersItem::from)
+        .map_err(|e| e.to_string())
 }
 
 /// Every column of a schema's relations, read with one catalog query on the explorer's
@@ -5446,6 +5630,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             cancel_chart,
             save_chart_image,
             column_stats,
+            column_top_values,
+            table_filters,
+            record_table_filter,
+            forget_table_filter,
+            set_table_default_filter,
             cancel_column_stats,
             list_columns,
             data_search_limits,

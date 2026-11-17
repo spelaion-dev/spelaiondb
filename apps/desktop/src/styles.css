@@ -3632,6 +3632,101 @@ span.pick-key {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
   font-size: 12.5px;
 }
+/* The filter box's memory (SDB-381): suggestions under the box, the default's badge and star. */
+.table-filter-box {
+  position: relative;
+}
+.table-filter-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 2px 0 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+.table-filter-suggestions li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 4px 0 8px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.table-filter-suggestions li.active,
+.table-filter-suggestions li:hover {
+  background: var(--accent-soft);
+}
+.table-filter-suggestions code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+  color: var(--fg);
+}
+.table-default-badge {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--fg);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.table-default-button[aria-pressed="true"] {
+  color: var(--accent);
+}
+.table-filter-note {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+.filter-match {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.filter-match button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+.filter-top-values {
+  margin: 8px 0;
+}
+.filter-top-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  max-height: 30vh;
+  overflow: auto;
+}
+.filter-top-list li {
+  border-top: 1px solid var(--line);
+}
+.filter-top-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 26px;
+  text-align: left;
+}
+.filter-top-list code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+}
 .table-range {
   white-space: nowrap;
   min-width: 90px;

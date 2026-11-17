@@ -30,8 +30,11 @@ export interface ResultMeta {
   sort?: SortState[];
   /** Text the core filtered the rows by; `rows` then counts what is left of `total`. */
   filter?: string;
-  /** Column conditions the core filtered the rows by (all must hold). */
+  /** Column conditions the core filtered the rows by. */
   columnFilters?: ColumnFilterItem[];
+  /** How the core reads them together: all of them unless `any`, ignoring case unless
+   *  `matchCase` (`undefined`: all, ignoring case). */
+  filterMode?: FilterMode;
   total?: number;
   /** The statement that produced it, as it ran: what an export runs again (ADR-034). */
   sql?: string;
@@ -39,6 +42,12 @@ export interface ResultMeta {
   /** `sort`: the grid sort its pages were read from the server with (the header clicks of a
    *  paged query), by result column. */
   paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number; sort?: SortState[] };
+}
+
+/** How a result's column conditions are read together (the core's `FilterMode`). */
+export interface FilterMode {
+  any: boolean;
+  matchCase: boolean;
 }
 
 export interface SortState {

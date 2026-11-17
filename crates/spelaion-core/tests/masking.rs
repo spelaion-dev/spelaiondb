@@ -16,13 +16,13 @@ use futures_util::StreamExt;
 use spelaion_config::MaskingRules;
 use spelaion_core::masking::is_masked_field;
 use spelaion_core::{
-    Block, BulkAction, CellBlock, CellContent, CellEdit, CellInput, ColumnFilter,
+    Block, BulkAction, CellBlock, CellContent, CellEdit, CellInput, ColumnFilter, ColumnStatsError,
     ColumnStatsRequest, CoreEvent, CsvOptions, DataSearchOptions, DataSearchRequest, EditError,
     ExportCancel, ExportFormat, ExportOptions, FilterOp, FindQuery, FollowError, KeyDirection,
     MASK, MaskPolicy, PendingEdit, ReadLimits, ResultId, ResultStore, RevealError, RowChange,
     SearchTable, Session, SortKey, StoredResult, StreamExport, TableKey, TableStatus, TextEncoding,
-    ViewError, cell_filter_value, column_in_list, column_stats, data_search, edit_statements,
-    export_query, follow, view_cell, write_result,
+    ViewError, cell_filter_value, column_in_list, column_stats, column_top_values, data_search,
+    edit_statements, export_query, follow, view_cell, write_result,
 };
 use spelaion_driver_api::{ConnectParams, Driver, LogicalType, Secret, TlsMode, Value};
 
@@ -673,7 +673,60 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
                     );
                 }
             }
+
+            // Its most frequent values are never offered to pick a filter's value from
+            // (SDB-381): refused before anything is read, whatever the tab's filter.
+            for filter in ["", "id > 0"] {
+                let request = ColumnStatsRequest {
+                    schema: schema.into(),
+                    table: "mask_customers".into(),
+                    column: name.into(),
+                    logical,
+                    filter: filter.into(),
+                    sample_rows: 100_000,
+                    top: 10,
+                };
+                assert_eq!(
+                    column_top_values(&session, &request, &ExportCancel::new()).await,
+                    Err(ColumnStatsError::Masked),
+                    "{label}: {name} where {filter:?}"
+                );
+                // The same column under another spelling of its name: whatever the engine
+                // makes of it, no value comes out.
+                for spelling in [name.to_uppercase(), format!(" {name}")] {
+                    let offered = column_top_values(
+                        &session,
+                        &ColumnStatsRequest {
+                            column: spelling.clone(),
+                            ..request.clone()
+                        },
+                        &ExportCancel::new(),
+                    )
+                    .await;
+                    assert_no_secret(label, "the values to pick", &format!("{offered:?}"));
+                }
+            }
         }
+
+        // A column no rule names is offered, with its counts.
+        let offered = column_top_values(
+            &session,
+            &ColumnStatsRequest {
+                schema: schema.into(),
+                table: "mask_customers".into(),
+                column: "id".into(),
+                logical: LogicalType::Int,
+                filter: String::new(),
+                sample_rows: 100_000,
+                top: 10,
+            },
+            &ExportCancel::new(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(offered.values.len(), 3, "{label}: {offered:?}");
+        assert!(offered.values.iter().all(|v| v.count == 1), "{label}");
+        assert!(!offered.sampled, "{label}");
 
         // The data search finds rows by a masked column's value (the user typed it) but shows
         // the mask, and writes no filter from a masked key.

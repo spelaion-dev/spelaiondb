@@ -117,6 +117,9 @@ pub enum ColumnStatsError {
     Failed(String),
     #[error("cancelled")]
     Cancelled,
+    /// The column is masked (ADR-051): its values are not offered to pick from.
+    #[error("the column is masked: its values are not offered")]
+    Masked,
 }
 
 /// Whether `MIN` and `MAX` mean something for the type in every engine.
@@ -431,6 +434,69 @@ pub async fn column_stats(
         statements,
         masked,
     })
+}
+
+/// One of a column's most frequent values, offered as a filter's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickableValue {
+    /// The value's text as the grid shows it, whole; `None` for NULL.
+    pub value: Option<String>,
+    pub count: u64,
+}
+
+/// A column's most frequent values, to pick a filter's value from (SDB-381).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopValues {
+    /// Most frequent first. A value longer than [`STATS_TEXT_CHARS`] is left out: it could
+    /// not be shown whole, and a value cut short is not that value.
+    pub values: Vec<PickableValue>,
+    /// They were counted over the first `sample_rows` rows only.
+    pub sampled: bool,
+}
+
+/// The most frequent values of a column, with the table data tab's filter, counted like
+/// [`column_stats`]' (the same statements, each a read in the engine's read-only transaction).
+///
+/// A masked column's values are never offered (ADR-051): it is refused before any statement
+/// runs, so its values are not even read.
+pub async fn column_top_values(
+    session: &Session,
+    request: &ColumnStatsRequest,
+    cancel: &ExportCancel,
+) -> Result<TopValues, ColumnStatsError> {
+    if session
+        .masking()
+        .masks_table_column(&request.table, &request.column)
+    {
+        return Err(ColumnStatsError::Masked);
+    }
+    let dialect = session.dialect().clone();
+    let probe = column_stats_sql(dialect.as_ref(), request, false)?.probe;
+    let seen = count(
+        read_rows(session, &probe, cancel)
+            .await?
+            .first()
+            .and_then(|r| r.first()),
+    )?;
+    let sampled = seen > request.sample_rows;
+    let top = column_stats_sql(dialect.as_ref(), request, sampled)?.top;
+    let mut values = Vec::new();
+    for row in read_rows(session, &top, cancel).await? {
+        let count = count(row.get(1))?;
+        match row.first() {
+            None | Some(Value::Null) => values.push(PickableValue { value: None, count }),
+            Some(value) => {
+                let text = value.to_string();
+                if text.chars().count() <= STATS_TEXT_CHARS {
+                    values.push(PickableValue {
+                        value: Some(text),
+                        count,
+                    });
+                }
+            }
+        }
+    }
+    Ok(TopValues { values, sampled })
 }
 
 #[cfg(test)]

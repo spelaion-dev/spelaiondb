@@ -60,6 +60,7 @@ mod sql_file;
 mod sql_mode;
 mod startup;
 mod table_data;
+mod table_filters;
 mod table_stats;
 mod temporal;
 #[cfg(all(test, unix))]
@@ -81,8 +82,9 @@ pub use classify::{
     ReadKind, classify_read_only, classify_read_only_connection, classify_session_setup,
 };
 pub use column_stats::{
-    ColumnStats, ColumnStatsError, ColumnStatsRequest, ColumnStatsSql, STATS_SAMPLE_ROWS,
-    STATS_TEXT_CHARS, Stat, TOP_VALUES, TopValue, column_stats, column_stats_sql,
+    ColumnStats, ColumnStatsError, ColumnStatsRequest, ColumnStatsSql, PickableValue,
+    STATS_SAMPLE_ROWS, STATS_TEXT_CHARS, Stat, TOP_VALUES, TopValue, TopValues, column_stats,
+    column_stats_sql, column_top_values,
 };
 pub use conn_test::{
     FailureKind, REDACTED, Redactor, StepFailure, StepKind, StepObserver, StepStatus, TestOptions,
@@ -130,7 +132,7 @@ pub use export_stream::{
     follow_session_context, rerun_check,
 };
 pub use file_folder::{FolderReport, FolderView, MAX_VIEWS as MAX_FOLDER_VIEWS, SkippedFile};
-pub use filter::{ColumnFilter, FilterOp};
+pub use filter::{ColumnFilter, FilterMode, FilterOp};
 pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use geometry::{
@@ -215,9 +217,9 @@ pub use spelaion_store::{
 };
 pub use spelaion_store::{
     BackupPreferences, Bookmark, EditorPreferences, EditorSnippet, ExplorerFilter,
-    ExplorerPreferences, FilterKind, GridPreferences, MapPreferences, RecentFile, SavedFile,
-    SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX,
-    TILE_URL_MAX, TileServerError, check_tile_server,
+    ExplorerPreferences, FilterKind, FilteredTable, GridPreferences, MapPreferences, RecentFile,
+    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX,
+    TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
@@ -230,6 +232,7 @@ pub use table_data::{
     table_count_sql, table_export_sql, table_order_by, table_page_sql, table_page_sql_by_key,
     typed_value, value_condition,
 };
+pub use table_filters::{RefusedFilter, TableFilterError, TableFilters};
 pub use table_stats::{TableStats, table_stats};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use value_pick::{

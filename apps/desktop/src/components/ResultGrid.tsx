@@ -15,7 +15,7 @@ import { RowCache, type ValueKind } from "../grid/rowCache";
 import { printableGridKey } from "../gridTyping";
 import { formatsValues, useDisplayFormat } from "../displayFormat";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
-import { useDialogs, type ResultMeta, type SortState } from "../store";
+import { useDialogs, type FilterMode, type ResultMeta, type SortState } from "../store";
 import { commandSpec, matchesShortcut } from "../commandRegistry";
 import { useExport } from "./ExportDialog";
 import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
@@ -290,7 +290,7 @@ export function ResultGrid({
   session: string;
   /** The core sorted the loaded rows by these keys (none: the order they arrived in). */
   onSorted(sort: SortState[]): void;
-  onColumnFiltered(filters: ColumnFilterItem[], rows: number, total: number): void;
+  onColumnFiltered(filters: ColumnFilterItem[], rows: number, total: number, mode?: FilterMode): void;
   /** In a table data tab, header clicks sort in the server (ORDER BY) instead. */
   serverSort?: { sort: SortState[]; onSort(sort: SortState[]): void };
   /** A paged query (ADR-054): reads it again from the server ordered by these keys. Resolves
@@ -1321,8 +1321,9 @@ export function ResultGrid({
     return [col];
   }
 
-  /** Applies the column conditions in the core (an empty list removes them). */
-  async function applyColumnFilters(filters: ColumnFilterItem[]) {
+  /** Applies the column conditions in the core (an empty list removes them), read as `mode`
+   *  says: all of them or any, telling upper case from lower case or not. */
+  async function applyColumnFilters(filters: ColumnFilterItem[], mode: FilterMode | undefined = result.filterMode) {
     setMenu(null);
     setCustomFilter(null);
     if (restoringView || result.paging?.loading) return;
@@ -1337,8 +1338,9 @@ export function ResultGrid({
       return;
     }
     try {
-      const outcome = await call(commands.filterColumns(result.id, filters));
-      onColumnFiltered(filters, outcome.rows, outcome.total);
+      const outcome = await call(commands.filterColumns(result.id, filters, mode ?? null));
+      // Without conditions there is nothing to read one way or the other.
+      onColumnFiltered(filters, outcome.rows, outcome.total, filters.length > 0 ? mode : undefined);
     } catch (e) {
       setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
     }
@@ -1940,6 +1942,32 @@ export function ResultGrid({
             </button>
           </span>
         ))}
+        {/* How the core reads the conditions together (SDB-381). */}
+        {(result.columnFilters?.length ?? 0) > 1 && (
+          <span className="filter-match" role="group" aria-label={t("results.matchMode")}>
+            {([false, true] as const).map((any) => (
+              <button
+                key={String(any)}
+                className="ghost small"
+                aria-pressed={(result.filterMode?.any ?? false) === any}
+                title={hasPendingEdits ? t("edit.applyFirst") : t(any ? "results.matchAnyHint" : "results.matchAllHint")}
+                disabled={hasPendingEdits}
+                onClick={() => void applyColumnFilters(result.columnFilters ?? [], { any, matchCase: result.filterMode?.matchCase ?? false })}
+              >
+                {t(any ? "results.matchAny" : "results.matchAll")}
+              </button>
+            ))}
+          </span>
+        )}
+        <label className="check small" title={hasPendingEdits ? t("edit.applyFirst") : t("results.matchCaseHint")}>
+          <input
+            type="checkbox"
+            checked={result.filterMode?.matchCase ?? false}
+            disabled={hasPendingEdits}
+            onChange={(e) => void applyColumnFilters(result.columnFilters ?? [], { any: result.filterMode?.any ?? false, matchCase: e.target.checked })}
+          />
+          {t("results.matchCase")}
+        </label>
         <button
           className="ghost small"
           title={hasPendingEdits ? t("edit.applyFirst") : undefined}
@@ -2464,6 +2492,7 @@ export function ResultGrid({
         <CustomFilterDialog
           start={customFilter}
           columns={result.columns}
+          topValues={tableData ? { session, resultId: result.id, table: { schema: tableData.schema, name: tableData.name, filter: tableData.filter } } : undefined}
           onApply={(filter) => (tableData ? void addServerFilter(filter, null) : addColumnFilter(filter))}
           onCancel={() => {
             setCustomFilter(null);
@@ -3032,17 +3061,64 @@ function FilterSubmenu(props: {
   );
 }
 
+/** Ids of the "most frequent values" requests, apart from the column statistics' own. */
+let nextTopValuesId = 1_500_000_000;
+
+/** A column's most frequent values, as far as the dialog has asked for them. */
+type TopValuesState =
+  | { column: number; kind: "loading"; id: number }
+  | { column: number; kind: "done"; values: { value: string | null; count: number | null }[]; sampled: boolean; sampleRows: number | null }
+  | { column: number; kind: "masked" }
+  | { column: number; kind: "failed"; message: string };
+
 /** One condition chosen by hand: column, operator and value. */
 function CustomFilterDialog(props: {
   start: ColumnFilterItem;
   columns: ResultMeta["columns"];
+  /** A table data tab: the server counts the column's most frequent values on request, to
+   *  pick the value from (SDB-381). The core never offers a masked column's (ADR-051). */
+  topValues?: { session: string; resultId: number; table: { schema: string; name: string; filter: string } };
   onApply(filter: ColumnFilterItem): void;
   onCancel(): void;
 }) {
-  const { t } = useTranslation("editor");
+  const { t, i18n } = useTranslation("editor");
+  const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const [filter, setFilter] = useState(props.start);
+  const [top, setTop] = useState<TopValuesState | null>(null);
   const needsValue = takesValue(filter.op);
   const apply = () => props.onApply(needsValue ? filter : { ...filter, value: "" });
+  // Only the answer for the column on screen counts; leaving the dialog or the column stops
+  // the count.
+  const running = useRef<number | null>(null);
+  const stop = () => {
+    if (running.current !== null) void call(commands.cancelColumnStats(running.current)).catch(() => undefined);
+    running.current = null;
+  };
+  useEffect(() => stop, []);
+  const masked = props.columns[filter.column]?.masked ?? false;
+  const shownTop = top?.column === filter.column ? top : null;
+  function loadTop() {
+    const source = props.topValues;
+    if (!source) return;
+    stop();
+    const column = filter.column;
+    const id = ++nextTopValuesId;
+    running.current = id;
+    setTop({ column, kind: "loading", id });
+    call(commands.columnTopValues(source.session, id, source.table, source.resultId, column))
+      .then((outcome) => {
+        if (running.current !== id) return;
+        running.current = null;
+        if (outcome.kind === "done") setTop({ column, kind: "done", values: outcome.values, sampled: outcome.sampled, sampleRows: outcome.sampleRows });
+        else if (outcome.kind === "masked") setTop({ column, kind: "masked" });
+        else setTop(null);
+      })
+      .catch((e: unknown) => {
+        if (running.current !== id) return;
+        running.current = null;
+        setTop({ column, kind: "failed", message: e instanceof Error ? e.message : String(e) });
+      });
+  }
   return (
     <div className="modal-backdrop">
       <div className="modal custom-filter" role="dialog" aria-modal="true" aria-label={t("results.customFilterTitle")} onKeyDown={(e) => {
@@ -3058,7 +3134,7 @@ function CustomFilterDialog(props: {
           <select
             aria-label={t("results.filterColumn")}
             value={filter.column}
-            onChange={(e) => setFilter({ ...filter, column: Number(e.target.value) })}
+            onChange={(e) => { stop(); setTop(null); setFilter({ ...filter, column: Number(e.target.value) }); }}
           >
             {props.columns.map((c, i) => (
               <option key={i} value={i}>
@@ -3087,6 +3163,46 @@ function CustomFilterDialog(props: {
           />
         </div>
         <p className="muted small">{t("results.customFilterHint")}</p>
+        {props.topValues && (
+          <div className="filter-top-values">
+            {masked || shownTop?.kind === "masked" ? (
+              <p className="muted small">{t("results.topValuesMasked")}</p>
+            ) : shownTop === null ? (
+              <button type="button" className="small" onClick={loadTop}>{t("results.topValuesShow")}</button>
+            ) : shownTop.kind === "loading" ? (
+              <p className="muted small" role="status">
+                {t("results.topValuesLoading")}{" "}
+                <button type="button" className="ghost small" onClick={() => { stop(); setTop(null); }}>{t("results.cancel")}</button>
+              </p>
+            ) : shownTop.kind === "failed" ? (
+              <p className="small" role="alert">{t("results.topValuesFailed", { reason: shownTop.message })}</p>
+            ) : (
+              <>
+                <p className="muted small">
+                  {shownTop.values.length === 0 ? t("results.topValuesNone") : t("results.topValuesPick")}
+                  {shownTop.sampled ? ` ${t("results.topValuesSampled", { rows: numbers.format(shownTop.sampleRows ?? 0) })}` : ""}
+                </p>
+                <ul className="filter-top-list" aria-label={t("results.topValues")}>
+                  {shownTop.values.map((item, index) => (
+                    <li key={index}>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() =>
+                          setFilter(item.value === null
+                            ? { ...filter, op: "isNull", value: "" }
+                            : { ...filter, op: takesValue(filter.op) ? filter.op : "eq", value: item.value })}
+                      >
+                        <code>{item.value === null ? "NULL" : item.value}</code>
+                        <span className="muted small">{numbers.format(item.count ?? 0)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
         <div className="modal-actions">
           <button onClick={props.onCancel}>{t("results.cancel")}</button>
           <button className="primary" onClick={apply}>

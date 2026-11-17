@@ -3961,6 +3961,197 @@ try {
   await page.keyboard.press("Control+w");
   await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor({ state: "detached" });
 
+  step("table data: the filter box remembers the filters used and completes column names (SDB-381)");
+  {
+    const openOrders = async () => {
+      await ordersNode.locator(".label").dblclick();
+      await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
+    };
+    const closeOrders = async () => {
+      // Only once the page has finished: closing a tab whose query still runs asks first.
+      await panel.locator(".statusline", { hasText: /rows · \d+ ms/ }).waitFor();
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor({ state: "detached" });
+    };
+    const where = panel.getByRole("textbox", { name: "WHERE" });
+    const suggestions = panel.getByRole("listbox", { name: "Filters used on this table and its columns" });
+    const offered = () => suggestions.getByRole("option").locator("code").allInnerTexts();
+    await openOrders();
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+    assert.equal(await where.inputValue(), "", "no default filter yet");
+    // This connection's query history is switched off (since the history steps), so the
+    // filters the previous step used were not remembered: a filter holds values, as a query does.
+    await where.click();
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(300);
+    assert.equal(await suggestions.count(), 0, "nothing remembered while the history is off");
+    await setHistorySaving("Shop (SQLite)", true);
+    // While a page loads, Apply is disabled and Enter in the box does nothing: each filter is
+    // typed once the page before it is in, and each has its own number of rows to wait for.
+    const pageIsIn = () => page.waitForFunction(() => !document.querySelector('.tab-panel:not([hidden]) .table-bar button[type="submit"]')?.disabled);
+    for (const [filter, rows] of [["id > 49900", "rows 1–100"], ["total > 1990", "rows 1–264"]]) {
+      await pageIsIn();
+      await where.fill(filter);
+      await page.keyboard.press("Enter");
+      await range.filter({ hasText: rows }).waitFor();
+      await panel.locator(".statusline", { hasText: /rows · \d+ ms/ }).waitFor();
+    }
+    await pageIsIn();
+    // One the core refuses never loads a page, so it is never remembered.
+    await where.fill("1=1); drop table orders; select (1");
+    await page.keyboard.press("Enter");
+    await panel.locator(".error-box", { hasText: "must not change the query" }).waitFor();
+    // The down arrow on an empty box lists the filters that loaded a page, newest first.
+    await where.fill("");
+    await page.keyboard.press("ArrowDown");
+    await suggestions.waitFor();
+    assert.deepEqual(await offered(), ["total > 1990", "id > 49900"]);
+    // Typing narrows the list and offers the table's columns; Enter takes the one chosen.
+    await where.fill("tot");
+    await page.waitForFunction(() => document.querySelectorAll(".tab-panel:not([hidden]) .table-filter-suggestions li").length === 2);
+    assert.deepEqual(await offered(), ["total", "total > 1990"]);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    assert.equal(await where.inputValue(), "total");
+    await page.keyboard.type(" > 1990");
+    await page.keyboard.press("Enter");
+    await suggestions.waitFor({ state: "detached" });
+    await range.filter({ hasText: "rows 1–264" }).waitFor();
+
+    step("table data: a filter saved as the table's default opens with the table, and a value is picked from the column's most frequent ones");
+    await panel.getByRole("button", { name: "Save this filter as the table's default: the tab opens with it" }).click();
+    await panel.locator(".table-default-badge", { hasText: "Default" }).waitFor();
+    const dropDefault = panel.getByRole("button", { name: "Drop the table's default filter (total > 1990)" });
+    assert.equal(await dropDefault.getAttribute("aria-pressed"), "true");
+    await shot("sdb-381-default-filter-light");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("sdb-381-default-filter-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    // Closed and opened again: the tab opens with the default, checked again by the core, and
+    // says it is the default.
+    await closeOrders();
+    await openOrders();
+    await range.filter({ hasText: "rows 1–264" }).waitFor();
+    assert.equal(await where.inputValue(), "total > 1990");
+    await panel.locator(".table-default-badge", { hasText: "Default" }).waitFor();
+    // The custom filter's value, picked from the values the server counted with the tab's filter.
+    {
+      let box = null;
+      for (let i = 0; i < 40 && !box; i++) {
+        box = await panel.locator(".grid-scroller").boundingBox();
+        if (!box) await page.waitForTimeout(100);
+      }
+      await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12, { button: "right" });
+      await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await panel.getByRole("menuitem", { name: "Custom filter…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Custom filter" });
+      await dialog.getByLabel("Column").selectOption({ label: "customer_id" });
+      await dialog.getByRole("button", { name: "Show the most frequent values" }).click();
+      const top = dialog.getByRole("list", { name: "Most frequent values" });
+      await top.waitFor();
+      const first = top.getByRole("button").first();
+      const picked = await first.locator("code").innerText();
+      assert.match(picked, /^\d+$/);
+      await first.click();
+      assert.equal(await dialog.getByRole("textbox", { name: "Value" }).inputValue(), picked);
+      await shot("sdb-381-top-values-light");
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+      await shot("sdb-381-top-values-dark");
+      await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+      await dialog.getByRole("button", { name: "Filter", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
+      await page.waitForFunction(
+        (wanted) => document.querySelector('.tab-panel:not([hidden]) input[aria-label="WHERE"]')?.value === wanted,
+        `total > 1990 AND customer_id = ${picked}`,
+      );
+      // The page of the picked value, not the one before it (which read "rows 1–264"): the
+      // most frequent customer has a handful of these orders. Until it has loaded, Apply is
+      // disabled and Enter in the box does nothing.
+      await page.waitForFunction(() => {
+        const shown = document.querySelector(".tab-panel:not([hidden]) .table-range")?.textContent?.trim() ?? "";
+        return /^rows 1–\d+$/.test(shown) && shown !== "rows 1–264";
+      });
+      await panel.locator(".statusline", { hasText: /rows? · \d+ ms/ }).waitFor();
+      await page.waitForFunction(() => !document.querySelector('.tab-panel:not([hidden]) .table-bar button[type="submit"]')?.disabled);
+      // No longer the default filter: the badge is gone until it is applied again.
+      await panel.locator(".table-default-badge").waitFor({ state: "detached" });
+    }
+    // Back on the default, the star drops it; the table then opens with every row again.
+    await where.fill("total > 1990");
+    await page.keyboard.press("Enter");
+    await range.filter({ hasText: "rows 1–264" }).waitFor();
+    await dropDefault.click();
+    await panel.locator(".table-default-badge").waitFor({ state: "detached" });
+    await panel.getByRole("button", { name: "Save this filter as the table's default: the tab opens with it" }).waitFor();
+    await closeOrders();
+    await openOrders();
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+    assert.equal(await where.inputValue(), "");
+    await closeOrders();
+    // As the steps after this one expect it.
+    await setHistorySaving("Shop (SQLite)", false);
+  }
+
+  step("column filters: match case, and match all of them or any (SDB-381)");
+  {
+    const names = await newQuery("Shop (SQLite)", "select 'Ada' as name union all select 'ada' union all select 'Bob';");
+    await run(names);
+    await names.locator(".statusline", { hasText: "3 rows" }).waitFor();
+    const addFilter = async (value) => {
+      const box = await settledBox(names.locator(".grid-scroller"));
+      await page.mouse.click(box.x + 80, box.y + 34 + 12, { button: "right" });
+      await names.getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await names.getByRole("menuitem", { name: "Custom filter…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Custom filter" });
+      // Only a table data tab offers the server's most frequent values.
+      assert.equal(await dialog.getByRole("button", { name: "Show the most frequent values" }).count(), 0);
+      await dialog.getByLabel("Value").fill(value);
+      await dialog.getByRole("button", { name: "Filter", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
+    };
+    const bar = names.getByRole("toolbar", { name: "Column filters" });
+    const matchMode = bar.getByRole("group", { name: "How the conditions combine" });
+    await addFilter("ada");
+    await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
+    // One condition: nothing to combine yet, but its text can tell upper case from lower.
+    assert.equal(await matchMode.count(), 0);
+    // The box is ticked once the core has filtered: a click, then the rows.
+    await bar.getByLabel("Match case").click();
+    await names.locator(".statusline", { hasText: "1 of 3 rows" }).waitFor();
+    assert.ok(await bar.getByLabel("Match case").isChecked());
+    await addFilter("Bob");
+    await names.locator(".statusline", { hasText: "0 of 3 rows" }).waitFor();
+    assert.equal(await matchMode.getByRole("button", { name: "Match all", exact: true }).getAttribute("aria-pressed"), "true");
+    await matchMode.getByRole("button", { name: "Match any", exact: true }).click();
+    await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
+    assert.equal(await matchMode.getByRole("button", { name: "Match any", exact: true }).getAttribute("aria-pressed"), "true");
+    await shot("sdb-381-match-any");
+    // Refresh reads the query again and filters the new rows as they were filtered: with
+    // Match all the two conditions keep no row, and without Match case "ada" keeps both Adas,
+    // so only "2 of 3 rows" says both were kept.
+    {
+      const refresh = names.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true });
+      const shown = await names.locator(".result-tab-item.active").getAttribute("data-result");
+      await refresh.click();
+      await page.waitForFunction(([old]) => {
+        const active = document.querySelector(".tab-panel:not([hidden]) .result-tab-item.active");
+        return active !== null && active.getAttribute("data-result") !== old;
+      }, [shown]);
+      await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
+      await page.waitForFunction(() => {
+        const button = document.querySelector('.tab-panel:not([hidden]) .grid-footer button[aria-label="Refresh"]');
+        return button !== null && !button.disabled;
+      });
+      assert.equal(await matchMode.getByRole("button", { name: "Match any", exact: true }).getAttribute("aria-pressed"), "true");
+      assert.ok(await bar.getByLabel("Match case").isChecked());
+      await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
+    }
+    await bar.getByRole("button", { name: "Reset filters" }).click();
+    await bar.waitFor({ state: "detached" });
+    await names.locator(".statusline", { hasText: "3 rows" }).waitFor();
+    await page.keyboard.press("Control+w");
+  }
+
   step("foreign keys: open the referenced row, and the rows that point back to it");
   {
     const gridBox = async () => {
@@ -5840,6 +6031,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id");
   await pageReloadedBy(() => panel.getByRole("button", { name: "Apply", exact: true }).click());
   await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
+  await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+  await panel.getByRole("button", { name: "Add row" }).waitFor();
   {
     let box = null;
     for (let i = 0; i < 40 && !box; i++) {
