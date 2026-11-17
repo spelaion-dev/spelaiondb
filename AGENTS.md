@@ -539,6 +539,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   writes last in both directions on every engine, in the `ORDER BY` and in the comparison that
   fetches the next page alike.
   `tests/query_pages.rs` writes between pages on every engine.
+  `load_rows.rs` is "Load every row" and a page or row past the ones loaded (SDB-386): keyset
+  pages of a paged query in order, cancellable with whole pages kept, after an estimate of the
+  rows and memory; a table data tab's page N is its numbered page and its last page is counted
+  (`table_data.rs`). `transpose.rs` makes the transposed view, rows shown as columns, a result
+  of its own. `tests/result_jumps.rs` runs both paths on every engine.
   `variables.rs` (SDB-383) writes the editor's `${name}` variables into a script before
   anything else reads it, so the guard, the read-only checks and masking see the text that
   runs: values are written in as they are, only in code (`Dialect::code_ranges`), one

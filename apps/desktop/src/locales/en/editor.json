@@ -1469,5 +1469,51 @@
     "noEdit": "\"{{column}}\" is masked: its cells cannot be edited.",
     "noSortHint": "Masked columns cannot be sorted by",
     "statsNote": "This column is masked: its values are shown as the mask."
+  },
+  "pages": {
+    "label": "Pages",
+    "first": "First page",
+    "last": "Last page",
+    "page": "Page number",
+    "ofPages": "of {{pages}}",
+    "pageHint": "Type a page number and press Enter",
+    "loadAll": "Load every row…",
+    "loadAllHint": "Load every row into the grid, after saying how many there are and roughly how much memory they take",
+    "loadAllTitle": "Load every row?",
+    "loadAllBody": "{{total}} rows, about {{size}} in memory. They stay in the app until the result is closed.",
+    "loadAllBodyUnknown": "{{total}} rows. Their memory can only be estimated once a row is loaded.",
+    "loadAllConfirm_one": "Load {{formattedCount}} row",
+    "loadAllConfirm_other": "Load {{formattedCount}} rows",
+    "tooMany": "Could not load every row: {{total}} rows is more than a result holds ({{max}}).",
+    "counting": "Counting rows…",
+    "loadingRows": "{{rows}} rows loaded…",
+    "cancelLoad": "Cancel loading",
+    "loadCancelled": "Loading cancelled: {{rows}} rows are loaded, each page whole.",
+    "loadFailed": "Could not load the rows: {{detail}}",
+    "allRows": "every row",
+    "showPages": "Show pages",
+    "showPagesHint": "Show one page at a time again",
+    "keyless": "No primary key",
+    "keylessHint": "This table has no primary key: its pages follow the order the server returns, so a page may repeat or miss rows, and a page number is not exact.",
+    "numberedHint": "Pages are numbered in the order shown, then by the primary key: a page is exact for the rows as they are when it is read, and a row written meanwhile moves the rows after it.",
+    "queryHint": "A query's pages are read in order, each after the last row loaded: a later page loads the pages before it, and the last page loads every row.",
+    "lastQueryHint": "The last page of a query is reached by loading every row"
+  },
+  "transpose": {
+    "show": "Transpose rows",
+    "hide": "Show rows",
+    "fromSelection": "Transpose selected rows",
+    "column": "Column",
+    "type": "Type",
+    "caption_one": "Row {{rows}} as a column",
+    "caption_other": "Rows {{rows}} as columns",
+    "failed": "Could not transpose the rows: {{detail}}"
+  },
+  "goToRow": {
+    "command": "Go to row…",
+    "title": "Go to row",
+    "placeholder": "Row number",
+    "of": "of {{total}}",
+    "past": "The result has {{rows}} rows: row {{row}} is past its end."
   }
 }

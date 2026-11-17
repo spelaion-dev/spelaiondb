@@ -1469,5 +1469,51 @@
     "noEdit": "«{{column}}» está enmascarada: sus celdas no se pueden editar.",
     "noSortHint": "No se puede ordenar por una columna enmascarada",
     "statsNote": "Esta columna está enmascarada: sus valores se muestran como la máscara."
+  },
+  "pages": {
+    "label": "Páginas",
+    "first": "Primera página",
+    "last": "Última página",
+    "page": "Número de página",
+    "ofPages": "de {{pages}}",
+    "pageHint": "Escribe un número de página y pulsa Intro",
+    "loadAll": "Cargar todas las filas…",
+    "loadAllHint": "Cargar todas las filas en la cuadrícula, tras decir cuántas son y cuánta memoria ocupan más o menos",
+    "loadAllTitle": "¿Cargar todas las filas?",
+    "loadAllBody": "{{total}} filas, unos {{size}} de memoria. Se quedan en la aplicación hasta que se cierra el resultado.",
+    "loadAllBodyUnknown": "{{total}} filas. Su memoria solo se puede estimar cuando hay alguna fila cargada.",
+    "loadAllConfirm_one": "Cargar {{formattedCount}} fila",
+    "loadAllConfirm_other": "Cargar {{formattedCount}} filas",
+    "tooMany": "No se pudieron cargar todas las filas: {{total}} filas son más de las que caben en un resultado ({{max}}).",
+    "counting": "Contando filas…",
+    "loadingRows": "{{rows}} filas cargadas…",
+    "cancelLoad": "Cancelar la carga",
+    "loadCancelled": "Carga cancelada: hay {{rows}} filas cargadas, cada página entera.",
+    "loadFailed": "No se pudieron cargar las filas: {{detail}}",
+    "allRows": "todas las filas",
+    "showPages": "Ver páginas",
+    "showPagesHint": "Volver a ver una página cada vez",
+    "keyless": "Sin clave primaria",
+    "keylessHint": "Esta tabla no tiene clave primaria: sus páginas siguen el orden en que las devuelve el servidor, así que una página puede repetir o saltarse filas, y un número de página no es exacto.",
+    "numberedHint": "Las páginas se numeran en el orden mostrado y después por la clave primaria: una página es exacta para las filas tal como están cuando se lee, y una fila escrita entretanto mueve las que van detrás.",
+    "queryHint": "Las páginas de una consulta se leen en orden, cada una tras la última fila cargada: una página posterior carga las anteriores, y la última página carga todas las filas.",
+    "lastQueryHint": "A la última página de una consulta se llega cargando todas las filas"
+  },
+  "transpose": {
+    "show": "Trasponer filas",
+    "hide": "Ver filas",
+    "fromSelection": "Trasponer las filas seleccionadas",
+    "column": "Columna",
+    "type": "Tipo",
+    "caption_one": "Fila {{rows}} como columna",
+    "caption_other": "Filas {{rows}} como columnas",
+    "failed": "No se pudieron trasponer las filas: {{detail}}"
+  },
+  "goToRow": {
+    "command": "Ir a la fila…",
+    "title": "Ir a la fila",
+    "placeholder": "Número de fila",
+    "of": "de {{total}}",
+    "past": "El resultado tiene {{rows}} filas: la fila {{row}} está más allá del final."
   }
 }

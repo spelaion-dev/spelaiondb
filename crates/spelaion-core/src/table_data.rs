@@ -194,6 +194,68 @@ pub async fn table_page_sql_by_key(session: &Session, page: &TablePage) -> Resul
     table_page_sql(dialect.as_ref(), &page).map_err(|e| e.to_string())
 }
 
+/// Every row the filter keeps, ordered as the tab's pages are ([`order_with_key`], the primary
+/// key read from the catalog now): "Load every row" of a table data tab (SDB-386). The same
+/// SELECT as a page without its paging, checked as [`table_export_sql`] checks it, so the
+/// filter and the order still cannot add a limit, read another table or run anything else.
+pub async fn table_rows_sql_by_key(
+    session: &Session,
+    schema: &str,
+    name: &str,
+    filter: &str,
+    order_by: &str,
+) -> Result<String, String> {
+    let key = session
+        .connection()
+        .describe_table(schema, name)
+        .await
+        .map(|table| table.primary_key)
+        .unwrap_or_default();
+    let dialect = session.dialect();
+    let order = order_with_key(dialect.as_ref(), order_by, &key);
+    table_export_sql(dialect.as_ref(), schema, name, filter, &order).map_err(|e| e.to_string())
+}
+
+/// The last page of a table data tab, from its rows counted now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastPage {
+    /// The rows the filter keeps.
+    pub total: u64,
+    /// The last page's number, from 0 (0 with no rows).
+    pub page: u64,
+}
+
+/// The page that holds the last of `total` rows, `page_rows` to a page.
+pub fn last_page_of(total: u64, page_rows: u64) -> u64 {
+    if total == 0 || page_rows == 0 {
+        0
+    } else {
+        (total - 1) / page_rows
+    }
+}
+
+/// The last page of a table data tab (SDB-386): its rows counted on `session`, then the page
+/// that holds the last of them. A table data tab numbers its pages (ADR-054, point 4): the
+/// page is exact for the rows as they were counted, ordered by the primary key after the
+/// user's order; a row written after the count can move it, and a table without a primary key
+/// has no order that makes it exact (the bar says so).
+pub async fn last_table_page(
+    session: &Session,
+    schema: &str,
+    name: &str,
+    filter: &str,
+    page_rows: u64,
+) -> Result<LastPage, String> {
+    if page_rows == 0 || page_rows > MAX_PAGE_ROWS {
+        return Err(PageError::BadLimit.to_string());
+    }
+    let total = u64::try_from(count_table_rows(session, schema, name, filter).await?).unwrap_or(0);
+    Ok(LastPage {
+        total,
+        page: last_page_of(total, page_rows),
+    })
+}
+
 /// `SELECT COUNT(*)` of the rows the filter keeps, checked the same way.
 pub fn table_count_sql(
     dialect: &dyn Dialect,
@@ -595,6 +657,16 @@ pub(crate) fn check_projection(
 mod tests {
     use super::*;
     use spelaion_dialect::SqliteDialect;
+
+    #[test]
+    fn the_last_page_holds_the_last_row() {
+        assert_eq!(last_page_of(0, 100), 0);
+        assert_eq!(last_page_of(1, 100), 0);
+        assert_eq!(last_page_of(100, 100), 0);
+        assert_eq!(last_page_of(101, 100), 1);
+        assert_eq!(last_page_of(250, 100), 2);
+        assert_eq!(last_page_of(10, 0), 0);
+    }
 
     struct Named(&'static str);
 

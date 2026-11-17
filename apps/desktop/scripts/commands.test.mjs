@@ -114,7 +114,9 @@ test("shortcuts are written as the guidelines say, unique, and in the shortcut m
     assert.ok(command.scope, `${command.id} says who handles ${command.shortcut}`);
     assert.ok(!seen.has(command.shortcut), `${command.shortcut} used twice`);
     seen.add(command.shortcut);
-    const where = command.scope === "global" ? "Anywhere" : command.scope === "grid" ? "Table data edits" : "SQL editor";
+    // The grid's own commands: pending table edits, or the result grid's ("Go to row").
+    const grid = command.id.startsWith("edits.") ? "Table data edits" : "Result grid";
+    const where = command.scope === "global" ? "Anywhere" : command.scope === "grid" ? grid : "SQL editor";
     assert.ok(row(where).includes(command.shortcut), `${command.shortcut} (${command.id}) in the "${where}" row of the shortcut map`);
   }
 });

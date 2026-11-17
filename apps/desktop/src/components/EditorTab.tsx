@@ -5,7 +5,8 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
-import type { EditableTableItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem } from "../bindings";
+import type { EditableTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem } from "../bindings";
+import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
@@ -19,6 +20,7 @@ import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
 import { defaultChart, ResultChart, type ChartSettings } from "./ResultChart";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
+import { TransposedView } from "./TransposedView";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { summaryMessages, summaryShort } from "../scriptRun";
 import { saveTab, saveTabAs } from "../sqlFiles";
@@ -477,16 +479,19 @@ export function EditorTab({ tab }: { tab: Tab }) {
     clearPending();
     let sql: string;
     try {
-      sql = await call(
-        commands.tablePageSql(tab.id, {
-          schema: view.schema,
-          name: view.name,
-          filter: view.filter,
-          orderBy: view.orderBy,
-          limit: view.pageSize,
-          offset: view.page * view.pageSize,
-        }),
-      );
+      // "Load every row" (SDB-386): the same SELECT without its paging, checked the same way.
+      sql = view.all
+        ? await call(commands.tableRowsSql(tab.id, view.schema, view.name, view.filter, view.orderBy))
+        : await call(
+          commands.tablePageSql(tab.id, {
+            schema: view.schema,
+            name: view.name,
+            filter: view.filter,
+            orderBy: view.orderBy,
+            limit: view.pageSize,
+            offset: view.page * view.pageSize,
+          }),
+        );
     } catch (e) {
       updateTab(tab.id, { run: failedRun(message(e)) });
       return;
@@ -565,6 +570,153 @@ export function EditorTab({ tab }: { tab: Tab }) {
     } catch (e) {
       setNotice({ text: message(e), error: true });
     }
+  }
+
+  /** The last page of a table data tab (SDB-386): the core counts the rows the filter keeps,
+   *  then the tab shows the page that holds the last of them. */
+  async function lastTablePage() {
+    const view = tab.table;
+    if (!view || !(await ensureConnected())) return;
+    try {
+      const last = await call(commands.lastTablePage(tab.id, view.schema, view.name, view.filter, view.pageSize));
+      const current = useApp.getState().tabs.find((item) => item.id === tab.id)?.table;
+      if (!current || current.schema !== view.schema || current.name !== view.name || current.filter !== view.filter) return;
+      changeView({ page: last.page, total: last.total ?? 0 });
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    }
+  }
+
+  /** Asks before loading every row (SDB-386): how many rows the server counts and roughly how
+   *  much memory they take, from what the rows loaded take now (both the core's). */
+  async function confirmLoadAll(resultId: number, source: LoadSourceItem): Promise<boolean> {
+    setNotice({ text: t("pages.counting"), error: false });
+    let estimate: LoadEstimateItem;
+    try {
+      estimate = await call(commands.loadEstimate(tab.id, resultId, source));
+    } catch (e) {
+      setNotice({ text: t("pages.loadFailed", { detail: message(e) }), error: true });
+      return false;
+    }
+    setNotice(null);
+    // Counts cross as f64, which the bindings type as nullable.
+    const rows = estimate.total ?? 0;
+    if (estimate.tooMany) {
+      setNotice({ text: t("pages.tooMany", { total: numbers.format(rows), max: numbers.format(estimate.maxRows ?? 0) }), error: true });
+      return false;
+    }
+    const total = numbers.format(rows);
+    const choice = await useDialogs.getState().askChoice({
+      title: t("pages.loadAllTitle"),
+      message: estimate.bytes === null
+        ? t("pages.loadAllBodyUnknown", { total })
+        : t("pages.loadAllBody", { total, size: byteSize(estimate.bytes, i18n.language) }),
+      choices: [
+        { id: "cancel", label: t("results.cancel") },
+        { id: "load", label: t("pages.loadAllConfirm", { count: rows, formattedCount: total }), primary: true },
+      ],
+    });
+    return choice === "load";
+  }
+
+  /** "Load every row" of a table data tab: every row the filter keeps, in its pages' order. */
+  async function loadAllTable() {
+    const view = tab.table;
+    const result = tab.run?.results[0];
+    if (!view || !result || !(await ensureConnected())) return;
+    if (!(await confirmLoadAll(result.id, { kind: "table", schema: view.schema, name: view.name, filter: view.filter }))) return;
+    changeView({ all: true, page: 0 });
+  }
+
+  /** "Go to row" in a table data tab (SDB-386): `row` counts from 1 in the tab's order, so it
+   *  is on page `(row - 1) / pageSize`, read as any page is. */
+  const pendingRow = useRef<number | null>(null);
+  function goToTableRow(row: number) {
+    const view = tab.table;
+    if (!view || row < 1) return;
+    if (view.all) {
+      // Every row is here already: a row past them is past the table's end.
+      pendingRow.current = row - 1;
+      showPendingRow();
+      return;
+    }
+    const page = Math.floor((row - 1) / view.pageSize);
+    pendingRow.current = (row - 1) % view.pageSize;
+    if (page === view.page) showPendingRow();
+    else changeView({ page });
+  }
+  /** Selects the row a jump asked for once its page is on screen. */
+  function showPendingRow() {
+    const index = pendingRow.current;
+    const result = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results[0];
+    if (index === null || !result?.complete) return;
+    pendingRow.current = null;
+    const row = Math.min(index, Math.max(0, result.rows - 1));
+    if (index >= result.rows) setNotice({ text: t("goToRow.past", { rows: numbers.format((tab.table?.page ?? 0) * (tab.table?.pageSize ?? 0) + result.rows), row: numbers.format((tab.table?.page ?? 0) * (tab.table?.pageSize ?? 0) + index + 1) }), error: false });
+    if (result.rows === 0) return;
+    updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === result.id ? { ...item, goToRow: { row, seq: Date.now() } } : item) }));
+  }
+  const firstResult = tab.run?.results[0];
+  useEffect(() => {
+    if (tab.table && !tab.run?.running && firstResult?.complete) showPendingRow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstResult?.id, firstResult?.complete, tab.run?.running]);
+
+  /** A load of many keyset pages of a paged query ("Load every row", or a page or a row past
+   *  the ones loaded; SDB-386), and its id for Cancel. */
+  const rowLoad = useRef<{ id: number; result: number } | null>(null);
+  const nextLoadId = useRef(1);
+
+  /** Loads a paged query's rows until the result holds `until` rows (every row when `null`,
+   *  after asking), by keyset pages in order (ADR-054). Resolves to the rows held. */
+  async function loadQueryRowsUntil(resultId: number, until: number | null): Promise<number | null> {
+    const current = useApp.getState().tabs.find((item) => item.id === tab.id);
+    const result = current?.run?.results.find((item) => item.id === resultId);
+    const paging = result?.paging;
+    if (!result || !result.complete || !paging || paging.loading || current?.run?.running || queryPageBusy.current ||
+        savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return null;
+    if (!paging.hasMore || (until !== null && result.rows >= until)) return result.rows;
+    if (until === null && !(await confirmLoadAll(resultId, { kind: "query", sql: paging.sql }))) return null;
+    if (queryPageBusy.current) return null;
+    queryPageBusy.current = true;
+    const id = nextLoadId.current++;
+    rowLoad.current = { id, result: resultId };
+    const setPaging = (patch: Partial<NonNullable<ResultMeta["paging"]>>, rows?: number) =>
+      updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
+        ? { ...item, ...(rows === undefined ? {} : { rows }), paging: { ...item.paging, ...patch } } : item) }));
+    setPaging({ loading: true, progress: result.rows });
+    const channel = new Channel<number>();
+    channel.onmessage = (rows) => { if (rowLoad.current?.id === id) setPaging({ progress: rows }); };
+    try {
+      const loaded = await call(commands.loadQueryRows(tab.id, id, resultId, paging.sql, result.rows, paging.sort ?? [], until, channel));
+      const outcome = loaded.outcome;
+      setPaging({ hasMore: outcome.kind !== "complete" }, loaded.rows);
+      if (outcome.kind === "cancelled") setNotice({ text: t("pages.loadCancelled", { rows: numbers.format(loaded.rows) }), error: false });
+      else if (outcome.kind === "failed") setNotice({ text: t("pages.loadFailed", { detail: outcome.message }), error: true });
+      return loaded.rows;
+    } catch (e) {
+      setNotice({ text: t("pages.loadFailed", { detail: message(e) }), error: true });
+      return null;
+    } finally {
+      rowLoad.current = null;
+      queryPageBusy.current = false;
+      setPaging({ loading: false, progress: undefined });
+    }
+  }
+
+  /** Stops a load of query rows: the page being read and every page after it. */
+  function cancelRowLoad() {
+    const load = rowLoad.current;
+    if (load) void call(commands.cancelLoadRows(tab.id, load.id)).catch(() => undefined);
+  }
+
+  /** "Go to row" past the rows of a paged query that are loaded: they are loaded up to it. */
+  async function goToQueryRow(resultId: number, row: number) {
+    const rows = await loadQueryRowsUntil(resultId, row);
+    if (rows === null) return;
+    if (row > rows) setNotice({ text: t("goToRow.past", { rows: numbers.format(rows), row: numbers.format(row) }), error: false });
+    if (rows === 0) return;
+    updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId ? { ...item, goToRow: { row: Math.min(row, rows) - 1, seq: Date.now() } } : item) }));
   }
 
   /** Fetch the next block of the original SELECT without replacing the rows already shown. */
@@ -1423,6 +1575,9 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             busy={running || savingEdits || pageLoading}
             onChange={changeView}
             onCount={() => void countTable()}
+            onLast={() => void lastTablePage()}
+            onLoadAll={() => void loadAllTable()}
+            keyless={primaryKey !== null && primaryKey.length === 0}
             editable={primaryKey === null ? null : primaryKey.length > 0 && !connection?.readOnly}
             readOnlyConnection={connection?.readOnly ?? false}
             pending={pendingCount}
@@ -1533,7 +1688,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
             serverSort={tab.table ? { sort: tab.table.sort ?? NO_TABLE_SORT, onSort: (sort) => void sortTable(sort) } : undefined}
             onQuerySort={tab.table ? undefined : sortQuery}
-            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0 }), connectionId: tab.connectionId } : undefined}
+            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0, all: undefined, total: undefined }), connectionId: tab.connectionId } : undefined}
             editing={editing}
             columnComments={tab.table ? columnComments : undefined}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
@@ -1548,6 +1703,13 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             onLoadMore={loadMoreQueryRows}
             onCountQuery={(id) => void countQueryResult(id)}
             onQueryPageSize={changeQueryPageSize}
+            rowOffset={tab.table && !tab.table.all ? tab.table.page * tab.table.pageSize : 0}
+            onGoToRow={(result, row) => {
+              if (tab.table) goToTableRow(row);
+              else void goToQueryRow(result, row);
+            }}
+            onLoadRows={(result, until) => loadQueryRowsUntil(result, until)}
+            onCancelLoad={cancelRowLoad}
             onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))}
             onSorted={(result, sort) =>
               updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
@@ -1606,6 +1768,10 @@ function Results({
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
+  rowOffset,
+  onGoToRow,
+  onLoadRows,
+  onCancelLoad,
   maximize,
 }: {
   /** The button that hides the SQL editor (SQL tabs only). */
@@ -1632,6 +1798,13 @@ function Results({
   onLoadMore(result: number): Promise<number>;
   onCountQuery(result: number): void;
   onQueryPageSize(size: number): void;
+  /** Rows before the first one shown (a table data tab's page): the grid numbers from there. */
+  rowOffset: number;
+  /** "Go to row" past what the grid holds (SDB-386): `row` counts from 1, as the grid numbers. */
+  onGoToRow(result: number, row: number): void;
+  /** Loads a paged query's rows until it holds `until` (every row when `null`). */
+  onLoadRows(result: number, until: number | null): Promise<number | null>;
+  onCancelLoad(): void;
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
@@ -1644,6 +1817,10 @@ function Results({
   /** Results shown as a chart instead of the grid, and what each chart draws (ADR-040). */
   const [chartShown, setChartShown] = useState<Record<number, boolean>>({});
   const [charts, setCharts] = useState<Record<number, ChartSettings | null>>({});
+  /** Results shown transposed (SDB-386): the rows of the current view shown as columns. */
+  const [transposed, setTransposed] = useState<Record<number, number[]>>({});
+  /** The rows each grid has selected (positions, not values), for the Transpose button. */
+  const selectedRows = useRef<Record<number, number[]>>({});
   // A connection that could not open may need a plugin that is not installed.
   const connectionEngine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? null);
   const maximizeButton = maximize && (
@@ -1712,6 +1889,23 @@ function Results({
           >
             <Icon name="chart" />
           </button>
+          <button
+            type="button"
+            className={`ghost result-transpose-toggle${transposed[active.id] ? " active" : ""}`}
+            aria-pressed={!!transposed[active.id]}
+            aria-label={t(transposed[active.id] ? "transpose.hide" : "transpose.show")}
+            title={t(transposed[active.id] ? "transpose.hide" : "transpose.show")}
+            disabled={!transposed[active.id] && active.rows === 0}
+            onClick={() => setTransposed((current) => {
+              const { [active.id]: shown, ...rest } = current;
+              if (shown) return rest;
+              // The selected rows, or the current one: the first row without a selection.
+              const rows = selectedRows.current[active.id] ?? [];
+              return { ...current, [active.id]: rows.length > 0 ? rows : [0] };
+            })}
+          >
+            <Icon name="transpose" />
+          </button>
         </div>}
         {maximizeButton}
       </div>
@@ -1726,8 +1920,18 @@ function Results({
             scope={serverSort ? "page" : active.paging?.hasMore ? "loaded" : undefined}
           />
         )}
+        {active && !chartShown[active.id] && transposed[active.id] && (
+          <TransposedView
+            key={`transposed-${active.id}-${active.rows}-${active.sort?.map((k) => `${k.column}${k.descending ? "d" : "a"}`).join(",") ?? ""}-${active.filter ?? ""}-${JSON.stringify(active.columnFilters ?? [])}`}
+            source={active}
+            rows={transposed[active.id] ?? []}
+            firstNumber={rowOffset + 1}
+            session={session}
+            onClose={() => setTransposed(({ [active.id]: _closed, ...rest }) => rest)}
+          />
+        )}
         {active ? (
-          <div className="result-view" hidden={!!chartShown[active.id]}>
+          <div className="result-view" hidden={!!chartShown[active.id] || !!transposed[active.id]}>
           <ResultGrid
             result={active}
             onChart={(columns) => {
@@ -1753,6 +1957,12 @@ function Results({
             onCountQuery={() => onCountQuery(active.id)}
             onQueryPageSize={onQueryPageSize}
             onHiddenColumns={(hidden) => setHiddenColumns((current) => ({ ...current, [active.id]: hidden }))}
+            rowOffset={rowOffset}
+            onGoToRow={(row) => onGoToRow(active.id, row)}
+            onLoadRows={(until) => onLoadRows(active.id, until)}
+            onCancelLoad={onCancelLoad}
+            onSelectedRows={(rows) => { selectedRows.current[active.id] = rows; }}
+            onTranspose={(rows) => setTransposed((current) => ({ ...current, [active.id]: rows }))}
           />
           </div>
         ) : (

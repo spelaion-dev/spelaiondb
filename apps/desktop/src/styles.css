@@ -3821,6 +3821,69 @@ span.pick-key {
   text-align: center;
 }
 
+/* The pages of a table data tab and of a paged query (SDB-386). */
+.page-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  white-space: nowrap;
+}
+.page-controls .icon-button {
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.page-controls .page-number {
+  width: calc(var(--control-md) * 2);
+  height: var(--control-sm);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.load-rows {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-md);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The transposed view of rows (SDB-386): a result of its own, above which its rows are named. */
+.transposed-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.transposed-caption {
+  padding: var(--space-xs) var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+
+/* Go to row (Ctrl+G), where the column picker opens. */
+.row-jump {
+  position: absolute;
+  top: var(--space-md);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-dropdown);
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-xs);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+.row-jump input {
+  width: calc(var(--control-md) * 4);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------------------------------------------------------------- editing table data */
 .result-editing {
   flex: none;
@@ -3869,7 +3932,6 @@ span.pick-key {
   gap: 4px;
   white-space: nowrap;
 }
-.query-paging button:not(.query-count) { width: 30px; padding: 0; }
 .query-paging .query-count {
   position: relative;
   width: auto;
