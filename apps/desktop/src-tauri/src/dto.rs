@@ -4824,7 +4824,7 @@ pub struct TextSpan {
     pub end: u32,
 }
 
-fn text_span(span: spelaion_driver_api::StatementSpan) -> TextSpan {
+pub(crate) fn text_span(span: spelaion_driver_api::StatementSpan) -> TextSpan {
     TextSpan {
         start: u32::try_from(span.start).unwrap_or(u32::MAX),
         end: u32::try_from(span.end).unwrap_or(u32::MAX),
@@ -4920,6 +4920,15 @@ pub struct PickedTextItem {
     /// Where `text` starts and ends in the script, in UTF-8 bytes.
     pub span: TextSpan,
     pub statements: u32,
+}
+
+/// What Ctrl+Enter runs: the text the core wrote for the statement under the cursor, and that
+/// statement's own place in the script (flashed in the editor).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementToRunItem {
+    pub picked: PickedTextItem,
+    pub statement: TextSpan,
 }
 
 impl From<spelaion_core::PickedText> for PickedTextItem {

@@ -256,3 +256,69 @@ fn a_statement_under_another_delimiter_is_not_run_as_its_pieces() {
     assert!(!picked.text.contains("select 0"));
     assert!(!picked.text.contains("select 3"));
 }
+
+/// Ctrl+Enter on a statement under `DELIMITER $$` runs it whole (SDB-403): its text is the
+/// script with the other statements written over, so the run reads it with that delimiter. A
+/// plain statement is sent alone, at its own place in the script.
+#[test]
+fn ctrl_enter_runs_a_statement_under_another_delimiter_whole() {
+    let dialect = dialect_of(Engine::Mysql).unwrap();
+    let script = "select 0;\nDELIMITER $$\ncreate procedure p() begin select 1; select 2; end$$\nDELIMITER ;\nselect 3";
+    let inside = script.find("select 2").unwrap();
+    let (picked, statement) = spelaion_core::statement_to_run(dialect.as_ref(), script, inside)
+        .unwrap()
+        .expect("a statement");
+    assert_eq!(
+        &script[statement.start..statement.end],
+        "create procedure p() begin select 1; select 2; end"
+    );
+    assert_eq!(
+        texts(dialect.as_ref(), &picked.text),
+        ["create procedure p() begin select 1; select 2; end"]
+    );
+    // Positions in the text are positions in the script: an error is underlined in place.
+    assert_eq!(
+        &picked.text[statement.start - picked.start..statement.end - picked.start],
+        &script[statement.start..statement.end]
+    );
+
+    let last = script.rfind("select 3").unwrap();
+    let (picked, statement) = spelaion_core::statement_to_run(dialect.as_ref(), script, last)
+        .unwrap()
+        .expect("a statement");
+    assert_eq!(picked.text, "select 3");
+    assert_eq!((picked.start, statement.start), (last, last));
+
+    assert!(
+        spelaion_core::statement_to_run(dialect.as_ref(), "-- nothing", 0)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// On every engine, Ctrl+Enter's text is read by that engine's splitter as exactly the
+/// statement under the cursor.
+#[test]
+fn ctrl_enter_text_is_the_statement_under_the_cursor_on_every_engine() {
+    for engine in Engine::ALL {
+        let Some(dialect) = dialect_of(engine) else {
+            continue;
+        };
+        let separator = match dialect.name() {
+            "redis" => "\n",
+            _ => ";\n",
+        };
+        let script = ["select 1", "select 2", "select 3"].join(separator);
+        let offset = script.find("select 2").unwrap() + 2;
+        let Ok(Some((picked, statement))) =
+            spelaion_core::statement_to_run(dialect.as_ref(), &script, offset)
+        else {
+            continue;
+        };
+        assert_eq!(
+            texts(dialect.as_ref(), &picked.text),
+            [&script[statement.start..statement.end]],
+            "{engine:?}"
+        );
+    }
+}

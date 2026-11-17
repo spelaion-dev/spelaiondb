@@ -337,3 +337,40 @@ async fn table_pages_and_counts_run_on_mysql() {
         .collect()
         .await;
 }
+
+/// Ctrl+Enter on a procedure written under `DELIMITER $$` creates it whole (SDB-403): the text
+/// the core writes for the statement under the cursor keeps the delimiter lines, and the run
+/// sends one `CREATE PROCEDURE`, not its body's pieces.
+#[tokio::test]
+async fn ctrl_enter_creates_a_procedure_written_under_another_delimiter() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let name = format!("ctrl_enter_{}", std::process::id());
+    let script = format!(
+        "select 0;\nDELIMITER $$\ncreate procedure {name}() begin select 1; select 2; end$$\nDELIMITER ;\nselect 3"
+    );
+    let dialect = spelaion_dialect::for_engine("mysql").expect("a dialect");
+    let cursor = script.find("select 2").unwrap();
+    let (picked, _) = spelaion_core::statement_to_run(dialect.as_ref(), &script, cursor)
+        .unwrap()
+        .expect("a statement");
+    let events: Vec<CoreEvent> = session.run_script(&picked.text).collect().await;
+    let failures: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            CoreEvent::StatementFailed { error, .. } => Some(error.message.clone()),
+            _ => None,
+        })
+        .collect();
+    let started = events
+        .iter()
+        .filter(|e| matches!(e, CoreEvent::StatementStarted { .. }))
+        .count();
+    let _: Vec<CoreEvent> = session
+        .run_script(&format!("drop procedure if exists {name}"))
+        .collect()
+        .await;
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(started, 1, "one statement sent");
+}
