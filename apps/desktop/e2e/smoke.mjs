@@ -260,7 +260,27 @@ async function appPage() {
   const page = browser.contexts()[0].pages()[0];
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+  watchContentSecurityPolicy(page);
   return page;
+}
+
+// The window's Content Security Policy (SDB-127, tauri.conf.json): anything it refuses is a
+// failure, reported at the next step. WebView2 logs each refusal to the console; pages loaded
+// from now on also report every `securitypolicyviolation` event there.
+const cspViolations = [];
+function watchContentSecurityPolicy(page) {
+  page.on("console", (message) => {
+    const text = message.text();
+    if (/Content Security Policy|securitypolicyviolation/i.test(text)) cspViolations.push(text);
+  });
+  void page.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (event) => {
+      console.error(`securitypolicyviolation: ${event.violatedDirective} refused ${event.blockedURI || "inline"} (${event.sourceFile}:${event.lineNumber})`);
+    });
+  }).catch(() => {});
+}
+function checkContentSecurityPolicy() {
+  if (cspViolations.length) throw new Error(`the Content Security Policy refused something:\n${cspViolations.join("\n")}`);
 }
 
 async function connect() {
@@ -286,6 +306,7 @@ try {
   // after that one begins, to repeat one step without the whole run.
   let untilReached = false;
   const step = (text) => {
+    checkContentSecurityPolicy();
     if (untilReached) throw untilComplete;
     if (process.env.SPELAION_E2E_UNTIL && text.startsWith(process.env.SPELAION_E2E_UNTIL)) untilReached = true;
     console.log(`· ${text}`);
@@ -418,6 +439,23 @@ try {
 
   step("startup and untrusted repository");
   await page.locator(".activity-bar .settings-button").waitFor();
+  {
+    // The policy is in force (SDB-127): an inline script added to the page does not run. Its
+    // refusal is the probe's, not a failure.
+    const before = cspViolations.length;
+    const ran = await page.evaluate(async () => {
+      const script = document.createElement("script");
+      script.textContent = "window.__cspProbe = true;";
+      document.head.append(script);
+      script.remove();
+      await new Promise((done) => setTimeout(done, 200));
+      return window.__cspProbe === true;
+    });
+    assert.equal(ran, false, "an inline script is refused by the Content Security Policy");
+    for (let i = 0; i < 20 && cspViolations.length === before; i++) await page.waitForTimeout(100);
+    assert.ok(cspViolations.length > before, "the refusal is reported, so the smoke would see a real one");
+    cspViolations.splice(before);
+  }
   // The broken local store was moved aside, never deleted, and the app opened with a new one.
   const movedStores = readdirSync(join(userDir, "db")).filter((name) => /^state\.db\.broken-\d{4}-\d{2}-\d{2}$/.test(name));
   assert.equal(movedStores.length, 1, `the broken store is kept beside the new one: ${readdirSync(join(userDir, "db"))}`);
@@ -9662,6 +9700,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await quitWithin(exitedFrozen, 15_000, "a second close request did not quit a frozen UI");
   }
 
+  checkContentSecurityPolicy();
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {
   if (e === editSmokeComplete) console.log("\nOK. Editing smoke test passed.");

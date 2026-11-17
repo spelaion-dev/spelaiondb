@@ -77,7 +77,7 @@ pub enum TileServerError {
     #[error("the tile server needs a name, of at most {TILE_NAME_MAX} characters")]
     Name,
     #[error(
-        "the tile address must start with https:// (http:// only for this computer) and be at most {TILE_URL_MAX} characters"
+        "the tile address must start with https:// (http:// only for localhost or 127.0.0.1) and be at most {TILE_URL_MAX} characters"
     )]
     Scheme,
     #[error("the tile address must contain {{z}}, {{x}} and {{y}}, and no other {{…}} field")]
@@ -92,7 +92,9 @@ pub enum TileServerError {
 
 /// Checks a tile server before it is saved: a name, an `https://` address (or `http://` to
 /// this computer, for a tile server of one's own) with `{z}`, `{x}` and `{y}`, and an
-/// attribution on one line. The address is only ever used as an image's address.
+/// attribution on one line. The address is only ever used as an image's address, and the
+/// window's Content Security Policy allows exactly these (SDB-127, `tauri.conf.json`'s
+/// `img-src`): `http://[::1]` is not one, since a policy cannot name an IPv6 address.
 pub fn check_tile_server(name: &str, url: &str, attribution: &str) -> Result<(), TileServerError> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > TILE_NAME_MAX || name.chars().any(char::is_control)
@@ -108,7 +110,7 @@ pub fn check_tile_server(name: &str, url: &str, attribution: &str) -> Result<(),
         return Err(TileServerError::Characters);
     }
     let lower = url.to_ascii_lowercase();
-    let local = ["http://localhost", "http://127.0.0.1", "http://[::1]"]
+    let local = ["http://localhost", "http://127.0.0.1"]
         .iter()
         .any(|prefix| {
             lower
@@ -170,6 +172,8 @@ mod tests {
             "https:///{z}/{x}/{y}.png",
             "https://user:pass@tile.example.com/{z}/{x}/{y}.png",
             "https://{z}.example.com/{x}/{y}.png",
+            // The window's policy could not let its images in (SDB-127).
+            "http://[::1]:8080/{z}/{x}/{y}.png",
         ] {
             assert_eq!(ok(url), Err(TileServerError::Scheme), "{url}");
         }
