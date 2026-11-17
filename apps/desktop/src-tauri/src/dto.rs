@@ -1572,6 +1572,8 @@ pub enum ConnectOutcome {
     PasswordRequired { can_remember: bool },
     /// The server rejected the password (or the user): it must be asked for again.
     AuthFailed { message: String, can_remember: bool },
+    /// The user declined an SSH question or cancelled an authentication prompt.
+    Cancelled,
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
     /// A repository connection or tunnel is new or changed since the repository was trusted

@@ -36,6 +36,7 @@ import {
   EXPLORER_REFRESH_EVENT,
   EXPLORER_SESSION_CLOSED_EVENT,
   openSession,
+  newQueryOnConnection,
   SCHEMAS_REFRESHED_EVENT,
   SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
@@ -1702,7 +1703,6 @@ function ConnectionNode({
     setRowNote(null);
     duplicateConnection(connection).catch(rowError);
   }
-  const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [schemas, setSchemas] = useState<SchemaItem[] | null>(null);
   const [serverObjects, setServerObjects] = useState<ServerObjectItem[]>([]);
@@ -1760,8 +1760,7 @@ function ConnectionNode({
   }, [connection.id, t]);
 
   function newQuery() {
-    const tab = addTab(connection.id);
-    if (schemas) connectTabFromExplorer(tab, session);
+    newQueryOnConnection(connection.id);
   }
 
   useEffect(() => {

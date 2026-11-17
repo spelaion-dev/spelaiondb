@@ -295,6 +295,15 @@ try {
     // Double-clicking a connection opens a new query on it (its row has no buttons, SDB-102).
     await page.locator(`.connection-row:has-text("${connection}") > .label`).dblclick();
     const panel = page.locator(".tab-panel:not([hidden])");
+    // Preserve the run-time password checks below: cancel the new tab's initial prompt,
+    // then Run will ask again. Connections that need no prompt finish normally.
+    await page.waitForFunction(() => {
+      const panel = document.querySelector(".tab-panel:not([hidden])");
+      return panel?.querySelector(".status-connected, .status-disconnected") || document.querySelector('[role="dialog"] input[type="password"]');
+    });
+    if (await page.locator('[role="dialog"] input[type="password"]').count()) {
+      await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+    }
     await panel.locator(".status-connecting").waitFor({ state: "detached" });
     await panel.locator(".cm-content").click();
     // insertText does not trigger autocompletion (Enter would accept a suggestion).

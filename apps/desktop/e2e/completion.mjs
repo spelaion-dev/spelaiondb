@@ -36,7 +36,7 @@ try {
   const panel = page.locator(".tab-panel:not([hidden])");
   await panel.locator(".status-connecting").waitFor({ state: "detached" });
   const content = panel.locator(".cm-content");
-  // A new console connects on its first explicit run; New query itself never runs SQL.
+  // New query opens a session but never runs SQL.
   await content.click(); await page.keyboard.insertText("SELECT 1;"); await page.keyboard.press("Control+Shift+Enter");
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   async function complete(text) {
