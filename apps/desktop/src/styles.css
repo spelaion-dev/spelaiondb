@@ -651,7 +651,9 @@ select {
 :root[data-theme="dark"] .engine-icon:not(.colored):not(.engine-icon-fallback) {
   filter: brightness(0) invert(0.83);
 }
-.engine-icon-fallback { color: var(--muted); text-align: center; }
+/* An engine without a licensed mark (SDB-363): the icon set's database or folder, muted. */
+.engine-icon-fallback { color: var(--muted); }
+.engine-icon-fallback .icon { display: block; width: 100%; height: 100%; }
 .engine-card .engine-icon { width: 25px; height: 25px; }
 .twisty {
   width: 14px;

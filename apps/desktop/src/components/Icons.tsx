@@ -2,7 +2,7 @@
 // `currentColor`), shown at 16px. Lucide itself (ISC) is not a dependency yet: these follow its
 // shapes, so they can be swapped for `lucide-react` without changing how they look.
 
-type IconName = "x" | "plus" | "pin" | "maximize" | "minimize" | "folderOpen" | "link" | "arrowUpRight" | "sigma" | "chevronRight" | "plan" | "chart" | "minus" | "scan" | "refresh" | "group" | "chevronLeft" | "chevronsLeft" | "chevronsRight" | "transpose";
+type IconName = "x" | "plus" | "pin" | "maximize" | "minimize" | "folderOpen" | "link" | "arrowUpRight" | "sigma" | "chevronRight" | "plan" | "chart" | "minus" | "scan" | "refresh" | "group" | "chevronLeft" | "chevronsLeft" | "chevronsRight" | "transpose" | "database";
 
 export const PATHS: Record<IconName, string[]> = {
   chevronRight: ["m9 6 6 6-6 6"],
@@ -34,6 +34,8 @@ export const PATHS: Record<IconName, string[]> = {
     "M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17",
   ],
   minus: ["M5 12h14"],
+  // Lucide's "database": the neutral mark of an engine without a licensed one (SDB-363).
+  database: ["M3 5a9 3 0 1 0 18 0a9 3 0 1 0-18 0", "M3 5v14a9 3 0 0 0 18 0V5", "M3 12a9 3 0 0 0 18 0"],
   scan: ["M3 7V5a2 2 0 0 1 2-2h2", "M17 3h2a2 2 0 0 1 2 2v2", "M21 17v2a2 2 0 0 1-2 2h-2", "M7 21H5a2 2 0 0 1-2-2v-2"],
   pin: [
     "M12 17v5",

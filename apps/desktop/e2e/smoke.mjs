@@ -6916,7 +6916,31 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.ok(!(await card.isDisabled()), `${name} has a verified official plugin pin`);
   }
   assert.equal(await wizard.locator(".engine-card", { hasText: "Open Distro" }).count(), 0);
+  // Every card shows a mark that loaded, or the icon set's database or folder (SDB-363): never
+  // a text character, and the engines with a licensed mark show theirs.
+  const marks = await wizard.locator(".engine-card").evaluateAll((cards) => cards.map((card) => {
+    const img = card.querySelector("img.engine-icon");
+    return { name: card.textContent.trim(), img: Boolean(img), loaded: img ? img.complete && img.naturalWidth > 0 : false, icon: Boolean(card.querySelector(".engine-icon-fallback svg")) };
+  }));
+  assert.ok(marks.length > 40, `${marks.length} cards`);
+  for (const mark of marks) assert.ok(mark.img ? mark.loaded : mark.icon, `${mark.name}: ${JSON.stringify(mark)}`);
+  for (const name of ["Trino", "Neo4j", "libSQL / Turso", "YugabyteDB", "Valkey", "Arrow Flight SQL", "Meilisearch"]) {
+    assert.ok(marks.find((mark) => mark.name.startsWith(name))?.img, `${name} shows a mark`);
+  }
+  for (const name of ["Databend", "TDengine", "CSV / Parquet folder"]) {
+    assert.ok(marks.find((mark) => mark.name.startsWith(name))?.icon, `${name} shows the neutral icon`);
+  }
   await shot("12a-add-connection-catalog");
+  {
+    // The analytical engines, where most new marks are, in both themes.
+    const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
+    await wizard.getByRole("heading", { name: "Analytical" }).evaluate((heading) => heading.scrollIntoView({ block: "start" }));
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("sdb-363-engine-marks-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    await shot("sdb-363-engine-marks-light");
+    await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, themeBefore);
+  }
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");
   await wizard.getByRole("button", { name: "Use URL" }).click();

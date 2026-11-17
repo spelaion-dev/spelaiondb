@@ -1,27 +1,40 @@
-import mysql from "../assets/engines/mysql-original.svg";
-import postgres from "../assets/engines/postgresql-original.svg";
-import mariadb from "../assets/engines/mariadb.svg";
-import sqlite from "../assets/engines/sqlite.svg";
-import duckdb from "../assets/engines/duckdb.svg";
-import sqlserver from "../assets/engines/microsoftsqlserver.svg";
-import oracle from "../assets/engines/oracle.svg";
-import cockroachdb from "../assets/engines/cockroachlabs.svg";
-import clickhouse from "../assets/engines/clickhouse.svg";
-import snowflake from "../assets/engines/snowflake.svg";
-import bigquery from "../assets/engines/googlebigquery.svg";
-import mongodb from "../assets/engines/mongodb.svg";
-import redis from "../assets/engines/redis.svg";
-import cassandra from "../assets/engines/apachecassandra.svg";
+// An engine's mark (SDB-363). Which file each engine shows, and why an engine has none, is
+// `assets/engines/marks.json`, also read by the desktop crate's test that every engine of the
+// core's catalogue is in it: a new engine cannot be added without that decision. The files
+// come only from licensed sources, listed in `assets/engines/README.md`.
+import table from "../assets/engines/marks.json";
+import { Icon } from "./Icons";
 
-const icons: Record<string, string> = { mysql, postgres, mariadb, sqlite, duckdb, sqlserver, oracle, cockroachdb, clickhouse, snowflake, bigquery, mongodb, redis, cassandra };
+interface Without {
+  /** What stands in: the base engine's mark (a kind of its connection), a folder or a database. */
+  shows: "base" | "folder" | "database";
+  why: string;
+}
+
+const MARKS = table.marks as Record<string, string>;
+const COLORED = new Set<string>(table.colored);
+const WITHOUT = table.without as Record<string, Without>;
+
+// Every mark's file, as the address Vite gives it.
+const FILES = import.meta.glob<string>("../assets/engines/*.svg", { eager: true, query: "?url", import: "default" });
+const fileOf = (engine: string): string | undefined => {
+  const name = MARKS[engine];
+  return name ? FILES[`../assets/engines/${name}`] : undefined;
+};
 
 /** Engine marks are decorative: the engine name is already present in the surrounding UI.
  *  `fallback` is the engine whose mark stands in when `engine` has none of its own (a server
  *  reached through PostgreSQL's protocol shows PostgreSQL's). */
 export function EngineIcon({ engine, fallback }: { engine: string | null; fallback?: string | null }) {
-  const shown = engine && icons[engine] ? engine : fallback ?? null;
-  const src = shown ? icons[shown] : undefined;
-  return src
-    ? <img className={`engine-icon ${shown === "sqlserver" || shown === "oracle" ? "colored" : ""}`} src={src} alt="" aria-hidden="true" />
-    : <span className="engine-icon engine-icon-fallback" aria-hidden="true">●</span>;
+  const own = engine ? fileOf(engine) : undefined;
+  const without = engine ? WITHOUT[engine] : undefined;
+  const shown = own ? engine : without?.shows === "folder" || without?.shows === "database" ? null : fallback ?? null;
+  const src = own ?? (shown ? fileOf(shown) : undefined);
+  if (src && shown) return <img className={`engine-icon ${COLORED.has(shown) ? "colored" : ""}`} src={src} alt="" aria-hidden="true" />;
+  // No licensed mark: a deliberate neutral one, in the interface's own icon set.
+  return (
+    <span className="engine-icon engine-icon-fallback" aria-hidden="true">
+      <Icon name={without?.shows === "folder" ? "folderOpen" : "database"} />
+    </span>
+  );
 }
