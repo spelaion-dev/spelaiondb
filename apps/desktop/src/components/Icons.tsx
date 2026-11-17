@@ -2,7 +2,7 @@
 // `currentColor`), shown at 16px. Lucide itself (ISC) is not a dependency yet: these follow its
 // shapes, so they can be swapped for `lucide-react` without changing how they look.
 
-type IconName = "x" | "plus" | "pin" | "maximize" | "minimize" | "folderOpen" | "link" | "arrowUpRight" | "sigma" | "chevronRight" | "plan" | "chart" | "minus" | "scan" | "refresh";
+type IconName = "x" | "plus" | "pin" | "maximize" | "minimize" | "folderOpen" | "link" | "arrowUpRight" | "sigma" | "chevronRight" | "plan" | "chart" | "minus" | "scan" | "refresh" | "group";
 
 export const PATHS: Record<IconName, string[]> = {
   chevronRight: ["m9 6 6 6-6 6"],
@@ -22,6 +22,12 @@ export const PATHS: Record<IconName, string[]> = {
   arrowUpRight: ["M7 7h10v10", "M7 17 17 7"],
   sigma: ["M18 7V5a1 1 0 0 0-1-1H6.5a.5.5 0 0 0-.4.8l4.5 6a2 2 0 0 1 0 2.4l-4.5 6a.5.5 0 0 0 .4.8H17a1 1 0 0 0 1-1v-2"],
   plus: ["M5 12h14", "M12 5v14"],
+  // Lucide's "layers": rows stacked into groups.
+  group: [
+    "M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z",
+    "M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12",
+    "M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17",
+  ],
   minus: ["M5 12h14"],
   scan: ["M3 7V5a2 2 0 0 1 2-2h2", "M17 3h2a2 2 0 0 1 2 2v2", "M21 17v2a2 2 0 0 1-2 2h-2", "M7 21H5a2 2 0 0 1-2-2v-2"],
   pin: [

@@ -24,6 +24,7 @@ mod filter;
 mod find;
 mod generate;
 mod geometry;
+mod group;
 mod guard;
 mod health;
 mod history;
@@ -138,6 +139,10 @@ pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates
 pub use geometry::{
     Bounds, ColumnMap, Dimensions, GeoFormat, GeoValue, Geometry, MAP_MAX_POINTS, MAP_MAX_SHAPES,
     MapCrs, MapError, MapShape, Position, column_map, is_geometry_type, map_crs, read_geometry,
+};
+pub use group::{
+    GROUP_KEY_CHARS, Group, GroupCounts, GroupError, GroupRequest, MAX_GROUP_COLUMNS,
+    MAX_GROUPS_COUNTED, MAX_GROUPS_RETURNED,
 };
 pub use guard::{
     NeedsConfirmation, ReadOnlyRefusal, Risk, RiskyStatement, RunRefused, check_read_only,
