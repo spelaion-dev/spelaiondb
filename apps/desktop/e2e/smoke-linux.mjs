@@ -546,6 +546,42 @@ try {
     await shot("10d-databend-tunnel");
   });
 
+  await step("JSON viewer switches presentation and formats an editable value without losing big numbers", async () => {
+    await newQuery("Shop (SQLite)", `update customer set name = '{"n":12345678901234567890}' where id = 1;`);
+    await run();
+    await visibleText(P, "Statement 1: OK");
+    await replaceQuery("select id, name from customer where id = 1;");
+    await run(); await statusline("1 row");
+    const box = await wd.evaluate((p) => { const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect(); return { x: r.x, y: r.y }; }, P);
+    await wd.pointerAt(box.x + 52 + 110 + 20, box.y + 34 + 12);
+    await wd.press("Enter");
+    const viewer = `${P} .cell-viewer`;
+    await wd.element((s) => document.querySelector(`${s} textarea.cell-viewer-editor`), [viewer], { what: "editable cell viewer" });
+    await wd.click(await button("Formatted", viewer));
+    await visibleText(viewer, "12345678901234567890");
+    await visibleText(P, "No pending changes");
+    await wd.click(await button("As stored", viewer));
+    await wd.click(await button("Wrap text", viewer));
+    assert.equal(await wd.evaluate((s) => document.querySelector(`${s} textarea`).getAttribute("wrap"), viewer), "off");
+    const editor = await wd.element((s) => document.querySelector(`${s} textarea`), [viewer]);
+    await fill(editor, '{"n":');
+    assert.equal(await wd.evaluate((el) => el.disabled, await button("Format JSON", viewer)), true);
+    await fill(editor, '{"n":12345678901234567890}');
+    await visibleText(P, "No pending changes");
+    await wd.click(await button("Format JSON", viewer));
+    await visibleText(P, "Updated: 1");
+    const formatted = await wd.evaluate((s) => document.querySelector(`${s} textarea`).value, viewer);
+    assert.ok(formatted.includes("12345678901234567890") && formatted.includes("\n"), formatted);
+    await wd.click(await button("Save changes", `${P} .result-editing`));
+    await visibleText(P, "No pending changes");
+    await replaceQuery("select name from customer where id = 1;"); await run(); await statusline("1 row");
+    const target = await wd.evaluate((p) => { const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect(); return { x: r.x, y: r.y }; }, P);
+    await wd.pointerAt(target.x + 65, target.y + 46); await wd.press("Control+c");
+    let copied = "";
+    for (let i = 0; i < 50 && !copied.includes("12345678901234567890"); i++) { await new Promise((resolve) => setTimeout(resolve, 100)); copied = clipboard.get(); }
+    assert.ok(copied.includes("12345678901234567890"), copied);
+  });
+
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {
     await newQuery("Shop (SQLite)", "create temp table quit_tx (x);");
     await run();

@@ -72,7 +72,7 @@ interface PreferencesStore {
 }
 
 const DEFAULT_EXPLORER: ExplorerPreferences = { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false };
-const DEFAULT_GRID: GridPreferences = { zebra: true, nullText: true, boolCheckboxes: false, resultTabs: 20 };
+const DEFAULT_GRID: GridPreferences = { zebra: true, nullText: true, boolCheckboxes: false, resultTabs: 20, viewerWrap: true };
 const DEFAULT_SCRIPT: ScriptPreferencesItem = { onError: "stop", notify: false, notifyAfterSeconds: 30, confirmDelaySeconds: 0 };
 const DEFAULT_EDITOR: EditorPreferencesItem = { font: "system", fontSize: 13, lineHeight: 18, tabSize: 2, lineNumbers: true, wordWrap: false, keywordCase: "preserve", indent: 2, commaPosition: "trailing" };
 const DEFAULT_MAP: MapPreferencesItem = { tiles: false, tileName: "", tileUrl: "", tileAttribution: "" };

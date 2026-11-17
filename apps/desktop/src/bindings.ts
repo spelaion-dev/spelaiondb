@@ -2817,6 +2817,7 @@ export type GrantedPrivilegeItem = {
  *  personal, like the theme.
  */
 export type GridPreferencesItem = {
+	viewerWrap: boolean,
 	zebra: boolean,
 	nullText: boolean,
 	boolCheckboxes: boolean,

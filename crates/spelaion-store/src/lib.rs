@@ -665,6 +665,8 @@ pub const MAX_RESULT_TABS: u32 = 100;
 /// by every workspace in this user directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridPreferences {
+    /// Wrap long text in the cell viewer; on by default.
+    pub viewer_wrap: bool,
     /// Every other row tinted; on by default.
     pub zebra: bool,
     /// NULL cells read `NULL` (dimmed); on by default. Off, they are drawn empty.
@@ -679,6 +681,7 @@ pub struct GridPreferences {
 impl Default for GridPreferences {
     fn default() -> Self {
         Self {
+            viewer_wrap: true,
             zebra: true,
             null_text: true,
             bool_checkboxes: false,
@@ -1442,6 +1445,7 @@ impl Store {
     pub fn get_grid_preferences(&self) -> Result<GridPreferences, StoreError> {
         let defaults = GridPreferences::default();
         Ok(GridPreferences {
+            viewer_wrap: self.get_flag("grid.viewer_wrap", defaults.viewer_wrap)?,
             zebra: self.get_flag("grid.zebra", defaults.zebra)?,
             null_text: self.get_flag("grid.null_text", defaults.null_text)?,
             bool_checkboxes: self.get_flag("grid.bool_checkboxes", defaults.bool_checkboxes)?,
@@ -1456,6 +1460,7 @@ impl Store {
 
     pub fn set_grid_preferences(&self, preferences: &GridPreferences) -> Result<(), StoreError> {
         let GridPreferences {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
@@ -1466,6 +1471,7 @@ impl Store {
                 "an editor tab keeps from 1 to {MAX_RESULT_TABS} result tabs"
             )));
         }
+        self.set_flag("grid.viewer_wrap", viewer_wrap)?;
         self.set_flag("grid.zebra", zebra)?;
         self.set_flag("grid.null_text", null_text)?;
         self.set_flag("grid.bool_checkboxes", bool_checkboxes)?;
@@ -2454,6 +2460,7 @@ mod tests {
         assert_eq!(defaults.result_tabs, 20);
         // Every field is saved on its own: each one changed from its default.
         let changed = GridPreferences {
+            viewer_wrap: false,
             zebra: false,
             null_text: false,
             bool_checkboxes: true,
