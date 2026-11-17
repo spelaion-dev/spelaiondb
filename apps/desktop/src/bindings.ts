@@ -691,6 +691,16 @@ export const commands = {
 	 */
 	statementsFromCursor: (engine: string, sql: string, offset: number) => typedError<PickedTextItem | null, string>(__TAURI_INVOKE("statements_from_cursor", { engine, sql, offset })),
 	/**
+	 *  The statements of a script for the editor's outline panel: the core's splitter for the
+	 *  engine, the one that runs the script, with each statement's line and how it starts.
+	 */
+	scriptOutline: (engine: string, sql: string) => typedError<OutlineItem, string>(__TAURI_INVOKE("script_outline", { engine, sql })),
+	/**
+	 *  The statement after (`forward`) or before the one at the cursor (`offset` in UTF-8
+	 *  bytes), for the editor's "next / previous statement"; `None` at the last or first one.
+	 */
+	neighbourStatement: (engine: string, sql: string, offset: number, forward: boolean) => typedError<TextSpan | null, string>(__TAURI_INVOKE("neighbour_statement", { engine, sql, offset, forward })),
+	/**
 	 *  Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
 	 *  overwrites an existing file.
 	 */
@@ -3743,6 +3753,24 @@ export type OpenTabItem_Serialize = {
 	timeoutSeconds: number | null,
 	snippetName: string | null,
 	file: OpenTabFileItem_Serialize | null,
+};
+
+/**  One statement of a script in the editor's outline. */
+export type OutlineEntryItem = {
+	/**  The statement, in bytes of the script. */
+	span: TextSpan,
+	/**  The line it starts on, from 1. */
+	line: number,
+	/**  How it starts, on one line. */
+	summary: string,
+};
+
+/**  The statements of a script, as the core's splitter reads it. */
+export type OutlineItem = {
+	/**  The first statements, in order (the core bounds how many). */
+	entries: OutlineEntryItem[],
+	/**  How many statements the script has. */
+	total: number,
 };
 
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 

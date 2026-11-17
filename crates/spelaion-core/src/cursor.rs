@@ -204,6 +204,124 @@ pub fn from_cursor(
     pick_statements(dialect, script, &picked).map(Some)
 }
 
+/// Most statements an outline lists: a pasted dump has hundreds of thousands, and nobody reads
+/// a panel that long.
+pub const MAX_OUTLINE_ENTRIES: usize = 2000;
+
+/// Most characters of a statement an outline shows.
+pub const OUTLINE_SUMMARY_CHARS: usize = 80;
+
+/// One statement of a script, for the editor's outline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutlineEntry {
+    /// The statement, in bytes of the script.
+    pub span: StatementSpan,
+    /// The line it starts on, from 1.
+    pub line: usize,
+    /// How it starts, on one line: from its first character outside comments, its white space
+    /// collapsed, at most [`OUTLINE_SUMMARY_CHARS`] characters.
+    pub summary: String,
+}
+
+/// The statements of a script, as the engine's splitter reads it (the one that runs it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outline {
+    /// The first [`MAX_OUTLINE_ENTRIES`] statements, in the script's order.
+    pub entries: Vec<OutlineEntry>,
+    /// How many statements the script has.
+    pub total: usize,
+}
+
+/// The outline of `script`: one entry per statement the engine's splitter finds in it.
+pub fn outline(dialect: &dyn Dialect, script: &str) -> Outline {
+    let spans = dialect.split_statements(script);
+    let total = spans.len();
+    let code = dialect.code_ranges(script);
+    let mut entries = Vec::with_capacity(total.min(MAX_OUTLINE_ENTRIES));
+    // Lines and code ranges are walked once, in step with the statements.
+    let (mut line, mut counted, mut range) = (1, 0, 0);
+    for span in spans.into_iter().take(MAX_OUTLINE_ENTRIES) {
+        let start = span.start.min(script.len());
+        let end = span.end.min(script.len()).max(start);
+        line += script.as_bytes()[counted.min(start)..start]
+            .iter()
+            .filter(|b| **b == b'\n')
+            .count();
+        counted = counted.max(start);
+        while range < code.len() && code[range].end <= start {
+            range += 1;
+        }
+        // The first character of the statement that is code and not white space; a statement
+        // that is only a comment (MySQL's executable comments) is shown from its start.
+        let mut from = start;
+        'found: for r in &code[range..] {
+            if r.start >= end {
+                break;
+            }
+            let (a, b) = (r.start.max(start), r.end.min(end));
+            let Some(text) = script.get(a..b) else {
+                continue;
+            };
+            if let Some((i, _)) = text.char_indices().find(|(_, c)| !c.is_whitespace()) {
+                from = a + i;
+                break 'found;
+            }
+        }
+        let mut summary = String::new();
+        let mut chars = 0;
+        let mut space = false;
+        let mut cut = false;
+        for c in script.get(from..end).unwrap_or("").chars() {
+            if c.is_whitespace() {
+                space = !summary.is_empty();
+                continue;
+            }
+            if chars + usize::from(space) >= OUTLINE_SUMMARY_CHARS {
+                cut = true;
+                break;
+            }
+            if space {
+                summary.push(' ');
+                chars += 1;
+                space = false;
+            }
+            summary.push(c);
+            chars += 1;
+        }
+        if cut {
+            summary.push('…');
+        }
+        entries.push(OutlineEntry {
+            span,
+            line,
+            summary,
+        });
+    }
+    Outline { entries, total }
+}
+
+/// The statement after (`forward`) or before the one the cursor at byte `offset` is in or
+/// next to, for "next / previous statement"; `None` at the script's last or first one.
+pub fn neighbour_statement(
+    dialect: &dyn Dialect,
+    script: &str,
+    offset: usize,
+    forward: bool,
+) -> Option<StatementSpan> {
+    let spans = dialect.split_statements(script);
+    let offset = offset.min(script.len());
+    if forward {
+        return spans.into_iter().find(|s| s.start > offset);
+    }
+    // Before the statement the cursor is inside (or at the end of); from between two
+    // statements, the one before the cursor.
+    let limit = spans
+        .iter()
+        .find(|s| s.start <= offset && offset <= s.end)
+        .map_or(offset, |s| s.start);
+    spans.into_iter().rev().find(|s| s.start < limit)
+}
+
 /// Writes spaces over `text`, keeping its line breaks. A character takes as many spaces as
 /// it has UTF-16 units, so the editor's positions after it do not move.
 fn blank(text: &str, into: &mut String) {
@@ -427,6 +545,87 @@ mod tests {
             pick_statements(&Moody, script, &[0, 1]).unwrap().text,
             script
         );
+    }
+
+    #[test]
+    fn the_outline_lists_each_statement_with_its_line_and_how_it_starts() {
+        let script = "-- setup\ncreate table t (\n  id int\n);\n\n/* two */ insert   into t\nvalues (';');\nselect 'ñ' ;";
+        let o = outline(&SqliteDialect, script);
+        assert_eq!(o.total, 3);
+        let shown: Vec<(usize, &str)> = o
+            .entries
+            .iter()
+            .map(|e| (e.line, e.summary.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (1, "create table t ( id int )"),
+                (6, "insert into t values (';')"),
+                (8, "select 'ñ'"),
+            ]
+        );
+        // Each entry is the splitter's statement: what "run" would send.
+        let spans: Vec<StatementSpan> = o.entries.iter().map(|e| e.span).collect();
+        assert_eq!(spans, SqliteDialect.split_statements(script));
+        // A long statement is cut, by characters.
+        let long = format!("select '{}'", "ñ".repeat(200));
+        let o = outline(&SqliteDialect, &long);
+        assert_eq!(
+            o.entries[0].summary.chars().count(),
+            OUTLINE_SUMMARY_CHARS + 1
+        );
+        assert!(o.entries[0].summary.ends_with('…'));
+        assert!(outline(&SqliteDialect, "  -- nothing\n").entries.is_empty());
+    }
+
+    #[test]
+    fn the_outline_follows_each_engines_splitter_and_is_bounded() {
+        // T-SQL: `GO` separates batches and is not a statement.
+        let script = "select 1\nGO\nselect 2\nGO\n";
+        let o = outline(&spelaion_dialect::SqlServerDialect, script);
+        let shown: Vec<(usize, &str)> = o
+            .entries
+            .iter()
+            .map(|e| (e.line, e.summary.as_str()))
+            .collect();
+        assert_eq!(shown, [(1, "select 1"), (3, "select 2")]);
+        // PostgreSQL: a `;` inside a dollar-quoted body does not end the statement.
+        let script = "do $$ begin perform 1; end $$;\nselect 2";
+        let o = outline(&spelaion_dialect::PostgresDialect, script);
+        assert_eq!(o.total, 2);
+        assert_eq!(o.entries[1].line, 2);
+        // A dump: every statement is counted, only the first ones are listed.
+        let dump = "select 1;\n".repeat(MAX_OUTLINE_ENTRIES + 5);
+        let o = outline(&SqliteDialect, &dump);
+        assert_eq!(o.total, MAX_OUTLINE_ENTRIES + 5);
+        assert_eq!(o.entries.len(), MAX_OUTLINE_ENTRIES);
+        assert_eq!(o.entries.last().unwrap().line, MAX_OUTLINE_ENTRIES);
+    }
+
+    #[test]
+    fn next_and_previous_statement_from_the_cursor() {
+        let script = "select 1;\n\nselect 2;\nselect 3";
+        let go = |marker_at: usize, forward| {
+            neighbour_statement(&SqliteDialect, script, marker_at, forward)
+                .map(|s| s.text(script).to_string())
+        };
+        let second = script.find("select 2").unwrap();
+        // From inside the first statement.
+        assert_eq!(go(3, true).as_deref(), Some("select 2"));
+        assert_eq!(go(3, false), None);
+        // From the blank line between two statements.
+        assert_eq!(go(10, true).as_deref(), Some("select 2"));
+        assert_eq!(go(10, false).as_deref(), Some("select 1"));
+        // From the start, the middle and the end of the second one.
+        for offset in [second, second + 4, second + 8] {
+            assert_eq!(go(offset, true).as_deref(), Some("select 3"), "{offset}");
+            assert_eq!(go(offset, false).as_deref(), Some("select 1"), "{offset}");
+        }
+        // From the last one, and past the end of the script.
+        assert_eq!(go(script.len(), true), None);
+        assert_eq!(go(9999, false).as_deref(), Some("select 2"));
+        assert_eq!(neighbour_statement(&SqliteDialect, "", 0, true), None);
     }
 
     #[test]

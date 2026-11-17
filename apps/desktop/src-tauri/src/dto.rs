@@ -4394,6 +4394,51 @@ fn text_span(span: spelaion_driver_api::StatementSpan) -> TextSpan {
     }
 }
 
+/// One statement of a script in the editor's outline.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlineEntryItem {
+    /// The statement, in bytes of the script.
+    pub span: TextSpan,
+    /// The line it starts on, from 1.
+    pub line: u32,
+    /// How it starts, on one line.
+    pub summary: String,
+}
+
+/// The statements of a script, as the core's splitter reads it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlineItem {
+    /// The first statements, in order (the core bounds how many).
+    pub entries: Vec<OutlineEntryItem>,
+    /// How many statements the script has.
+    pub total: u32,
+}
+
+impl From<spelaion_core::Outline> for OutlineItem {
+    fn from(outline: spelaion_core::Outline) -> Self {
+        Self {
+            entries: outline
+                .entries
+                .into_iter()
+                .map(|entry| OutlineEntryItem {
+                    span: text_span(entry.span),
+                    line: u32::try_from(entry.line).unwrap_or(u32::MAX),
+                    summary: entry.summary,
+                })
+                .collect(),
+            total: u32::try_from(outline.total).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+impl From<spelaion_driver_api::StatementSpan> for TextSpan {
+    fn from(span: spelaion_driver_api::StatementSpan) -> Self {
+        text_span(span)
+    }
+}
+
 /// What the editor's Run will send: the statement under the cursor, the selection, or the
 /// whole script (a tab with no connection).
 #[derive(Debug, Clone, Copy, Serialize, Type)]

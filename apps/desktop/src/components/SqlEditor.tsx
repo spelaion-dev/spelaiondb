@@ -7,7 +7,7 @@
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Compartment, countColumn, EditorSelection, EditorState, findColumn, Prec, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, lineNumbers } from "@codemirror/view";
 import { sql } from "@codemirror/lang-sql";
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, foldCode, unfoldCode, indentUnit } from "@codemirror/language";
 import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess } from "@codemirror/commands";
@@ -17,7 +17,7 @@ import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel,
 import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, nextSnippetField, prevSnippetField, acceptCompletion } from "@codemirror/autocomplete";
 import { EDITOR_ACTIONS, EDITOR_SNIPPETS as snippets, quotedLines, type EditorActionId } from "../editorActions";
 import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
-import { sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase } from "../sqlCompletion";
+import { resolveName, sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase, type ResolvedName } from "../sqlCompletion";
 import { formatHttp, httpLanguage, isHttpLanguage } from "../httpLanguage";
 import { usePreferences } from "../preferences";
 import type { EditorPreferencesItem, RunKindItem } from "../bindings";
@@ -50,7 +50,17 @@ export interface SqlEditorHandle {
   runCurrent(): void;
   runScript(): void;
   currentRequest(): Promise<RunRequest | null>;
+  /** Gives the editor the focus, its cursor where it was. */
+  focus(): void;
+  /** Puts the cursor at `index` (JS) of the text, shows it and takes the focus. */
+  showAt(index: number): void;
 }
+
+/** What to do with the table a name stands for: open its details, or show it in the explorer. */
+export type NameAction = "open" | "reveal";
+
+/** Most columns a table's hover lists. */
+const HOVER_COLUMNS = 24;
 
 interface Props {
   handle?: React.Ref<SqlEditorHandle>;
@@ -68,6 +78,10 @@ interface Props {
   onRun(request: RunRequest, newTab?: boolean): void;
   /** What Run will send changed (the cursor, the selection, the text or the engine). */
   onRunLabel(label: RunLabel): void;
+  /** Ctrl+click on a table's name, or "Go to table" / "Reveal in explorer" at the cursor. */
+  onName(name: ResolvedName, action: NameAction): void;
+  /** Shows or hides the outline of the script. */
+  onOutline(): void;
   /** Error to underline, with its JS index in the document. */
   error: { index: number; message: string; source: object } | null;
 }
@@ -87,6 +101,7 @@ const theme = EditorView.theme({
   ".cm-tooltip": { backgroundColor: "var(--panel)", color: "var(--fg)", border: "1px solid var(--line)" },
   ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--fg)" },
   ".cm-completionDetail": { color: "var(--muted)" },
+  ".cm-tooltip-hover": { boxShadow: "var(--shadow-popover)", borderRadius: "var(--radius-md)" },
   ".cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail": { color: "var(--fg)" },
 });
 
@@ -247,6 +262,48 @@ async function formatIn(view: EditorView, engine: string | null, preferences: Ed
   return null;
 }
 
+/** The hover of a name: a table with its columns and types, or a column with its type, whether
+ *  it may be NULL and its comment. Built as DOM: CodeMirror shows it outside React. */
+function nameTooltip(name: ResolvedName, t: (key: string, values?: Record<string, unknown>) => string): HTMLElement {
+  const el = (tag: string, className: string, text?: string) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const root = el("div", "sql-hover");
+  root.setAttribute("role", "tooltip");
+  const table = name.table;
+  const qualified = `${table.schema}.${table.name}`;
+  if (name.kind === "column") {
+    const column = table.details?.find((c) => c.name === name.column);
+    const head = el("div", "sql-hover-head");
+    head.append(el("span", "sql-hover-name", name.column), el("span", "sql-hover-type", column?.type ?? ""));
+    root.append(head);
+    if (column) root.append(el("div", "sql-hover-note", t(column.nullable ? "names.nullable" : "names.notNull")));
+    if (column?.comment) root.append(el("div", "sql-hover-comment", column.comment));
+    root.append(el("div", "sql-hover-note", t("names.columnOf", { table: qualified })));
+    return root;
+  }
+  const head = el("div", "sql-hover-head");
+  head.append(el("span", "sql-hover-name", qualified));
+  if (table.kind) head.append(el("span", "sql-hover-type", table.kind.replaceAll("_", " ")));
+  root.append(head);
+  if (!table.details) {
+    root.append(el("div", "sql-hover-note", t("names.columnsLoading")));
+    return root;
+  }
+  const list = el("div", "sql-hover-columns");
+  for (const column of table.details.slice(0, HOVER_COLUMNS)) {
+    list.append(el("span", "sql-hover-column", column.name), el("span", "sql-hover-type", column.type));
+  }
+  root.append(list);
+  const more = table.details.length - HOVER_COLUMNS;
+  if (more > 0) root.append(el("div", "sql-hover-note", t("names.moreColumns", { count: more })));
+  root.append(el("div", "sql-hover-note", t("names.openHint")));
+  return root;
+}
+
 function language(engine: string | null, catalog: CompletionCatalog, keywordCase: KeywordCase) {
   if (engine && isHttpLanguage(engine)) return httpLanguage(engine, catalog);
   return [sql({ dialect: sqlDialect(engine) }), autocompletion({ override: [sqlCompletionSource(catalog, engine, keywordCase)] })];
@@ -260,7 +317,7 @@ function editorPreferences(p: EditorPreferencesItem) {
   ];
 }
 
-export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, error }: Props) {
+export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, onName, onOutline, error }: Props) {
   const { t } = useTranslation("editor");
   const preferences = usePreferences((s) => s.editor);
   const settings = useRef(new Compartment());
@@ -269,8 +326,8 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const locale = useRef(new Compartment());
-  const callbacks = useRef({ onChange, onRun, onRunLabel, engine, onFormatError, onActionError });
-  callbacks.current = { onChange, onRun, onRunLabel, engine, onFormatError, onActionError };
+  const callbacks = useRef({ onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t });
+  callbacks.current = { onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t };
   const failed = (e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e));
   // The Run button's label: the core says what Run will send. Asked once the cursor rests, so
   // typing never waits for it, and an answer to an older question is dropped.
@@ -383,6 +440,32 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     }).catch((e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e)));
     return true;
   };
+  // What the name at `pos` is, in the catalog the editor already has (the one completion
+  // uses): nothing is asked of the database for a click or a hover.
+  const nameAt = (v: EditorView, pos: number): ResolvedName | null => {
+    const { engine, catalog } = callbacks.current;
+    if (engine && isHttpLanguage(engine)) return null;
+    return resolveName(v.state.doc.toString(), pos, catalog, engine);
+  };
+  // "Go to table" and "Reveal in explorer": the table the name at the cursor stands for (a
+  // column leads to its table).
+  const nameAtCursor = (v: EditorView, how: NameAction) => {
+    const name = nameAt(v, v.state.selection.main.head);
+    if (name) callbacks.current.onName(name, how);
+    else callbacks.current.onActionError(callbacks.current.t("names.unknown"));
+    return true;
+  };
+  // The statement after or before the cursor's, as the core's splitter reads the script.
+  const moveStatement = (v: EditorView, forward: boolean) => {
+    const doc = v.state.doc.toString();
+    call(commands.neighbourStatement(callbacks.current.engine ?? "postgres", doc, indexToByte(doc, v.state.selection.main.head), forward))
+      .then((span) => {
+        if (!span || !v.dom.isConnected || v.state.doc.toString() !== doc) return;
+        v.dispatch({ selection: { anchor: byteToIndex(doc, span.start) }, scrollIntoView: true, userEvent: "select" });
+      })
+      .catch(failed);
+    return true;
+  };
   const transform = (v: EditorView, change: (text: string) => string, wholeLine = false) => {
     v.dispatch(v.state.changeByRange((range) => {
       const target = range.empty ? (wholeLine ? v.state.doc.lineAt(range.head) : v.state.wordAt(range.head)) ?? range : range;
@@ -413,6 +496,11 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       case "selectStatement": return currentStatement(v, false);
       case "copyStatement": return currentStatement(v, true);
       case "selectOccurrences": return selectAllOccurrences(v);
+      case "openObject": return nameAtCursor(v, "open");
+      case "revealInExplorer": return nameAtCursor(v, "reveal");
+      case "nextStatement": return moveStatement(v, true);
+      case "previousStatement": return moveStatement(v, false);
+      case "outline": callbacks.current.onOutline(); return true;
       case "insertSelect": case "insertInsert": case "insertUpdate": return insertSnippet(v, id);
     }
   };
@@ -446,6 +534,13 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       return { text: doc.slice(from, to), from };
     },
     runScript: () => { if (view.current) runAll(view.current); },
+    focus: () => view.current?.focus(),
+    showAt: (index) => {
+      const v = view.current;
+      if (!v) return;
+      v.dispatch({ selection: { anchor: Math.min(index, v.state.doc.length) }, scrollIntoView: true, userEvent: "select" });
+      v.focus();
+    },
   }));
 
   useEffect(() => {
@@ -488,7 +583,25 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
               });
             }
           }),
+          // Hover: a table's columns and types, or a column's type and comment, from the
+          // catalog already read. A name that is not there shows nothing.
+          hoverTooltip((v, pos) => {
+            const name = nameAt(v, pos);
+            if (!name) return null;
+            return { pos: name.from, end: name.to, above: true, create: () => ({ dom: nameTooltip(name, callbacks.current.t) }) };
+          }, { hoverTime: 350 }),
           EditorView.domEventHandlers({
+            // Ctrl / Cmd+click on a table's name (written, or through its alias) opens its
+            // details. Anywhere else the click adds a cursor, as before.
+            mousedown: (event, v) => {
+              if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return false;
+              const pos = v.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+              const name = nameAt(v, pos);
+              if (!name) return false;
+              event.preventDefault();
+              callbacks.current.onName(name, "open");
+              return true;
+            },
             contextmenu: (event) => {
               event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }); return true;
             },

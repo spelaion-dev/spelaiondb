@@ -59,14 +59,20 @@ export function useCompletionCatalog(session: string, connection: string | null,
         for (const schema of schemas) {
           if (cancelled()) break;
           for (const table of await call(commands.listObjects(metadata, schema.name, null, false))) {
-            tables.push({ schema: table.schema, name: table.name, columns: [] as string[], foreignKeys: [] });
+            tables.push({ schema: table.schema, name: table.name, columns: [] as string[], foreignKeys: [], kind: table.kind });
           }
         }
         return { tables, defaultSchema: defaultSchema ?? database ?? "main" };
       },
       describe: async (table) => {
         const details = await call(commands.describeTable(metadata, table.schema, table.name, null));
-        return { ...table, columns: details.columns.map((column) => column.name), foreignKeys: details.foreignKeys };
+        return {
+          ...table,
+          columns: details.columns.map((column) => column.name),
+          foreignKeys: details.foreignKeys,
+          // Types and comments for the editor's hover, read with the names: no hover asks the database.
+          details: details.columns.map((column) => ({ name: column.name, type: column.nativeType, nullable: column.nullable, comment: column.comment ?? null })),
+        };
       },
       cancel: async () => { if (opened && !closing) await call(commands.cancel(metadata)); },
       close,

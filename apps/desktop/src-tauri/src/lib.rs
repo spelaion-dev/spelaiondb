@@ -3029,6 +3029,34 @@ async fn statements_from_cursor(
         .map_err(|e| e.to_string())
 }
 
+/// The statements of a script for the editor's outline panel: the core's splitter for the
+/// engine, the one that runs the script, with each statement's line and how it starts.
+#[command]
+async fn script_outline(engine: String, sql: String) -> CmdResult<OutlineItem> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    tokio::task::spawn_blocking(move || spelaion_core::outline(dialect.as_ref(), &sql).into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The statement after (`forward`) or before the one at the cursor (`offset` in UTF-8
+/// bytes), for the editor's "next / previous statement"; `None` at the last or first one.
+#[command]
+async fn neighbour_statement(
+    engine: String,
+    sql: String,
+    offset: u32,
+    forward: bool,
+) -> CmdResult<Option<TextSpan>> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    Ok(
+        spelaion_core::neighbour_statement(dialect.as_ref(), &sql, offset as usize, forward)
+            .map(TextSpan::from),
+    )
+}
+
 /// Sorts a result by columns in the core, the first key being the most significant (no keys
 /// restore the server's order). The grid then asks for its windows again.
 #[command]
@@ -5258,6 +5286,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             run_target,
             pick_statements,
             statements_from_cursor,
+            script_outline,
+            neighbour_statement,
             create_database,
             script_risks,
             script_params,
