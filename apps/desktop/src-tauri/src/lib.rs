@@ -24,9 +24,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
-use arrow::array::{ArrayRef, RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::ipc::writer::StreamWriter;
 use futures_util::StreamExt;
 use spelaion_config::{
     Config, ConnectionDraft, ConnectionId, Resolver, Source, SystemBackend, TrustStore,
@@ -66,6 +63,9 @@ struct AppState {
     /// Each editor tab's result tabs over `results` (SDB-378): what a run replaces, the pins
     /// and the names are the core's.
     result_tabs: Arc<spelaion_core::ResultTabs>,
+    /// How the grid shows values (SDB-385), checked and ready: read as each window is served.
+    /// Swapped whole when the user changes it.
+    display: std::sync::RwLock<Arc<spelaion_core::Display>>,
     plans: Arc<spelaion_core::plan::PlanStore>,
     startup_plan: std::sync::Mutex<Option<String>>,
     sessions: Mutex<HashMap<String, DesktopSession>>,
@@ -404,6 +404,36 @@ async fn get_grid_preferences(state: State<'_, AppState>) -> CmdResult<GridPrefe
         .await
         .map(GridPreferencesItem::from)
         .map_err(|e| e.to_string())
+}
+
+/// How the grid shows values (SDB-385): the user's formats, zone and binary display.
+#[command]
+async fn get_display_format(state: State<'_, AppState>) -> CmdResult<DisplayFormatItem> {
+    let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
+    Ok(DisplayFormatItem::from(display.format()))
+}
+
+/// Saves how the grid shows values. The core checks it first (a pattern that cannot format
+/// its kind of value, a zone that does not exist) and nothing changes when it refuses. The
+/// windows served from now on use it.
+#[command]
+async fn set_display_format(
+    format: DisplayFormatItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let display = state
+        .history
+        .set_display_format(format.into_format()?)
+        .await
+        .map_err(|e| e.to_string())?;
+    *state.display.write().map_err(|_| "lock poisoned")? = Arc::new(display);
+    Ok(())
+}
+
+/// The time zones the display zone can be, by name.
+#[command]
+async fn time_zones() -> CmdResult<Vec<String>> {
+    Ok(spelaion_core::time_zones())
 }
 
 #[command]
@@ -2731,12 +2761,14 @@ async fn dialect_for(state: &AppState, session: &str) -> Arc<dyn Dialect> {
 /// the typed data, for the clipboard. One cell copied as plain text is its value alone,
 /// without a line break after it.
 #[command]
+#[allow(clippy::too_many_arguments)]
 async fn copy_rows(
     result: u32,
     session: String,
     range: CellRange,
     format: TextFormat,
     header: bool,
+    displayed: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let selected_count = range
@@ -2747,6 +2779,27 @@ async fn copy_rows(
         return Err(format!(
             "{} rows are too many to copy (at most {MAX_COPY_ROWS}): export them to a file",
             selected_count
+        ));
+    }
+    // "Copy as displayed" (SDB-385): the cells as the grid shows them, only when the user
+    // picks it. Every other copy keeps the database's own text.
+    if displayed {
+        let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
+        let stored = state
+            .results
+            .get(ResultId(result.into()))
+            .ok_or("result freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
+        // The rows chosen one by one, or the block (#315's selection).
+        let rows: Vec<usize> = match &range.selected_rows {
+            Some(rows) => rows.iter().map(|&row| row as usize).collect(),
+            None => {
+                (range.first_row as usize..range.first_row as usize + range.rows as usize).collect()
+            }
+        };
+        return Ok(spelaion_core::displayed_text(
+            &stored, &rows, &columns, header, &display,
         ));
     }
     let dialect = dialect_for(&state, &session).await;
@@ -5247,37 +5300,11 @@ fn fetch_window(
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
-    let columns = &stored.schema().columns;
-    let schema = Arc::new(Schema::new(
-        columns
-            .iter()
-            .map(|c| Field::new(&c.name, DataType::Utf8, true))
-            .collect::<Vec<_>>(),
-    ));
-    let mut out = Vec::new();
-    let mut writer = StreamWriter::try_new(&mut out, &schema).map_err(|e| e.to_string())?;
-    for batch in stored.window(start as usize, len as usize) {
-        let arrays: Vec<ArrayRef> = columns
-            .iter()
-            .enumerate()
-            .map(|(i, meta)| {
-                let column = batch.column(i);
-                let text: StringArray = (0..batch.num_rows())
-                    .map(
-                        |row| match Value::from_array(column.as_ref(), row, meta.logical) {
-                            Some(Value::Null) | None => None,
-                            Some(value) => Some(value.to_string()),
-                        },
-                    )
-                    .collect();
-                Arc::new(text) as ArrayRef
-            })
-            .collect();
-        let text_batch = RecordBatch::try_new(schema.clone(), arrays).map_err(|e| e.to_string())?;
-        writer.write(&text_batch).map_err(|e| e.to_string())?;
-    }
-    writer.finish().map_err(|e| e.to_string())?;
-    drop(writer);
+    // Each cell as the database prints it and, where the user's display settings show it
+    // otherwise, as they show it (SDB-385): the core writes both.
+    let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
+    let out = spelaion_core::window_ipc(&stored, start as usize, len as usize, &display)
+        .map_err(|e| e.to_string())?;
     Ok(Response::new(out))
 }
 
@@ -5353,6 +5380,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             editor_snippet_limits,
             get_grid_preferences,
             set_grid_preferences,
+            get_display_format,
+            set_display_format,
+            time_zones,
             get_map_preferences,
             set_map_preferences,
             column_map,
@@ -5780,6 +5810,11 @@ pub fn run() {
     // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
     let engines = plugins::engines_for(&user_dir);
     let results = Arc::new(ResultStore::new());
+    // The display settings as they were saved; what can no longer be used is its default.
+    let display = tauri::async_runtime::block_on(history.display_format())
+        .ok()
+        .and_then(|format| format.compile().ok())
+        .unwrap_or_default();
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
@@ -5789,6 +5824,7 @@ pub fn run() {
         plugins: plugins::PluginOps::default(),
         tunnels: Arc::new(TunnelPool::new()),
         result_tabs: Arc::new(spelaion_core::ResultTabs::new(results.clone())),
+        display: std::sync::RwLock::new(Arc::new(display)),
         results,
         plans: Arc::new(spelaion_core::plan::PlanStore::new()),
         startup_plan: std::sync::Mutex::new(startup_plan),

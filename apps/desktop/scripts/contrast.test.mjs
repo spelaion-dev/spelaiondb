@@ -42,6 +42,17 @@ const pairs = [
   ["--muted", "--bg"],
   ["--fg", "--sidebar"],
   ["--fg", "--panel"],
+  // Values colored by their type in the grid (SDB-385), on its rows and its striped rows.
+  ["--value-number", "--grid-bg"],
+  ["--value-number", "--grid-stripe"],
+  ["--value-date", "--grid-bg"],
+  ["--value-date", "--grid-stripe"],
+  ["--value-bool", "--grid-bg"],
+  ["--value-bool", "--grid-stripe"],
+  ["--value-text", "--grid-bg"],
+  ["--value-text", "--grid-stripe"],
+  ["--value-null", "--grid-bg"],
+  ["--value-null", "--grid-stripe"],
   // The connected status (the toolbar) and the connection test's "ok" marks.
   ["--success", "--panel"],
   ["--success", "--bg"],

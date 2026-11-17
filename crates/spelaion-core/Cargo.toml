@@ -30,6 +30,9 @@ serde = { version = "1", features = ["derive"] }
 # Dates and timestamps of imports, in the formats the user chooses (ADR-038), and "now" for a
 # bulk edit (pending.rs).
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# Time zones and strftime patterns for the grid's display formats (SDB-385). It brings the
+# zone database with it on Windows and reads the system's elsewhere.
+jiff = "0.2"
 # New UUIDs for a bulk edit of a selection (pending.rs, ADR-044).
 uuid = { version = "1", features = ["v4"] }
 specta = { version = "=2.0.0-rc.26", features = ["derive"], optional = true }

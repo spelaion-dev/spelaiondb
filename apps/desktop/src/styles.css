@@ -19,6 +19,12 @@
   --editor-active: rgba(59, 111, 216, 0.05);
   --grid-bg: #ffffff;
   --grid-text: #252b34;
+  /* Values colored by their type in the grid (SDB-385), when the user asks for it. */
+  --value-number: #1d4ed8;
+  --value-date: #0f766e;
+  --value-bool: #7c3aed;
+  --value-text: #252b34;
+  --value-null: #92400e;
   --grid-stripe: #f8f9fb;
   --grid-line: #eceef2;
   --grid-header: #f3f4f7;
@@ -152,6 +158,11 @@
   --editor-active: rgba(108, 156, 255, 0.06);
   --grid-bg: #1e2126;
   --grid-text: #d9dee6;
+  --value-number: #8ab4ff;
+  --value-date: #5eead4;
+  --value-bool: #c4b5fd;
+  --value-text: #d9dee6;
+  --value-null: #fbbf24;
   --grid-stripe: #22252b;
   --grid-line: #2a2e35;
   --grid-header: #25292f;
@@ -1778,6 +1789,11 @@ select {
   color: var(--fg);
   box-shadow: inset 0 -2px var(--accent);
 }
+/* Settings: how values are shown (SDB-385). */
+.display-format-row { display: flex; gap: var(--space-lg); align-items: flex-end; margin-top: var(--space-md); }
+.display-format-row .field { display: flex; flex-direction: column; gap: var(--space-xs); flex: 1 1 0; min-width: 0; }
+.display-format-row .field > span { color: var(--muted); font-size: var(--text-sm); }
+.display-format-row select, .display-format-row input { width: 100%; min-width: 0; }
 /* The variables dialog (SDB-383): rows of a name, its value and a remove button. */
 .modal.variables-dialog { width: 560px; max-width: calc(100vw - var(--space-2xl)); max-height: calc(100vh - var(--space-2xl)); overflow: auto; }
 .variables-heading { margin: var(--space-xl) 0 var(--space-xs); font-size: var(--text-md); font-weight: 600; }
