@@ -166,6 +166,15 @@ export class Session {
     await this.#pointer(actions);
   }
 
+  /** A real Ctrl-click at viewport coordinates. */
+  async controlClickAt(x, y) {
+    await this.#cmd("POST", "/actions", { actions: [
+      { type: "key", id: "keyboard", actions: [{ type: "keyDown", value: KEYS.Control }, { type: "pause", duration: 40 }, { type: "pause", duration: 40 }, { type: "keyUp", value: KEYS.Control }] },
+      { type: "pointer", id: "mouse", parameters: { pointerType: "mouse" }, actions: [{ type: "pointerMove", origin: "viewport", x: Math.round(x), y: Math.round(y), duration: 20 }, { type: "pointerDown", button: 0 }, { type: "pointerUp", button: 0 }, { type: "pause", duration: 20 }] },
+    ] });
+    await this.#cmd("DELETE", "/actions");
+  }
+
   /** Presses a chord such as "Control+Shift+Enter" with real key actions. Letters are sent as
    *  key values, so they follow the keyboard layout: type text with `insertText`. */
   async press(chord) {

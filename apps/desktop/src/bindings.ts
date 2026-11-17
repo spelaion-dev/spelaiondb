@@ -330,7 +330,7 @@ export const commands = {
 	 *  the typed data, for the clipboard. One cell copied as plain text is its value alone,
 	 *  without a line break after it.
 	 */
-	copyRows: (result: number, session: string, range: CellRange, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
+	copyRows: (result: number, session: string, range: CellRange_Deserialize, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
 	/**
 	 *  Column names for the clipboard: plain, quoted for the engine, qualified with the table
 	 *  (a table data tab's) or one per line; written by the core.
@@ -364,7 +364,7 @@ export const commands = {
 	 *  core computes over the stored result. A newer calculation on the same result, or
 	 *  `cancel_selection_stats`, stops this one (`None`).
 	 */
-	selectionStats: (result: number, range: CellRange) => typedError<SelectionStatsItem_Serialize | null, string>(__TAURI_INVOKE("selection_stats", { result, range })),
+	selectionStats: (result: number, range: CellRange_Deserialize) => typedError<SelectionStatsItem_Serialize | null, string>(__TAURI_INVOKE("selection_stats", { result, range })),
 	/**  Stops the selection calculation running on a result (the calc panel's Cancel). */
 	cancelSelectionStats: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_selection_stats", { result })),
 	/**
@@ -444,7 +444,7 @@ export const commands = {
 	 *  rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
 	 *  are the shown columns, in order.
 	 */
-	exportResult: (result: number, session: string, path: string, options: ExportFileOptions_Deserialize, range: CellRange | null) => typedError<ExportSummaryItem, string>(__TAURI_INVOKE("export_result", { result, session, path, options, range })),
+	exportResult: (result: number, session: string, path: string, options: ExportFileOptions_Deserialize, range: CellRange_Deserialize | null) => typedError<ExportSummaryItem, string>(__TAURI_INVOKE("export_result", { result, session, path, options, range })),
 	/**
 	 *  Before offering to run a query (or a table data tab) again for an export: whether it may
 	 *  be (only a single read), and whether the tab has an open transaction whose uncommitted
@@ -1247,10 +1247,28 @@ export type CellInputItem = { kind: "text"; text: string } | { kind: "null" } | 
  *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
  *  out the columns it hides).
  */
-export type CellRange = {
+export type CellRange = CellRange_Serialize | CellRange_Deserialize;
+
+/**
+ *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
+ *  out the columns it hides).
+ */
+export type CellRange_Deserialize = {
 	firstRow: number,
 	rows: number,
 	columns: number[],
+	selectedRows?: number[] | null,
+};
+
+/**
+ *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
+ *  out the columns it hides).
+ */
+export type CellRange_Serialize = {
+	firstRow: number,
+	rows: number,
+	columns: number[],
+	selectedRows: number[] | null,
 };
 
 /**

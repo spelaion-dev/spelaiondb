@@ -468,6 +468,16 @@ impl StoredResult {
         selection_stats::compute(self, block, ticket)
     }
 
+    /// Calculates statistics for distinct rows of the current view.
+    pub fn selection_stats_rows(
+        &self,
+        columns: &[usize],
+        rows: &[usize],
+        ticket: &StatsTicket,
+    ) -> Result<Option<SelectionStats>, ViewError> {
+        selection_stats::compute_selected(self, columns, rows, ticket)
+    }
+
     /// Starts preparing a chart: one still being prepared on this result stops (its
     /// [`Self::chart`] returns `None`).
     pub fn chart_ticket(&self) -> StatsTicket {

@@ -108,6 +108,8 @@
     "applyFilter": "Filtrar",
     "filterMenu": "Filtrar",
     "selectedCell": "1 celda seleccionada",
+    "disjointUnsupported": "Esta acción necesita una selección continua. Selecciona primero un intervalo.",
+    "disjointTooLarge": "Selecciona como máximo 100.000 filas antes de cambiar filas individuales.",
     "selectedRows_one": "{{formattedCount}} fila seleccionada",
     "selectedRows_other": "{{formattedCount}} filas seleccionadas",
     "selectedColumns_one": "{{formattedCount}} columna seleccionada",

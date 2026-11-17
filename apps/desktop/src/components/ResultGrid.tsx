@@ -83,6 +83,8 @@ interface Cell {
 
 /** A rectangle from the cell where the selection started (`anchor`) to the active one. */
 interface Selection {
+  /** Individual whole rows in display order, when the selection is discontinuous. */
+  rows?: number[];
   anchor: Cell;
   focus: Cell;
 }
@@ -442,12 +444,14 @@ export function ResultGrid({
   /** Rows of the selection (the active row without one). */
   const selectedRows = (): number[] => {
     if (!selection) return [];
+    if (selection.rows) return selection.rows;
     const b = bounds(selection);
     return Array.from({ length: b.r1 - b.r0 + 1 }, (_, i) => b.r0 + i);
   };
 
   async function duplicateRow() {
     if (!editing || !selection || editing.deleted.includes(selection.focus.row)) return;
+    if (selection.rows) { setNotice({ text: t("results.disjointUnsupported"), error: true }); return; }
     try {
       const row = selection.focus.row;
       const values = await call(commands.rowValues(result.id, row));
@@ -466,6 +470,7 @@ export function ResultGrid({
   /** One cell switches between NULL and its value; a larger selection is set to NULL. */
   function setSelectedNull() {
     if (!editing || !selection) return;
+    if (selection.rows) { setNotice({ text: t("results.disjointUnsupported"), error: true }); return; }
     const block = selectedBlock();
     if (block && (block.firstRow !== block.lastRow || block.columns.length > 1)) {
       editing.onBulk(block, { kind: "set", value: { kind: "null" } });
@@ -481,6 +486,7 @@ export function ResultGrid({
   /** The selection's rows and shown columns. */
   function selectedBlock(): BlockItem | null {
     if (!selection) return null;
+    if (selection.rows) { setNotice({ text: t("results.disjointUnsupported"), error: true }); return null; }
     const b = bounds(selection);
     const columns = visibleCols.filter((c) => c >= b.c0 && c <= b.c1);
     return columns.length ? { firstRow: b.r0, lastRow: b.r1, columns } : null;
@@ -617,6 +623,7 @@ export function ResultGrid({
     const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns } = live.current;
     const deletedRows = new Set(editing?.deleted ?? []);
     const range = selection ? bounds(selection) : null;
+    const sparseRows = selection?.rows ? new Set(selection.rows) : null;
     const dpr = window.devicePixelRatio || 1;
     if (canvas.width !== size.w * dpr || canvas.height !== size.h * dpr) {
       canvas.width = size.w * dpr;
@@ -653,7 +660,7 @@ export function ResultGrid({
     findCache?.load(first, last);
 
     const drawCell = (row: number, col: number, x: number, y: number, w: number) => {
-      if (range && inside(range, row, col)) {
+      if (range && (sparseRows ? sparseRows.has(row) : inside(range, row, col))) {
         ctx.fillStyle = c.select;
         ctx.fillRect(x, y, w, ROW_H);
       }
@@ -793,7 +800,7 @@ export function ResultGrid({
     ctx.textAlign = "right";
     for (let row = first; row < last; row++) {
       const y = HEADER_H + row * ROW_H - top;
-      if (range && row >= range.r0 && row <= range.r1) {
+      if (range && (sparseRows ? sparseRows.has(row) : row >= range.r0 && row <= range.r1)) {
         ctx.fillStyle = c.select;
         ctx.fillRect(0, y, rowNumW, ROW_H);
       }
@@ -805,7 +812,7 @@ export function ResultGrid({
     ctx.fillRect(rowNumW - 1, 0, 1, size.h);
 
     // Header (fixed at the top): name and native type; tinted where whole columns are selected.
-    const wholeColumns = range !== null && result.rows > 0 && range.r0 === 0 && range.r1 === result.rows - 1;
+    const wholeColumns = !selection?.rows && range !== null && result.rows > 0 && range.r0 === 0 && range.r1 === result.rows - 1;
     const drawHeader = (col: number, x: number, w: number) => {
       const meta = result.columns[col];
       if (!meta) return;
@@ -885,6 +892,11 @@ export function ResultGrid({
     setSelection(null);
     setQueryPage(0);
   }, [result.filter, filtersKey]);
+
+  useEffect(() => {
+    // A disjoint selection names view positions; any changed ordering invalidates it.
+    setSelection((current) => current?.rows ? null : current);
+  }, [view]);
 
   // Hidden and frozen columns belong to the tab: running the query again (the same columns)
   // keeps them; another set of columns starts with every column shown.
@@ -1055,10 +1067,11 @@ export function ResultGrid({
             firstRow: Math.min(calcBounds.r0, result.rows - 1),
             rows: Math.max(0, Math.min(calcBounds.r1, result.rows - 1) - Math.min(calcBounds.r0, result.rows - 1) + 1),
             columns: calcColumns ? calcColumns.split(",").map(Number) : [],
+            selectedRows: selection?.rows ?? null,
           }
         : null,
     // Rebuilt only when the bounds change, not on every render.
-    [calcBounds?.r0, calcBounds?.r1, calcColumns, result.rows],
+    [calcBounds?.r0, calcBounds?.r1, calcColumns, result.rows, selection?.rows],
   );
 
   function hideColumn(col: number) {
@@ -1361,6 +1374,7 @@ export function ResultGrid({
       return;
     }
     if (serverSort) {
+      if (selection?.rows) setSelection(null);
       requestedSort.current = sort;
       serverSort.onSort(sort);
       return;
@@ -1370,6 +1384,7 @@ export function ResultGrid({
       return;
     }
     const previous = requestedSort.current;
+    if (selection?.rows) setSelection(null);
     requestedSort.current = sort;
     sortsPending.current += 1;
     setSorting(true);
@@ -1504,6 +1519,17 @@ export function ResultGrid({
     findAt.current = null;
     const cell = cellAt(e.clientX, e.clientY, extend);
     if (!cell) return;
+    if (cell.gutter && (e.ctrlKey || e.metaKey) && !extend) {
+      if (selection && !selection.rows && bounds(selection).r1 - bounds(selection).r0 + 1 > 100_000) {
+        setNotice({ text: t("results.disjointTooLarge"), error: true }); return;
+      }
+      const existing = selection?.rows ?? (selection && bounds(selection).c0 === firstVisible && bounds(selection).c1 === lastVisible ? selectedRows() : []);
+      if (existing.length >= 100_000 && !existing.includes(cell.row)) { setNotice({ text: t("results.disjointTooLarge"), error: true }); return; }
+      const rows = existing.includes(cell.row) ? existing.filter((row) => row !== cell.row) : [...existing, cell.row].sort((a, b) => a - b);
+      if (!rows.length) { setSelection(null); return; }
+      setSelection({ anchor: { row: rows[0]!, col: firstVisible }, focus: { row: rows[rows.length - 1]!, col: lastVisible }, rows });
+      return;
+    }
     setSelection((current) => {
       if (cell.gutter) {
         // The row-number gutter selects whole rows.
@@ -1518,7 +1544,7 @@ export function ResultGrid({
     setMenu(null);
     if (!selection) return;
     const b = bounds(selection);
-    const range: CellRange = { firstRow: b.r0, rows: b.r1 - b.r0 + 1, columns: shownIn(b) };
+    const range: CellRange = { firstRow: b.r0, rows: selection.rows?.length ?? b.r1 - b.r0 + 1, columns: shownIn(b), selectedRows: selection.rows ?? null };
     try {
       const text = await call(commands.copyRows(result.id, session, range, format, header));
       // HTML goes to the clipboard as HTML (documents and spreadsheets paste a table) and as
@@ -1702,7 +1728,7 @@ export function ResultGrid({
   function selectionSummary(): string {
     if (!selection || result.rows === 0) return "";
     const b = bounds(selection);
-    const rows = b.r1 - b.r0 + 1;
+    const rows = selection.rows?.length ?? b.r1 - b.r0 + 1;
     const columns = shownIn(b).length;
     const allRows = rows === result.rows;
     const allColumns = columns === visibleCols.length;
@@ -1901,6 +1927,13 @@ export function ResultGrid({
             return;
           }
           // The link of a foreign key cell, or Ctrl+click anywhere on one, follows the key.
+          const hit = cellAt(e.clientX, e.clientY);
+          if (hit?.gutter && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+            e.preventDefault();
+            dragging.current = false;
+            selectAt(e, false);
+            return;
+          }
           const link = keyCellAt(e.clientX, e.clientY, (e.ctrlKey || e.metaKey) && !e.shiftKey);
           if (link) {
             e.preventDefault();
@@ -1921,7 +1954,7 @@ export function ResultGrid({
           const cell = cellAt(e.clientX, e.clientY);
           if (!cell) return;
           // Right-click outside the selection selects that cell first.
-          if (!selection || (!cell.gutter && !inside(bounds(selection), cell.row, cell.col))) selectAt(e, false);
+          if (!selection || (selection.rows ? !selection.rows.includes(cell.row) : (!cell.gutter && !inside(bounds(selection), cell.row, cell.col)))) selectAt(e, false);
           setMenu({ x: e.clientX, y: e.clientY, cell: cell.gutter ? null : cell });
         }}
         onMouseMove={(e) => {
@@ -2166,7 +2199,7 @@ export function ResultGrid({
               {t("calc.open")}
             </button>
           )}
-          {selection && onChart && (
+          {selection && !selection.rows && onChart && (
             <button
               role="menuitem"
               onClick={() => {
@@ -2203,7 +2236,7 @@ export function ResultGrid({
               </button>
             ))}
           </GridSubmenu>
-          {selection && result.complete && (
+          {selection && !selection.rows && result.complete && (
             <button
               role="menuitem"
               onClick={() => {

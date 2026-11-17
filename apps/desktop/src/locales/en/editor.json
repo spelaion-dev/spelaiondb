@@ -108,6 +108,8 @@
     "applyFilter": "Filter",
     "filterMenu": "Filter",
     "selectedCell": "1 cell selected",
+    "disjointUnsupported": "This action needs a contiguous selection. Select a range first.",
+    "disjointTooLarge": "Select at most 100,000 rows before changing individual rows.",
     "selectedRows_one": "{{formattedCount}} row selected",
     "selectedRows_other": "{{formattedCount}} rows selected",
     "selectedColumns_one": "{{formattedCount}} column selected",
