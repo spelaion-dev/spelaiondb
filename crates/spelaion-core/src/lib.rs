@@ -111,8 +111,9 @@ pub use display::{
     LOCAL_ZONE, MAX_PATTERN, ValueKind, ZONE_KEY, displayed_text, time_zones, window_ipc,
 };
 pub use edit::{
-    CellInput, EditError, EditTarget, RowChange, apply_edits, check_edit_policy, edit_statements,
-    editable_query_source, editable_query_table,
+    CellInput, EditError, EditTarget, RowChange, UpdateCopyError, UpdateSource, UpdateTable,
+    apply_edits, check_edit_policy, edit_statements, editable_query_source, editable_query_table,
+    update_copy_table,
 };
 pub use editor_snippets::{
     MAX_SCRIPT_TEMPLATE, MAX_SNIPPET_BODY, MAX_SNIPPET_DESCRIPTION, MAX_SNIPPET_NAME, MAX_SNIPPETS,
@@ -125,9 +126,10 @@ pub use er::{
     mermaid, read_model as read_er_model, save_diagram_text,
 };
 pub use export::{
-    CopyError, CsvOptions, ExportFormat, ExportOptions, FileSummary, GenericDialect, MAX_IN_LIST,
-    NameStyle, TextEncoding, column_in_list, column_names, copy_selected_rows, copy_text,
-    export_to_file, formula_escaped, write_result,
+    CopyError, CopySpecial, CsvOptions, ExportFormat, ExportOptions, FileSummary, GenericDialect,
+    MAX_IN_LIST, MAX_NULL_TEXT, NameStyle, RowDelimiter, TextEncoding, column_in_list,
+    column_names, copy_selected_rows, copy_special, copy_text, copy_updates, export_to_file,
+    formula_escaped, write_result,
 };
 pub use export_stream::{
     DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, RerunCheck,
