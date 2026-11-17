@@ -5834,10 +5834,15 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       const now = await panel.locator(".grid-scroller").boundingBox();
       return [now.x + 52 + x + 20, now.y + 34 + 12 + row * 24];
     };
-    // name of row 1 → "edited" (inline editor).
-    await page.mouse.dblclick(...(await cellAt(0, 110)));
+    // Typing replaces the selected value, and Escape discards the edit.
+    await page.mouse.click(...(await cellAt(0, 110)));
+    await page.keyboard.type("replacement", { delay: 10 });
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
-    await editor.fill("edited");
+    assert.equal(await editor.inputValue(), "replacement");
+    await editor.press("Escape");
+    await panel.getByText("No pending changes").waitFor();
+    await page.keyboard.type("edited", { delay: 10 });
+    assert.equal(await editor.inputValue(), "edited");
     await editor.press("Enter");
     // The full value panel edits the same pending cell, and can be undone by row.
     await page.keyboard.press("Enter");
@@ -6676,6 +6681,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     await page.waitForTimeout(300);
     assert.equal(await panel.locator("input.cell-editor").count(), 0, "a cell read in tempdb cannot be edited in spelaion");
+    await page.keyboard.type("x");
+    assert.equal(await panel.locator("input.cell-editor").count(), 0, "typing cannot edit a read-only result");
   }
   await shot("12a4-database-changed-read-only-light");
   await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
@@ -7160,6 +7167,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
   const maskedBox = await panel.locator(".grid-scroller").boundingBox();
   const maskedCell = { x: maskedBox.x + 80, y: maskedBox.y + 34 + 12 };
+  await page.mouse.click(maskedCell.x, maskedCell.y);
+  await page.keyboard.type("x");
+  assert.equal(await panel.locator("input.cell-editor").count(), 0, "typing cannot edit a masked cell");
   // Copies come from the core's stored result, which holds the mask: no e-mail leaves.
   const copiesBefore = await page.evaluate(() => window.__copied.length);
   await page.mouse.click(maskedCell.x, maskedCell.y);

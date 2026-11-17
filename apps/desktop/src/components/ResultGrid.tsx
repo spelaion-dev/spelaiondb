@@ -12,6 +12,7 @@ import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
 import { RowCache } from "../grid/rowCache";
+import { printableGridKey } from "../gridTyping";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
 import { useDialogs, type ResultMeta, type SortState } from "../store";
 import { commandSpec, matchesShortcut } from "../commandRegistry";
@@ -383,12 +384,13 @@ export function ResultGrid({
   const sortsPending = useRef(0);
   const [inserting, setInserting] = useState<{ values: CellEditItem[]; index?: number } | null>(null);
   /** The cell being typed into (table data tabs). */
-  const [cellEditor, setCellEditor] = useState<{ row: number; col: number; value: string; original: string | null; dirty: boolean } | null>(null);
+  const [cellEditor, setCellEditor] = useState<{ row: number; col: number; value: string; original: string | null; dirty: boolean; typed: boolean } | null>(null);
   const skipEditorBlur = useRef(false);
   const editRequest = useRef(0);
+  const typedWhileLoading = useRef<{ request: number; text: string } | null>(null);
 
   /** Opens the inline editor on a cell, with its pending value or the one loaded. */
-  async function startEdit(cell: Cell) {
+  async function startEdit(cell: Cell, initial?: string) {
     if (!editing || editing.deleted.includes(cell.row) || editing.busy || sorting) return;
     const meta = result.columns[cell.col];
     if (meta?.masked) {
@@ -396,18 +398,32 @@ export function ResultGrid({
       return;
     }
     const request = ++editRequest.current;
+    typedWhileLoading.current = initial === undefined ? null : { request, text: initial };
     const key = `${cell.row}:${cell.col}`;
     setSelection({ anchor: cell, focus: cell });
     scrollIntoView(cell);
     let original = cache.get(cell.row, cell.col);
     if (original === undefined) {
       try { original = await call(commands.cellValue(result.id, cell.row, cell.col)); }
-      catch (e) { setNotice({ text: e instanceof Error ? e.message : String(e), error: true }); return; }
+      catch (e) {
+        if (request === editRequest.current) {
+          typedWhileLoading.current = null;
+          setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+        }
+        return;
+      }
     }
     if (request !== editRequest.current) return;
-    const current = key in editing.cells ? editing.cells[key] : original;
+    const latest = live.current;
+    if (latest.result.id !== result.id || !latest.editing || latest.editing.busy || latest.sorting || latest.editing.deleted.includes(cell.row) || latest.result.columns[cell.col]?.masked) {
+      typedWhileLoading.current = null;
+      return;
+    }
+    const current = key in latest.editing.cells ? latest.editing.cells[key] : original;
+    const typed = typedWhileLoading.current?.request === request ? typedWhileLoading.current.text : undefined;
+    typedWhileLoading.current = null;
     skipEditorBlur.current = false;
-    setCellEditor({ row: cell.row, col: cell.col, value: current ?? "", original, dirty: false });
+    setCellEditor({ row: cell.row, col: cell.col, value: typed ?? current ?? "", original, dirty: typed !== undefined, typed: typed !== undefined });
   }
 
   function commitEdit(value: string) {
@@ -587,8 +603,8 @@ export function ResultGrid({
   }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers, keyColumns]);
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns });
-  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns };
 
   function draw() {
     const canvas = canvasRef.current;
@@ -1475,6 +1491,7 @@ export function ResultGrid({
 
   function selectAt(e: React.MouseEvent | MouseEvent, extend: boolean) {
     editRequest.current += 1;
+    typedWhileLoading.current = null;
     // The next F3 starts from the cell clicked.
     findAt.current = null;
     const cell = cellAt(e.clientX, e.clientY, extend);
@@ -1550,6 +1567,15 @@ export function ResultGrid({
 
   function onKeyDown(e: React.KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
+    const printable = printableGridKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing });
+    if (typedWhileLoading.current) {
+      if (printable) { e.preventDefault(); typedWhileLoading.current.text += e.key; return; }
+      if (e.key === "Escape") { e.preventDefault(); editRequest.current += 1; typedWhileLoading.current = null; return; }
+      if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) {
+        editRequest.current += 1;
+        typedWhileLoading.current = null;
+      }
+    }
     if (e.key === "Escape" && viewer) {
       e.preventDefault();
       setViewer(false);
@@ -1610,6 +1636,11 @@ export function ResultGrid({
       } else {
         setSelection({ anchor: { row: result.rows - 1, col: selection.anchor.col }, focus: { row: 0, col: selection.focus.col } });
       }
+      return;
+    }
+    if (editing && printable) {
+      e.preventDefault();
+      void startEdit(selection.focus, e.key);
       return;
     }
     // Arrows move one cell; with Ctrl, to the first or last row or column (a result has no
@@ -2240,7 +2271,7 @@ export function ResultGrid({
           }}
           value={cellEditor.value}
           onChange={(e) => setCellEditor({ ...cellEditor, value: e.target.value, dirty: true })}
-          onFocus={(e) => e.currentTarget.select()}
+          onFocus={(e) => { if (cellEditor.typed) e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length); else e.currentTarget.select(); }}
           onBlur={(e) => { if (!skipEditorBlur.current) commitEdit(e.currentTarget.value); skipEditorBlur.current = false; }}
           onKeyDown={(e) => {
             if (e.key === "Enter") { skipEditorBlur.current = true; commitEdit(e.currentTarget.value); }
