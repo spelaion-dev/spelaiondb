@@ -2080,8 +2080,21 @@ try {
 
   step("Ctrl+Enter runs the statement under the cursor, Ctrl+Shift+Enter all of them");
   await replaceQuery(panel, "select 'first' as which;\nselect 'second;' as which;\n\n-- the third\nselect 'third' as which");
+  // The active result's id, as its result tab carries it (`null` with none).
+  const activeResult = () =>
+    page.evaluate(() => document.querySelector(".tab-panel:not([hidden]) .result-tab-item.active")?.getAttribute("data-result") ?? null);
+  // A run replaces the result and its grid: a click and a Ctrl+C sent while the old grid goes
+  // away reach no grid, and the copy never comes (SDB-417). So wait until the run is over and
+  // its own result, with another id than `before`, is the one shown with all of its row.
+  const newResultShown = async (before) => {
+    await page.waitForFunction((old) => {
+      const tab = document.querySelector(".tab-panel:not([hidden])");
+      const active = tab?.querySelector(".result-tab-item.active")?.getAttribute("data-result") ?? null;
+      const status = tab?.querySelector(".statusline")?.textContent ?? "";
+      return active !== null && active !== old && /^1 row(?! \(loading\))/.test(status) && tab?.querySelector(".editor-action-cancel") === null;
+    }, before);
+  };
   const firstCell = async () => {
-    // Between two runs the grid is replaced: wait until the new one is there.
     const grid = panel.locator(".grid-scroller");
     await grid.waitFor();
     let box = await grid.boundingBox();
@@ -2099,24 +2112,22 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("End");
+  const beforeSecond = await activeResult();
   await page.keyboard.press("Control+Enter");
   await panel.locator(".cm-ran", { hasText: "select 'second;' as which" }).waitFor();
   await shot("05c-statement-under-cursor");
-  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await newResultShown(beforeSecond);
   assert.equal(await panel.locator(".result-tabs button", { hasText: /^Result/ }).count(), 1);
   assert.equal(await firstCell(), "second;");
   await sqlEditor.click();
   await page.keyboard.press("Control+End");
+  // The status line already says "1 row" from the previous run: the new result's id tells.
+  const beforeThird = await activeResult();
   await page.keyboard.press("Control+Enter");
   await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.waitForFunction(() => document.querySelector(".cm-ran")?.textContent?.includes("-- the third"));
-  // The status line already says "1 row" from the previous run: wait for the new value.
-  let third = "";
-  for (let i = 0; i < 20 && third !== "third"; i++) {
-    third = await firstCell();
-    if (third !== "third") await page.waitForTimeout(250);
-  }
-  assert.equal(third, "third");
+  await newResultShown(beforeThird);
+  assert.equal(await firstCell(), "third");
 
   step("editor toolbar: run the current statement or selection, and run the whole script");
   const actions = panel.getByRole("toolbar", { name: "Query actions" });
