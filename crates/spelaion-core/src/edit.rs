@@ -289,7 +289,22 @@ impl From<EditError> for UpdateCopyError {
     fn from(error: EditError) -> Self {
         match error {
             EditError::OtherSource => Self::OtherSource,
-            other => Self::Failed(other.to_string()),
+            EditError::NoPrimaryKey(_)
+            | EditError::KeyNotInResult(_)
+            | EditError::NoSuchRow(_)
+            | EditError::NoSuchNewRow(_)
+            | EditError::TooMuchToPaste(_)
+            | EditError::NotATableColumn(_)
+            | EditError::BadValue { .. }
+            | EditError::Nothing
+            | EditError::ReadOnly
+            | EditError::NeedsConfirmation
+            | EditError::Failed { .. }
+            | EditError::TransactionOpen
+            | EditError::NotAtomic(_)
+            | EditError::NotOneRow { .. }
+            | EditError::Masked(_)
+            | EditError::Source(_) => Self::Failed(error.to_string()),
         }
     }
 }
