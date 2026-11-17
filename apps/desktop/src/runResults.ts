@@ -34,6 +34,20 @@ interface TabResult {
   run?: number;
 }
 
+/** Only a successfully completed, single-statement run can be refreshed from its grid. */
+export function markRefreshable<R extends TabResult>(results: R[], run: number, summary: { statements: number; executed: number; failed: number; stop?: unknown }): (R & { refreshable?: boolean })[] {
+  const allowed = summary.statements === 1 && summary.executed === 1 && summary.failed === 0 && !summary.stop && results.filter((result) => result.run === run).length === 1;
+  return results.map((result) => result.run === run ? { ...result, refreshable: allowed } : result);
+}
+
+/** A stored column index is reusable only when the refreshed result has the same columns. */
+export function sameResultColumns(a: readonly { name: string; logical: string; nativeType: string; masked: boolean }[], b: typeof a): boolean {
+  return a.length === b.length && a.every((column, index) => {
+    const other = b[index];
+    return !!other && column.name === other.name && column.logical === other.logical && column.nativeType === other.nativeType && column.masked === other.masked;
+  });
+}
+
 interface TabResults<R extends TabResult> {
   results: R[];
   activeResult: number | null;

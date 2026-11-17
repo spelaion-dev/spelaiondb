@@ -19,6 +19,12 @@ export interface ResultMeta {
   columns: ColumnItem[];
   rows: number;
   complete: boolean;
+  /** The result came from a completed run of exactly one statement. */
+  refreshable?: boolean;
+  /** Original single statement, before variables and parameters were substituted. */
+  refreshSql?: string;
+  /** Row to restore after an explicit refresh of a paged query. */
+  refreshScrollRow?: number;
   /** Columns the core sorted the loaded rows by, the most significant first (none: the
    *  order they arrived in). */
   sort?: SortState[];

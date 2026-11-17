@@ -255,6 +255,8 @@ export function ResultGrid({
   tableData,
   onHiddenColumns,
   onChart,
+  refresh,
+  restoringView,
 }: {
   result: ResultMeta;
   session: string;
@@ -281,6 +283,8 @@ export function ResultGrid({
   onHiddenColumns?(hidden: number[]): void;
   /** "Chart selected columns": the first is the X axis, the numeric ones after it the values. */
   onChart?(columns: number[]): void;
+  refresh?: { disabled: boolean; run(row: number): void };
+  restoringView?: boolean;
   /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
    *  can be followed to new table data tabs of `connectionId`. */
@@ -921,6 +925,10 @@ export function ResultGrid({
     }
   }, [result.rows]);
 
+  useEffect(() => {
+    if (result.refreshScrollRow !== undefined && result.rows > 0) scrollToContent(result.refreshScrollRow * ROW_H);
+  }, [result.refreshScrollRow, result.id]);
+
   /** The cell under the pointer; `"row"` as column for the row-number gutter. With `clamp`,
    *  positions outside the data snap to the nearest cell (while dragging). */
   function cellAt(clientX: number, clientY: number, clamp = false): (Cell & { gutter: boolean }) | null {
@@ -1248,7 +1256,7 @@ export function ResultGrid({
   async function applyColumnFilters(filters: ColumnFilterItem[]) {
     setMenu(null);
     setCustomFilter(null);
-    if (result.paging?.loading) return;
+    if (restoringView || result.paging?.loading) return;
     if (!result.complete) {
       setNotice({ text: t("results.filterWhenComplete"), error: true });
       return;
@@ -1342,7 +1350,7 @@ export function ResultGrid({
   /** Sorts by `sort`, the most significant key first; none restores the original order. */
   function sortBy(sort: SortState[]) {
     setMenu(null);
-    if (result.paging?.loading) return;
+    if (restoringView || result.paging?.loading) return;
     const maskedColumn = sort.map((key) => result.columns[key.column]).find((column) => column?.masked);
     if (maskedColumn) {
       setNotice({ text: t("masking.noSort", { column: maskedColumn.name }), error: true });
@@ -2369,6 +2377,7 @@ export function ResultGrid({
       )}
     </div>
     <div className="grid-footer">
+      {refresh && <button type="button" className="ghost small" aria-label={t("table.refresh")} title={t(tableData ? "table.refreshHint" : "resultTabs.rerun")} disabled={refresh.disabled || sorting} onClick={() => refresh.run(pageStart)}><Icon name="refresh" /> {t("table.refresh")}</button>}
       {hidden.size > 0 && (
         <button
           type="button"

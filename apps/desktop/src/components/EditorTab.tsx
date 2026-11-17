@@ -10,7 +10,7 @@ import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { connectionTooltip } from "../connectionInfo";
-import { afterRun, endStatementResults, withoutResults, withStartedResult } from "../runResults";
+import { afterRun, endStatementResults, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../runResults";
 import { ResultTabList } from "./ResultTabs";
 import { VariablesDialog } from "./VariablesDialog";
 import { byteToIndex } from "../text";
@@ -119,8 +119,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const runSeq = useRef(0);
   /** The text each run executed and how many results it returned, by run: a result is
    *  editable only when it is the whole answer of its run, whose text the core resolves. */
-  const runTexts = useRef(new Map<number, { text: string; results: number }>());
+  const runTexts = useRef(new Map<number, { text: string; source: string; results: number; canRefresh: boolean }>());
   const startingRun = useRef(false);
+  const restoringView = useRef(false);
+  const [refreshRestoring, setRefreshRestoring] = useState(false);
   /** The text of each statement of the running script, by index: what an export runs again. */
   const statementTexts = useRef<Record<number, string>>({});
   const [variablesOpen, setVariablesOpen] = useState(false);
@@ -521,12 +523,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  that way: the grid then sorts the rows it has loaded. */
   async function sortQuery(resultId: number, sort: SortState[]): Promise<boolean> {
     const current = useApp.getState().tabs.find((item) => item.id === tab.id);
-    const paging = current?.run?.results.find((item) => item.id === resultId)?.paging;
+    const result = current?.run?.results.find((item) => item.id === resultId);
+    const paging = result?.paging;
     if (!paging) return false;
     if (current?.run?.running || queryPageBusy.current || startingRun.current) throw new Error(t("results.sortBusy"));
     if (sort.length > 0 && !(await call(commands.queryPageSupported(tab.id, paging.sql, sort)).catch(() => false))) return false;
     // The result's own query, into its own tab (SDB-378): the other result tabs stay.
-    await run({ text: paging.sql, from: 0 }, false, paging.pageSize, sort, { kind: "into", result: resultId });
+    await run({ text: paging.sql, from: 0 }, false, paging.pageSize, sort, { kind: "into", result: resultId }, result?.refreshSql);
     return true;
   }
 
@@ -927,15 +930,59 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // the script it came from.
     const text = result?.paging?.sql ?? result?.sql;
     if (!result || !text) return;
-    void run({ text, from: 0 }, refreshingEdits, pageSize, sort ?? result.paging?.sort ?? [], { kind: "into", result: resultId });
+    void run({ text, from: 0 }, refreshingEdits, pageSize, sort ?? result.paging?.sort ?? [], { kind: "into", result: resultId }, result.refreshSql);
+  }
+
+  /** Refresh a single-statement result through Run, then restore its local view. */
+  async function refreshQuery(resultId: number, row: number) {
+    const before = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.id === resultId);
+    const text = before?.refreshSql;
+    if (!before?.refreshable || !text) return;
+    const previousRun = runSeq.current;
+    await run({ text, from: 0 }, false, before.paging?.pageSize ?? queryPageSize, before.paging?.sort ?? [], { kind: "into", result: resultId });
+    if (runSeq.current !== previousRun + 1) return;
+    const find = () => useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.run === previousRun + 1);
+    let result = find();
+    if (!result?.complete || !result.refreshable) return;
+    if (!sameResultColumns(before.columns, result.columns)) {
+      setNotice({ text: t("results.refreshColumnsChanged"), error: true });
+      return;
+    }
+    restoringView.current = true;
+    setRefreshRestoring(true);
+    try {
+      // A keyset page is reached by reading its predecessors, never by guessing an offset.
+      const loaded = before.total ?? before.rows;
+      while (result.paging?.hasMore && result.rows < loaded) {
+        const added = await loadMoreQueryRows(result.id);
+        if (!added || runSeq.current !== previousRun + 1) break;
+        result = find();
+        if (!result) return;
+      }
+      if (before.sort?.length) await call(commands.sortResult(result.id, before.sort));
+      let rows = result.rows;
+      let total: number | undefined;
+      if (before.filter) {
+        const outcome = await call(commands.filterResult(result.id, before.filter));
+        rows = outcome.rows; total = outcome.total;
+      }
+      if (before.columnFilters?.length) {
+        const outcome = await call(commands.filterColumns(result.id, before.columnFilters));
+        rows = outcome.rows; total = outcome.total;
+      }
+      updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === result?.id
+        ? { ...item, sort: before.sort, filter: before.filter, columnFilters: before.columnFilters, rows, total, refreshScrollRow: Math.min(row, Math.max(0, rows - 1)) }
+        : item) }));
+    } catch (e) { setNotice({ text: message(e), error: true }); }
+    finally { restoringView.current = false; setRefreshRestoring(false); }
   }
 
   /** `sort`: the grid's sort a paged query is read with (its header clicks); none for the
    *  query's own order, as every run from the editor. `placement`: where the core puts the
    *  run's results (SDB-378). */
-  async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize, sort: SortState[] = [], placement: ResultPlacementItem = { kind: "replace" }) {
+  async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize, sort: SortState[] = [], placement: ResultPlacementItem = { kind: "replace" }, refreshSource = request.text) {
     if (!refreshingEdits && (pendingCount > 0 || savingEditsRef.current)) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
-    if (queryPageBusy.current || startingRun.current) return;
+    if (queryPageBusy.current || startingRun.current || restoringView.current) return;
     if (!request.text.trim() || tab.run?.running || databaseBusyRef.current || useApp.getState().workspaceChanging ||
         (tab.connectionId && useApp.getState().historySaving.includes(tab.connectionId))) return;
     startingRun.current = true;
@@ -983,7 +1030,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const queryPage = canPage ? { sql: sent.text, pageSize, ...(pageSort.length > 0 ? { sort: pageSort } : {}) } : null;
     // The results stay until the core says which ones the run replaced (its first event): it
     // frees every one that is not pinned, none for a run into a new tab (SDB-378).
-    const started = startRun(sent.text);
+    const started = startRun(sent.text, refreshSource);
     const channel = new Channel<ScriptEvent>();
     // The last error, for the question a paused run asks (ADR-035).
     const failures = new Map<number, string>();
@@ -1005,14 +1052,14 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   /** Marks the tab as running a new run, keeping the result tabs it has, and numbers it. */
-  function startRun(text: string): { run: number; startedAt: number } {
+  function startRun(text: string, source = text, canRefresh = true): { run: number; startedAt: number } {
     const run = ++runSeq.current;
     const kept = useApp.getState().tabs.find((item) => item.id === tab.id)?.run;
     // Runs whose results are all gone are forgotten.
     for (const known of [...runTexts.current.keys()]) {
       if (!kept?.results.some((result) => result.run === known)) runTexts.current.delete(known);
     }
-    runTexts.current.set(run, { text, results: 0 });
+    runTexts.current.set(run, { text, source, results: 0, canRefresh });
     const startedAt = performance.now();
     updateTab(tab.id, {
       run: { running: true, results: kept?.results ?? [], activeResult: kept?.activeResult ?? null, messages: [], error: null, startedAt, elapsedMs: null },
@@ -1053,7 +1100,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       // that are not pinned and says which. Refusals and dismissed warnings above leave them.
       setPlan(null);
       runStarted = true;
-      const started = startRun(text);
+      const started = startRun(text, text, false);
       const channel = new Channel<ScriptEvent>(), failures = new Map<number, string>();
       // PostgreSQL diagnostics refer to the generated EXPLAIN, so never underline source offsets.
       channel.onmessage = event => handle(event, { ...request, text, bound: true }, started.startedAt, null, failures, started.run);
@@ -1144,6 +1191,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
         // A run with no result of its own shows its messages.
         updateRun(tab.id, (r) => afterRun({
           ...r,
+          results: markRefreshable(r.results, runId, summary).map((result) => result.run === runId && result.refreshable
+            ? { ...result, refreshable: !!runTexts.current.get(runId)?.canRefresh, refreshSql: runTexts.current.get(runId)?.source }
+            : result),
           running: false,
           elapsedMs,
           summary,
@@ -1186,7 +1236,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     : runLabel.kind === "statement" ? t("runStatement")
     : runLabel.kind === "script" ? t("runScript")
     : runPicks ? t("runSelectionPick") : t("runSelection");
-  actionState.current = { running, runBlocked: historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging };
+  actionState.current = { running, runBlocked: historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging || refreshRestoring };
   // A result tab's menu (SDB-378), on the active result. The pin and the name are the core's:
   // it answers what the tab is now, and that is what is drawn.
   resultCommand.current = (command) => {
@@ -1291,23 +1341,11 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           </span>
         )}
         <div className="spacer" />
-        {tab.table && (running ? (
+        {tab.table && running && (
           <button className="danger" onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
             {t("cancel")}
           </button>
-        ) : (
-          <button
-            className="primary"
-            disabled={historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging || savingEdits}
-            title={t("table.refreshHint")}
-            onClick={() => {
-              if (pendingCount > 0) setNotice({ text: t("edit.applyFirst"), error: true });
-              else if (tab.table) void loadPage(tab.table);
-            }}
-          >
-            {t("table.refresh")}
-          </button>
-        ))}
+        )}
       </div>
       {tab.setupSkipped && tab.setupSkipped.length > 0 && (
         <div className="banner restore-notes setup-skipped" role="status" aria-label={t("setupSkipped.title")}>
@@ -1457,6 +1495,13 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             editing={editing}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
             pendingEdits={pendingCount > 0}
+            refreshDisabled={running || historySaving || databaseBusy || tab.status !== "connected" || !!tab.lost || workspaceChanging || savingEdits || pageLoading || refreshRestoring}
+            restoringView={refreshRestoring}
+            onRefresh={(result, row) => {
+              if (pendingCount > 0 || savingEditsRef.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+              if (tab.table) void loadPage(tab.table);
+              else void refreshQuery(result, row);
+            }}
             onLoadMore={loadMoreQueryRows}
             onCountQuery={(id) => void countQueryResult(id)}
             onQueryPageSize={changeQueryPageSize}
@@ -1511,6 +1556,9 @@ function Results({
   editing,
   readOnlyHint,
   pendingEdits,
+  refreshDisabled,
+  restoringView,
+  onRefresh,
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
@@ -1533,6 +1581,9 @@ function Results({
   editing?: GridEditing;
   readOnlyHint?: boolean;
   pendingEdits: boolean;
+  refreshDisabled: boolean;
+  restoringView: boolean;
+  onRefresh(result: number, row: number): void;
   onLoadMore(result: number): Promise<number>;
   onCountQuery(result: number): void;
   onQueryPageSize(size: number): void;
@@ -1585,14 +1636,14 @@ function Results({
         />
         {active && <div className="result-tools">
           <ResultFilter
-            key={`filter-${active.id}`}
+            key={`filter-${active.id}-${active.refreshScrollRow === undefined ? 0 : 1}`}
             result={active}
             scope={serverSort ? "page" : active.paging?.hasMore ? "loaded" : undefined}
             errorId={`result-filter-error-${active.id}`}
             onError={(message) => setFilterError(message ? { result: active.id, message } : null)}
             onFiltered={(filter, rows, total) => onFiltered(active.id, filter, rows, total)}
             onPending={(pending) => setFilteringResult(pending ? active.id : null)}
-            locked={!!active.paging?.loading || (editing !== undefined && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0))}
+            locked={restoringView || !!active.paging?.loading || (editing !== undefined && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0))}
           />
           <ExportButton
             key={`export-${active.id}`}
@@ -1644,12 +1695,14 @@ function Results({
             serverSort={serverSort}
             onQuerySort={onQuerySort ? (sort) => onQuerySort(active.id, sort) : undefined}
             tableData={tableData}
-            editing={filteringResult === active.id ? undefined : editing}
+            editing={filteringResult === active.id || restoringView ? undefined : editing}
+            restoringView={restoringView}
             viewerOpen={viewerOpen}
             onViewerOpen={setViewerOpen}
             viewerWidth={viewerWidth}
             onViewerWidth={setViewerWidth}
-            pagingLocked={pendingEdits || run.running || filteringResult === active.id || !!active.paging?.loading || !!editing?.busy}
+            pagingLocked={restoringView || pendingEdits || run.running || filteringResult === active.id || !!active.paging?.loading || !!editing?.busy}
+            refresh={table || active.refreshable ? { disabled: refreshDisabled || filteringResult === active.id || !!active.paging?.loading || !active.complete, run: (row) => onRefresh(active.id, row) } : undefined}
             onLoadMore={() => onLoadMore(active.id)}
             onCountQuery={() => onCountQuery(active.id)}
             onQueryPageSize={onQueryPageSize}
