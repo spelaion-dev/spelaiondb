@@ -937,16 +937,16 @@ try {
       const dialog = page.getByRole("dialog", { name: "Copy special" });
       await dialog.waitFor();
       // The options arrive from the core's copy defaults.
-      await dialog.getByRole("combobox", { name: "Delimiter" }).waitFor();
+      await dialog.getByRole("combobox", { name: "Delimiter", exact: true }).waitFor();
       return dialog;
     };
     let dialog = await openCopySpecial();
-    await dialog.getByRole("combobox", { name: "Delimiter" }).selectOption("other");
-    await dialog.getByRole("textbox", { name: "Character" }).fill("~");
-    await dialog.getByRole("combobox", { name: "Quote character" }).selectOption("'");
-    await dialog.getByRole("combobox", { name: "Row delimiter" }).selectOption("crLf");
-    await dialog.getByRole("textbox", { name: "NULL as" }).fill("NULL");
-    await dialog.getByRole("checkbox", { name: "Row numbers" }).check();
+    await dialog.getByRole("combobox", { name: "Delimiter", exact: true }).selectOption("other");
+    await dialog.getByRole("textbox", { name: "Character", exact: true }).fill("~");
+    await dialog.getByRole("combobox", { name: "Quote character", exact: true }).selectOption("'");
+    await dialog.getByRole("combobox", { name: "Row delimiter", exact: true }).selectOption("crLf");
+    await dialog.getByRole("textbox", { name: "NULL as", exact: true }).fill("NULL");
+    await dialog.getByRole("checkbox", { name: "Row numbers", exact: true }).check();
     await shot("03b2-copy-special-light");
     // The settings dialog cannot open over this one: the screenshot switches the theme directly.
     const themeBefore = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
@@ -968,10 +968,10 @@ try {
     // The choices are the copy defaults: the dialog opens with them. Options that could not be
     // read back (the delimiter is the quote) are refused by the core, inside the dialog.
     dialog = await openCopySpecial();
-    assert.equal(await dialog.getByRole("textbox", { name: "Character" }).inputValue(), "~");
-    assert.equal(await dialog.getByRole("combobox", { name: "Row delimiter" }).inputValue(), "crLf");
-    assert.ok(await dialog.getByRole("checkbox", { name: "Row numbers" }).isChecked());
-    await dialog.getByRole("textbox", { name: "Character" }).fill("'");
+    assert.equal(await dialog.getByRole("textbox", { name: "Character", exact: true }).inputValue(), "~");
+    assert.equal(await dialog.getByRole("combobox", { name: "Row delimiter", exact: true }).inputValue(), "crLf");
+    assert.ok(await dialog.getByRole("checkbox", { name: "Row numbers", exact: true }).isChecked());
+    await dialog.getByRole("textbox", { name: "Character", exact: true }).fill("'");
     await dialog.getByRole("button", { name: "Copy", exact: true }).click();
     await dialog.getByRole("alert").filter({ hasText: "the delimiter and the quote must be different characters" }).waitFor();
     await dialog.getByRole("button", { name: "Cancel" }).click();

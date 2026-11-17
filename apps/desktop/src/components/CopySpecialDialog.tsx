@@ -81,6 +81,7 @@ export function CopySpecialDialog(props: {
               <span>{t("results.copyDelimiter")}</span>
               <select
                 autoFocus
+                aria-label={t("results.copyDelimiter")}
                 value={other ? OTHER : options.delimiter}
                 onChange={(e) => {
                   if (e.target.value === OTHER) { setOther(true); change({ delimiter: "" }); }
@@ -97,6 +98,7 @@ export function CopySpecialDialog(props: {
                 <input
                   type="text"
                   className="copy-special-char"
+                  aria-label={t("results.copyOtherDelimiter")}
                   autoFocus
                   maxLength={2}
                   spellCheck={false}
@@ -107,13 +109,13 @@ export function CopySpecialDialog(props: {
             )}
             <label className="field">
               <span>{t("results.copyQuote")}</span>
-              <select value={options.quote} onChange={(e) => change({ quote: e.target.value })}>
+              <select aria-label={t("results.copyQuote")} value={options.quote} onChange={(e) => change({ quote: e.target.value })}>
                 {QUOTES.map((q) => <option key={q.key} value={q.value}>{t(`results.copyQuotes.${q.key}`)}</option>)}
               </select>
             </label>
             <label className="field">
               <span>{t("results.copyRowDelimiter")}</span>
-              <select value={options.rowDelimiter} onChange={(e) => change({ rowDelimiter: e.target.value as RowDelimiterItem })}>
+              <select aria-label={t("results.copyRowDelimiter")} value={options.rowDelimiter} onChange={(e) => change({ rowDelimiter: e.target.value as RowDelimiterItem })}>
                 <option value="lf">{t("results.copyRowDelimiters.lf")}</option>
                 <option value="crLf">{t("results.copyRowDelimiters.crLf")}</option>
               </select>
@@ -122,6 +124,7 @@ export function CopySpecialDialog(props: {
               <span>{t("results.copyNullText")}</span>
               <input
                 type="text"
+                aria-label={t("results.copyNullText")}
                 spellCheck={false}
                 placeholder={t("results.copyNullEmpty")}
                 value={options.nullText}
