@@ -9,12 +9,13 @@ use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
     AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, EditorPreferences,
-    ExplorerFilter, ExplorerPreferences, GridPreferences, HistoryEntry, HistoryFilter, HistoryPage,
-    MapPreferences, NewHistoryEntry, RecentFile, SavedTabs, ScriptPreferences, Snippet,
-    SnippetFilter, SnippetFolder, Store, StoreError, ToolOutput,
+    ExplorerFilter, ExplorerPreferences, FilteredTable, GridPreferences, HistoryEntry,
+    HistoryFilter, HistoryPage, MapPreferences, NewHistoryEntry, RecentFile, SavedTabs,
+    ScriptPreferences, Snippet, SnippetFilter, SnippetFolder, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
+use crate::table_filters::{StoredTableFilters, TableFilterChange, stored_table_filters};
 use crate::{CoreEvent, ResultId, ScriptOptions, Session};
 
 /// Identity captured from the source session, never from a subsequently edited profile.
@@ -287,6 +288,12 @@ enum Request {
         name: String,
         value: Option<String>,
         reply: Reply<()>,
+    },
+    /// A table data tab's filter history and default (`table_filters.rs`).
+    TableFilters {
+        table: FilteredTable,
+        change: TableFilterChange,
+        reply: Reply<StoredTableFilters>,
     },
     SetFilter {
         workspace: String,
@@ -576,6 +583,13 @@ impl QueryHistory {
                                 &name,
                                 value.as_deref(),
                             ));
+                        }
+                        Request::TableFilters {
+                            table,
+                            change,
+                            reply,
+                        } => {
+                            let _ = reply.send(stored_table_filters(&store, &table, change));
                         }
                         Request::SetFilter {
                             workspace,
@@ -1133,6 +1147,22 @@ impl QueryHistory {
         self.request(|reply| Request::GetFilter {
             workspace,
             connection,
+            reply,
+        })
+        .await
+    }
+
+    /// Changes what the store remembers of a table's filters and reads it back, in one step
+    /// of the store's actor. Nothing is checked here: `table_filters.rs` checks what goes in
+    /// and what comes out.
+    pub(crate) async fn stored_table_filters(
+        &self,
+        table: FilteredTable,
+        change: TableFilterChange,
+    ) -> Result<StoredTableFilters, HistoryError> {
+        self.request(|reply| Request::TableFilters {
+            table,
+            change,
             reply,
         })
         .await

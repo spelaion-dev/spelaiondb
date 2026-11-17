@@ -13,7 +13,7 @@ use spelaion_driver_api::{ResultSchema, Value};
 
 use crate::chart::{self, ChartData, ChartError, ChartRequest};
 use crate::edit::EditError;
-use crate::filter::{ColumnFilter, matches, validate};
+use crate::filter::{ColumnFilter, FilterMode, matches_as, validate};
 use crate::find::{FindMatches, FindQuery, FindTicket, search};
 use crate::masking::{MaskPolicy, mask_batch, masked_schema};
 use crate::pending::{EditOutcome, PendingEdit, PendingEdits};
@@ -37,8 +37,11 @@ pub struct StoredResult {
     sort: Option<(Vec<SortKey>, Vec<u32>)>,
     /// The filter text and, per original row, whether it matches.
     filter: Option<(String, Vec<bool>)>,
-    /// Column filters (all must pass) and, per original row, whether it passes them.
+    /// Column filters and, per original row, whether it passes them as `filter_mode` reads
+    /// them (all of them, or any).
     column_filters: Option<(Vec<ColumnFilter>, Vec<bool>)>,
+    /// How the column filters are read together; the default when there are none.
+    filter_mode: FilterMode,
     /// With a sort or a filter, the original row shown at each position.
     view: Option<Vec<u32>>,
     /// Changes whenever the row shown at some position may change (rows appended, a sort,
@@ -118,6 +121,7 @@ impl StoredResult {
             sort: None,
             filter: None,
             column_filters: None,
+            filter_mode: FilterMode::default(),
             view: None,
             generation: 0,
             find: None,
@@ -286,11 +290,33 @@ impl StoredResult {
     /// Keeps the rows that pass every column filter (an empty list removes them), on top of
     /// the text filter. Returns the rows left.
     pub fn filter_columns(&mut self, filters: Vec<ColumnFilter>) -> Result<usize, ViewError> {
-        if self.column_filters() != filters.as_slice() {
+        self.filter_columns_as(filters, FilterMode::default())
+    }
+
+    /// How the column filters in force are read together.
+    pub fn filter_mode(&self) -> FilterMode {
+        self.filter_mode
+    }
+
+    /// [`Self::filter_columns`] read as `mode` says: every filter or any of them, telling
+    /// upper case from lower case or not.
+    pub fn filter_columns_as(
+        &mut self,
+        filters: Vec<ColumnFilter>,
+        mode: FilterMode,
+    ) -> Result<usize, ViewError> {
+        // No filters, no mode: nothing is left to read one way or the other.
+        let mode = if filters.is_empty() {
+            FilterMode::default()
+        } else {
+            mode
+        };
+        if self.column_filters() != filters.as_slice() || self.filter_mode != mode {
             self.check_unedited()?;
         }
         if filters.is_empty() {
             self.column_filters = None;
+            self.filter_mode = mode;
             self.rebuild_view();
             return Ok(self.rows());
         }
@@ -305,16 +331,22 @@ impl StoredResult {
         let mut passes = Vec::with_capacity(self.rows);
         for batch in &self.batches {
             for row in 0..batch.num_rows() {
-                passes.push(filters.iter().all(|filter| {
+                let passes_filter = |filter: &ColumnFilter| {
                     let logical = columns[filter.column].logical;
                     let cell =
                         Value::from_array(batch.column(filter.column).as_ref(), row, logical)
                             .unwrap_or(Value::Null);
-                    matches(&cell, logical, filter)
-                }));
+                    matches_as(&cell, logical, filter, mode.match_case)
+                };
+                passes.push(if mode.any {
+                    filters.iter().any(passes_filter)
+                } else {
+                    filters.iter().all(passes_filter)
+                });
             }
         }
         self.column_filters = Some((filters, passes));
+        self.filter_mode = mode;
         self.rebuild_view();
         Ok(self.rows())
     }
@@ -1009,6 +1041,51 @@ mod tests {
         assert_eq!(ids(&r), [6, 4, 7, 0, 3, 1, 8, 2, 5]);
         r.sort(&[]).unwrap();
         assert_eq!(ids(&r), (0..9).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn column_filters_match_all_of_them_or_any() {
+        use crate::filter::{FilterMode, FilterOp};
+        let store = ResultStore::new();
+        let s = schema();
+        let id = store.create(s.clone());
+        store.append(id, batch(&s, 0, 30));
+        store.complete(id);
+        let r = store.get(id).unwrap();
+        let mut r = r.write().unwrap();
+        let filter = |op, value: &str| ColumnFilter {
+            column: 0,
+            op,
+            value: value.into(),
+        };
+        let both = || vec![filter(FilterOp::Lt, "3"), filter(FilterOp::Ge, "28")];
+        let any = FilterMode {
+            any: true,
+            match_case: false,
+        };
+        // No number is both under 3 and from 28 on; five are one or the other.
+        assert_eq!(r.filter_columns(both()), Ok(0));
+        assert_eq!(r.filter_mode(), FilterMode::default());
+        assert_eq!(r.filter_columns_as(both(), any), Ok(5));
+        assert_eq!(r.filter_mode(), any);
+        assert_eq!(values(&r.window(0, 9)), [0, 1, 2, 28, 29]);
+        // On top of the text filter and under the sort, like "all".
+        assert_eq!(r.filter(Some("2")), Ok(3));
+        r.sort(&[SortKey {
+            column: 0,
+            descending: true,
+        }])
+        .unwrap();
+        assert_eq!(values(&r.window(0, 9)), [29, 28, 2]);
+        // A refused filter leaves the mode as it was, and no filters leave no mode.
+        assert!(
+            r.filter_columns_as(vec![filter(FilterOp::Gt, "many")], FilterMode::default())
+                .is_err()
+        );
+        assert_eq!(r.filter_mode(), any);
+        // The text filter stays: 2, 12 and 20 to 29.
+        assert_eq!(r.filter_columns_as(Vec::new(), any), Ok(12));
+        assert_eq!(r.filter_mode(), FilterMode::default());
     }
 
     #[test]

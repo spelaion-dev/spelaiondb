@@ -7,7 +7,7 @@ import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import type { EditableTableItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem } from "../bindings";
 import { PlanViewer } from "./PlanViewer";
-import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
+import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { connectionTooltip } from "../connectionInfo";
 import { afterRun, endStatementResults, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../runResults";
@@ -623,12 +623,27 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.run?.running]);
 
+  /** The first page of a table data tab: with the table's default filter (SDB-381) when the
+   *  tab opens without one of its own. The core checked that default again as it read it; one
+   *  it refused is not applied (the filter box says so), and the page checks it once more. */
+  async function openTablePage(view: TableView) {
+    let first = view;
+    if (!view.filter && tab.connectionId) {
+      const saved = await call(commands.tableFilters(tab.connectionId, view.schema, view.name)).catch(() => null);
+      if (saved?.default) {
+        first = { ...view, filter: saved.default };
+        updateTab(tab.id, { table: first });
+      }
+    }
+    void loadPage(first);
+  }
+
   // A table data tab shows its first page as soon as it opens.
   const opened = useRef(false);
   useEffect(() => {
     if (opened.current || !tab.table || tab.run || tab.status === "connecting") return;
     opened.current = true;
-    void loadPage(tab.table);
+    void openTablePage(tab.table);
     // Wait for an explorer-created tab's independent session before loading its first page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.status, tab.table, tab.run]);
@@ -972,11 +987,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
         rows = outcome.rows; total = outcome.total;
       }
       if (before.columnFilters?.length) {
-        const outcome = await call(commands.filterColumns(result.id, before.columnFilters));
+        // Read as they were: Match any and Match case too (SDB-381).
+        const outcome = await call(commands.filterColumns(result.id, before.columnFilters, before.filterMode ?? null));
         rows = outcome.rows; total = outcome.total;
       }
       updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === result?.id
-        ? { ...item, sort: before.sort, filter: before.filter, columnFilters: before.columnFilters, rows, total, refreshScrollRow: Math.min(row, Math.max(0, rows - 1)) }
+        ? { ...item, sort: before.sort, filter: before.filter, columnFilters: before.columnFilters, filterMode: before.columnFilters?.length ? before.filterMode : undefined, rows, total, refreshScrollRow: Math.min(row, Math.max(0, rows - 1)) }
         : item) }));
     } catch (e) { setNotice({ text: message(e), error: true }); }
     finally { restoringView.current = false; setRefreshRestoring(false); }
@@ -1249,6 +1265,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     : runLabel.kind === "statement" ? t("runStatement")
     : runLabel.kind === "script" ? t("runScript")
     : runPicks ? t("runSelectionPick") : t("runSelection");
+  // The names the table tab's filter box completes from: the columns of the page on screen.
+  const tableColumns = tab.table ? (tab.run?.results[0]?.columns ?? []).map((column) => column.name) : [];
   actionState.current = { running, runBlocked: historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging || refreshRestoring };
   // A result tab's menu (SDB-378), on the active result. The pin and the name are the core's:
   // it answers what the tab is now, and that is what is drawn.
@@ -1402,6 +1420,10 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             editable={primaryKey === null ? null : primaryKey.length > 0 && !connection?.readOnly}
             readOnlyConnection={connection?.readOnly ?? false}
             pending={pendingCount}
+            connectionId={tab.connectionId}
+            session={tab.id}
+            columns={tableColumns}
+            loaded={!!tab.run && !tab.run.running && !tab.run.error && tab.run.results.length > 0}
           />
         )}
         {!tab.table && (
@@ -1524,10 +1546,10 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             onSorted={(result, sort) =>
               updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
             }
-            onColumnFiltered={(result, columnFilters, rows, total) =>
+            onColumnFiltered={(result, columnFilters, rows, total, filterMode) =>
               updateRun(tab.id, (r) => ({
                 ...r,
-                results: r.results.map((x) => (x.id === result ? { ...x, columnFilters, rows, total } : x)),
+                results: r.results.map((x) => (x.id === result ? { ...x, columnFilters, filterMode, rows, total } : x)),
               }))
             }
             onFiltered={(result, filter, rows, total) =>
@@ -1589,7 +1611,7 @@ function Results({
   onSelect(id: number | null): void;
   onSorted(result: number, sort: SortState[]): void;
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
-  onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
+  onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number, filterMode?: FilterMode): void;
   serverSort?: { sort: SortState[]; onSort(sort: SortState[]): void };
   /** Reads a paged query again from the server in a sort's order (see `ResultGrid`). */
   onQuerySort?(result: number, sort: SortState[]): Promise<boolean>;
@@ -1708,7 +1730,7 @@ function Results({
             }}
             session={session}
             onSorted={(sort) => onSorted(active.id, sort)}
-            onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
+            onColumnFiltered={(columnFilters, rows, total, filterMode) => onColumnFiltered(active.id, columnFilters, rows, total, filterMode)}
             serverSort={serverSort}
             onQuerySort={onQuerySort ? (sort) => onQuerySort(active.id, sort) : undefined}
             tableData={tableData}
