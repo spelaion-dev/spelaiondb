@@ -8,4 +8,43 @@
     <background_schedule_pool_size>4</background_schedule_pool_size>
     <background_message_broker_schedule_pool_size>2</background_message_broker_schedule_pool_size>
     <background_distributed_schedule_pool_size>2</background_distributed_schedule_pool_size>
+
+    <!-- More pools that default to the host's core count. On a 24-core development machine they
+         kept 135 threads and their memory, against 80 with these (SDB-357). The merge pool keeps
+         its default: MergeTree's own settings need background_pool_size × ratio >= 20. -->
+    <background_common_pool_size>2</background_common_pool_size>
+    <background_fetches_pool_size>1</background_fetches_pool_size>
+    <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
+    <max_io_thread_pool_size>8</max_io_thread_pool_size>
+    <max_backups_io_thread_pool_size>2</max_backups_io_thread_pool_size>
+    <max_active_parts_loading_thread_pool_size>2</max_active_parts_loading_thread_pool_size>
+    <max_outdated_parts_loading_thread_pool_size>2</max_outdated_parts_loading_thread_pool_size>
+    <max_parts_cleaning_thread_pool_size>2</max_parts_cleaning_thread_pool_size>
+    <max_prefixes_deserialization_thread_pool_size>2</max_prefixes_deserialization_thread_pool_size>
+    <max_fetch_partition_thread_pool_size>1</max_fetch_partition_thread_pool_size>
+    <tables_loader_foreground_pool_size>2</tables_loader_foreground_pool_size>
+    <tables_loader_background_pool_size>2</tables_loader_background_pool_size>
+    <max_build_vector_similarity_index_thread_pool_size>1</max_build_vector_similarity_index_thread_pool_size>
+    <concurrent_threads_soft_limit_num>4</concurrent_threads_soft_limit_num>
+
+    <!-- The server's own log tables grow for as long as the container lives, and their parts and
+         buffers count against max_server_memory_usage: after hours of test runs every query was
+         refused with MEMORY_LIMIT_EXCEEDED (SDB-357). Five minutes of inserts took the tracked
+         memory to 334 MiB with them and kept it at 90 MiB without them. The tests read none. -->
+    <query_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <part_log remove="1"/>
+    <trace_log remove="1"/>
+    <text_log remove="1"/>
+    <metric_log remove="1"/>
+    <latency_log remove="1"/>
+    <query_metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <session_log remove="1"/>
+    <error_log remove="1"/>
+    <blob_storage_log remove="1"/>
+    <background_schedule_pool_log remove="1"/>
 </clickhouse>

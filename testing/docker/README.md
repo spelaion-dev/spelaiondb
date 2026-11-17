@@ -87,12 +87,25 @@ Manual check with OpenSSH:
 ssh -i testing/docker/keys/id_ed25519 -J spelaion@127.0.0.1:2221 -p 22 spelaion@bastion2 -N -L 15432:postgres:5432
 ```
 
+## ClickHouse's memory on a development machine
+
+The test ClickHouse keeps its data in an anonymous volume, which a plain `docker compose up
+--force-recreate` keeps. Before SDB-357 it wrote its own log tables there (`trace_log`,
+`text_log`…), which grew for as long as the volume lived and were loaded into memory at every
+start: after a few days every query was refused with `MEMORY_LIMIT_EXCEEDED`. Its configuration
+(`clickhouse/memory.xml`) no longer writes them and keeps its thread pools small whatever the
+number of cores. A volume made before that still holds the old tables: recreate it once with
+
+```bash
+docker compose -f testing/docker/compose.yaml up -d --force-recreate --renew-anon-volumes --wait clickhouse
+```
+
 ## CI memory budget
 
 The main Compose project has a hard limit on every container. CI uses two phases: the default
-twenty services total **11,392 MiB (11.125 GiB)**; after they stop, Hive, Trino, Presto, InfluxDB, GreptimeDB and
+twenty services total **11,520 MiB (11.25 GiB)**; after they stop, Hive, Trino, Presto, InfluxDB, GreptimeDB and
 the two bastions total **6,784 MiB (6.625 GiB)**. The smoke job starts only the servers its app tests
-use, for **9,824 MiB (9.594 GiB)**. Running all twenty-five at once would total 18,048 MiB
+use, for **9,952 MiB (9.719 GiB)**. Running all twenty-five at once would total 18,176 MiB
 and leave too little room for compilation. Public GitHub `ubuntu-latest` runners have
 [16 GB of RAM](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories).
 Before starting either CI job's services, `check-memory.py` checks the resolved Compose JSON:
@@ -100,7 +113,7 @@ no unbounded service (even inactive profiles), at most 11.5 GiB per active phase
 least 4 GB (3,815 MiB) of the Docker
 host's actual RAM left** for the operating system, the kind cluster and Rust compilation/tests.
 This uses the daemon's reported RAM: a real runner reported 15,700 MiB after kernel reservations,
-which leaves 4,308 MiB after the default phase or 5,876 MiB during smoke, rather than assuming
+which leaves 4,180 MiB after the default phase or 5,748 MiB during smoke, rather than assuming
 it has 16 GiB available.
 The smaller protocol-family projects below are separate, opt-in projects; CI does not add
 them to this budget.
