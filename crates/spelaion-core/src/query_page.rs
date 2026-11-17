@@ -526,11 +526,32 @@ impl Keyset {
     }
 }
 
+/// Whether the primary keys an engine's catalog reports are enforced unique (SDB-405), by the
+/// name of its dialect (MariaDB reads as `mysql`, libSQL as `sqlite`) and, for PostgreSQL and
+/// MySQL, the server the session reached. ClickHouse's primary key is a sorting key, Trino's,
+/// Presto's, Hive's and Flight SQL's come from connectors or servers that need not enforce
+/// one, Databend and TDengine enforce none here: their queries are not paged, they run as
+/// written.
+fn unique_keys(engine: &str, family: Option<&crate::ServerFamily>) -> bool {
+    match engine {
+        "sqlite" | "sqlserver" | "duckdb" | "oracle" | "spanner" => true,
+        // The server is asked when the session opens (`open_connection` always sets it for
+        // these two, `Unchecked` when it cannot tell): a server not known to enforce them is
+        // not paged. A session made without one is the engine itself, as for the read-only
+        // checks (`Session::read_only_transaction_refusal`).
+        "postgres" | "mysql" => family.is_none_or(crate::ServerFamily::enforces_unique_keys),
+        _ => false,
+    }
+}
+
 /// The keyset of `sql` on `session` ordered by the grid's `sort` first, with its table's key
 /// read from the catalog now.
 async fn resolve(session: &Session, sql: &str, sort: &[SortKey]) -> Option<Keyset> {
     let dialect = session.dialect();
     let engine = dialect.name();
+    if !unique_keys(engine, session.server_family()) {
+        return None;
+    }
     let query = pageable(dialect.as_ref(), sql)?;
     let (schema, table, qualifier) = target_table(engine, &query)?;
     let schema = match schema {
@@ -932,5 +953,56 @@ mod tests {
             query_count_sql(&d, "select id from orders order by id;"),
             Some("SELECT COUNT(*) FROM (SELECT 1 FROM orders) AS spelaion_counted".into())
         );
+    }
+
+    #[test]
+    fn only_keys_the_server_enforces_unique_page_a_query() {
+        use crate::ServerFamily;
+        // Engines that enforce their primary keys.
+        for engine in ["sqlite", "sqlserver", "duckdb", "oracle", "spanner"] {
+            assert!(unique_keys(engine, None), "{engine}");
+        }
+        // PostgreSQL and MySQL only for the servers known to enforce them; an unchecked one
+        // never.
+        assert!(unique_keys("postgres", Some(&ServerFamily::PostgreSql)));
+        assert!(unique_keys("postgres", Some(&ServerFamily::CockroachDb)));
+        assert!(unique_keys("mysql", Some(&ServerFamily::MariaDb)));
+        assert!(unique_keys("mysql", Some(&ServerFamily::TiDb)));
+        assert!(unique_keys("postgres", None));
+        assert!(unique_keys("mysql", None));
+        assert!(!unique_keys(
+            "postgres",
+            Some(&ServerFamily::Unchecked(String::new()))
+        ));
+        for family in [
+            ServerFamily::Materialize,
+            ServerFamily::Unchecked("Redshift".into()),
+        ] {
+            assert!(!unique_keys("postgres", Some(&family)), "{family:?}");
+        }
+        for family in [
+            ServerFamily::Doris,
+            ServerFamily::GreptimeDb,
+            ServerFamily::Databend,
+            ServerFamily::SingleStore,
+        ] {
+            assert!(!unique_keys("mysql", Some(&family)), "{family:?}");
+        }
+        // Engines whose keys are sorting keys, a connector's, or not enforced.
+        for engine in [
+            "clickhouse",
+            "trino",
+            "databend",
+            "tdengine",
+            "flightsql",
+            "dremio",
+            "gizmosql",
+            "hive",
+            "spark",
+            "kyuubi",
+            "impala",
+        ] {
+            assert!(!unique_keys(engine, None), "{engine}");
+        }
     }
 }
