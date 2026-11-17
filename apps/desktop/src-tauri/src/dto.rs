@@ -4801,13 +4801,15 @@ impl From<spelaion_core::GroupCounts> for GroupingItem {
 /// A result filtered to one group: the column filters now in force (the ones there were and
 /// one condition per grouped column, written by the core) and the rows left.
 #[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupFilterOutcome {
     pub filters: Vec<ColumnFilterItem>,
-    /// How the filters are now read (a group's conditions all hold, and case is matched when
-    /// they are the only ones).
+    /// How the filters are now read (a group's conditions all hold, and case is matched).
     pub mode: FilterModeItem,
     pub rows: u32,
     pub total: u32,
+    /// Filters in force before were read ignoring case and now match it (SDB-410).
+    pub case_switched: bool,
 }
 
 /// Rows left after filtering a result, out of all it has.

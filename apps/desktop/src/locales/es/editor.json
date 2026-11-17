@@ -1000,6 +1000,7 @@
     "again": "Agrupar de nuevo",
     "failed": "No se pudieron agrupar las filas: {{detail}}",
     "filterFailed": "No se pudo filtrar la cuadrícula a ese grupo: {{detail}}",
+    "caseSwitched": "Ahora se distinguen mayúsculas y minúsculas, para que la cuadrícula muestre exactamente las filas de este grupo. Los demás filtros de columna también las distinguen.",
     "summary_one": "1 grupo en {{rows}} filas",
     "summary_other": "{{groups}} grupos en {{rows}} filas",
     "summaryDuplicates_one": "1 grupo con más de una fila, en {{rows}} filas",

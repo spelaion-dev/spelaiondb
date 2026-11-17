@@ -15,7 +15,7 @@ use crate::chart::{self, ChartData, ChartError, ChartRequest};
 use crate::edit::EditError;
 use crate::filter::{ColumnFilter, FilterMode, matches_as, validate};
 use crate::find::{FindMatches, FindQuery, FindTicket, search};
-use crate::group::{self, GroupCounts, GroupError, GroupRequest};
+use crate::group::{self, GroupCounts, GroupError, GroupFiltered, GroupRequest};
 use crate::masking::{MaskPolicy, mask_batch, masked_schema};
 use crate::pending::{EditOutcome, PendingEdit, PendingEdits};
 use crate::selection_stats::{self, CellBlock, SelectionStats, StatsTicket};
@@ -562,23 +562,25 @@ impl StoredResult {
     ///
     /// The group's conditions must all hold, so they are read with "Match all": refused when
     /// two filters or more in force are read with "Match any" (their meaning would change).
-    /// Case is matched when no other filter is in force, so the rows left are exactly the
-    /// group's (groups tell `a@x` from `A@x`); otherwise the filters in force keep the case
-    /// rule the user chose.
+    /// Case is always matched, so the rows left are exactly the group's (groups tell `a@x`
+    /// from `A@x`, SDB-410). When other filters in force were read ignoring case, they are now
+    /// read matching it too, and [`GroupFiltered::case_switched`] says so, for the panel to
+    /// tell the user.
     pub fn filter_to_group(
         &mut self,
         columns: &[usize],
         position: usize,
         generation: u64,
-    ) -> Result<(Vec<ColumnFilter>, usize), GroupError> {
+    ) -> Result<GroupFiltered, GroupError> {
         self.check_viewable()?;
         let mut filters = self.column_filters().to_vec();
         if self.filter_mode.any && filters.len() > 1 {
             return Err(GroupError::MatchAny);
         }
+        let case_switched = !self.filter_mode.match_case && !filters.is_empty();
         let mode = FilterMode {
             any: false,
-            match_case: self.filter_mode.match_case || filters.is_empty(),
+            match_case: true,
         };
         for filter in group::group_filters(self, columns, position, generation)? {
             if !filters.contains(&filter) {
@@ -586,7 +588,11 @@ impl StoredResult {
             }
         }
         let rows = self.filter_columns_as(filters.clone(), mode)?;
-        Ok((filters, rows))
+        Ok(GroupFiltered {
+            filters,
+            rows,
+            case_switched,
+        })
     }
 
     /// Starts preparing a chart: one still being prepared on this result stops (its

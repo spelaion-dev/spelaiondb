@@ -3879,15 +3879,20 @@ async fn filter_to_group(
         let mut stored = stored
             .write()
             .map_err(|_| "result lock poisoned".to_string())?;
-        let (filters, rows) = stored
+        let filtered = stored
             .filter_to_group(&columns, first_row as usize, generation as u64)
             .map_err(|e| e.to_string())?;
         let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
         Ok(GroupFilterOutcome {
-            filters: filters.into_iter().map(ColumnFilterItem::from).collect(),
+            filters: filtered
+                .filters
+                .into_iter()
+                .map(ColumnFilterItem::from)
+                .collect(),
             mode: stored.filter_mode().into(),
-            rows: n(rows),
+            rows: n(filtered.rows),
             total: n(stored.total_rows()),
+            case_switched: filtered.case_switched,
         })
     })
     .await

@@ -981,11 +981,15 @@ async fn the_grouping_panel_groups_a_masked_column_by_its_mask() {
             .unwrap()
             .unwrap();
         let first = grouping.groups[0].first_row as usize;
-        let (filters, rows) = result
+        let filtered = result
             .filter_to_group(&[salary], first, grouping.generation)
             .unwrap_or_else(|e| panic!("{label}: {e}"));
-        assert_no_secret(label, "a group's filter", &format!("{filters:?}"));
-        assert_eq!(rows, 3, "{label}");
+        assert_no_secret(
+            label,
+            "a group's filter",
+            &format!("{:?}", filtered.filters),
+        );
+        assert_eq!(filtered.rows, 3, "{label}");
         result.filter_columns(Vec::new()).unwrap();
     }
 }

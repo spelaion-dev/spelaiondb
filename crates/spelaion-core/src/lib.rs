@@ -145,8 +145,8 @@ pub use geometry::{
     MapCrs, MapError, MapShape, Position, column_map, is_geometry_type, map_crs, read_geometry,
 };
 pub use group::{
-    GROUP_KEY_CHARS, Group, GroupCounts, GroupError, GroupRequest, MAX_GROUP_COLUMNS,
-    MAX_GROUPS_COUNTED, MAX_GROUPS_RETURNED,
+    GROUP_KEY_CHARS, Group, GroupCounts, GroupError, GroupFiltered, GroupRequest,
+    MAX_GROUP_COLUMNS, MAX_GROUPS_COUNTED, MAX_GROUPS_RETURNED,
 };
 pub use guard::{
     NeedsConfirmation, ReadOnlyRefusal, Risk, RiskyStatement, RunRefused, check_read_only,
