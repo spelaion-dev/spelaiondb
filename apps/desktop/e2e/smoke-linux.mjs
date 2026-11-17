@@ -286,6 +286,20 @@ try {
     await statusline("1 row");
   });
 
+  await step("SQL completion offers columns for a referenced table", async () => {
+    await newQuery("Shop (SQLite)", "select * from customer c where c.");
+    await wd.waitFor((p) => !!document.querySelector(`${p} .status-connected`), [P], { what: "the completion query to connect" });
+    let found = false;
+    for (let i = 0; i < 60 && !found; i++) {
+      await wd.press("Control+Space");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      found = await wd.evaluate(() => [...document.querySelectorAll('.cm-tooltip-autocomplete li')].some((item) => item.textContent.includes('name')));
+      if (!found) await wd.press("Escape");
+    }
+    assert.ok(found, "completion offers the referenced customer's name column");
+    await wd.press("Escape");
+  });
+
   await step("typing replaces an editable result cell and Escape cancels it", async () => {
     await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 3;");
     await run();

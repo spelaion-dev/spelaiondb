@@ -53,16 +53,16 @@ export function useCompletionCatalog(session: string, connection: string | null,
     };
     return cache.acquire(completionCacheKey(workspace, connection, database, generation, session), {
       open: async () => { await call(commands.connectFromSession(session, metadata, database, false)); opened = true; },
-      names: async (cancelled) => {
+      names: async (cancelled, schemaReady) => {
         const defaultSchema = await call(commands.activeSchema(metadata));
         const schemas = (await call(commands.listSchemas(metadata, null, false))).filter((schema) => !schema.system);
         schemas.sort((a, b) => Number(b.name === (defaultSchema ?? database)) - Number(a.name === (defaultSchema ?? database)));
         const tables = [];
         for (const schema of schemas) {
           if (cancelled()) break;
-          for (const table of await call(commands.listObjects(metadata, schema.name, null, false))) {
-            tables.push({ schema: table.schema, name: table.name, columns: [] as string[], foreignKeys: [], kind: table.kind });
-          }
+          const found = (await call(commands.listObjects(metadata, schema.name, null, false))).map((table) => ({ schema: table.schema, name: table.name, columns: [] as string[], foreignKeys: [], kind: table.kind }));
+          tables.push(...found);
+          await schemaReady(schema.name, found, defaultSchema ?? database ?? "main");
         }
         return { tables, defaultSchema: defaultSchema ?? database ?? "main" };
       },
