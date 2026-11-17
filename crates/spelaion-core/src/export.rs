@@ -1284,6 +1284,51 @@ mod tests {
         assert!(copy_selected_rows(&result, &options, &[4], &Quoted("postgres")).is_err());
     }
 
+    #[test]
+    fn sparse_copy_uses_one_formatter_for_every_copy_format() {
+        let stored = copy_sample(&[
+            (Some("alpha"), Some(1)),
+            (Some("bravo"), Some(2)),
+            (Some("charlie"), Some(3)),
+            (Some("delta"), Some(4)),
+        ]);
+        let result = stored.read().unwrap();
+        for format in [
+            ExportFormat::Tsv,
+            ExportFormat::Csv,
+            ExportFormat::Json,
+            ExportFormat::SqlInsert { table: "t".into() },
+            ExportFormat::SqlInsertBatch { table: "t".into() },
+            ExportFormat::Markdown,
+            ExportFormat::Html,
+            ExportFormat::InList,
+        ] {
+            for header in [false, true] {
+                let options = ExportOptions {
+                    format: format.clone(),
+                    rows: 0..4,
+                    columns: vec![0],
+                    header,
+                    csv: CsvOptions::default(),
+                };
+                let text =
+                    copy_selected_rows(&result, &options, &[3, 1], &Quoted("postgres")).unwrap();
+                assert!(
+                    text.contains("bravo") && text.contains("delta"),
+                    "{format:?}: {text}"
+                );
+                assert!(
+                    !text.contains("alpha") && !text.contains("charlie"),
+                    "{format:?}: {text}"
+                );
+                assert!(
+                    text.find("bravo") < text.find("delta"),
+                    "{format:?}: {text}"
+                );
+            }
+        }
+    }
+
     /// What `write_result` writes for the same options: today's copy, byte for byte.
     fn written(
         result: &StoredResult,

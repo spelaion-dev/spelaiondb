@@ -4568,6 +4568,8 @@ pub struct CellRange {
     pub first_row: u32,
     pub rows: u32,
     pub columns: Vec<u32>,
+    #[serde(default)]
+    pub selected_rows: Option<Vec<u32>>,
 }
 
 /// What testing a connection from its form gives (ADR-032). The steps arrive as they change

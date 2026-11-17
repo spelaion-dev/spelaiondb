@@ -2739,10 +2739,14 @@ async fn copy_rows(
     header: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
-    if range.rows > MAX_COPY_ROWS {
+    let selected_count = range
+        .selected_rows
+        .as_ref()
+        .map_or(range.rows as usize, Vec::len);
+    if selected_count > MAX_COPY_ROWS as usize {
         return Err(format!(
             "{} rows are too many to copy (at most {MAX_COPY_ROWS}): export them to a file",
-            range.rows
+            selected_count
         ));
     }
     let dialect = dialect_for(&state, &session).await;
@@ -2763,7 +2767,13 @@ async fn copy_rows(
         header,
         csv: spelaion_core::CsvOptions::default(),
     };
-    copy_text(&stored, &options, dialect.as_ref()).map_err(|e| e.to_string())
+    if let Some(rows) = range.selected_rows {
+        let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
+        spelaion_core::copy_selected_rows(&stored, &options, &rows, dialect.as_ref())
+            .map_err(|e| e.to_string())
+    } else {
+        copy_text(&stored, &options, dialect.as_ref()).map_err(|e| e.to_string())
+    }
 }
 
 /// Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
@@ -2778,6 +2788,12 @@ async fn export_result(
     range: Option<CellRange>,
     state: State<'_, AppState>,
 ) -> CmdResult<ExportSummaryItem> {
+    if range
+        .as_ref()
+        .is_some_and(|range| range.selected_rows.is_some())
+    {
+        return Err("export requires a contiguous selection".into());
+    }
     let dialect = dialect_for(&state, &session).await;
     let csv = options.csv()?;
     let stored = state
@@ -3409,6 +3425,9 @@ async fn selection_stats(
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
+    let selected_rows = range
+        .selected_rows
+        .map(|rows| rows.into_iter().map(|row| row as usize).collect::<Vec<_>>());
     let block = spelaion_core::CellBlock {
         first_row: range.first_row as usize,
         rows: range.rows as usize,
@@ -3419,9 +3438,13 @@ async fn selection_stats(
             .read()
             .map_err(|_| "result lock poisoned".to_string())?;
         let ticket = read.stats_ticket();
-        read.selection_stats(&block, &ticket)
-            .map(|stats| stats.map(SelectionStatsItem::from))
-            .map_err(|e| e.to_string())
+        if let Some(rows) = selected_rows {
+            read.selection_stats_rows(&block.columns, &rows, &ticket)
+        } else {
+            read.selection_stats(&block, &ticket)
+        }
+        .map(|stats| stats.map(SelectionStatsItem::from))
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

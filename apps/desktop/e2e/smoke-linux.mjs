@@ -347,6 +347,33 @@ try {
     await statusline("1 of 3 rows");
   });
 
+  await step("copy two non-adjacent result rows", async () => {
+    await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 3;");
+    await run();
+    await statusline("3 rows");
+    const box = await wd.evaluate((p) => {
+      const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect();
+      return { x: r.x, y: r.y };
+    }, P);
+    await wd.pointerAt(box.x + 15, box.y + 34 + 12);
+    await wd.controlClickAt(box.x + 15, box.y + 34 + 2 * 24 + 12);
+    clipboard.set("not copied");
+    await wd.press("Control+Shift+c");
+    let copied = "not copied";
+    for (let i = 0; i < 50 && copied === "not copied"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100)); copied = clipboard.get();
+    }
+    const lines = copied.trimEnd().split(/\r?\n/);
+    assert.equal(lines.length, 3, copied);
+    assert.match(lines[1], /Customer 1/);
+    assert.match(lines[2], /Customer 3/);
+    assert.ok(!copied.includes("Customer 2"));
+    await wd.press("Delete");
+    await visibleText(P, "Deleted: 2");
+    await wd.click(await button("Discard", `${P} .result-editing`));
+    await visibleText(P, "No pending changes");
+  });
+
   await step("refresh asks again when the connection confirms every execution", async () => {
     await newQuery("Careful SQLite", "select :wanted as value;");
     await run();
