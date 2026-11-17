@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
-import type { EditorPreferencesItem, MapPreferencesItem } from "./bindings";
+import type { EditorPreferencesItem, MapPreferencesItem, SizeStepsItem } from "./bindings";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 import { createSaveQueue, savedSetting } from "./saveQueue";
 
@@ -27,9 +27,40 @@ export function applyTheme(preference: ThemePreference): void {
   window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
 }
 
+/**
+ * Calls `onChange` each time the page's device pixel ratio changes: the interface size (the
+ * webview's zoom, SDB-389) or a monitor of another scale. Canvases drawn at that ratio repaint
+ * on it. Returns the function that stops watching.
+ */
+export function onPixelRatioChange(onChange: () => void): () => void {
+  let query: MediaQueryList | null = null;
+  const watch = () => {
+    query = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    query.addEventListener("change", changed, { once: true });
+  };
+  const changed = () => {
+    watch();
+    onChange();
+  };
+  watch();
+  return () => query?.removeEventListener("change", changed);
+}
+
+/** The zoom step after `current` in `steps` (`direction` 1) or before it (-1); `current` when
+ *  there is none that way. A value between two steps goes to the nearest one that way. */
+export function nextStep(steps: readonly number[], current: number, direction: 1 | -1): number {
+  if (direction === 1) return steps.find((step) => step > current) ?? current;
+  return [...steps].reverse().find((step) => step < current) ?? current;
+}
+
+/** A size in pixels at the editor's zoom (SDB-389), whole pixels. */
+export function zoomed(size: number, zoom: number): number {
+  return Math.round((size * zoom) / 100);
+}
+
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export type PreferenceSetting = "language" | "theme" | "explorer" | "grid" | "script" | "editor" | "map";
+export type PreferenceSetting = "language" | "theme" | "interfaceSize" | "explorer" | "grid" | "script" | "editor" | "map";
 
 export interface PreferenceError {
   setting: PreferenceSetting;
@@ -40,6 +71,12 @@ export interface PreferenceError {
 interface PreferencesStore {
   language: LanguagePreference;
   theme: ThemePreference;
+  /** The interface size in percent (SDB-389): the whole window is drawn at it, by the
+   *  webview's zoom, so the sizes of every other setting are at the normal size and grow
+   *  with it. */
+  interfaceSize: number;
+  /** The steps the interface size and the editor's zoom move through, as the core lists them. */
+  steps: SizeStepsItem;
   /** How the explorer shows its tree. */
   explorer: ExplorerPreferences;
   /** How the result grid draws its cells. */
@@ -64,6 +101,9 @@ interface PreferencesStore {
   load(): Promise<void>;
   setLanguage(next: LanguagePreference): Promise<void>;
   setTheme(next: ThemePreference): Promise<void>;
+  setInterfaceSize(next: number): Promise<void>;
+  /** Moves the editor's zoom one step in (1) or out (-1), or back to 100 (0); remembered. */
+  zoomEditor(direction: 1 | -1 | 0): Promise<boolean>;
   setExplorer(next: ExplorerPreferences): Promise<void>;
   setGrid(next: GridPreferences): Promise<void>;
   setScript(next: ScriptPreferencesItem): Promise<void>;
@@ -74,7 +114,10 @@ interface PreferencesStore {
 const DEFAULT_EXPLORER: ExplorerPreferences = { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false };
 const DEFAULT_GRID: GridPreferences = { zebra: true, nullText: true, boolCheckboxes: false, resultTabs: 20, colorize: false, headerType: true, headerComment: false, fontSize: 12, viewerWrap: true };
 const DEFAULT_SCRIPT: ScriptPreferencesItem = { onError: "stop", notify: false, notifyAfterSeconds: 30, confirmDelaySeconds: 0 };
-const DEFAULT_EDITOR: EditorPreferencesItem = { font: "system", fontSize: 13, lineHeight: 18, tabSize: 2, lineNumbers: true, wordWrap: false, keywordCase: "preserve", indent: 2, commaPosition: "trailing" };
+const DEFAULT_EDITOR: EditorPreferencesItem = { font: "system", fontSize: 13, lineHeight: 18, zoom: 100, tabSize: 2, lineNumbers: true, wordWrap: false, keywordCase: "preserve", indent: 2, commaPosition: "trailing" };
+// Only until the core's lists arrive: the same values, and nothing is offered meanwhile
+// that the core would refuse (the size and zoom are sent as one of these).
+const DEFAULT_STEPS: SizeStepsItem = { interfaceSizes: [90, 100, 110, 125, 150], defaultInterfaceSize: 100, editorZooms: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200], defaultEditorZoom: 100 };
 const DEFAULT_MAP: MapPreferencesItem = { tiles: false, tileName: "", tileUrl: "", tileAttribution: "" };
 
 // Every save goes through one queue. The settings shown at once keep what was last saved, to go
@@ -89,9 +132,11 @@ const saved = {
   reconnectOnStart: savedSetting(false),
 };
 
-export const usePreferences = create<PreferencesStore>((set) => ({
+export const usePreferences = create<PreferencesStore>((set, get) => ({
   language: "system",
   theme: "system",
+  interfaceSize: 100,
+  steps: DEFAULT_STEPS,
   explorer: DEFAULT_EXPLORER,
   grid: DEFAULT_GRID,
   script: DEFAULT_SCRIPT,
@@ -102,7 +147,7 @@ export const usePreferences = create<PreferencesStore>((set) => ({
   saving: null,
   error: null,
   async load() {
-    const [language, theme, explorer, grid, script, reconnect, editor, map] = await Promise.allSettled([
+    const [language, theme, explorer, grid, script, reconnect, editor, map, interfaceSize, steps] = await Promise.allSettled([
       call(commands.getLanguage()),
       call(commands.getTheme()),
       call(commands.getExplorerPreferences()),
@@ -111,8 +156,13 @@ export const usePreferences = create<PreferencesStore>((set) => ({
       call(commands.getReconnectOnStart()),
       call(commands.getEditorPreferences()),
       call(commands.getMapPreferences()),
+      call(commands.getInterfaceSize()),
+      commands.sizeSteps(),
     ]);
     let error: PreferenceError | null = null;
+    if (steps.status === "fulfilled") set({ steps: steps.value });
+    if (interfaceSize.status === "fulfilled") set({ interfaceSize: interfaceSize.value });
+    else error = { setting: "interfaceSize", phase: "load", detail: errorText(interfaceSize.reason) };
     if (map.status === "fulfilled") { saved.map.loaded(map.value); set({ map: map.value }); }
     else error = { setting: "map", phase: "load", detail: errorText(map.reason) };
     if (editor.status === "fulfilled") { saved.editor.loaded(editor.value); set({ editor: editor.value }); }
@@ -165,6 +215,24 @@ export const usePreferences = create<PreferencesStore>((set) => ({
         set({ error: { setting: "theme", phase: "save", detail: errorText(e) } });
       }
     });
+  },
+  setInterfaceSize(next) {
+    // The core saves it and draws the window at it; the page follows once it has.
+    set({ error: null });
+    return enqueue("interfaceSize", async () => {
+      try {
+        await call(commands.setInterfaceSize(next));
+        set({ interfaceSize: next });
+      } catch (e) {
+        set({ error: { setting: "interfaceSize", phase: "save", detail: errorText(e) } });
+      }
+    });
+  },
+  zoomEditor(direction) {
+    const { editor, steps, setEditor } = get();
+    const zoom = direction === 0 ? steps.defaultEditorZoom : nextStep(steps.editorZooms, editor.zoom, direction);
+    if (zoom === editor.zoom) return Promise.resolve(true);
+    return setEditor({ ...editor, zoom });
   },
   setExplorer(next) {
     // The tree follows at once.

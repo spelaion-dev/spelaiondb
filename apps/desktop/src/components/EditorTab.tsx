@@ -892,6 +892,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
         case "insertSelect":
         case "insertInsert":
         case "insertUpdate":
+        case "zoomIn":
+        case "zoomOut":
+        case "zoomReset":
           editor.current?.action(command);
           break;
         case "cancel":

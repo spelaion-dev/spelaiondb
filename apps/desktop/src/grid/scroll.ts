@@ -14,13 +14,29 @@ export const MAX_SPACER_H = 30_000_000;
 export interface ScrollMap {
   /** The content's full height: the header and every row. */
   contentH: number;
-  /** The spacer's height: the content's, or `MAX_SPACER_H` past it. */
+  /** The spacer's height: the content's, or `maxSpacerH` past it. */
   spacerH: number;
   /** The scroll container's visible height. */
   viewportH: number;
 }
 
-export function scrollMap(contentH: number, viewportH: number, maxH: number = MAX_SPACER_H): ScrollMap {
+/**
+ * The tallest spacer at a device pixel ratio. The engines' cap counts zoomed pixels: at an
+ * interface size of 150 % (the webview's zoom, SDB-389), or on a monitor scaled to 150 %, a
+ * spacer of `MAX_SPACER_H` CSS pixels would pass it and be cut short, and the last rows could
+ * not be reached. So the spacer is shorter by the ratio (never taller than `MAX_SPACER_H`).
+ */
+export function maxSpacerH(pixelRatio: number): number {
+  return Math.floor(MAX_SPACER_H / Math.max(1, pixelRatio));
+}
+
+/** The page's device pixel ratio; 1 where there is none (the tests). */
+function pagePixelRatio(): number {
+  const ratio = (globalThis as { devicePixelRatio?: number }).devicePixelRatio;
+  return typeof ratio === "number" && ratio > 0 ? ratio : 1;
+}
+
+export function scrollMap(contentH: number, viewportH: number, maxH: number = maxSpacerH(pagePixelRatio())): ScrollMap {
   return { contentH, spacerH: Math.min(contentH, maxH), viewportH };
 }
 

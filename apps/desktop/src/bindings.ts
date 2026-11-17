@@ -115,6 +115,16 @@ export const commands = {
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
 	setTheme: (theme: string) => typedError<null, string>(__TAURI_INVOKE("set_theme", { theme })),
+	/**  The interface size in percent (SDB-389). */
+	getInterfaceSize: () => typedError<number, string>(__TAURI_INVOKE("get_interface_size")),
+	/**
+	 *  Saves the interface size, then draws the window at it: the webview's own zoom, so every
+	 *  size on the page and every canvas scales together. The core refuses a size that is not
+	 *  one of its steps, and then nothing changes.
+	 */
+	setInterfaceSize: (size: number) => typedError<null, string>(__TAURI_INVOKE("set_interface_size", { size })),
+	/**  The steps the interface size and the editor's zoom move through, as the core lists them. */
+	sizeSteps: () => __TAURI_INVOKE<SizeStepsItem>("size_steps"),
 	getUpdateCheck: () => typedError<boolean, string>(__TAURI_INVOKE("get_update_check")),
 	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
 	getExplorerPreferences: () => typedError<ExplorerPreferencesItem, string>(__TAURI_INVOKE("get_explorer_preferences")),
@@ -2426,6 +2436,8 @@ export type EditorPreferencesItem = {
 	font: string,
 	fontSize: number,
 	lineHeight: number,
+	/**  The editor's zoom in percent (SDB-389): it multiplies the font size and line height. */
+	zoom: number,
 	tabSize: number,
 	lineNumbers: boolean,
 	wordWrap: boolean,
@@ -5468,6 +5480,17 @@ export type SessionLost_Serialize = {
 	 *  (ADR-031).
 	 */
 	openTransaction: boolean,
+};
+
+/**
+ *  The steps the interface size and the editor's zoom move through (SDB-389), in percent:
+ *  the core's lists, so the page never offers one the core would refuse.
+ */
+export type SizeStepsItem = {
+	interfaceSizes: number[],
+	defaultInterfaceSize: number,
+	editorZooms: number[],
+	defaultEditorZoom: number,
 };
 
 /**  A session setup statement that failed and was skipped (ADR-037). */

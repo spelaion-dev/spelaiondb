@@ -33,6 +33,10 @@
     "light": "Light",
     "dark": "Dark",
     "hint": "Applies to every workspace and is saved in your personal settings.",
+    "interfaceSize": "Interface size",
+    "interfaceSizeHint": "Scales the whole window: text, spacing, the explorer, dialogs and the results. The font sizes chosen for the editor and the results are at the normal size and grow with it; the editor's zoom then multiplies the editor's.",
+    "percent": "{{value}}%",
+    "normalSize": "{{value}}% (normal)",
     "grid": "Result grid",
     "zebra": "Zebra rows",
     "nullText": "Show NULL as text (off: an empty cell)",
@@ -43,7 +47,7 @@
     "headerType": "Show each column's type in its header",
     "headerComment": "Show each column's comment in its header (a table's data)",
     "gridFontSize": "Font size of the results, in pixels",
-    "gridFontSizeHint": "From {{min}} to {{max}}. Only the results: the editor has its own.",
+    "gridFontSizeHint": "From {{min}} to {{max}}, at the normal interface size. Only the results: the editor has its own.",
     "resultTabsHint": "From 1 to {{max}}. Past it, the oldest result that is not pinned is closed; a run always shows every result it returns."
   },
   "language": {
@@ -272,6 +276,8 @@
     "systemFont": "System monospace",
     "fontSize": "Font size (px)",
     "lineHeight": "Line height (px)",
+    "zoom": "Zoom",
+    "zoomHint": "Multiplies the editor's font size and line height. In the editor, Ctrl+= zooms in, Ctrl+- zooms out and Ctrl+0 goes back to 100%. The sizes are at the normal interface size (Appearance) and grow with it.",
     "tabSize": "Tab size",
     "lineNumbers": "Show line numbers",
     "wordWrap": "Wrap long lines",

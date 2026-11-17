@@ -33,6 +33,10 @@
     "light": "Claro",
     "dark": "Oscuro",
     "hint": "Se aplica a todos los espacios de trabajo y se guarda en tu configuración personal.",
+    "interfaceSize": "Tamaño de la interfaz",
+    "interfaceSizeHint": "Escala toda la ventana: el texto, los espacios, el explorador, los diálogos y los resultados. Los tamaños de letra elegidos para el editor y los resultados son los del tamaño normal y crecen con él; el zoom del editor multiplica después el del editor.",
+    "percent": "{{value}} %",
+    "normalSize": "{{value}} % (normal)",
     "grid": "Rejilla de resultados",
     "zebra": "Filas alternas sombreadas",
     "nullText": "Mostrar NULL como texto (desactivado: celda vacía)",
@@ -43,7 +47,7 @@
     "headerType": "Mostrar el tipo de cada columna en su cabecera",
     "headerComment": "Mostrar el comentario de cada columna en su cabecera (datos de una tabla)",
     "gridFontSize": "Tamaño de letra de los resultados, en píxeles",
-    "gridFontSizeHint": "De {{min}} a {{max}}. Solo los resultados: el editor tiene el suyo.",
+    "gridFontSizeHint": "De {{min}} a {{max}}, con el tamaño normal de la interfaz. Solo los resultados: el editor tiene el suyo.",
     "resultTabsHint": "De 1 a {{max}}. Al superarlo se cierra el resultado más antiguo que no esté fijado; una ejecución siempre muestra todos los resultados que devuelve."
   },
   "language": {
@@ -272,6 +276,8 @@
     "systemFont": "Monoespaciada del sistema",
     "fontSize": "Tamaño de fuente (px)",
     "lineHeight": "Altura de línea (px)",
+    "zoom": "Zoom",
+    "zoomHint": "Multiplica el tamaño de fuente y la altura de línea del editor. En el editor, Ctrl+= amplía, Ctrl+- reduce y Ctrl+0 vuelve al 100 %. Los tamaños son los del tamaño normal de la interfaz (Apariencia) y crecen con él.",
     "tabSize": "Tamaño de tabulación",
     "lineNumbers": "Mostrar números de línea",
     "wordWrap": "Ajustar líneas largas",

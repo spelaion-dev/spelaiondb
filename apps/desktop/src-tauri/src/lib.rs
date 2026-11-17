@@ -286,6 +286,51 @@ async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
         .map_err(|e| e.to_string())
 }
 
+/// The interface size in percent (SDB-389).
+#[command]
+async fn get_interface_size(state: State<'_, AppState>) -> CmdResult<u16> {
+    state
+        .history
+        .interface_size()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the interface size, then draws the window at it: the webview's own zoom, so every
+/// size on the page and every canvas scales together. The core refuses a size that is not
+/// one of its steps, and then nothing changes.
+#[command]
+async fn set_interface_size(
+    size: u16,
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_interface_size(size)
+        .await
+        .map_err(|e| e.to_string())?;
+    window
+        .set_zoom(interface_scale(size))
+        .map_err(|e| e.to_string())
+}
+
+/// The steps the interface size and the editor's zoom move through, as the core lists them.
+#[command]
+fn size_steps() -> SizeStepsItem {
+    SizeStepsItem {
+        interface_sizes: spelaion_core::INTERFACE_SIZES.to_vec(),
+        default_interface_size: spelaion_core::DEFAULT_INTERFACE_SIZE,
+        editor_zooms: spelaion_core::EDITOR_ZOOMS.to_vec(),
+        default_editor_zoom: spelaion_core::DEFAULT_EDITOR_ZOOM,
+    }
+}
+
+/// The webview's zoom factor for an interface size in percent.
+fn interface_scale(size: u16) -> f64 {
+    f64::from(size) / 100.0
+}
+
 #[command]
 async fn get_explorer_preferences(
     state: State<'_, AppState>,
@@ -5788,6 +5833,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_language,
             get_theme,
             set_theme,
+            get_interface_size,
+            set_interface_size,
+            size_steps,
             get_update_check,
             set_update_check,
             get_explorer_preferences,
@@ -6077,7 +6125,10 @@ pub fn export_bindings(path: &std::path::Path) -> Result<(), String> {
 /// only while handling a click or a key. The text stays untrusted input that the core checks
 /// (ADR-030, ADR-038). WebView2 and WKWebView keep their own behaviour: on Windows this switch
 /// would also grant every read without asking.
-fn open_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn open_main_window(
+    app: &tauri::App,
+    interface_size: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = app
         .config()
         .app
@@ -6096,6 +6147,11 @@ fn open_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> 
         window
     }
     .build()?;
+    // The saved interface size (SDB-389) applies before the page shows, so it never opens at
+    // the normal size first.
+    if interface_size != spelaion_core::DEFAULT_INTERFACE_SIZE {
+        window.set_zoom(interface_scale(interface_size))?;
+    }
     if offscreen {
         move_offscreen(&window)?;
         window.show()?;
@@ -6251,6 +6307,10 @@ pub fn run() {
         .ok()
         .and_then(|format| format.compile().ok())
         .unwrap_or_default();
+    // The interface size the window opens at (SDB-389); one that cannot be read is the
+    // normal size.
+    let interface_size = tauri::async_runtime::block_on(history.interface_size())
+        .unwrap_or(spelaion_core::DEFAULT_INTERFACE_SIZE);
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
@@ -6302,7 +6362,7 @@ pub fn run() {
             // The window and its webview (WebView2 on Windows, WebKitGTK on Linux) open here:
             // when they cannot, there is no page to tell it in. An error returned from `setup`
             // would only be Tauri's panic.
-            if let Err(e) = open_main_window(app) {
+            if let Err(e) = open_main_window(app, interface_size) {
                 startup::ask(&StartupFailure::window(&e), &setup_log);
                 std::process::exit(1);
             }
