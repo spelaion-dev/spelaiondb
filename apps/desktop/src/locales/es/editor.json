@@ -265,6 +265,11 @@
     "No diagnostics": "Sin diagnósticos"
   },
   "viewer": {
+    "jsonDisplay": "Vista de JSON",
+    "jsonRaw": "Original",
+    "jsonFormatted": "Formateado",
+    "formatJson": "Formatear JSON",
+    "wrap": "Ajustar texto",
     "title": "Valor de la celda",
     "toolbar": "Paneles de resultados",
     "toggle": "Panel de valor de celda",

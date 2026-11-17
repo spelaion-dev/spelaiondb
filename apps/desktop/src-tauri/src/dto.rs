@@ -1122,6 +1122,7 @@ impl From<spelaion_core::ColumnMap> for ColumnMapItem {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GridPreferencesItem {
+    pub viewer_wrap: bool,
     pub zebra: bool,
     pub null_text: bool,
     pub bool_checkboxes: bool,
@@ -1193,6 +1194,7 @@ impl DisplayFormatItem {
 impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
     fn from(p: spelaion_core::GridPreferences) -> Self {
         let spelaion_core::GridPreferences {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
@@ -1203,6 +1205,7 @@ impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
             font_size,
         } = p;
         Self {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
@@ -1218,6 +1221,7 @@ impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
 impl From<GridPreferencesItem> for spelaion_core::GridPreferences {
     fn from(p: GridPreferencesItem) -> Self {
         let GridPreferencesItem {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
@@ -1228,6 +1232,7 @@ impl From<GridPreferencesItem> for spelaion_core::GridPreferences {
             font_size,
         } = p;
         Self {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,

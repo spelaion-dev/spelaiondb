@@ -265,6 +265,11 @@
     "No diagnostics": "No diagnostics"
   },
   "viewer": {
+    "jsonDisplay": "JSON display",
+    "jsonRaw": "As stored",
+    "jsonFormatted": "Formatted",
+    "formatJson": "Format JSON",
+    "wrap": "Wrap text",
     "title": "Cell value",
     "toolbar": "Result panels",
     "toggle": "Cell value panel",

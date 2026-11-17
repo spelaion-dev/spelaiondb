@@ -3123,6 +3123,7 @@ select {
 .cell-viewer-hex {
   white-space: pre;
 }
+.cell-viewer-value.no-wrap { white-space: pre; overflow-wrap: normal; }
 .cell-viewer-null,
 .cell-viewer > p {
   padding: 10px 12px;
