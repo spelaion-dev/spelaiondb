@@ -587,20 +587,33 @@ function LeafRow({
  * Shows a row the explorer was asked to reveal (`matches`): scrolls it into view and outlines
  * it for a moment, without taking the keyboard from where it is.
  */
+/** How long a revealed row keeps its outline. */
+const REVEAL_OUTLINE_MS = 1500;
+
 function useRevealedRow(matches: (reveal: ExplorerReveal) => boolean) {
   const reveal = useApp((s) => s.explorerReveal);
   const row = useRef<HTMLDivElement>(null);
   const [revealed, setRevealed] = useState(false);
+  // The outline's timer outlives the request: `revealDone` clears the request, which runs the
+  // effect's cleanup, and a timer cleared there left the outline on for good (SDB-204). It is
+  // cleared only by a new reveal of this row, or when the row goes away.
+  const timer = useRef<number | null>(null);
   const hit = reveal !== null && matches(reveal);
   useEffect(() => {
     if (!reveal || !hit) return;
     row.current?.scrollIntoView({ block: "center" });
     setRevealed(true);
     useApp.getState().revealDone(reveal.nonce);
-    const timer = window.setTimeout(() => setRevealed(false), 1500);
-    return () => window.clearTimeout(timer);
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      setRevealed(false);
+    }, REVEAL_OUTLINE_MS);
     // Once per request.
   }, [reveal?.nonce, hit]);
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+  }, []);
   return { row, revealed: revealed ? " revealed" : "" };
 }
 
