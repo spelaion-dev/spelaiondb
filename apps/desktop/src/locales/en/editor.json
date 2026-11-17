@@ -900,7 +900,9 @@
     "failed": "The outline could not be read: {{reason}}"
   },
   "completion": {
-    "loadFailed": "Could not load completion metadata: {{reason}}. Refresh the connection in the explorer to try again."
+    "loadFailed": "Could not load completion metadata: {{reason}}.",
+    "loading": "Loading SQL suggestions…",
+    "retry": "Retry"
   },
   "calc": {
     "title": "Selection numbers",

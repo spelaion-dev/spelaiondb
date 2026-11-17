@@ -28,6 +28,15 @@ export interface CompletionCatalog {
   defaultSchema: string | null;
 }
 export const EMPTY_CATALOG: CompletionCatalog = { tables: [], defaultSchema: null };
+/** Tables named by the current statement, using the same scope and identifier rules as completion. */
+export function referencedCompletionTables(sql: string, catalog: CompletionCatalog, engine: string | null): CompletionTable[] {
+  // A script commonly ends in a semicolon; inspect the statement before it, not the empty
+  // statement after it. This is only a scheduling hint, never a query or a safety decision.
+  const end = sql.trimEnd().replace(/;$/, "").length;
+  const analysis = analyze(sql, end, catalog, engine);
+  if (!analysis) return [];
+  return [...new Set(analysis.scopes.flatMap((scope) => scope.sources.flatMap((source) => source.table ? [source.table] : [])))];
+}
 export type KeywordCase = "upper" | "lower" | "preserve";
 export function sqlDialect(engine: string | null): SQLDialect {
   // ClickHouse: MySQL's keywords and backticks are the closest CodeMirror has.

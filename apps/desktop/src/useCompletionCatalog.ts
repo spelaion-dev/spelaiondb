@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { call, commands } from "./api";
 import { CompletionCache, completionCacheKey, type CompletionSnapshot } from "./completionCache";
-import { EMPTY_CATALOG } from "./sqlCompletion";
+import { EMPTY_CATALOG, referencedCompletionTables } from "./sqlCompletion";
 import { SCHEMAS_REFRESHED_EVENT, EXPLORER_REFRESH_EVENT } from "./connect";
 
 const cache = new CompletionCache();
@@ -11,9 +11,10 @@ const initial: CompletionSnapshot = { catalog: EMPTY_CATALOG, loading: false, er
 
 /** The same unfiltered catalog operations the explorer uses (ADR-025). The clone keeps
  * metadata reads off the user's actor/transaction, and takes credentials only inside Rust. */
-export function useCompletionCatalog(session: string, connection: string | null, workspace: string | null, database: string | null, connected: boolean) {
+export function useCompletionCatalog(session: string, connection: string | null, workspace: string | null, database: string | null, connected: boolean, sql: string, engine: string | null) {
   const [snapshot, setSnapshot] = useState<CompletionSnapshot>(initial);
   const [defaultSchema, setDefaultSchema] = useState<string | null>(null);
+  const [prioritySql, setPrioritySql] = useState(sql);
   const [generation, setGeneration] = useState(() => generations.get(connection ?? "") ?? 0);
   useEffect(() => {
     const refresh = (event: Event) => {
@@ -52,15 +53,16 @@ export function useCompletionCatalog(session: string, connection: string | null,
     };
     return cache.acquire(completionCacheKey(workspace, connection, database, generation, session), {
       open: async () => { await call(commands.connectFromSession(session, metadata, database, false)); opened = true; },
-      names: async (cancelled) => {
+      names: async (cancelled, schemaReady) => {
         const defaultSchema = await call(commands.activeSchema(metadata));
         const schemas = (await call(commands.listSchemas(metadata, null, false))).filter((schema) => !schema.system);
+        schemas.sort((a, b) => Number(b.name === (defaultSchema ?? database)) - Number(a.name === (defaultSchema ?? database)));
         const tables = [];
         for (const schema of schemas) {
           if (cancelled()) break;
-          for (const table of await call(commands.listObjects(metadata, schema.name, null, false))) {
-            tables.push({ schema: table.schema, name: table.name, columns: [] as string[], foreignKeys: [], kind: table.kind });
-          }
+          const found = (await call(commands.listObjects(metadata, schema.name, null, false))).map((table) => ({ schema: table.schema, name: table.name, columns: [] as string[], foreignKeys: [], kind: table.kind }));
+          tables.push(...found);
+          await schemaReady(schema.name, found, defaultSchema ?? database ?? "main");
         }
         return { tables, defaultSchema: defaultSchema ?? database ?? "main" };
       },
@@ -74,10 +76,25 @@ export function useCompletionCatalog(session: string, connection: string | null,
           details: details.columns.map((column) => ({ name: column.name, type: column.nativeType, nullable: column.nullable, comment: column.comment ?? null })),
         };
       },
+      columns: async (schema) => call(commands.listColumns(metadata, schema)),
       cancel: async () => { if (opened && !closing) await call(commands.cancel(metadata)); },
       close,
     }, setSnapshot);
   }, [session, connection, workspace, database, connected, generation]);
   const catalog = useMemo(() => ({ ...snapshot.catalog, defaultSchema: defaultSchema ?? snapshot.catalog.defaultSchema }), [snapshot.catalog, defaultSchema]);
-  return { ...snapshot, catalog };
+  useEffect(() => {
+    const timer = setTimeout(() => setPrioritySql(sql), 150);
+    return () => clearTimeout(timer);
+  }, [sql]);
+  useEffect(() => {
+    if (!connected || !connection) return;
+    cache.prioritize(completionCacheKey(workspace, connection, database, generation, session), referencedCompletionTables(prioritySql, catalog, engine));
+  }, [catalog, connected, connection, database, engine, generation, session, prioritySql, workspace]);
+  const retry = () => {
+    if (!connection) return;
+    const next = (generations.get(connection) ?? 0) + 1;
+    generations.set(connection, next);
+    setGeneration(next);
+  };
+  return { ...snapshot, catalog, retry };
 }

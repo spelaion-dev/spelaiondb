@@ -112,7 +112,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const databaseBusyRef = useRef(false);
   const workspace = useApp((s) => s.workspace?.workspace ?? null);
   // SQL completion only where the language is SQL (ADR-056).
-  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tab.status === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null));
+  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tab.status === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   /** This tab's runs, counted: each result remembers which one produced it (SDB-378). */
@@ -1465,7 +1465,8 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             />
           )}
         </div>
-        {!tab.table && completion.error && <div className="notice error" role="status">{t("completion.loadFailed", { reason: completion.error })}</div>}
+        {!tab.table && completion.error ? <div className="notice error" role="status">{t("completion.loadFailed", { reason: completion.error })} <button onClick={completion.retry}>{t("completion.retry")}</button></div>
+          : !tab.table && completion.loading ? <div className="muted small" role="status">{t("completion.loading")}</div> : null}
         <div
           className="divider"
           hidden={maximized}
