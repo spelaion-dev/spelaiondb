@@ -15,6 +15,7 @@ use crate::chart::{self, ChartData, ChartError, ChartRequest};
 use crate::edit::EditError;
 use crate::filter::{ColumnFilter, FilterMode, matches_as, validate};
 use crate::find::{FindMatches, FindQuery, FindTicket, search};
+use crate::group::{self, GroupCounts, GroupError, GroupRequest};
 use crate::masking::{MaskPolicy, mask_batch, masked_schema};
 use crate::pending::{EditOutcome, PendingEdit, PendingEdits};
 use crate::selection_stats::{self, CellBlock, SelectionStats, StatsTicket};
@@ -55,6 +56,8 @@ pub struct StoredResult {
     stats_latest: Arc<AtomicU64>,
     /// The number of the latest chart started (or cancelled).
     chart_latest: Arc<AtomicU64>,
+    /// The number of the latest grouping started (or cancelled).
+    group_latest: Arc<AtomicU64>,
     /// The edits of a table data page not yet applied (ADR-044), by position in the view.
     pending: PendingEdits,
     /// Column masking (ADR-051): the masked columns, their original metadata, and per batch
@@ -128,6 +131,7 @@ impl StoredResult {
             find_latest: Arc::new(AtomicU64::new(0)),
             stats_latest: Arc::new(AtomicU64::new(0)),
             chart_latest: Arc::new(AtomicU64::new(0)),
+            group_latest: Arc::new(AtomicU64::new(0)),
             pending: PendingEdits::default(),
             source: None,
         }
@@ -508,6 +512,63 @@ impl StoredResult {
         ticket: &StatsTicket,
     ) -> Result<Option<SelectionStats>, ViewError> {
         selection_stats::compute_selected(self, columns, rows, ticket)
+    }
+
+    /// Starts a grouping: one still running on this result stops (its [`Self::grouping`]
+    /// returns `None`).
+    pub fn group_ticket(&self) -> StatsTicket {
+        StatsTicket::new(&self.group_latest)
+    }
+
+    /// Stops the grouping running on this result, if any.
+    pub fn cancel_group(&self) {
+        selection_stats::cancel(&self.group_latest);
+    }
+
+    /// The groups of the current view by some columns, with their counts (the grouping
+    /// panel), with a read lock only. `None`: a newer grouping, or a cancel, stopped this one.
+    pub fn grouping(
+        &self,
+        request: &GroupRequest,
+        ticket: &StatsTicket,
+    ) -> Result<Option<GroupCounts>, GroupError> {
+        self.check_viewable()?;
+        group::compute(self, request, ticket)
+    }
+
+    /// Keeps only the rows of one group of a grouping: adds to the column filters in force
+    /// one condition per grouped column, written from the row at `position` of the view the
+    /// grouping was made over (`generation`). Returns the filters now in force and the rows
+    /// left ([`Self::filter_mode`] says how they are read). Refused when the view changed
+    /// since the grouping.
+    ///
+    /// The group's conditions must all hold, so they are read with "Match all": refused when
+    /// two filters or more in force are read with "Match any" (their meaning would change).
+    /// Case is matched when no other filter is in force, so the rows left are exactly the
+    /// group's (groups tell `a@x` from `A@x`); otherwise the filters in force keep the case
+    /// rule the user chose.
+    pub fn filter_to_group(
+        &mut self,
+        columns: &[usize],
+        position: usize,
+        generation: u64,
+    ) -> Result<(Vec<ColumnFilter>, usize), GroupError> {
+        self.check_viewable()?;
+        let mut filters = self.column_filters().to_vec();
+        if self.filter_mode.any && filters.len() > 1 {
+            return Err(GroupError::MatchAny);
+        }
+        let mode = FilterMode {
+            any: false,
+            match_case: self.filter_mode.match_case || filters.is_empty(),
+        };
+        for filter in group::group_filters(self, columns, position, generation)? {
+            if !filters.contains(&filter) {
+                filters.push(filter);
+            }
+        }
+        let rows = self.filter_columns_as(filters.clone(), mode)?;
+        Ok((filters, rows))
     }
 
     /// Starts preparing a chart: one still being prepared on this result stops (its

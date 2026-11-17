@@ -1382,6 +1382,87 @@ try {
     assert.deepEqual(await copyFirstRows(0, 2), ["1", "2"]);
   }
 
+  step("grouping panel: rows counted by a column, duplicates only, a header dragged in, and a click filters the grid to a group");
+  {
+    await panel.getByRole("button", { name: "Group rows", exact: true }).click();
+    const groups = panel.getByRole("complementary", { name: "Group rows" });
+    await groups.waitFor();
+    const addColumn = (name) => groups.getByRole("combobox", { name: "Add a column…" }).selectOption({ label: name });
+    const summary = groups.locator(".group-summary");
+    const groupRows = () => groups.locator(".group-table tbody tr").evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.textContent)));
+    const number = (text) => Number(text.replace(/[^0-9]/g, ""));
+    // The 50,000 orders by customer: the core counts them, the largest group first.
+    await addColumn("customer_id");
+    await summary.filter({ hasText: /^\d+ groups in 50,000 rows$/ }).waitFor();
+    const byCustomer = await groupRows();
+    assert.ok(byCustomer.length > 1, "several customers");
+    const counts = byCustomer.map((row) => number(row[1]));
+    assert.equal(counts.reduce((sum, n) => sum + n, 0), 50_000, "every row is in a group");
+    for (let i = 1; i < counts.length; i++) assert.ok(counts[i - 1] >= counts[i], "the largest groups first");
+    assert.match(byCustomer[0][2], /^\d+(\.\d)?%$/);
+    {
+      const themeNow = await page.locator("html").getAttribute("data-theme");
+      const lookOf = (theme) =>
+        page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+          window.dispatchEvent(new Event("spelaion-themechange"));
+        }, theme);
+      for (const theme of ["light", "dark"]) {
+        await lookOf(theme);
+        await page.waitForTimeout(200);
+        await shot(`04c-grouping-panel-${theme}`);
+      }
+      await lookOf(themeNow);
+    }
+    // A second column that never repeats: every row its own group, of which the panel shows
+    // the first thousand and says so; none is a duplicate.
+    await addColumn("id");
+    await summary.filter({ hasText: /^50,000 groups in 50,000 rows$/ }).waitFor();
+    await groups.getByText("Only the 1,000 largest groups are shown.", { exact: false }).waitFor();
+    await groups.getByRole("checkbox", { name: "Duplicates only" }).check();
+    await summary.filter({ hasText: /^0 groups with more than one row, in 50,000 rows$/ }).waitFor();
+    assert.equal(await groups.locator(".group-table tbody tr").count(), 0);
+    await groups.getByRole("checkbox", { name: "Duplicates only" }).uncheck();
+    await groups.getByRole("button", { name: "Remove id from the grouping" }).click();
+    await summary.filter({ hasText: /^\d+ groups in 50,000 rows$/ }).waitFor();
+    // A header dragged to the panel joins the grouping; a click on a header still sorts.
+    {
+      const target = await groups.boundingBox();
+      await page.mouse.move(sortBox.x + TOTAL_X, sortBox.y + 18);
+      await page.mouse.down();
+      await page.mouse.move(sortBox.x + TOTAL_X + 40, sortBox.y + 60, { steps: 4 });
+      await page.locator(".group-ghost", { hasText: "total" }).waitFor();
+      await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 8 });
+      await page.mouse.up();
+      await groups.locator(".group-chip", { hasText: "total" }).waitFor();
+      await page.locator(".group-ghost").waitFor({ state: "detached" });
+      await sortedAs("");
+      await groups.getByRole("button", { name: "Remove total from the grouping" }).click();
+      await groups.locator(".group-chip", { hasText: "total" }).waitFor({ state: "detached" });
+      await clickHeader(ID_X);
+      await sortedAs(", sorted by id, ascending");
+      await clickHeader(ID_X);
+      await sortedAs(", sorted by id, descending");
+      await clickHeader(ID_X);
+      await sortedAs("");
+    }
+    // A click on a group filters the grid to its rows, through the column filters.
+    await summary.filter({ hasText: /^\d+ groups in 50,000 rows$/ }).waitFor();
+    const [customer, customerRows] = (await groupRows())[0];
+    await groups.locator(".group-table tbody tr").first().getByRole("button").click();
+    await panel.locator(".filter-chip", { hasText: `customer_id = ${customer}` }).waitFor();
+    await panel.locator(`.grid-scroller[aria-label^="Result with ${customerRows} rows"]`).waitFor();
+    // The panel now groups what the grid shows: that one customer.
+    await summary.filter({ hasText: new RegExp(`^1 group in ${customerRows} rows$`) }).waitFor();
+    await shot("04c-grouping-filtered");
+    await panel.getByRole("button", { name: "Reset filters" }).click();
+    await panel.locator(".filter-chip").first().waitFor({ state: "detached" });
+    await sortedAs("");
+    await summary.filter({ hasText: /^\d+ groups in 50,000 rows$/ }).waitFor();
+    await groups.getByRole("button", { name: "Close the groups (Esc)" }).click();
+    await groups.waitFor({ state: "detached" });
+  }
+
   step("columns: drag a header edge to resize, double-click it to fit the content");
   const widthsNow = async () => (await sortGrid.getAttribute("data-column-widths")).split(",").map(Number);
   const [idWidth, customerWidth, createdWidth] = await widthsNow();

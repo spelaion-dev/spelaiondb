@@ -99,9 +99,9 @@ export function chooseValueFile(t: TFunction<"editor">): Promise<string | null> 
   return chooseOpenFile(t("viewer.loadTitle"), [{ name: t("viewer.allFiles"), extensions: ["*"] }]);
 }
 
-export type ViewerMode = "cell" | "row" | "references" | "calc";
+export type ViewerMode = "cell" | "row" | "references" | "calc" | "group";
 
-const MODE_LABELS: Record<ViewerMode, string> = { cell: "viewer.cellMode", row: "viewer.rowMode", references: "viewer.referencesMode", calc: "viewer.calcMode" };
+const MODE_LABELS: Record<ViewerMode, string> = { cell: "viewer.cellMode", row: "viewer.rowMode", references: "viewer.referencesMode", calc: "viewer.calcMode", group: "viewer.groupMode" };
 
 /** The side panel's views: the cell, its row, in a table data tab the row's references, and the
  *  numbers about the selection. */

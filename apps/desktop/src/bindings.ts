@@ -378,6 +378,22 @@ export const commands = {
 	/**  Stops the selection calculation running on a result (the calc panel's Cancel). */
 	cancelSelectionStats: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_selection_stats", { result })),
 	/**
+	 *  The groups of a result's current view by some of its columns, with each group's count
+	 *  (the grouping panel). Only the columns travel: the core counts over the stored result and
+	 *  returns the largest groups. A newer grouping on the same result, or `cancel_grouping`,
+	 *  stops this one (`None`).
+	 */
+	groupResult: (result: number, columns: number[], duplicatesOnly: boolean) => typedError<GroupingItem | null, string>(__TAURI_INVOKE("group_result", { result, columns, duplicatesOnly })),
+	/**  Stops the grouping running on a result (the grouping panel's Cancel, or its closing). */
+	cancelGrouping: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_grouping", { result })),
+	/**
+	 *  Filters a result to one group of a grouping: the core adds to the column filters in force
+	 *  one condition per grouped column, written from the group's first row (`first_row` of the
+	 *  view the grouping was made over, `generation`). The page sends no value; a grouping made
+	 *  over rows that changed since is refused.
+	 */
+	filterToGroup: (result: number, columns: number[], firstRow: number | null, generation: number | null) => typedError<GroupFilterOutcome, string>(__TAURI_INVOKE("filter_to_group", { result, columns, firstRow, generation })),
+	/**
 	 *  The points of a chart over a result (ADR-040): the UI names the X and Y columns, the core
 	 *  reads the current view of the stored result and sends at most `MAX_CHART_POINTS` points,
 	 *  never rows. A newer chart on the same result, or `cancel_chart`, stops this one (`None`).
@@ -2889,6 +2905,55 @@ export type GridPreferencesItem = {
 	headerComment: boolean,
 	/**  The grid's own font size, in pixels. */
 	fontSize: number,
+};
+
+/**
+ *  A result filtered to one group: the column filters now in force (the ones there were and
+ *  one condition per grouped column, written by the core) and the rows left.
+ */
+export type GroupFilterOutcome = {
+	filters: ColumnFilterItem[],
+	/**
+	 *  How the filters are now read (a group's conditions all hold, and case is matched when
+	 *  they are the only ones).
+	 */
+	mode: FilterModeItem,
+	rows: number,
+	total: number,
+};
+
+/**  One group of a result's rows (the grouping panel): its values and how many rows have them. */
+export type GroupItem = {
+	/**
+	 *  The value of each grouped column, as the database's own text; `null` is NULL. A long
+	 *  value is cut (it ends in "…").
+	 */
+	key: (string | null)[],
+	/**  Rows in the group (f64 holds every count up to 2^53 exactly). */
+	count: number | null,
+	/**
+	 *  The position in the current view of the group's first row: what "filter to this
+	 *  group" names it by.
+	 */
+	firstRow: number | null,
+};
+
+/**  The groups of a result's current view, as the core counted them. */
+export type GroupingItem = {
+	/**  The largest groups first, at most `max_groups` of them. */
+	groups: GroupItem[],
+	/**  Rows of the view: what a group's percent is of. */
+	rows: number | null,
+	/**  Groups there are (with "duplicates only", those of more than one row). */
+	totalGroups: number | null,
+	/**  Different groups told apart, whatever "duplicates only" says. */
+	distinct: number | null,
+	/**  Rows left out of every group because too many groups were already being counted. */
+	uncountedRows: number | null,
+	/**  The view the groups belong to, sent back with "filter to this group". */
+	generation: number | null,
+	/**  The most groups the core returns. */
+	maxGroups: number,
 };
 
 export type HistoryFilterItem = HistoryFilterItem_Serialize | HistoryFilterItem_Deserialize;

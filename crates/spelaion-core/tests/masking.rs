@@ -897,6 +897,99 @@ async fn an_alias_does_not_unmask_a_column_where_the_engine_reports_its_origin()
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The grouping panel (SDB-387) groups a masked column by its mask: it reads the result as it
+/// is served, never the originals kept for "reveal". No group's key holds a masked value, the
+/// masked cells are one group whatever they hold, and filtering to that group goes by the
+/// mask too.
+#[tokio::test]
+async fn the_grouping_panel_groups_a_masked_column_by_its_mask() {
+    use spelaion_core::GroupRequest;
+    let _serial = SERIAL.lock().await;
+    for (label, session, _, _) in engines().await {
+        setup(label, &session).await;
+        let id = run(
+            label,
+            &session,
+            "SELECT id, name, email, salary, card_number FROM mask_customers ORDER BY id",
+            false,
+        )
+        .await
+        .unwrap();
+        let result = stored(&session, id);
+        let mut result = result.write().unwrap();
+        let email = column(&result, "email");
+        let salary = column(&result, "salary");
+        let card = column(&result, "card_number");
+        let name = column(&result, "name");
+        for masked in [email, salary, card] {
+            let grouping = result
+                .grouping(
+                    &GroupRequest {
+                        columns: vec![masked],
+                        duplicates_only: false,
+                    },
+                    &result.group_ticket(),
+                )
+                .unwrap()
+                .unwrap();
+            let text = format!("{:?}", grouping.groups);
+            assert_no_secret(label, "a group's key", &text);
+            // Different values are one group: the mask does not tell them apart.
+            let keys: Vec<Option<&str>> = grouping
+                .groups
+                .iter()
+                .map(|group| group.key[0].as_deref())
+                .collect();
+            assert!(
+                keys.iter().all(|key| matches!(key, None | Some(MASK))),
+                "{label}: {keys:?}"
+            );
+            assert!(grouping.groups.len() <= 2, "{label}: {keys:?}");
+            assert_eq!(
+                grouping.groups.iter().map(|group| group.count).sum::<u64>(),
+                3,
+                "{label}"
+            );
+        }
+        // With a column that is not masked, its values still show and the masked one does not.
+        let grouping = result
+            .grouping(
+                &GroupRequest {
+                    columns: vec![name, salary],
+                    duplicates_only: false,
+                },
+                &result.group_ticket(),
+            )
+            .unwrap()
+            .unwrap();
+        let text = format!("{:?}", grouping.groups);
+        assert_no_secret(label, "a two-column group's key", &text);
+        assert!(
+            text.contains("Ada") && text.contains(MASK),
+            "{label}: {text}"
+        );
+        assert_eq!(grouping.groups.len(), 3, "{label}");
+        // Filtering to a masked group: the condition is the mask, and every masked row passes.
+        let grouping = result
+            .grouping(
+                &GroupRequest {
+                    columns: vec![salary],
+                    duplicates_only: false,
+                },
+                &result.group_ticket(),
+            )
+            .unwrap()
+            .unwrap();
+        let first = grouping.groups[0].first_row as usize;
+        let (filters, rows) = result
+            .filter_to_group(&[salary], first, grouping.generation)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_no_secret(label, "a group's filter", &format!("{filters:?}"));
+        assert_eq!(rows, 3, "{label}");
+        result.filter_columns(Vec::new()).unwrap();
+    }
+}
+
 /// A sort read from the server (SDB-380) is refused for a masked column as the stored
 /// result's is: the order of the rows would tell the masked values apart. Neither a paged
 /// query's pages nor a table data tab's ORDER BY are written for one, by any name.

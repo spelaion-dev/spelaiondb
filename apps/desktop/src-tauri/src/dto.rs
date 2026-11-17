@@ -4068,6 +4068,37 @@ impl From<ColumnFilterItem> for spelaion_core::ColumnFilter {
     }
 }
 
+impl From<spelaion_core::FilterOp> for FilterOpItem {
+    fn from(op: spelaion_core::FilterOp) -> Self {
+        use spelaion_core::FilterOp;
+        match op {
+            FilterOp::Eq => Self::Eq,
+            FilterOp::NotEq => Self::NotEq,
+            FilterOp::Gt => Self::Gt,
+            FilterOp::Lt => Self::Lt,
+            FilterOp::Ge => Self::Ge,
+            FilterOp::Le => Self::Le,
+            FilterOp::Like => Self::Like,
+            FilterOp::NotLike => Self::NotLike,
+            FilterOp::Contains => Self::Contains,
+            FilterOp::NotContains => Self::NotContains,
+            FilterOp::IsNull => Self::IsNull,
+            FilterOp::IsNotNull => Self::IsNotNull,
+        }
+    }
+}
+
+/// A condition the core wrote (filtering to a group), as the page keeps the filters in force.
+impl From<spelaion_core::ColumnFilter> for ColumnFilterItem {
+    fn from(filter: spelaion_core::ColumnFilter) -> Self {
+        Self {
+            column: u32::try_from(filter.column).unwrap_or(u32::MAX),
+            op: filter.op.into(),
+            value: filter.value,
+        }
+    }
+}
+
 /// One key of a result's sort: a result column by position, and its direction.
 #[derive(Debug, Clone, Deserialize, Type)]
 pub struct SortKeyItem {
@@ -4112,6 +4143,15 @@ impl From<ColumnSortItem> for spelaion_core::ColumnSort {
 pub struct FilterModeItem {
     pub any: bool,
     pub match_case: bool,
+}
+
+impl From<spelaion_core::FilterMode> for FilterModeItem {
+    fn from(mode: spelaion_core::FilterMode) -> Self {
+        Self {
+            any: mode.any,
+            match_case: mode.match_case,
+        }
+    }
 }
 
 impl From<FilterModeItem> for spelaion_core::FilterMode {
@@ -4594,6 +4634,74 @@ impl From<spelaion_core::CellView> for CellViewItem {
             geometry: view.geometry.map(GeoItem::from),
         }
     }
+}
+
+/// One group of a result's rows (the grouping panel): its values and how many rows have them.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupItem {
+    /// The value of each grouped column, as the database's own text; `null` is NULL. A long
+    /// value is cut (it ends in "…").
+    pub key: Vec<Option<String>>,
+    /// Rows in the group (f64 holds every count up to 2^53 exactly).
+    pub count: f64,
+    /// The position in the current view of the group's first row: what "filter to this
+    /// group" names it by.
+    pub first_row: f64,
+}
+
+/// The groups of a result's current view, as the core counted them.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupingItem {
+    /// The largest groups first, at most `max_groups` of them.
+    pub groups: Vec<GroupItem>,
+    /// Rows of the view: what a group's percent is of.
+    pub rows: f64,
+    /// Groups there are (with "duplicates only", those of more than one row).
+    pub total_groups: f64,
+    /// Different groups told apart, whatever "duplicates only" says.
+    pub distinct: f64,
+    /// Rows left out of every group because too many groups were already being counted.
+    pub uncounted_rows: f64,
+    /// The view the groups belong to, sent back with "filter to this group".
+    pub generation: f64,
+    /// The most groups the core returns.
+    pub max_groups: u32,
+}
+
+impl From<spelaion_core::GroupCounts> for GroupingItem {
+    fn from(grouping: spelaion_core::GroupCounts) -> Self {
+        Self {
+            groups: grouping
+                .groups
+                .into_iter()
+                .map(|group| GroupItem {
+                    key: group.key,
+                    count: group.count as f64,
+                    first_row: group.first_row as f64,
+                })
+                .collect(),
+            rows: grouping.rows as f64,
+            total_groups: grouping.total_groups as f64,
+            distinct: grouping.distinct as f64,
+            uncounted_rows: grouping.uncounted_rows as f64,
+            generation: grouping.generation as f64,
+            max_groups: u32::try_from(spelaion_core::MAX_GROUPS_RETURNED).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// A result filtered to one group: the column filters now in force (the ones there were and
+/// one condition per grouped column, written by the core) and the rows left.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct GroupFilterOutcome {
+    pub filters: Vec<ColumnFilterItem>,
+    /// How the filters are now read (a group's conditions all hold, and case is matched when
+    /// they are the only ones).
+    pub mode: FilterModeItem,
+    pub rows: u32,
+    pub total: u32,
 }
 
 /// Rows left after filtering a result, out of all it has.

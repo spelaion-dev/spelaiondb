@@ -22,6 +22,7 @@ import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerM
 import { Icon, PATHS } from "./Icons";
 import { ReferencesPanel } from "./ReferencesPanel";
 import { CalcPanel } from "./CalcPanel";
+import { GroupPanel } from "./GroupPanel";
 import { ColumnStatsPopover } from "./ColumnStatsPopover";
 import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
@@ -417,10 +418,21 @@ export function ResultGrid({
     }
     return byColumn;
   }, [keys, result.columns]);
-  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references", "calc"] : ["cell", "row", "calc"];
+  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references", "calc", "group"] : ["cell", "row", "calc", "group"];
   const shownMode: ViewerMode = viewerModes.includes(viewerMode) ? viewerMode : "cell";
   const referencesShown = viewer && shownMode === "references";
   const calcShown = viewer && shownMode === "calc";
+  const groupShown = viewer && shownMode === "group";
+  /** Counts the changes of the view (a sort, a filter, more rows). The groups belong to the
+   *  view they were counted over: a sort and its undo leave the same rows in the same order,
+   *  but the core's view is a newer one, so the groups are counted again. */
+  const viewChanges = useRef({ key: "", count: 0 });
+  /** The columns of the grouping panel, by position in the result (kept while the result is). */
+  const [grouped, setGrouped] = useState<number[]>([]);
+  /** A header pressed while the grouping panel is open: dragged to the panel it joins the
+   *  grouping, released where it was it sorts as a click does. */
+  const headerDrag = useRef<{ col: number; x: number; y: number; moved: boolean } | null>(null);
+  const [headerGhost, setHeaderGhost] = useState<{ col: number; x: number; y: number } | null>(null);
   const [sorting, setSorting] = useState(false);
   const sortsPending = useRef(0);
   const [inserting, setInserting] = useState<{ values: CellEditItem[]; index?: number } | null>(null);
@@ -586,6 +598,7 @@ export function ResultGrid({
   const view = `${localSort.map((key) => `${key.column}:${key.descending}`).join(",")}|${result.filter ?? ""}|${filtersKey}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw, displayRevision]);
+  if (viewChanges.current.key !== `${view}|${result.rows}`) viewChanges.current = { key: `${view}|${result.rows}`, count: viewChanges.current.count + 1 };
   cache.grewTo(result.rows);
 
   // Widths: header and type, bounded. (Fitting to content: next iteration.)
@@ -1085,7 +1098,15 @@ export function ResultGrid({
   }
 
   function openCellViewer() {
-    if (viewerMode === "references" || viewerMode === "calc") setViewerMode("cell");
+    if (viewerMode === "references" || viewerMode === "calc" || viewerMode === "group") setViewerMode("cell");
+    setViewer(true);
+  }
+
+  /** Shows the grouping panel, with `column` added to its columns when given. */
+  function openGroup(column?: number) {
+    setMenu(null);
+    if (column !== undefined) setGrouped((current) => (current.includes(column) ? current : [...current, column]));
+    setViewerMode("group");
     setViewer(true);
   }
 
@@ -1770,11 +1791,26 @@ export function ResultGrid({
         setResized((r) => (r[resize.col] === width ? r : { ...r, [resize.col]: width }));
         return;
       }
+      const drag = headerDrag.current;
+      if (drag && e.buttons === 1) {
+        if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 5) drag.moved = true;
+        if (drag.moved) setHeaderGhost({ col: drag.col, x: e.clientX, y: e.clientY });
+        return;
+      }
       if (dragging.current && e.buttons === 1) selectAt(e, true);
     };
-    const up = () => {
+    const up = (e: MouseEvent) => {
       dragging.current = false;
       resizing.current = null;
+      const drag = headerDrag.current;
+      if (drag) {
+        headerDrag.current = null;
+        setHeaderGhost(null);
+        // Dropped on the grouping panel: the column joins the grouping. Released where it was
+        // pressed: a click, which sorts. Dropped anywhere else: nothing.
+        if (!drag.moved) cycleSort(drag.col, false);
+        else if (document.elementFromPoint(e.clientX, e.clientY)?.closest(".group-panel")) openGroup(drag.col);
+      }
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -2009,6 +2045,9 @@ export function ResultGrid({
             // Ctrl+click selects the column (Ctrl+Shift+click up to it); a plain click sorts by
             // it alone, Shift+click adds it to the sort.
             if (e.ctrlKey || e.metaKey) selectColumn(header, e.shiftKey);
+            // With the grouping panel open a header can be dragged to it: the click's sort
+            // waits for the button to come up, to tell a click from a drag.
+            else if (groupShown && !e.shiftKey) headerDrag.current = { col: header, x: e.clientX, y: e.clientY, moved: false };
             else cycleSort(header, e.shiftKey);
             return;
           }
@@ -2117,6 +2156,9 @@ export function ResultGrid({
             onSort={(sort) => sortBy(sort)}
             masked={result.columns[menu.header ?? 0]?.masked ?? false}
           >
+            <button role="menuitem" onClick={() => openGroup(menu.header ?? 0)}>
+              {t("group.byColumn")}
+            </button>
             <GridSubmenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
                 <button key={n.style} role="menuitem" onClick={() => void copyNames(headerColumns(menu.header ?? 0), n.style)}>
@@ -2603,7 +2645,25 @@ export function ResultGrid({
       }}
     />
     <div className="viewer-panel" id={viewerId} style={{ width: shownViewerWidth }}>
-    {calcShown ? (
+    {groupShown ? (
+      <GroupPanel
+        resultId={result.id}
+        columns={result.columns}
+        grouped={grouped.filter((column) => column < result.columns.length)}
+        onGrouped={setGrouped}
+        view={String(viewChanges.current.count)}
+        waiting={!result.complete}
+        scope={serverSort ? "page" : result.paging?.hasMore ? "loaded" : undefined}
+        dropping={headerGhost !== null}
+        locked={!!result.paging?.loading || hasPendingEdits}
+        onFiltered={(filters, rows, total, mode) => onColumnFiltered(filters, rows, total, mode)}
+        modes={<ViewerModes modes={viewerModes} mode={shownMode} onMode={(mode) => { setViewerMode(mode); scrollerRef.current?.focus(); }} />}
+        onClose={() => {
+          setViewer(false);
+          scrollerRef.current?.focus();
+        }}
+      />
+    ) : calcShown ? (
       <CalcPanel
         resultId={result.id}
         range={calcRange}
@@ -2685,13 +2745,13 @@ export function ResultGrid({
     <div className="result-side-actions" role="toolbar" aria-label={t("viewer.toolbar")}>
       <button
         type="button"
-        className={`result-side-action ${viewer && !referencesShown && !calcShown ? "active" : ""}`}
+        className={`result-side-action ${viewer && !referencesShown && !calcShown && !groupShown ? "active" : ""}`}
         aria-label={t("viewer.toggle")}
-        aria-pressed={viewer && !referencesShown && !calcShown}
+        aria-pressed={viewer && !referencesShown && !calcShown && !groupShown}
         aria-controls={viewer ? viewerId : undefined}
-        title={t(viewer && !referencesShown && !calcShown ? "viewer.hide" : "viewer.show")}
+        title={t(viewer && !referencesShown && !calcShown && !groupShown ? "viewer.hide" : "viewer.show")}
         onClick={() => {
-          if (referencesShown || calcShown) setViewerMode("cell");
+          if (referencesShown || calcShown || groupShown) setViewerMode("cell");
           else setViewer(!viewer);
         }}
       >
@@ -2732,7 +2792,26 @@ export function ResultGrid({
       >
         <Icon name="sigma" size={18} />
       </button>
+      <button
+        type="button"
+        className={`result-side-action ${groupShown ? "active" : ""}`}
+        aria-label={t("group.toggle")}
+        aria-pressed={groupShown}
+        aria-controls={groupShown ? viewerId : undefined}
+        title={t(groupShown ? "group.hide" : "group.show")}
+        onClick={() => {
+          if (groupShown) setViewer(false);
+          else openGroup();
+        }}
+      >
+        <Icon name="group" size={18} />
+      </button>
     </div>
+    {headerGhost && (
+      <div className="group-ghost" style={{ left: headerGhost.x + 12, top: headerGhost.y + 12 }} aria-hidden="true">
+        {result.columns[headerGhost.col]?.name}
+      </div>
+    )}
     </div>
   );
 }

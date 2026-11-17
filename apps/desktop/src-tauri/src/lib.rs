@@ -3508,6 +3508,94 @@ async fn selection_stats(
     .map_err(|e| e.to_string())?
 }
 
+/// The groups of a result's current view by some of its columns, with each group's count
+/// (the grouping panel). Only the columns travel: the core counts over the stored result and
+/// returns the largest groups. A newer grouping on the same result, or `cancel_grouping`,
+/// stops this one (`None`).
+#[command]
+async fn group_result(
+    result: u32,
+    columns: Vec<u32>,
+    duplicates_only: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<GroupingItem>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let request = spelaion_core::GroupRequest {
+        columns: columns.into_iter().map(|c| c as usize).collect(),
+        duplicates_only,
+    };
+    // The ticket is taken before the work is queued: a grouping asked for later always
+    // stops this one, even if this one has not started yet.
+    let ticket = stored
+        .read()
+        .map_err(|_| "result lock poisoned".to_string())?
+        .group_ticket();
+    tokio::task::spawn_blocking(move || {
+        let read = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        read.grouping(&request, &ticket)
+            .map(|grouping| grouping.map(GroupingItem::from))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops the grouping running on a result (the grouping panel's Cancel, or its closing).
+#[command]
+async fn cancel_grouping(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(stored) = state.results.get(ResultId(result.into())) {
+        stored
+            .read()
+            .map_err(|_| "result lock poisoned")?
+            .cancel_group();
+    }
+    Ok(())
+}
+
+/// Filters a result to one group of a grouping: the core adds to the column filters in force
+/// one condition per grouped column, written from the group's first row (`first_row` of the
+/// view the grouping was made over, `generation`). The page sends no value; a grouping made
+/// over rows that changed since is refused.
+#[command]
+async fn filter_to_group(
+    result: u32,
+    columns: Vec<u32>,
+    first_row: f64,
+    generation: f64,
+    state: State<'_, AppState>,
+) -> CmdResult<GroupFilterOutcome> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let columns: Vec<usize> = columns.into_iter().map(|c| c as usize).collect();
+    if !(first_row >= 0.0 && generation >= 0.0) {
+        return Err("no such group".into());
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut stored = stored
+            .write()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let (filters, rows) = stored
+            .filter_to_group(&columns, first_row as usize, generation as u64)
+            .map_err(|e| e.to_string())?;
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        Ok(GroupFilterOutcome {
+            filters: filters.into_iter().map(ColumnFilterItem::from).collect(),
+            mode: stored.filter_mode().into(),
+            rows: n(rows),
+            total: n(stored.total_rows()),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Stops the selection calculation running on a result (the calc panel's Cancel).
 #[command]
 async fn cancel_selection_stats(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
@@ -5626,6 +5714,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             clear_find,
             selection_stats,
             cancel_selection_stats,
+            group_result,
+            cancel_grouping,
+            filter_to_group,
             result_chart,
             cancel_chart,
             save_chart_image,

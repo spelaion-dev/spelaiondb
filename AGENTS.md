@@ -509,7 +509,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
   `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
-  only, stopped by a newer one or a cancel; `chart.rs` prepares a chart's points from that view,
+  only, stopped by a newer one or a cancel; `group.rs` is the grouping panel the same way:
+  the rows of that view counted by some columns (NULL a group of its own, a masked column by its
+  mask, a bounded answer), and "filter to a group" written as column filters of `filter.rs`
+  from one row of the group; `chart.rs` prepares a chart's points from that view,
   ADR-040: at most `MAX_CHART_POINTS`, rows combined by X, and it writes the saved PNG or SVG;
   `er/` is the ER diagram, ADR-046: the model read from the explorer's catalog, its layered layout
   computed once per model and display options, and its Mermaid and DBML text, which must parse
