@@ -698,3 +698,109 @@ async fn pages_sorted_by_columns_with_nulls_and_ties_show_every_row_once_on_ever
     let _ = std::fs::remove_dir_all(&dir);
     eprintln!("tested on {tested:?}");
 }
+
+/// SQL Server: a `varchar` key of a SQL collation sorts with the collation's non-Unicode rules,
+/// where a hyphen or an apostrophe is a character like any other. Compared with an `N'…'`
+/// literal it would be converted to `nvarchar` and compared with Unicode rules, which weigh
+/// them otherwise, and a page boundary between such values would show a row twice or hide one
+/// (SDB-404). Pages one row long must show every row once, in the server's own `ORDER BY`
+/// order.
+#[tokio::test]
+async fn sqlserver_pages_by_a_varchar_key_follow_its_collation() {
+    let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1") else {
+        return;
+    };
+    params.tls = TlsMode::Require;
+    params.database = "master".into();
+    let master = connect(&*engines::sqlserver(), &params).await;
+    run(
+        "sqlserver",
+        &master,
+        "if db_id('spelaion') is null create database spelaion",
+    )
+    .await;
+    params.database = "spelaion".into();
+    let session = connect(&*engines::sqlserver(), &params).await;
+    let cleanup = connect(&*engines::sqlserver(), &params).await;
+    let t = format!("collation_pages_{}", std::process::id());
+    let values = [
+        "co-op",
+        "coop",
+        "co'op",
+        "co op",
+        "cop",
+        "co-operate",
+        "cooperate",
+        "coo",
+        "co--op",
+        "c-o-o-p",
+        "'coop",
+        "-coop",
+        "coo-p",
+        "COOP",
+        "Co-Op",
+        "co_op",
+        "co.op",
+        // Outside ASCII, in the database's code page (1252).
+        "coöp",
+        "cöop",
+        "coop-é",
+        "co'-op",
+    ];
+    let body = async {
+        run(
+            "sqlserver",
+            &session,
+            &format!(
+                "drop table if exists {t}; create table {t} (code varchar(20) collate SQL_Latin1_General_CP1_CS_AS not null primary key, n int not null)"
+            ),
+        )
+        .await;
+        for (n, value) in values.iter().enumerate() {
+            let literal = value.replace("'", "''");
+            run(
+                "sqlserver",
+                &session,
+                &format!("insert into {t} values ('{literal}', {n})"),
+            )
+            .await;
+        }
+        let ordered = result(
+            "sqlserver",
+            &session,
+            &format!("select code from {t} order by code"),
+        )
+        .await;
+        let expected = column(&session, ordered, 0);
+        session.results().remove(ordered);
+        assert_eq!(expected.len(), values.len());
+
+        let sql = format!("select code, n from {t}");
+        if !spelaion_core::query_pages_exactly(&session, &sql, &[]).await {
+            // Not paged: it runs as written, which is exact too.
+            eprintln!("not paged by a varchar key of a SQL collation");
+            return;
+        }
+        let page = spelaion_core::first_query_page_sql(&session, &sql, 1, &[])
+            .await
+            .expect("paged");
+        let id = result("sqlserver", &session, &page).await;
+        for _ in 0..values.len() + 2 {
+            let shown = session.results().get(id).unwrap().read().unwrap().rows() as u64;
+            let added = spelaion_core::append_query_page(&session, id, &sql, 1, shown, &[])
+                .await
+                .expect("a page");
+            if added == 0 {
+                break;
+            }
+        }
+        let paged = column(&session, id, 0);
+        session.results().remove(id);
+        assert_eq!(paged, expected, "pages differ from the server's ORDER BY");
+    };
+    let drop = vec![format!("drop table if exists {t}")];
+    cleaning_up(body, |panicked| async move {
+        run_cleanup("sqlserver", &cleanup, &drop, panicked).await
+    })
+    .await;
+}

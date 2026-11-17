@@ -84,6 +84,21 @@ and "Load every row" follow the two paths above, and never claim a page that is 
   (`table_rows_sql_by_key`), as a run of the tab that its Cancel stops. Every page goes through
   the result store, which masks it (ADR-051). A result holds at most `u32::MAX` rows.
 
+## Keys and collations (2026-11-17)
+
+- **Only keys the engine enforces unique** (SDB-405): SQLite, libSQL, SQL Server, DuckDB,
+  Oracle and Spanner, and PostgreSQL and MySQL when the server reached is one known to enforce
+  them. ClickHouse's sorting key, a connector's key (Trino, Presto, Hive, Flight SQL), Databend,
+  Doris, GreptimeDB or an unchecked fork could be shared by two rows: their queries run as
+  written.
+- **SQL Server's `varchar` and `char`** (SDB-404): a text literal is `N'…'`, and comparing such
+  a column with it converts the column to `nvarchar`, so with a SQL collation the comparison
+  followed Unicode rules while the `ORDER BY` followed the collation's own: pages one row long
+  over hyphens and apostrophes lost 10 rows of 18. Their literal is now
+  `CAST(N'…' AS varchar(max))`, compared under the column's collation. The conversion uses the
+  database's code page, which every value of such a column fits; a column whose collation has
+  another code page and holds characters outside ASCII is the known limit.
+
 ## Alternatives
 - **`OFFSET` with the key appended to the order.** Stable against plan changes and ties, but a
   row inserted or deleted between pages still shifts the rest.
