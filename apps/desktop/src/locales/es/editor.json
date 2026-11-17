@@ -913,6 +913,9 @@
     "insertSelect": "Insertar fragmento SELECT",
     "insertInsert": "Insertar fragmento INSERT",
     "insertUpdate": "Insertar fragmento UPDATE",
+    "zoomIn": "Ampliar el editor",
+    "zoomOut": "Reducir el editor",
+    "zoomReset": "Restablecer el zoom del editor",
     "failed": "No se pudo realizar la acción del editor: {{reason}}"
   },
   "names": {

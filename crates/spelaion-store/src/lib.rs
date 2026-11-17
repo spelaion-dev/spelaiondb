@@ -614,12 +614,26 @@ impl Default for ExplorerPreferences {
     }
 }
 
+/// The interface sizes the user may choose (SDB-389), in percent of the normal size: the
+/// whole window is drawn at that scale, every size the other settings give included.
+pub const INTERFACE_SIZES: [u16; 5] = [90, 100, 110, 125, 150];
+/// The interface size until the user chooses another.
+pub const DEFAULT_INTERFACE_SIZE: u16 = 100;
+/// The editor's zoom steps (SDB-389), in percent of the editor's own font size and line
+/// height: Ctrl+= and Ctrl+- move to the next step, Ctrl+0 goes back to 100.
+pub const EDITOR_ZOOMS: [u16; 11] = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+/// The editor's zoom until the user zooms.
+pub const DEFAULT_EDITOR_ZOOM: u16 = 100;
+
 /// Personal SQL editor and formatter preferences. Values are checked before storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorPreferences {
     pub font: String,
     pub font_size: u8,
     pub line_height: u8,
+    /// The editor's zoom, one of [`EDITOR_ZOOMS`]: it multiplies `font_size` and
+    /// `line_height`, so going back to 100 gives the sizes chosen in Settings again.
+    pub zoom: u16,
     pub tab_size: u8,
     pub line_numbers: bool,
     pub word_wrap: bool,
@@ -633,6 +647,7 @@ impl Default for EditorPreferences {
             font: "system".into(),
             font_size: 13,
             line_height: 18,
+            zoom: DEFAULT_EDITOR_ZOOM,
             tab_size: 2,
             line_numbers: true,
             word_wrap: false,
@@ -648,6 +663,7 @@ impl EditorPreferences {
             || !(10..=32).contains(&self.font_size)
             || !(14..=48).contains(&self.line_height)
             || self.line_height < self.font_size
+            || !EDITOR_ZOOMS.contains(&self.zoom)
             || !(1..=8).contains(&self.tab_size)
             || !(1..=8).contains(&self.indent)
             || !["preserve", "upper", "lower"].contains(&self.keyword_case.as_str())
@@ -1356,6 +1372,26 @@ impl Store {
         self.set_personal_setting("theme", theme)
     }
 
+    /// The interface size (SDB-389), one of [`INTERFACE_SIZES`], shared by every workspace in
+    /// this user directory. A value that is not one of them reads as the default.
+    pub fn get_interface_size(&self) -> Result<u16, StoreError> {
+        Ok(self
+            .personal_setting("interface_size")?
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|size| INTERFACE_SIZES.contains(size))
+            .unwrap_or(DEFAULT_INTERFACE_SIZE))
+    }
+
+    /// Saves the interface size; anything but one of [`INTERFACE_SIZES`] is refused.
+    pub fn set_interface_size(&self, size: u16) -> Result<(), StoreError> {
+        if !INTERFACE_SIZES.contains(&size) {
+            return Err(StoreError::new(format!(
+                "the interface size is one of {INTERFACE_SIZES:?} percent"
+            )));
+        }
+        self.set_personal_setting("interface_size", &size.to_string())
+    }
+
     /// Whether the app checks for updates when it starts (ADR-021). On unless turned off.
     pub fn get_update_check(&self) -> Result<bool, StoreError> {
         let value = self
@@ -1454,6 +1490,12 @@ impl Store {
                 .personal_setting("editor.line_height")?
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(defaults.line_height),
+            // Read on its own: a zoom that is not a step is 100, and never resets the rest.
+            zoom: self
+                .personal_setting("editor.zoom")?
+                .and_then(|s| s.parse().ok())
+                .filter(|zoom| EDITOR_ZOOMS.contains(zoom))
+                .unwrap_or(defaults.zoom),
             tab_size: self
                 .personal_setting("editor.tab_size")?
                 .and_then(|s| s.parse().ok())
@@ -1486,6 +1528,7 @@ impl Store {
         self.set_personal_setting("editor.font", &preferences.font)?;
         self.set_personal_setting("editor.font_size", &preferences.font_size.to_string())?;
         self.set_personal_setting("editor.line_height", &preferences.line_height.to_string())?;
+        self.set_personal_setting("editor.zoom", &preferences.zoom.to_string())?;
         self.set_personal_setting("editor.tab_size", &preferences.tab_size.to_string())?;
         self.set_flag("editor.line_numbers", preferences.line_numbers)?;
         self.set_flag("editor.word_wrap", preferences.word_wrap)?;
@@ -2451,6 +2494,7 @@ mod tests {
             font: "Consolas".into(),
             font_size: 16,
             line_height: 24,
+            zoom: 125,
             keyword_case: "upper".into(),
             word_wrap: true,
             ..defaults.clone()
@@ -2474,11 +2518,60 @@ mod tests {
             },
             EditorPreferences {
                 comma_position: "unknown".into(),
+                ..defaults.clone()
+            },
+            // Only the zoom steps: never a size of its own, nor nothing.
+            EditorPreferences {
+                zoom: 0,
+                ..defaults.clone()
+            },
+            EditorPreferences {
+                zoom: 133,
+                ..defaults.clone()
+            },
+            EditorPreferences {
+                zoom: 1000,
                 ..defaults
             },
         ] {
             assert!(store.set_editor_preferences(&invalid).is_err());
             assert_eq!(store.get_editor_preferences().unwrap(), changed);
+        }
+        // A damaged zoom reads as 100 and leaves the other preferences as they were.
+        store.set_personal_setting("editor.zoom", "9999").unwrap();
+        assert_eq!(
+            store.get_editor_preferences().unwrap(),
+            EditorPreferences {
+                zoom: DEFAULT_EDITOR_ZOOM,
+                ..changed
+            }
+        );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn interface_size_is_one_of_its_steps_and_persists() {
+        let path = temp("interface-size");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_interface_size().unwrap(), DEFAULT_INTERFACE_SIZE);
+        store.set_interface_size(150).unwrap();
+        for refused in [0, 1, 99, 101, 151, 200, u16::MAX] {
+            assert!(store.set_interface_size(refused).is_err(), "{refused}");
+        }
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_interface_size().unwrap(), 150);
+        // What is not a step (a damaged file) reads as the default.
+        for damaged in ["abc", "", "-1", "1000", "99"] {
+            store
+                .set_personal_setting("interface_size", damaged)
+                .unwrap();
+            assert_eq!(
+                store.get_interface_size().unwrap(),
+                DEFAULT_INTERFACE_SIZE,
+                "{damaged}"
+            );
         }
         drop(store);
         let _ = std::fs::remove_file(path);

@@ -97,6 +97,11 @@ export const COMMANDS = [
   { id: "editor.insertSelect", category: "editor", label: "editor:actions.insertSelect", shortcut: "Ctrl+Alt+1", scope: "editor", menus: ["editor"] },
   { id: "editor.insertInsert", category: "editor", label: "editor:actions.insertInsert", shortcut: "Ctrl+Alt+2", scope: "editor", menus: ["editor"] },
   { id: "editor.insertUpdate", category: "editor", label: "editor:actions.insertUpdate", shortcut: "Ctrl+Alt+3", scope: "editor", menus: ["editor"] },
+  // The editor's zoom (SDB-389), a personal preference: the editor also takes Ctrl++ for zoom in
+  // (the + key, the keypad's, or Shift with =), and the webview's own zoom keys are off.
+  { id: "editor.zoomIn", category: "editor", label: "editor:actions.zoomIn", shortcut: "Ctrl+=", scope: "editor", menus: ["editor"] },
+  { id: "editor.zoomOut", category: "editor", label: "editor:actions.zoomOut", shortcut: "Ctrl+-", scope: "editor", menus: ["editor"] },
+  { id: "editor.zoomReset", category: "editor", label: "editor:actions.zoomReset", shortcut: "Ctrl+0", scope: "editor", menus: ["editor"] },
   { id: "view.explorer", category: "view", label: "shell:connections", menus: ["activity"] },
   { id: "view.explorerFilter", category: "view", label: "app:commands.explorerFilter", shortcut: "Ctrl+Shift+F", scope: "global" },
   { id: "view.erDiagram", category: "view", label: "app:commands.erDiagram" },

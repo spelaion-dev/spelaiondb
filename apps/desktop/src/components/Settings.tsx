@@ -128,6 +128,9 @@ function AppearanceSettings() {
   // Only while loading: a change made while another saves waits for it (SDB-83).
   const busy = usePreferences((s) => s.loading);
   const setTheme = usePreferences((s) => s.setTheme);
+  const interfaceSize = usePreferences((s) => s.interfaceSize);
+  const steps = usePreferences((s) => s.steps);
+  const setInterfaceSize = usePreferences((s) => s.setInterfaceSize);
   return (
     <>
       <Choice<ThemePreference>
@@ -144,6 +147,15 @@ function AppearanceSettings() {
       />
       <p className="muted small">{t("appearance.hint")}</p>
       <SaveError setting="theme" />
+      {/* SDB-389: the whole window at this scale (the webview's zoom, applied by the core). */}
+      <label className="field">
+        <span>{t("appearance.interfaceSize")}</span>
+        <select name="interfaceSize" value={interfaceSize} disabled={busy} onChange={(e) => void setInterfaceSize(Number(e.target.value))}>
+          {steps.interfaceSizes.map((size) => <option key={size} value={size}>{t(size === steps.defaultInterfaceSize ? "appearance.normalSize" : "appearance.percent", { value: size })}</option>)}
+        </select>
+      </label>
+      <p className="muted small">{t("appearance.interfaceSizeHint")}</p>
+      <SaveError setting="interfaceSize" />
       <GridSettings />
       <DisplaySettings />
     </>
@@ -159,6 +171,7 @@ function EditorSettings() {
   const reconnect = usePreferences((s) => s.reconnectOnStart);
   const busy = usePreferences((s) => s.loading);
   const setReconnect = usePreferences((s) => s.setReconnectOnStart);
+  const zooms = usePreferences((s) => s.steps.editorZooms);
   return (
     <>
       <fieldset disabled={busy} className="settings-choice">
@@ -178,6 +191,12 @@ function EditorSettings() {
             </select>
           </label>)}
         </div>
+        <label className="field"><span>{t("editor.zoom")}</span>
+          <select name="editor-zoom" value={preferences.zoom} onChange={(e) => void setEditor({ ...preferences, zoom: Number(e.target.value) })}>
+            {zooms.map((zoom) => <option key={zoom} value={zoom}>{t("appearance.percent", { value: zoom })}</option>)}
+          </select>
+        </label>
+        <p className="muted small">{t("editor.zoomHint")}</p>
         {(["lineNumbers", "wordWrap"] as const).map((key) => <label className="check" key={key}><input type="checkbox" name={`editor-${key}`} checked={preferences[key]} onChange={(e) => void setEditor({ ...preferences, [key]: e.target.checked })} />{t(`editor.${key}`)}</label>)}
       </fieldset>
       <fieldset disabled={busy} className="settings-choice">

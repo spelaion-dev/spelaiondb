@@ -22,7 +22,7 @@ import { useSnippets } from "../snippetStore";
 import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
 import { resolveName, sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase, type ResolvedName } from "../sqlCompletion";
 import { formatHttp, httpLanguage, isHttpLanguage } from "../httpLanguage";
-import { usePreferences } from "../preferences";
+import { usePreferences, zoomed } from "../preferences";
 import type { EditorPreferencesItem, RunKindItem } from "../bindings";
 import { useDialogs } from "../dialogStore";
 import { EditorMenu } from "./EditorMenu";
@@ -319,7 +319,8 @@ function editorPreferences(p: EditorPreferencesItem) {
   return [
     EditorState.tabSize.of(p.tabSize), indentUnit.of(" ".repeat(p.tabSize)),
     p.lineNumbers ? lineNumbers() : [], p.wordWrap ? EditorView.lineWrapping : [],
-    EditorView.theme({ "&": { "--sql-font-size": `${p.fontSize}px`, "--sql-line-height": `${p.lineHeight}px`, "--sql-font": p.font === "system" ? "var(--font-code)" : `"${p.font}", monospace` } }),
+    // The editor's zoom (SDB-389) multiplies both sizes; the interface size scales the result.
+    EditorView.theme({ "&": { "--sql-font-size": `${zoomed(p.fontSize, p.zoom)}px`, "--sql-line-height": `${zoomed(p.lineHeight, p.zoom)}px`, "--sql-font": p.font === "system" ? "var(--font-code)" : `"${p.font}", monospace` } }),
   ];
 }
 
@@ -489,6 +490,11 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     }), { userEvent: "input.transform" });
     return true;
   };
+  // A preference the editor changed from a key: why it could not be saved shows in the editor.
+  const editorSaved = (saved: boolean) => {
+    const error = usePreferences.getState().error;
+    if (!saved && error?.setting === "editor") callbacks.current.onActionError(error.detail);
+  };
   const action = (v: EditorView, id: EditorActionId): boolean => {
     switch (id) {
       case "runNewTab": return run(v, true);
@@ -496,11 +502,11 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       case "blockComment": return toggleBlockComment(v);
       case "wordWrap": {
         const { editor, setEditor } = usePreferences.getState();
-        void setEditor({ ...editor, wordWrap: !editor.wordWrap }).then((saved) => {
-          const error = usePreferences.getState().error;
-          if (!saved && error?.setting === "editor") callbacks.current.onActionError(error.detail);
-        }); return true;
+        void setEditor({ ...editor, wordWrap: !editor.wordWrap }).then(editorSaved); return true;
       }
+      case "zoomIn": void usePreferences.getState().zoomEditor(1).then(editorSaved); return true;
+      case "zoomOut": void usePreferences.getState().zoomEditor(-1).then(editorSaved); return true;
+      case "zoomReset": void usePreferences.getState().zoomEditor(0).then(editorSaved); return true;
       case "fold": return foldCode(v);
       case "unfold": return unfoldCode(v);
       case "matchingBracket": return cursorMatchingBracket(v);
@@ -576,6 +582,8 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
               { key: "Mod-Enter", run: (v) => run(v) },
               { key: "Shift-Alt-f", run: format },
               ...EDITOR_ACTIONS.map(({ id, key }) => ({ key, run: (v: EditorView) => action(v, id) })),
+              // Zoom in also from the + key (its own on some layouts, the keypad's, Shift+=).
+              { key: "Mod-+", run: (v) => action(v, "zoomIn") },
               { key: "Enter", run: acceptCompletion },
               { key: "Tab", run: tab },
               { key: "Shift-Tab", run: (v) => prevSnippetField(v) || indentLess(v) },

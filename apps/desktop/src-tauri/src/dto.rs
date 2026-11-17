@@ -934,6 +934,8 @@ pub struct EditorPreferencesItem {
     pub font: String,
     pub font_size: u8,
     pub line_height: u8,
+    /// The editor's zoom in percent (SDB-389): it multiplies the font size and line height.
+    pub zoom: u16,
     pub tab_size: u8,
     pub line_numbers: bool,
     pub word_wrap: bool,
@@ -947,6 +949,7 @@ impl From<spelaion_core::EditorPreferences> for EditorPreferencesItem {
             font,
             font_size,
             line_height,
+            zoom,
             tab_size,
             line_numbers,
             word_wrap,
@@ -958,6 +961,7 @@ impl From<spelaion_core::EditorPreferences> for EditorPreferencesItem {
             font,
             font_size,
             line_height,
+            zoom,
             tab_size,
             line_numbers,
             word_wrap,
@@ -973,6 +977,7 @@ impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
             font,
             font_size,
             line_height,
+            zoom,
             tab_size,
             line_numbers,
             word_wrap,
@@ -984,6 +989,7 @@ impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
             font,
             font_size,
             line_height,
+            zoom,
             tab_size,
             line_numbers,
             word_wrap,
@@ -992,6 +998,17 @@ impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
             comma_position,
         }
     }
+}
+
+/// The steps the interface size and the editor's zoom move through (SDB-389), in percent:
+/// the core's lists, so the page never offers one the core would refuse.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SizeStepsItem {
+    pub interface_sizes: Vec<u16>,
+    pub default_interface_size: u16,
+    pub editor_zooms: Vec<u16>,
+    pub default_editor_zoom: u16,
 }
 
 /// The map view's background (ADR-045): tiles from the user's server, off by default.

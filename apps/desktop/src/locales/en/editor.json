@@ -913,6 +913,9 @@
     "insertSelect": "Insert SELECT snippet",
     "insertInsert": "Insert INSERT snippet",
     "insertUpdate": "Insert UPDATE snippet",
+    "zoomIn": "Zoom in the editor",
+    "zoomOut": "Zoom out the editor",
+    "zoomReset": "Reset the editor's zoom",
     "failed": "Could not perform editor action: {{reason}}"
   },
   "names": {

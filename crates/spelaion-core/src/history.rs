@@ -135,6 +135,13 @@ enum Request {
         theme: String,
         reply: Reply<()>,
     },
+    GetInterfaceSize {
+        reply: Reply<u16>,
+    },
+    SetInterfaceSize {
+        size: u16,
+        reply: Reply<()>,
+    },
     GetUpdateCheck {
         reply: Reply<bool>,
     },
@@ -392,6 +399,12 @@ impl QueryHistory {
                         }
                         Request::SetTheme { theme, reply } => {
                             let _ = reply.send(store.set_theme(&theme));
+                        }
+                        Request::GetInterfaceSize { reply } => {
+                            let _ = reply.send(store.get_interface_size());
+                        }
+                        Request::SetInterfaceSize { size, reply } => {
+                            let _ = reply.send(store.set_interface_size(size));
                         }
                         Request::GetUpdateCheck { reply } => {
                             let _ = reply.send(store.get_update_check());
@@ -797,6 +810,19 @@ impl QueryHistory {
             return Err(HistoryError::UnsupportedTheme);
         }
         self.request(|reply| Request::SetTheme { theme, reply })
+            .await
+    }
+
+    /// The interface size in percent (SDB-389), one of
+    /// [`spelaion_store::INTERFACE_SIZES`]; 100 until the user chooses another.
+    pub async fn interface_size(&self) -> Result<u16, HistoryError> {
+        self.request(|reply| Request::GetInterfaceSize { reply })
+            .await
+    }
+
+    /// Saves the interface size; the store refuses anything but one of its steps.
+    pub async fn set_interface_size(&self, size: u16) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetInterfaceSize { size, reply })
             .await
     }
 
@@ -2771,6 +2797,30 @@ mod tests {
         let reopened = QueryHistory::open(path).unwrap();
         assert_eq!(reopened.theme().await.unwrap(), "dark");
         assert_eq!(reopened.language().await.unwrap(), "es");
+    }
+
+    #[tokio::test]
+    async fn interface_size_is_personal_persistent_and_only_one_of_its_steps() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "spelaion-core-interface-size-{}-{nonce}/state.db",
+            std::process::id()
+        ));
+        let history = QueryHistory::open(path.clone()).unwrap();
+        assert_eq!(
+            history.interface_size().await.unwrap(),
+            spelaion_store::DEFAULT_INTERFACE_SIZE
+        );
+        let largest = *spelaion_store::INTERFACE_SIZES.last().unwrap();
+        history.set_interface_size(largest).await.unwrap();
+        assert!(history.set_interface_size(largest + 1).await.is_err());
+        assert!(history.set_interface_size(0).await.is_err());
+        drop(history);
+        let reopened = QueryHistory::open(path).unwrap();
+        assert_eq!(reopened.interface_size().await.unwrap(), largest);
     }
 
     #[tokio::test]

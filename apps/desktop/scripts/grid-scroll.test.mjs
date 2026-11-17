@@ -4,7 +4,7 @@
 // last row of results of millions of rows.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_SPACER_H, isScaled, maxContentTop, maxScrollTop, scrollMap, toContent, toScroll, wheelPixels } from "../src/grid/scroll.ts";
+import { MAX_SPACER_H, isScaled, maxContentTop, maxScrollTop, maxSpacerH, scrollMap, toContent, toScroll, wheelPixels } from "../src/grid/scroll.ts";
 
 const ROW_H = 24;
 const HEADER_H = 34;
@@ -61,6 +61,27 @@ test("every row of a scaled result has a content position that maps back to itse
   const scale = maxContentTop(map) / maxScrollTop(map);
   assert.ok(Math.abs(toContent(map, 1) - scale) < 1e-9);
   assert.ok(scale < VIEW);
+});
+
+test("at a larger interface size the spacer stays under the cap in zoomed pixels, and the last row is reached", () => {
+  // The largest interface size (150 %) on a monitor scaled to 150 %, and below 1.
+  for (const ratio of [0.9, 1, 1.25, 1.5, 2.25, 3]) {
+    const cap = maxSpacerH(ratio);
+    assert.ok(cap <= MAX_SPACER_H);
+    assert.ok(cap * ratio < BROWSER_CAP, `ratio ${ratio}: ${cap} CSS px`);
+    // The tallest grid rows (a 20 px font: 32 px rows, SDB-385) and the usual ones.
+    for (const rowH of [24, 32]) {
+      for (const rows of [1_000_000, 5_000_000, 1_000_000_000]) {
+        const map = scrollMap(HEADER_H + rows * rowH, VIEW, cap);
+        assert.ok(map.spacerH <= cap);
+        const end = toContent(map, maxScrollTop(map));
+        assert.equal(Math.floor((end + VIEW - HEADER_H - 1) / rowH), rows - 1, `ratio ${ratio}, ${rows} rows of ${rowH} px`);
+        assert.equal(toContent(map, 0), 0);
+      }
+    }
+  }
+  // Without a page (these tests) the ratio is 1.
+  assert.equal(scrollMap(1e12, VIEW).spacerH, MAX_SPACER_H);
 });
 
 test("a viewport taller than the content scrolls nowhere", () => {

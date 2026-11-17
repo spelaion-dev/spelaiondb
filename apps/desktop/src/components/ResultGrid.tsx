@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
 import { readClipboardText } from "../clipboardText";
 import { openTableData } from "../connect";
-import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
+import { THEME_CHANGE_EVENT, onPixelRatioChange, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
 import { RowCache, type ValueKind } from "../grid/rowCache";
 import { printableGridKey } from "../gridTyping";
@@ -367,6 +367,8 @@ export function ResultGrid({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frame = useRef<number | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // The device pixel ratio the spacer was sized for: its height depends on it (`maxSpacerH`).
+  const [, setPixelRatio] = useState(() => window.devicePixelRatio || 1);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [queryPage, setQueryPage] = useState(0);
   const requestedPageScroll = useRef<number | null>(null);
@@ -731,9 +733,12 @@ export function ResultGrid({
     const range = selection ? bounds(selection) : null;
     const sparseRows = selection?.rows ? new Set(selection.rows) : null;
     const dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== size.w * dpr || canvas.height !== size.h * dpr) {
-      canvas.width = size.w * dpr;
-      canvas.height = size.h * dpr;
+    // Whole device pixels: at a fractional ratio (an interface size of 110 %, SDB-389) the
+    // canvas would otherwise be resized on every frame.
+    const deviceW = Math.round(size.w * dpr), deviceH = Math.round(size.h * dpr);
+    if (canvas.width !== deviceW || canvas.height !== deviceH) {
+      canvas.width = deviceW;
+      canvas.height = deviceH;
     }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -995,9 +1000,16 @@ export function ResultGrid({
     const observer = new ResizeObserver(() => setSize({ w: scroller.clientWidth, h: scroller.clientHeight }));
     observer.observe(scroller);
     window.addEventListener(THEME_CHANGE_EVENT, redraw);
+    // The interface size (the webview's zoom) or another monitor: the spacer is sized again
+    // (the engines' height cap counts zoomed pixels) and the canvas drawn at the new ratio.
+    const stopWatching = onPixelRatioChange(() => {
+      setPixelRatio(window.devicePixelRatio || 1);
+      redraw();
+    });
     return () => {
       observer.disconnect();
       window.removeEventListener(THEME_CHANGE_EVENT, redraw);
+      stopWatching();
     };
   }, [redraw]);
 

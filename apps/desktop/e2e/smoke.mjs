@@ -1645,6 +1645,175 @@ try {
   assert.equal(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "no tint without zebra rows");
   await setGridLook({ zebra: true });
 
+  step("interface size: the largest draws every screen bigger with no text cut off, and the editor zooms in and back");
+  {
+    // Text in `selector` that a box which does not scroll cuts off (SDB-389): a text node's
+    // box partly outside an ancestor that hides its overflow. Cut short with an ellipsis is
+    // meant (long names, ui-guidelines); hidden whole (a collapsed panel) is not cut off.
+    const cutOff = (selector) => page.evaluate((selector) => {
+      const found = [];
+      for (const root of document.querySelectorAll(selector)) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const owner = node.parentElement;
+          if (!node.textContent.trim() || !owner?.checkVisibility({ visibilityProperty: true, opacityProperty: true })) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const text = range.getBoundingClientRect();
+          if (text.width < 1 || text.height < 1) continue;
+          let ellipsis = false;
+          for (let box = owner; box && box !== document.body; box = box.parentElement) {
+            const style = getComputedStyle(box);
+            const rect = box.getBoundingClientRect();
+            // Read only by screen readers.
+            if (rect.width <= 1 || rect.height <= 1) break;
+            if (style.textOverflow === "ellipsis") ellipsis = true;
+            const clips = (overflow) => overflow === "hidden" || overflow === "clip";
+            const outside = (a0, a1, b0, b1) => a0 < b0 - 1 || a1 > b1 + 1;
+            const disjoint = text.bottom <= rect.top || text.top >= rect.bottom || text.right <= rect.left || text.left >= rect.right;
+            if (disjoint) break;
+            const cutY = clips(style.overflowY) && outside(text.top, text.bottom, rect.top, rect.bottom);
+            const cutX = clips(style.overflowX) && !ellipsis && outside(text.left, text.right, rect.left, rect.right);
+            if (cutY || cutX) {
+              found.push(`${cutY ? "height" : "width"}: "${node.textContent.trim().slice(0, 40)}" in ${box.tagName.toLowerCase()}.${[...box.classList].join(".")}`);
+              break;
+            }
+            // A box that scrolls shows the rest when scrolled.
+            if (["auto", "scroll"].includes(style.overflowY) || ["auto", "scroll"].includes(style.overflowX)) break;
+          }
+        }
+      }
+      return found;
+    }, selector);
+    const ratio = () => page.evaluate(() => window.devicePixelRatio);
+    const normalRatio = await ratio();
+    // Playwright's screenshot of a zoomed page keeps only its top-left corner (CSS pixels taken
+    // as device pixels): the whole window, as it is on screen, comes from CDP itself.
+    const cdp = await page.context().newCDPSession(page);
+    const windowShot = async (name) => {
+      const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(join(shots, `${name}.png`), Buffer.from(data, "base64"));
+    };
+    // A box wholly inside the window (nothing of it beyond an edge, where no scroll reaches).
+    const inWindow = (selector) => page.locator(selector).evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth + 0.5 && box.bottom <= window.innerHeight + 0.5;
+    });
+    const sizeSelect = (dialog) => dialog.locator('select[name="interfaceSize"]');
+    const openSettings = async () => {
+      // Ctrl+, : the keyboard, so nothing depends on where a click lands at another scale.
+      await page.keyboard.press("Control+,");
+      const dialog = page.locator(".settings-dialog");
+      await dialog.waitFor();
+      await dialog.locator(".settings-nav button:nth-child(1)").evaluate((button) => button.click());
+      await sizeSelect(dialog).waitFor();
+      return dialog;
+    };
+    const closeSettings = async (dialog) => {
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
+    };
+    const chooseSize = async (dialog, size) => {
+      await sizeSelect(dialog).selectOption(String(size));
+      await page.waitForFunction(([normal, size]) => Math.abs(window.devicePixelRatio - (normal * size) / 100) < 0.01 && !document.querySelector('select[name="interfaceSize"]')?.matches(":disabled"), [normalRatio, size]);
+      // Two frames: the layout and the grid's repaint at the new ratio.
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    };
+    await sortGrid.evaluate((el) => (el.scrollTop = 0));
+    let dialog = await openSettings();
+    const steps = await sizeSelect(dialog).locator("option").evaluateAll((options) => options.map((option) => Number(option.value)));
+    assert.deepEqual(steps, [90, 100, 110, 125, 150], "the core's interface sizes");
+    assert.equal(await sizeSelect(dialog).inputValue(), "100");
+    await chooseSize(dialog, 150);
+    assert.equal(await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_interface_size")), 150, "saved");
+    // A dialog: Settings itself, every category's text whole.
+    assert.deepEqual(await cutOff(".settings-dialog"), [], "the settings dialog at 150 %");
+    assert.ok(await inWindow(".settings-dialog"), "the settings dialog fits in the window at 150 %");
+    await windowShot("sdb-389-settings-largest-light");
+    await closeSettings(dialog);
+    // The explorer, the tab strip, the editor's bars, the results' toolbar and status line.
+    assert.deepEqual(await cutOff("#connections-sidebar"), [], "the explorer at 150 %");
+    assert.deepEqual(await cutOff(".tabbar"), [], "the tab strip at 150 %");
+    assert.deepEqual(await cutOff(".tab-panel:not([hidden])"), [], "the editor and its results at 150 %");
+    // The grid is a canvas: drawn at the new ratio (sharp), its rows as tall as at 100 % in CSS
+    // pixels (so 1.5 times on screen), its spacer under the engines' cap in zoomed pixels.
+    const canvasNow = await sortGrid.evaluate((scroller) => {
+      const canvas = scroller.closest(".tab-panel").querySelector(".grid-canvas");
+      return { width: canvas.width, expected: Math.round(scroller.clientWidth * window.devicePixelRatio), spacer: scroller.firstElementChild.getBoundingClientRect().height, spacerStyle: parseFloat(scroller.firstElementChild.style.height) };
+    });
+    assert.equal(canvasNow.width, canvasNow.expected, "the grid's canvas follows the ratio");
+    assert.ok(canvasNow.spacer >= canvasNow.spacerStyle - 1, `the spacer is not cut short: ${JSON.stringify(canvasNow)}`);
+    assert.notEqual(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "the rows are where the grid draws them, at 150 % too");
+    // How tall an element the engine lays out at this ratio: the grid's spacer stays under it.
+    const tallest = await page.evaluate(() => {
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;left:0;top:0;width:1px;height:30000000px;visibility:hidden";
+      document.body.append(probe);
+      const height = probe.getBoundingClientRect().height;
+      probe.remove();
+      return height;
+    });
+    // WebView2 lays out about 33,554,430 zoomed pixels at most (22,369,620 CSS px at 1.5x): the
+    // grid's tallest spacer at this ratio (`maxSpacerH`) must fit.
+    const largest = await ratio();
+    console.log(`  a 30,000,000 px element at ${largest}x is laid out ${tallest} px tall`);
+    assert.ok(tallest >= Math.floor(30_000_000 / Math.max(1, largest)), "the grid's tallest spacer fits at this ratio");
+    await windowShot("sdb-389-largest-light");
+    // The same in the dark theme (screenshots for review), then back as it was.
+    dialog = await openSettings();
+    const themeBefore = await dialog.locator('input[name="theme"]:checked').getAttribute("value");
+    await dialog.locator('input[name="theme"][value="dark"]').evaluate((input) => input.click());
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    await windowShot("sdb-389-settings-largest-dark");
+    await closeSettings(dialog);
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    assert.deepEqual(await cutOff("#connections-sidebar, .tabbar, .tab-panel:not([hidden])"), [], "the dark theme at 150 %");
+    await windowShot("sdb-389-largest-dark");
+    dialog = await openSettings();
+    await dialog.locator(`input[name="theme"][value="${themeBefore}"]`).evaluate((input) => input.click());
+    await page.waitForFunction((theme) => document.querySelector(`input[name="theme"][value="${theme}"]`)?.checked && !document.querySelector('input[name="theme"]')?.matches(":disabled"), themeBefore);
+    await chooseSize(dialog, 100);
+    await closeSettings(dialog);
+    assert.equal(await ratio(), normalRatio, "back to the normal size");
+    assert.equal(await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_interface_size")), 100);
+
+    // The editor's zoom: Ctrl+= and Ctrl+- step it, Ctrl+0 goes back; each step is saved, and
+    // the webview's own zoom never moves.
+    const editorPreferences = () => page.evaluate(async () => (await window.__TAURI_INTERNALS__.invoke("get_editor_preferences")));
+    const base = await editorPreferences();
+    assert.equal(base.zoom, 100);
+    const editorFont = () => panel.locator(".cm-editor").evaluate((editor) => parseFloat(getComputedStyle(editor).fontSize));
+    const zoomedTo = async (zoom) => {
+      const size = Math.round((base.fontSize * zoom) / 100);
+      await page.waitForFunction(([size]) => parseFloat(getComputedStyle(document.querySelector(".tab-panel:not([hidden]) .cm-editor")).fontSize) === size, [size]);
+      for (let i = 0; i < 50 && (await editorPreferences()).zoom !== zoom; i++) await page.waitForTimeout(100);
+      assert.equal((await editorPreferences()).zoom, zoom, `zoom ${zoom} saved`);
+    };
+    assert.equal(await editorFont(), base.fontSize);
+    await panel.locator(".cm-content").click();
+    await page.keyboard.press("Control+Equal");
+    await zoomedTo(110);
+    await page.keyboard.press("Control+Equal");
+    await zoomedTo(125);
+    // The + key (Shift+= here) zooms in too.
+    await page.keyboard.press("Control+Shift+Equal");
+    await zoomedTo(150);
+    await page.keyboard.press("Control+Minus");
+    await zoomedTo(125);
+    assert.equal(await ratio(), normalRatio, "the webview's own zoom did not move");
+    await windowShot("sdb-389-editor-zoomed");
+    // Outside the editor the keys do nothing.
+    await sortGrid.focus();
+    await page.keyboard.press("Control+Equal");
+    await page.waitForTimeout(300);
+    assert.equal((await editorPreferences()).zoom, 125, "the grid does not zoom the editor");
+    assert.equal(await ratio(), normalRatio, "nor the webview");
+    await panel.locator(".cm-content").click();
+    await page.keyboard.press("Control+0");
+    await zoomedTo(100);
+    assert.equal(await editorFont(), base.fontSize, "back to the size chosen in Settings");
+  }
+
   step("find: Ctrl+F searches the 50,000 rows in the core, Enter and F3 step through the matches");
   await sortGrid.evaluate((el) => {
     el.scrollTop = 0;
@@ -2623,7 +2792,8 @@ try {
     await page.keyboard.press("Shift+F10");
     await menu.waitFor();
     await page.keyboard.press("End");
-    assert.equal(await page.evaluate(() => document.activeElement.textContent.includes("Insert UPDATE")), true);
+    // The last item is the editor's zoom (SDB-389), after the snippets.
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.includes("Reset the editor's zoom")), true);
     await page.keyboard.press("Escape");
     assert.equal(await sqlEditor.evaluate((el) => el === document.activeElement), true);
     await withSettings("editor", async (settings) => {

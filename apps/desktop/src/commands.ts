@@ -12,6 +12,7 @@ import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
 import { openDiagram } from "./diagramTabs";
+import { usePreferences } from "./preferences";
 import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, GRID_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type ResultMeta, type Tab } from "./store";
 import {
   closable,
@@ -277,6 +278,10 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "editor.insertSelect": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertSelect") },
   "editor.insertInsert": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertInsert") },
   "editor.insertUpdate": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertUpdate") },
+  // A personal preference of every editor (SDB-389): it needs no editor to change.
+  "editor.zoomIn": { run: () => void usePreferences.getState().zoomEditor(1) },
+  "editor.zoomOut": { run: () => void usePreferences.getState().zoomEditor(-1) },
+  "editor.zoomReset": { run: () => void usePreferences.getState().zoomEditor(0) },
   "view.explorer": { run: () => toggleSection("connections") },
   "view.explorerFilter": {
     run: () => {
