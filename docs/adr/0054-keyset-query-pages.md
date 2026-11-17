@@ -49,6 +49,13 @@ the query's own `ORDER BY`, then by the key. The rules above hold, with one addi
   says that only the loaded rows were sorted.
 - A table data tab keeps its numbered pages (point 4): its header sort is an `ORDER BY` the
   core writes from the table's own columns, followed by the key.
+  **Its NULLs stay where the engine puts them** (decided 2026-11-17, SDB-406): the header click
+  writes a plain `ORDER BY "c" DESC` into the tab's ORDER BY box, which the user reads and edits,
+  and the box is then the same text whether a click or the user wrote it. `CASE WHEN …` there
+  would be hard to read and would turn a typed sort into a different one. So the same click puts
+  NULLs first on MySQL, MariaDB, SQL Server and SQLite and last on PostgreSQL and DuckDB in a
+  table data tab, while a stored result's sort and a paged query's put them last everywhere.
+  Revisit if users find that difference surprising enough to trade the box's plain text for it.
 
 ## Moving through big results (2026-11-17, SDB-386)
 A pagination bar (first, previous, the page's number typed to jump, next, last), "Go to row"
