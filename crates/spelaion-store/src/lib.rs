@@ -674,6 +674,52 @@ pub struct GridPreferences {
     /// How many result tabs an editor tab keeps (SDB-378), from 1 to [`MAX_RESULT_TABS`]:
     /// past it, the oldest result that is not pinned is closed.
     pub result_tabs: u32,
+    /// Values colored by their type (numbers, text, dates, booleans, NULL); off by default.
+    pub colorize: bool,
+    /// The column header shows the column's type under its name; on by default.
+    pub header_type: bool,
+    /// The column header shows the column's comment, where it is known; off by default.
+    pub header_comment: bool,
+    /// The grid's own font size in pixels (SDB-385), from [`MIN_GRID_FONT`] to
+    /// [`MAX_GRID_FONT`]: not the editor's, nor the interface's.
+    pub font_size: u32,
+}
+
+/// The grid's font size until the user chooses another, and its bounds, in pixels.
+pub const DEFAULT_GRID_FONT: u32 = 12;
+pub const MIN_GRID_FONT: u32 = 10;
+pub const MAX_GRID_FONT: u32 = 20;
+
+/// How the grid shows values (SDB-385), as the user set it: `strftime` patterns for dates,
+/// times and timestamps, a number's marks, a display time zone and how binary reads. Kept as
+/// text; the core checks it before it is saved and reads it leniently (a value it does not
+/// know is the default). An empty text means "as the database prints it".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayPreferences {
+    /// Everything as the database prints it, whatever the other settings say; on by default.
+    pub as_stored: bool,
+    pub date: String,
+    pub time: String,
+    pub timestamp: String,
+    pub grouping: String,
+    pub decimal: String,
+    pub time_zone: String,
+    pub binary: String,
+}
+
+impl Default for DisplayPreferences {
+    fn default() -> Self {
+        Self {
+            as_stored: true,
+            date: String::new(),
+            time: String::new(),
+            timestamp: String::new(),
+            grouping: String::new(),
+            decimal: String::new(),
+            time_zone: String::new(),
+            binary: String::new(),
+        }
+    }
 }
 
 impl Default for GridPreferences {
@@ -683,6 +729,10 @@ impl Default for GridPreferences {
             null_text: true,
             bool_checkboxes: false,
             result_tabs: DEFAULT_RESULT_TABS,
+            colorize: false,
+            header_type: true,
+            header_comment: false,
+            font_size: DEFAULT_GRID_FONT,
         }
     }
 }
@@ -1451,7 +1501,60 @@ impl Store {
                 .and_then(|value| value.parse::<u32>().ok())
                 .filter(|tabs| (1..=MAX_RESULT_TABS).contains(tabs))
                 .unwrap_or(defaults.result_tabs),
+            colorize: self.get_flag("grid.colorize", defaults.colorize)?,
+            header_type: self.get_flag("grid.header_type", defaults.header_type)?,
+            header_comment: self.get_flag("grid.header_comment", defaults.header_comment)?,
+            font_size: self
+                .personal_setting("grid.font_size")?
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|size| (MIN_GRID_FONT..=MAX_GRID_FONT).contains(size))
+                .unwrap_or(defaults.font_size),
         })
+    }
+
+    /// How the grid shows values, each setting at its default until it is changed.
+    pub fn get_display_preferences(&self) -> Result<DisplayPreferences, StoreError> {
+        let text = |key: &str| Ok::<_, StoreError>(self.personal_setting(key)?.unwrap_or_default());
+        Ok(DisplayPreferences {
+            as_stored: self.get_flag("display.as_stored", true)?,
+            date: text("display.date")?,
+            time: text("display.time")?,
+            timestamp: text("display.timestamp")?,
+            grouping: text("display.grouping")?,
+            decimal: text("display.decimal")?,
+            time_zone: text("display.time_zone")?,
+            binary: text("display.binary")?,
+        })
+    }
+
+    /// Saves how the grid shows values, all of it or nothing. Each text is one line of at
+    /// most 128 bytes (the core has checked what it means).
+    pub fn set_display_preferences(
+        &self,
+        preferences: &DisplayPreferences,
+    ) -> Result<(), StoreError> {
+        let texts = [
+            ("display.date", &preferences.date),
+            ("display.time", &preferences.time),
+            ("display.timestamp", &preferences.timestamp),
+            ("display.grouping", &preferences.grouping),
+            ("display.decimal", &preferences.decimal),
+            ("display.time_zone", &preferences.time_zone),
+            ("display.binary", &preferences.binary),
+        ];
+        if texts
+            .iter()
+            .any(|(_, text)| text.len() > 128 || text.chars().any(char::is_control))
+        {
+            return Err(StoreError::new("invalid display preferences".into()));
+        }
+        let transaction = self.conn.unchecked_transaction()?;
+        self.set_flag("display.as_stored", preferences.as_stored)?;
+        for (key, text) in texts {
+            self.set_personal_setting(key, text)?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn set_grid_preferences(&self, preferences: &GridPreferences) -> Result<(), StoreError> {
@@ -1460,15 +1563,28 @@ impl Store {
             null_text,
             bool_checkboxes,
             result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         } = *preferences;
         if !(1..=MAX_RESULT_TABS).contains(&result_tabs) {
             return Err(StoreError::new(format!(
                 "an editor tab keeps from 1 to {MAX_RESULT_TABS} result tabs"
             )));
         }
+        if !(MIN_GRID_FONT..=MAX_GRID_FONT).contains(&font_size) {
+            return Err(StoreError::new(format!(
+                "the grid's font size is from {MIN_GRID_FONT} to {MAX_GRID_FONT} pixels"
+            )));
+        }
         self.set_flag("grid.zebra", zebra)?;
         self.set_flag("grid.null_text", null_text)?;
         self.set_flag("grid.bool_checkboxes", bool_checkboxes)?;
+        self.set_flag("grid.colorize", colorize)?;
+        self.set_flag("grid.header_type", header_type)?;
+        self.set_flag("grid.header_comment", header_comment)?;
+        self.set_personal_setting("grid.font_size", &font_size.to_string())?;
         self.set_personal_setting("results.kept_tabs", &result_tabs.to_string())
     }
 
@@ -2445,6 +2561,44 @@ mod tests {
     }
 
     #[test]
+    fn display_preferences_start_as_the_database_prints_and_persist() {
+        let path = temp("display");
+        let store = Store::open(&path).unwrap();
+        let defaults = DisplayPreferences::default();
+        assert!(defaults.as_stored);
+        assert_eq!(store.get_display_preferences().unwrap(), defaults);
+        let changed = DisplayPreferences {
+            as_stored: false,
+            date: "%d/%m/%Y".into(),
+            time: "%H:%M".into(),
+            timestamp: "%d/%m/%Y %H:%M:%S".into(),
+            grouping: "dot".into(),
+            decimal: "comma".into(),
+            time_zone: "Europe/Madrid".into(),
+            binary: "base64".into(),
+        };
+        store.set_display_preferences(&changed).unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.get_display_preferences().unwrap(), changed);
+        // A text that is not one short line is refused, and nothing changes.
+        for bad in ["%Y\n%m".to_string(), "x".repeat(129)] {
+            let refused = DisplayPreferences {
+                date: bad,
+                as_stored: true,
+                ..changed.clone()
+            };
+            assert!(reopened.set_display_preferences(&refused).is_err());
+        }
+        assert_eq!(reopened.get_display_preferences().unwrap(), changed);
+        // The grid's other preferences are kept apart.
+        assert_eq!(
+            reopened.get_grid_preferences().unwrap(),
+            GridPreferences::default()
+        );
+    }
+
+    #[test]
     fn grid_preferences_start_at_their_defaults_and_persist() {
         let path = temp("grid");
         let store = Store::open(&path).unwrap();
@@ -2458,7 +2612,20 @@ mod tests {
             null_text: false,
             bool_checkboxes: true,
             result_tabs: 5,
+            colorize: true,
+            header_type: false,
+            header_comment: true,
+            font_size: 15,
         };
+        for font_size in [MIN_GRID_FONT - 1, MAX_GRID_FONT + 1] {
+            let out_of_range = GridPreferences {
+                font_size,
+                ..changed
+            };
+            assert!(store.set_grid_preferences(&out_of_range).is_err());
+        }
+        assert!(!defaults.colorize && defaults.header_type && !defaults.header_comment);
+        assert_eq!(defaults.font_size, 12);
         // A number of result tabs out of range is refused, and nothing is saved.
         for result_tabs in [0, MAX_RESULT_TABS + 1] {
             let out_of_range = GridPreferences {

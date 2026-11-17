@@ -226,6 +226,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   };
   /** The table's primary key (`null` until known): editing needs one. */
   const [primaryKey, setPrimaryKey] = useState<string[] | null>(null);
+  const [columnComments, setColumnComments] = useState<Record<string, string>>({});
   const [queryTable, setQueryTable] = useState<(EditableTableItem & { result: number }) | null>(null);
   const [queryChecked, setQueryChecked] = useState<number | null>(null);
   const [savingEdits, setSavingEdits] = useState(false);
@@ -465,7 +466,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (!(await ensureConnected())) return;
     if (primaryKey === null) {
       call(commands.describeTable(tab.id, view.schema, view.name, null))
-        .then((details) => setPrimaryKey(details.primaryKey))
+        .then((details) => {
+          setPrimaryKey(details.primaryKey);
+          // The columns' comments, for the grid's header (SDB-385).
+          setColumnComments(Object.fromEntries(details.columns.flatMap((column) => (column.comment ? [[column.name, column.comment]] : []))));
+        })
         .catch(() => setPrimaryKey([]));
     }
     clearPending();
@@ -1502,6 +1507,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             onQuerySort={tab.table ? undefined : sortQuery}
             tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0 }), connectionId: tab.connectionId } : undefined}
             editing={editing}
+            columnComments={tab.table ? columnComments : undefined}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
             pendingEdits={pendingCount > 0}
             refreshDisabled={running || historySaving || databaseBusy || tab.status !== "connected" || !!tab.lost || workspaceChanging || savingEdits || pageLoading || refreshRestoring}
@@ -1563,6 +1569,7 @@ function Results({
   onQuerySort,
   tableData,
   editing,
+  columnComments,
   readOnlyHint,
   pendingEdits,
   refreshDisabled,
@@ -1588,6 +1595,7 @@ function Results({
   onQuerySort?(result: number, sort: SortState[]): Promise<boolean>;
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
   editing?: GridEditing;
+  columnComments?: Record<string, string>;
   readOnlyHint?: boolean;
   pendingEdits: boolean;
   refreshDisabled: boolean;
@@ -1704,6 +1712,7 @@ function Results({
             serverSort={serverSort}
             onQuerySort={onQuerySort ? (sort) => onQuerySort(active.id, sort) : undefined}
             tableData={tableData}
+            columnComments={columnComments}
             editing={filteringResult === active.id || restoringView ? undefined : editing}
             restoringView={restoringView}
             viewerOpen={viewerOpen}

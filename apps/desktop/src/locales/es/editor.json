@@ -135,6 +135,8 @@
     "columnCount_one": "{{formattedCount}} columna",
     "columnCount_other": "{{formattedCount}} columnas",
     "copyHtml": "Copiar como tabla HTML",
+    "copyDisplayed": "Copiar como se muestra",
+    "shownInZone": "mostrado en {{zone}}",
     "copyNamesMenu": "Copiar nombres de columna",
     "copyNamesPlain": "Nombres (id, name)",
     "copyNamesQuoted": "Entrecomillados para esta base de datos",

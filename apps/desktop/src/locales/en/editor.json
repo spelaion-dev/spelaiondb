@@ -135,6 +135,8 @@
     "columnCount_one": "{{formattedCount}} column",
     "columnCount_other": "{{formattedCount}} columns",
     "copyHtml": "Copy as HTML table",
+    "copyDisplayed": "Copy as displayed",
+    "shownInZone": "shown in {{zone}}",
     "copyNamesMenu": "Copy column names",
     "copyNamesPlain": "Names (id, name)",
     "copyNamesQuoted": "Quoted for this database",

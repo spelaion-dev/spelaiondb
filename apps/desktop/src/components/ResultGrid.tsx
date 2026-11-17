@@ -11,8 +11,9 @@ import { readClipboardText } from "../clipboardText";
 import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
-import { RowCache } from "../grid/rowCache";
+import { RowCache, type ValueKind } from "../grid/rowCache";
 import { printableGridKey } from "../gridTyping";
+import { formatsValues, useDisplayFormat } from "../displayFormat";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
 import { useDialogs, type ResultMeta, type SortState } from "../store";
 import { commandSpec, matchesShortcut } from "../commandRegistry";
@@ -35,7 +36,9 @@ function sameSort(a: SortState[], b: SortState[]): boolean {
   return a.length === b.length && a.every((key, i) => key.column === b[i]?.column && key.descending === b[i]?.descending);
 }
 
-const ROW_H = 24;
+// The grid's own font size is a personal setting (SDB-385): every grid shares it, so the row
+// height and the fonts that follow it are set once per render by `setGridFont`.
+let ROW_H = 24;
 const HEADER_H = 34;
 const PAD = 6;
 const MIN_COL = 72;
@@ -46,8 +49,31 @@ const MAX_RESIZE = 2000;
 /** Pixels on each side of a header edge that grab it. */
 const EDGE = 4;
 // Regular UI text is easier to scan across dense rows; the header remains distinct.
-const DATA_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
-const ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
+let DATA_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
+let ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
+/** Sets the size of the grid's values, in pixels; a row is that plus the usual room. */
+function setGridFont(size: number) {
+  const px = Math.min(20, Math.max(10, Math.round(size) || 12));
+  ROW_H = px + 12;
+  DATA_FONT = `400 ${px}px "Segoe UI", system-ui, sans-serif`;
+  ROW_NUMBER_FONT = `400 ${Math.min(px, 13)}px "Segoe UI", system-ui, sans-serif`;
+}
+/** The token that colors each kind of value (SDB-385), when the user asks for it. */
+const KIND_TOKEN: Partial<Record<ValueKind, "vNumber" | "vDate" | "vBool" | "vText">> = {
+  number: "vNumber",
+  date: "vDate",
+  time: "vDate",
+  timestamp: "vDate",
+  timestamptz: "vDate",
+  bool: "vBool",
+  text: "vText",
+};
+/** A column's kind before its first rows arrive, from its type. */
+function kindOf(logical: string): ValueKind {
+  if (NUMERIC.has(logical)) return "number";
+  if (logical === "date" || logical === "time" || logical === "timestamp" || logical === "timestamptz" || logical === "bool" || logical === "text") return logical;
+  return "other";
+}
 const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
 const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
 const NUMERIC = new Set(["int", "float", "decimal"]);
@@ -254,7 +280,7 @@ export function ResultGrid({
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
-  tableData,
+  tableData, columnComments,
   onHiddenColumns,
   onChart,
   refresh,
@@ -291,6 +317,9 @@ export function ResultGrid({
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
    *  can be followed to new table data tabs of `connectionId`. */
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+  /** The comments of the columns, by name, where they are known (a table's data): shown in
+   *  the header when the user asks for it. */
+  columnComments?: Record<string, string>;
 }) {
   // The sort the headers show: the table data tab's, else the core's sort of the loaded rows,
   // else the one a paged query's pages were read with.
@@ -330,6 +359,12 @@ export function ResultGrid({
   /** A masked cell revealed on request (ADR-051): its value lives only in the popover. */
   const [reveal, setReveal] = useState<{ x: number; y: number; row: number; col: number } | null>(null);
   const gridLook = usePreferences((s) => s.grid);
+  setGridFont(gridLook.fontSize);
+  // How values are shown (SDB-385): the core formats each window; when the format changes
+  // the rows are asked for again.
+  const displayRevision = useDisplayFormat((s) => s.revision);
+  const displayFormats = useDisplayFormat((s) => formatsValues(s.format));
+  useEffect(() => { void useDisplayFormat.getState().load(); }, []);
   /** The find bar (Ctrl+F): what is searched, and what the core found. */
   const [find, setFind] = useState<{ text: string; matchCase: boolean } | null>(null);
   const [found, setFound] = useState<{ count: number; truncated: boolean; busy: boolean; error?: string } | null>(null);
@@ -549,7 +584,8 @@ export function ResultGrid({
   // (blocks still on their way to the old one are dropped with it).
   const filtersKey = JSON.stringify(result.columnFilters ?? []);
   const view = `${localSort.map((key) => `${key.column}:${key.descending}`).join(",")}|${result.filter ?? ""}|${filtersKey}`;
-  const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw, displayRevision]);
   cache.grewTo(result.rows);
 
   // Widths: header and type, bounded. (Fitting to content: next iteration.)
@@ -641,6 +677,11 @@ export function ResultGrid({
       muted: cssVar(style, "--muted"),
       select: cssVar(style, "--accent-soft"),
       accent: cssVar(style, "--accent"),
+      vNumber: cssVar(style, "--value-number"),
+      vDate: cssVar(style, "--value-date"),
+      vBool: cssVar(style, "--value-bool"),
+      vText: cssVar(style, "--value-text"),
+      vNull: cssVar(style, "--value-null"),
     };
     const left = scroller.scrollLeft;
     const top = contentTop(scroller);
@@ -712,12 +753,16 @@ export function ResultGrid({
         ctx.fillStyle = c.muted;
         text = "…";
       } else if (value === null) {
-        ctx.fillStyle = c.muted;
+        ctx.fillStyle = gridLook.colorize ? c.vNull : c.muted;
         text = gridLook.nullText ? "NULL" : "";
       } else {
+        const masked = result.columns[col]?.masked && !edited;
+        // Colors by type (SDB-385), from the theme's tokens: the kind is the core's.
+        const token = gridLook.colorize && !masked ? KIND_TOKEN[cache.column(col)?.kind ?? kindOf(logical)] : undefined;
         // A masked value (ADR-051) holds the mask, not data: drawn like NULL.
-        ctx.fillStyle = result.columns[col]?.masked && !edited ? c.muted : c.text;
-        text = value.replace(/[\r\n\t]+/g, " ");
+        ctx.fillStyle = masked ? c.muted : token ? c[token] : c.text;
+        // The user's display format (SDB-385), for drawing only: an edit shows what was typed.
+        text = (edited ? value : (cache.shown(row, col) ?? value)).replace(/[\r\n\t]+/g, " ");
       }
       // A foreign key value: a link at the right, which opens the referenced row.
       const linked = value !== null && value !== undefined && keyColumns.has(col) && !edited;
@@ -826,17 +871,28 @@ export function ResultGrid({
       const place = sortShown.findIndex((key) => key.column === col);
       const mark = place < 0 ? "" : `${sortShown[place]?.descending ? "▼" : "▲"}${sortShown.length > 1 ? place + 1 : ""}`;
       const markW = mark ? Math.ceil(ctx.measureText(mark).width) + 4 : 0;
-      ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - markW), x + PAD, 13);
+      // Under the name (SDB-385): the type, that it is masked, the zone its values are shown
+      // in and the column's comment, each when it is asked for and known.
+      const zone = cache.column(col)?.zone;
+      const comment = gridLook.headerComment ? columnComments?.[meta.name] : undefined;
+      // The zone goes first: it changes what the cells say, and a long type would cut it off.
+      const typeLine = [
+        zone ? t("results.shownInZone", { zone }) : "",
+        gridLook.headerType ? meta.nativeType : "",
+        meta.masked ? t("masking.header") : "",
+        comment ?? "",
+      ].filter((part) => part !== "").join(" · ");
+      const nameY = typeLine ? 13 : HEADER_H / 2;
+      ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - markW), x + PAD, nameY);
       if (mark) {
         ctx.fillStyle = c.accent;
         ctx.textAlign = "right";
-        ctx.fillText(mark, x + w - PAD, 13);
+        ctx.fillText(mark, x + w - PAD, nameY);
         ctx.textAlign = "left";
       }
       ctx.font = TYPE_FONT;
       ctx.fillStyle = c.muted;
-      const typeLine = meta.masked ? `${meta.nativeType} · ${t("masking.header")}` : meta.nativeType;
-      ctx.fillText(fit(ctx, typeLine, w - PAD * 2), x + PAD, 26);
+      if (typeLine) ctx.fillText(fit(ctx, typeLine, w - PAD * 2), x + PAD, 26);
       ctx.fillStyle = c.line;
       ctx.fillRect(Math.round(x + w) - 1, 0, 1, HEADER_H);
     };
@@ -1330,7 +1386,7 @@ export function ResultGrid({
     const first = scroller ? Math.floor(contentTop(scroller) / ROW_H) : 0;
     const last = Math.min(result.rows, first + Math.ceil((size.h || 600) / ROW_H) + 1);
     for (let row = first; row < last; row++) {
-      const value = cache.get(row, col);
+      const value = cache.shown(row, col);
       const text = value === null ? "NULL" : value === undefined ? "" : value.replace(/[\r\n\t]+/g, " ").slice(0, 300);
       widest = Math.max(widest, ctx.measureText(text).width);
     }
@@ -1540,13 +1596,15 @@ export function ResultGrid({
     });
   }
 
-  async function copy(format: TextFormat, header: boolean) {
+  /** `displayed`: the cells as the grid shows them (SDB-385), only when the user picks it;
+   *  every other copy is the database's own text. */
+  async function copy(format: TextFormat, header: boolean, displayed = false) {
     setMenu(null);
     if (!selection) return;
     const b = bounds(selection);
     const range: CellRange = { firstRow: b.r0, rows: selection.rows?.length ?? b.r1 - b.r0 + 1, columns: shownIn(b), selectedRows: selection.rows ?? null };
     try {
-      const text = await call(commands.copyRows(result.id, session, range, format, header));
+      const text = await call(commands.copyRows(result.id, session, range, format, header, displayed));
       // HTML goes to the clipboard as HTML (documents and spreadsheets paste a table) and as
       // its source for plain text.
       await writeClipboard(text, format === "html" ? text : undefined);
@@ -2235,6 +2293,11 @@ export function ResultGrid({
                 {t(`results.${item.key}`)}
               </button>
             ))}
+            {displayFormats && (
+              <button role="menuitem" onClick={() => void copy("tsv", false, true)}>
+                {t("results.copyDisplayed")}
+              </button>
+            )}
           </GridSubmenu>
           {selection && !selection.rows && result.complete && (
             <button

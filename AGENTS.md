@@ -581,6 +581,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
   PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
   (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
+  `display.rs` (SDB-385) is how the grid shows values: `strftime` patterns for dates, times
+  and timestamps, a number's marks, a display time zone (jiff; values without a zone are never
+  converted) and how binary reads. Display only: `window_ipc` serves each cell as the database
+  prints it and, next to it, as it is shown, and the grid draws the second; copies, exports,
+  filters, value pickers, edits and Ctrl+F keep the database's text (`displayed_text` is the
+  one copy of what is shown, asked for explicitly). A masked column is never formatted.
+  `tests/value_display.rs` formats every engine's types and writes a filter from a formatted
+  cell.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
   `export.rs` also holds the CSV options and formula escaping of files;

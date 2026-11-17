@@ -65,6 +65,7 @@ impl StartupFailure {
             HistoryError::Store(e) => e.newer_schema(),
             HistoryError::Closed
             | HistoryError::Start(_)
+            | HistoryError::Display(_)
             | HistoryError::UnsupportedLanguage
             | HistoryError::UnsupportedTheme
             | HistoryError::InvalidSnippetName

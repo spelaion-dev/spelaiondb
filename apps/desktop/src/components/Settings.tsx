@@ -2,6 +2,7 @@
 // behind shows a new theme at once). Per-connection options (such as saving query history)
 // live with each connection in the sidebar, not here.
 
+import { DisplaySettings } from "./DisplaySettings";
 import { useEffect, useReducer, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
@@ -144,6 +145,7 @@ function AppearanceSettings() {
       <p className="muted small">{t("appearance.hint")}</p>
       <SaveError setting="theme" />
       <GridSettings />
+      <DisplaySettings />
     </>
   );
 }
@@ -346,6 +348,9 @@ function MapSettings() {
 
 /** The most result tabs an editor tab may be set to keep (the core refuses more). */
 const MAX_RESULT_TABS = 100;
+/** The bounds of the grid's own font size, in pixels (the store refuses others). */
+const MIN_GRID_FONT = 10;
+const MAX_GRID_FONT = 20;
 
 /** How the result grid draws its cells (zebra rows, NULL and booleans) and how many result
  *  tabs an editor tab keeps. */
@@ -356,6 +361,16 @@ function GridSettings() {
   const setGrid = usePreferences((s) => s.setGrid);
   const [tabs, setTabs] = useState(String(grid.resultTabs));
   useEffect(() => setTabs(String(grid.resultTabs)), [grid.resultTabs]);
+  const [font, setFont] = useState(String(grid.fontSize));
+  useEffect(() => setFont(String(grid.fontSize)), [grid.fontSize]);
+  const saveFont = () => {
+    const size = Math.trunc(Number(font));
+    if (font.trim() !== "" && Number.isFinite(size) && size >= MIN_GRID_FONT && size <= MAX_GRID_FONT) {
+      if (size !== grid.fontSize) void setGrid({ ...grid, fontSize: size });
+    } else {
+      setFont(String(grid.fontSize));
+    }
+  };
   const saveTabs = () => {
     const count = Math.trunc(Number(tabs));
     if (tabs.trim() !== "" && Number.isFinite(count) && count >= 1 && count <= MAX_RESULT_TABS) {
@@ -380,8 +395,35 @@ function GridSettings() {
           <input type="checkbox" name="boolCheckboxes" checked={grid.boolCheckboxes} onChange={(e) => void setGrid({ ...grid, boolCheckboxes: e.target.checked })} />
           {t("appearance.boolCheckboxes")}
         </label>
+        <label className="check">
+          <input type="checkbox" name="colorize" checked={grid.colorize} onChange={(e) => void setGrid({ ...grid, colorize: e.target.checked })} />
+          {t("appearance.colorize")}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="headerType" checked={grid.headerType} onChange={(e) => void setGrid({ ...grid, headerType: e.target.checked })} />
+          {t("appearance.headerType")}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="headerComment" checked={grid.headerComment} onChange={(e) => void setGrid({ ...grid, headerComment: e.target.checked })} />
+          {t("appearance.headerComment")}
+        </label>
       </fieldset>
       <p className="muted small">{t("appearance.gridHint")}</p>
+      <label className="field port">
+        <span>{t("appearance.gridFontSize")}</span>
+        <input
+          type="number"
+          name="gridFontSize"
+          min={MIN_GRID_FONT}
+          max={MAX_GRID_FONT}
+          value={font}
+          disabled={busy}
+          onChange={(e) => setFont(e.target.value)}
+          onBlur={saveFont}
+          onKeyDown={(e) => e.key === "Enter" && saveFont()}
+        />
+      </label>
+      <p className="muted small">{t("appearance.gridFontSizeHint", { min: MIN_GRID_FONT, max: MAX_GRID_FONT })}</p>
       <label className="field port">
         <span>{t("appearance.resultTabs")}</span>
         <input

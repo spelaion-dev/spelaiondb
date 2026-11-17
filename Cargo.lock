@@ -5703,6 +5703,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hickory-resolver",
+ "jiff",
  "minisign-verify",
  "quick-xml",
  "rusqlite",
