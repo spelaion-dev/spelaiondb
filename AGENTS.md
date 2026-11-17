@@ -606,6 +606,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   cell.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
+  "Copy special…" (SDB-388) is `export.rs`'s `copy_special` (delimiter, quote, row delimiter,
+  NULL text, header, row numbers; the choices are the copy defaults, `History::copy_defaults`,
+  checked before they are saved), and copy as UPDATE is its `copy_updates`, through an
+  `UpdateTable` only `edit.rs`'s `update_copy_table` makes, by the rule of edits (ADR-014:
+  the table and its primary key from the catalog, rows read through this session, a query
+  only as a plain SELECT of one table, an engine without transactions refused); a masked
+  column in the key or the selection is refused, never written from the mask.
+  `tests/copy_updates.rs` runs the copied UPDATEs on every engine and reads the rows back.
   `export.rs` also holds the CSV options and formula escaping of files;
   `export_stream.rs` streams a query, a table data tab or explorer tables to a file
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's

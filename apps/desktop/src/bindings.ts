@@ -351,6 +351,21 @@ export const commands = {
 	 *  without a line break after it.
 	 */
 	copyRows: (result: number, session: string, range: CellRange_Deserialize, format: TextFormat, header: boolean, displayed: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header, displayed })),
+	/**  The copy defaults (SDB-388): what "Copy special…" chose last. */
+	copyDefaults: () => typedError<CopySpecialItem, string>(__TAURI_INVOKE("copy_defaults")),
+	/**
+	 *  "Copy special…" (SDB-388): a selection as delimited text, written by the core with the
+	 *  options given, which become the copy defaults once checked. The values are the database's
+	 *  own text, never the grid's display formats (a masked column's is the mask, ADR-051).
+	 */
+	copySpecial: (result: number, range: CellRange_Deserialize, options: CopySpecialItem) => typedError<string, string>(__TAURI_INVOKE("copy_special", { result, range, options })),
+	/**
+	 *  The selected rows as UPDATE statements, one per row by the table's primary key (SDB-388).
+	 *  The core decides the table and its key from the catalog, as it does for edits, and refuses
+	 *  anything else with the reason: a join, rows without the whole key, a masked column, rows
+	 *  read through another session.
+	 */
+	copyUpdates: (result: number, session: string, range: CellRange_Deserialize, source: UpdateSourceItem) => typedError<string, string>(__TAURI_INVOKE("copy_updates", { result, session, range, source })),
 	/**
 	 *  Column names for the clipboard: plain, quoted for the engine, qualified with the table
 	 *  (a table data tab's) or one per line; written by the core.
@@ -2073,6 +2088,19 @@ export type ConstraintDetails_Serialize = {
 };
 
 export type ConstraintKindItem = "primary_key" | "unique" | "check";
+
+/**
+ *  "Copy special…" options, which are also the copy defaults (SDB-388). The core checks
+ *  them: `delimiter` is one character, `quote` one or none (empty: never quoted).
+ */
+export type CopySpecialItem = {
+	delimiter: string,
+	quote: string,
+	rowDelimiter: RowDelimiterItem,
+	nullText: string,
+	header: boolean,
+	rowNumbers: boolean,
+};
 
 /**  What "Create" in the explorer can start (see `spelaion_core::CreateKind`). */
 export type CreateKindItem = "table" | "view" | "materializedView" | "sequence" | "schema";
@@ -5041,6 +5069,9 @@ export type RiskyItem = {
 	risk: RiskKind,
 };
 
+/**  The line break between copied rows. */
+export type RowDelimiterItem = "lf" | "crLf";
+
 /**
  *  One key of a row in the references panel: where it leads and its first rows (as text,
  *  `None` for NULL); or the column that is NULL in this row (it references nothing through
@@ -6098,6 +6129,12 @@ export type UpdateMethod =
 "rpm" | 
 /**  A Linux binary that is none of those: the new version is downloaded by hand. */
 "releasesPage";
+
+/**
+ *  Where rows copied as UPDATE statements come from (SDB-388): a table data tab's table, or
+ *  the statement a query's result came from. The core decides the table and its key.
+ */
+export type UpdateSourceItem = { kind: "table"; schema: string; name: string } | { kind: "query"; sql: string };
 
 export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
 
