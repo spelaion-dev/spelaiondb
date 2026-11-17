@@ -56,6 +56,7 @@ export function GroupPanel(props: {
   const [busy, setBusy] = useState(false);
   const [again, setAgain] = useState(0);
   const [failure, setFailure] = useState<string | null>(null);
+  const [caseSwitched, setCaseSwitched] = useState(false);
   const running = useRef<string | null>(null);
 
   useEffect(() => {
@@ -104,8 +105,14 @@ export function GroupPanel(props: {
   const filterTo = (columns: number[], firstRow: number, generation: number) => {
     if (props.locked) return;
     setFailure(null);
+    setCaseSwitched(false);
     call(commands.filterToGroup(resultId, columns, firstRow, generation))
-      .then((outcome) => props.onFiltered(outcome.filters, outcome.rows, outcome.total, outcome.mode))
+      .then((outcome) => {
+        // The core matched case to keep exactly the group's rows, which changes how the other
+        // filters in force are read: say so (SDB-410).
+        setCaseSwitched(outcome.caseSwitched);
+        props.onFiltered(outcome.filters, outcome.rows, outcome.total, outcome.mode);
+      })
       .catch((e: unknown) => {
         // Refused (the rows moved since these groups were counted, or the grid cannot be
         // filtered now): say why, and count the groups again so the next click is on fresh ones.
@@ -170,6 +177,7 @@ export function GroupPanel(props: {
         )}
         {grouped.length > 0 && current?.kind === "failed" && <p className="error small" role="alert">{t("group.failed", { detail: current.error })}</p>}
         {failure && <p className="error small" role="alert">{t("group.filterFailed", { detail: failure })}</p>}
+        {caseSwitched && <p className="muted small group-case-switched" role="status">{t("group.caseSwitched")}</p>}
         {grouped.length > 0 && grouping && (
           <div className={stale ? "calc-stale" : undefined}>
             <p className="reference-note group-summary" role="status">

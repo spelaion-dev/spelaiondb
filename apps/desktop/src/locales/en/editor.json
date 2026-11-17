@@ -1000,6 +1000,7 @@
     "again": "Group again",
     "failed": "The rows could not be grouped: {{detail}}",
     "filterFailed": "The grid could not be filtered to that group: {{detail}}",
+    "caseSwitched": "Match case is now on, so the grid shows exactly this group's rows. The other column filters match case too.",
     "summary_one": "1 group in {{rows}} rows",
     "summary_other": "{{groups}} groups in {{rows}} rows",
     "summaryDuplicates_one": "1 group with more than one row, in {{rows}} rows",

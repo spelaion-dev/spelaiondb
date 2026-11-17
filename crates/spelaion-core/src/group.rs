@@ -83,6 +83,16 @@ pub struct GroupCounts {
     pub generation: u64,
 }
 
+/// The grid filtered to a group: the column filters now in force, the rows they leave, and
+/// whether filters that were in force before are now read matching case, which they did not
+/// (SDB-410: the group's rows must be exactly its own).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupFiltered {
+    pub filters: Vec<crate::filter::ColumnFilter>,
+    pub rows: usize,
+    pub case_switched: bool,
+}
+
 /// Why a result cannot be grouped as asked.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GroupError {
@@ -497,7 +507,7 @@ mod tests {
         let mut r = r.write().unwrap();
         let g = run(&r, &request(&[1], false));
         // "done": one `=` condition, added to the result's column filters.
-        let (filters, rows) = r.filter_to_group(&[1], 1, g.generation).unwrap();
+        let GroupFiltered { filters, rows, .. } = r.filter_to_group(&[1], 1, g.generation).unwrap();
         assert_eq!(
             filters,
             [ColumnFilter {
@@ -516,13 +526,13 @@ mod tests {
         r.filter_columns(Vec::new()).unwrap();
         // The NULL group: IS NULL.
         let g = run(&r, &request(&[1], false));
-        let (filters, rows) = r.filter_to_group(&[1], 2, g.generation).unwrap();
+        let GroupFiltered { filters, rows, .. } = r.filter_to_group(&[1], 2, g.generation).unwrap();
         assert_eq!(filters[0].op, FilterOp::IsNull);
         assert_eq!((rows, ids(&r)), (2, vec![3, 7]));
         r.filter_columns(Vec::new()).unwrap();
         // A text with white space around it is matched whole (LIKE): `=` would read "open".
         let g = run(&r, &request(&[1], false));
-        let (filters, rows) = r.filter_to_group(&[1], 8, g.generation).unwrap();
+        let GroupFiltered { filters, rows, .. } = r.filter_to_group(&[1], 8, g.generation).unwrap();
         assert_eq!(
             (filters[0].op, filters[0].value.as_str()),
             (FilterOp::Like, " open")
@@ -538,12 +548,13 @@ mod tests {
         .unwrap();
         let g = run(&r, &request(&[1, 2], false));
         assert_eq!(shown(&g)[0], "∅|a@x=1@0");
-        let (filters, rows) = r.filter_to_group(&[1, 2], 0, g.generation).unwrap();
+        let GroupFiltered { filters, rows, .. } =
+            r.filter_to_group(&[1, 2], 0, g.generation).unwrap();
         assert_eq!(filters.len(), 3);
         assert_eq!((rows, ids(&r)), (1, vec![3]));
         // The same group again adds nothing.
         let g = run(&r, &request(&[1, 2], false));
-        let (filters, _) = r.filter_to_group(&[1, 2], 0, g.generation).unwrap();
+        let GroupFiltered { filters, .. } = r.filter_to_group(&[1, 2], 0, g.generation).unwrap();
         assert_eq!(filters.len(), 3);
         // A row that is not there.
         let g = run(&r, &request(&[1], false));
@@ -554,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn filtering_to_a_group_reads_its_conditions_with_match_all_and_matches_case_when_alone() {
+    fn filtering_to_a_group_reads_its_conditions_with_match_all_and_always_matches_case() {
         use crate::filter::FilterMode;
         let (store, id) = store();
         let r = store.get(id).unwrap();
@@ -562,7 +573,7 @@ mod tests {
         // No filter in force: case is matched, so "a@x" leaves its four rows and not "A@x".
         let g = run(&r, &request(&[2], false));
         assert_eq!(shown(&g)[0], "a@x=4@0");
-        let (_, rows) = r.filter_to_group(&[2], 0, g.generation).unwrap();
+        let GroupFiltered { rows, .. } = r.filter_to_group(&[2], 0, g.generation).unwrap();
         assert_eq!((rows, ids(&r)), (4, vec![1, 3, 6, 9]));
         assert_eq!(
             r.filter_mode(),
@@ -572,27 +583,32 @@ mod tests {
             }
         );
         r.filter_columns(Vec::new()).unwrap();
-        // A filter in force read ignoring case keeps that rule: "A@x" is let through too.
+        // A filter in force read ignoring case is read matching it from now on, and the
+        // answer says so: the rows left are still exactly the group's, "A@x" is not let
+        // through (SDB-410).
         let id_above = |value: &str| ColumnFilter {
             column: 0,
             op: FilterOp::Gt,
             value: value.into(),
         };
-        r.filter_columns(vec![id_above("0")]).unwrap();
-        let g = run(&r, &request(&[2], false));
-        let (filters, rows) = r.filter_to_group(&[2], 0, g.generation).unwrap();
-        assert_eq!((filters.len(), rows), (2, 5));
-        assert_eq!(r.filter_mode(), FilterMode::default());
-        // A filter in force read with that case rule: exact again.
         let match_case = FilterMode {
             any: false,
             match_case: true,
         };
+        r.filter_columns(vec![id_above("0")]).unwrap();
+        let g = run(&r, &request(&[2], false));
+        let filtered = r.filter_to_group(&[2], 0, g.generation).unwrap();
+        assert_eq!((filtered.filters.len(), filtered.rows), (2, 4));
+        assert!(filtered.case_switched);
+        assert_eq!(ids(&r), vec![1, 3, 6, 9]);
+        assert_eq!(r.filter_mode(), match_case);
+        // A filter in force already read matching case: exact, and nothing switched.
         r.filter_columns_as(vec![id_above("0")], match_case)
             .unwrap();
         let g = run(&r, &request(&[2], false));
-        let (_, rows) = r.filter_to_group(&[2], 0, g.generation).unwrap();
-        assert_eq!((rows, r.filter_mode()), (4, match_case));
+        let filtered = r.filter_to_group(&[2], 0, g.generation).unwrap();
+        assert_eq!((filtered.rows, r.filter_mode()), (4, match_case));
+        assert!(!filtered.case_switched);
         // "Match any" over one filter means the same as "Match all": the group's conditions
         // are added and must all hold.
         let any = FilterMode {
@@ -602,7 +618,7 @@ mod tests {
         r.filter_columns_as(vec![id_above("5")], any).unwrap();
         let g = run(&r, &request(&[1], false));
         assert_eq!(shown(&g)[0], "open=1@0");
-        let (_, rows) = r.filter_to_group(&[1], 0, g.generation).unwrap();
+        let GroupFiltered { rows, .. } = r.filter_to_group(&[1], 0, g.generation).unwrap();
         assert_eq!((rows, ids(&r)), (1, vec![6]));
         assert!(!r.filter_mode().any);
         // Over two filters it would change what they mean: refused, nothing changed.
@@ -719,7 +735,8 @@ mod tests {
         assert_eq!(g.groups[0].key[0].as_deref(), Some("7"));
         // The long text is cut for display, but the filter compares it whole.
         assert_eq!(g.groups[0].key[1].as_deref(), Some(cut.as_str()));
-        let (filters, rows) = r.filter_to_group(&[0, 1], 7, g.generation).unwrap();
+        let GroupFiltered { filters, rows, .. } =
+            r.filter_to_group(&[0, 1], 7, g.generation).unwrap();
         assert_eq!(filters[1].value, long);
         assert_eq!(rows, 2);
     }
@@ -805,7 +822,7 @@ mod tests {
         // The NULL group of the million rows, filtered to through the column filters.
         let mut r = stored.write().unwrap();
         let g = run(&r, &request(&[0], false));
-        let (filters, rows) = r.filter_to_group(&[0], 0, g.generation).unwrap();
+        let GroupFiltered { filters, rows, .. } = r.filter_to_group(&[0], 0, g.generation).unwrap();
         assert_eq!(filters[0].op, FilterOp::IsNull);
         assert_eq!(rows, 100_000);
     }

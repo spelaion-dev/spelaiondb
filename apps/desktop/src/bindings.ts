@@ -2987,13 +2987,12 @@ export type GridPreferencesItem = {
  */
 export type GroupFilterOutcome = {
 	filters: ColumnFilterItem[],
-	/**
-	 *  How the filters are now read (a group's conditions all hold, and case is matched when
-	 *  they are the only ones).
-	 */
+	/**  How the filters are now read (a group's conditions all hold, and case is matched). */
 	mode: FilterModeItem,
 	rows: number,
 	total: number,
+	/**  Filters in force before were read ignoring case and now match it (SDB-410). */
+	caseSwitched: boolean,
 };
 
 /**  One group of a result's rows (the grouping panel): its values and how many rows have them. */
