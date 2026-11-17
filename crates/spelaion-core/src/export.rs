@@ -452,6 +452,61 @@ pub fn copy_text(
     String::from_utf8(out).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Copies distinct view rows in display order with a single header and formatter.
+/// Reject invalid row indices rather than silently copying a different selection.
+pub fn copy_selected_rows(
+    result: &StoredResult,
+    options: &ExportOptions,
+    selected: &[usize],
+    dialect: &dyn Dialect,
+) -> io::Result<String> {
+    let mut rows = selected.to_vec();
+    rows.sort_unstable();
+    rows.dedup();
+    if rows.last().is_some_and(|&row| row >= result.rows()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "selected row is outside the result",
+        ));
+    }
+    if let [row] = rows.as_slice() {
+        let mut one = options.clone();
+        one.rows = *row..row + 1;
+        return copy_text(result, &one, dialect);
+    }
+    let schema = result.schema();
+    let columns: Vec<usize> = options
+        .columns
+        .iter()
+        .copied()
+        .filter(|&c| c < schema.columns.len())
+        .collect();
+    let metas = columns.iter().map(|&c| schema.columns[c].clone()).collect();
+    let mut writer = RowWriter::new(
+        options.format.clone(),
+        options.header,
+        options.csv.clone(),
+        dialect,
+        metas,
+    );
+    let mut out = Vec::new();
+    writer.begin(&mut out)?;
+    for row in rows {
+        for batch in result.window(row, 1) {
+            let values: Vec<Value> = columns
+                .iter()
+                .map(|&c| {
+                    Value::from_array(batch.column(c).as_ref(), 0, schema.columns[c].logical)
+                        .unwrap_or(Value::Null)
+                })
+                .collect();
+            writer.row(&values, &mut out)?;
+        }
+    }
+    writer.finish(&mut out)?;
+    String::from_utf8(out).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
 /// The value of the one cell `options` selects as plain text (TSV, no header), and whether its
 /// column is numeric; `None` for any other copy.
 fn single_cell(result: &StoredResult, options: &ExportOptions) -> Option<(Value, bool)> {
@@ -1204,6 +1259,29 @@ mod tests {
             csv,
         };
         copy_text(result, &options, &Quoted("postgres")).unwrap()
+    }
+
+    #[test]
+    fn sparse_copy_preserves_view_order_and_excludes_other_rows() {
+        let result = copy_sample(&[
+            (Some("one"), Some(1)),
+            (Some("two"), Some(2)),
+            (Some("three"), Some(3)),
+            (Some("four"), Some(4)),
+        ]);
+        let result = result.read().unwrap();
+        let options = ExportOptions {
+            format: ExportFormat::Tsv,
+            rows: 0..4,
+            columns: vec![0],
+            header: true,
+            csv: CsvOptions::default(),
+        };
+        assert_eq!(
+            copy_selected_rows(&result, &options, &[3, 1, 3], &Quoted("postgres")).unwrap(),
+            "value\ntwo\nfour\n"
+        );
+        assert!(copy_selected_rows(&result, &options, &[4], &Quoted("postgres")).is_err());
     }
 
     /// What `write_result` writes for the same options: today's copy, byte for byte.
