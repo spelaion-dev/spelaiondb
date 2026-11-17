@@ -20,6 +20,11 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained zbus 5 sub-crate via tauri-plugin-notification -> notify-rust (Linux), merged into zbus 6; remove when notify-rust moves to zbus 6 (SDB-79)" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained zbus 5 sub-crate via tauri-plugin-notification -> notify-rust (Linux), merged into zbus 6; remove when notify-rust moves to zbus 6 (SDB-79)" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained zbus 5 sub-crate via tauri-plugin-notification -> notify-rust (Linux), merged into zbus 6; remove when notify-rust moves to zbus 6 (SDB-79)" },
+  # Unmaintained (not vulnerable), no fixed version: chrono. It comes through Arrow (arrow-arith,
+  # arrow-array, arrow-cast), rmcp and schemars, which we cannot change, and spelaion-core names
+  # it directly. Stop naming it in spelaion-core (it has jiff) and remove this when Arrow, rmcp
+  # and schemars no longer bring it (Plane SDB-413).
+  { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained, not vulnerable; through Arrow, rmcp and schemars; remove when they move off it (SDB-413)" },
 ]
 
 [licenses]
