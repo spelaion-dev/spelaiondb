@@ -73,6 +73,39 @@ See [execution plans](execution-plans.md) for metric semantics, capabilities and
 4. On connections with `mcp.writes = "allow"`, `execute_write` runs one checked write in its
    own transaction, in a session separate from the reads, also audited (ADR-019).
 
+**The window's Content Security Policy (SDB-127)**
+The window shows a lot of text it does not control (cell values, names, comments, server
+messages, agents' statements), and any script that ran in it could call every command of the
+app. All of it is rendered as text today; the policy is the layer that keeps one future
+mistake, or a compromised dependency, from running script there. It is
+`apps/desktop/src-tauri/tauri.conf.json`'s `app.security.csp`, which the release build keeps
+(`tauri.release.conf.json` is merged over it and does not name it). Tauri adds the nonces and
+hashes of its own scripts. Everything starts from `default-src 'self'` (the app's own files),
+with `object-src`, `frame-src`, `base-uri` and `form-action` set to `'none'`; only these are
+relaxed, each for one thing:
+
+- `script-src 'self'`: no `'unsafe-inline'` and no `'unsafe-eval'`; nothing in the app needs either.
+- `style-src 'unsafe-inline'`: CodeMirror writes its themes into `<style>` elements it creates
+  (`style-mod`), and components set `style` attributes. CSS cannot run script; it is the one
+  inline relaxation.
+- `img-src data:`: the cell viewer shows images as `data:` URLs of the types the core recognised
+  by their bytes (never SVG), and the chart and ER diagram exports draw their SVG through an
+  `Image` with a `data:image/svg+xml` URL.
+- `img-src https: http://localhost:* http://127.0.0.1:*`: the map's tiles (ADR-045) come from
+  the server the user chose in Settings, whose address the core only accepts over HTTPS, or
+  HTTP to `localhost` or `127.0.0.1` (`spelaion-store`'s `check_tile_server`; not `[::1]`, which
+  a policy cannot name). Off by default.
+- `connect-src ipc: http://ipc.localhost`: Tauri's commands, `fetch_window`'s binary windows
+  included (the custom `ipc:` scheme, or `http://ipc.localhost` on Windows). The app reaches no
+  other address from the page: updates, plugins and every database go through the Rust side.
+
+`devCsp` is the same for `tauri dev`, plus what Vite's dev server needs: its inline React
+refresh preamble (`script-src 'unsafe-inline'`, development only) and its hot-reload socket
+(`connect-src ws://localhost:1420`). Tauri adds a policy only to the files it serves itself, and
+in development the window loads Vite's server directly, so `vite.config.ts` reads `devCsp` and
+sends it as that server's header. The Windows smoke test fails on any refusal the policy
+reports, and checks first that an injected inline script does not run.
+
 ## Phases
 - **Phase 0** (done, 2026-11-02): risk experiments for the conditional decisions; ADR-003,
   ADR-007 and ADR-010 record what they measured.
