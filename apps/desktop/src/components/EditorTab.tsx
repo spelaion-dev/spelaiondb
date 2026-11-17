@@ -869,6 +869,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         case "resultRerun":
         case "resultPin":
         case "resultRename":
+        case "resultResetName":
         case "resultClose":
           resultCommand.current(command);
           break;
@@ -1322,7 +1323,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         if (produced) produced.results += 1;
         // Where the core put it: last, or in the place of the result it ran again; and the
         // tabs it closed to stay within the limit.
-        const started: ResultMeta = { id: event.result, statement: event.index, run: runId, columns: event.columns, rows: 0, complete: false, pinned: event.pinned, ...(event.name ? { name: event.name } : {}), ...(sql ? { sql } : {}), ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) };
+        const started: ResultMeta = { id: event.result, statement: event.index, run: runId, columns: event.columns, rows: 0, complete: false, pinned: event.pinned, renamed: event.renamed, ...(event.name ? { name: event.name } : {}), ...(sql ? { sql } : {}), ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) };
         updateRun(tab.id, (r) => withStartedResult(r, started, event.replaces ?? null, event.closed));
         break;
       }
@@ -1435,8 +1436,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const current = useApp.getState().tabs.find((item) => item.id === tab.id)?.run;
     const result = current?.results.find((item) => item.id === current.activeResult);
     if (!result || tab.table) return;
-    const drawn = (item: { result: number; name: string | null; pinned: boolean }) =>
-      updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === item.result ? { ...x, name: item.name ?? undefined, pinned: item.pinned } : x)) }));
+    const drawn = (item: { result: number; name: string | null; renamed: boolean; pinned: boolean }) =>
+      updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === item.result ? { ...x, name: item.name ?? undefined, renamed: item.renamed, pinned: item.pinned } : x)) }));
     const failed = (e: unknown) => setNotice({ text: message(e), error: true });
     switch (command) {
       case "resultRerun":
@@ -1450,6 +1451,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
           .askText({ title: t("resultTabs.renameTitle"), label: t("resultTabs.name"), initial: result.name ?? "", confirm: t("resultTabs.renameConfirm") })
           .then((name) => (name ? call(commands.renameResult(tab.id, result.id, name)).then(drawn) : undefined))
           .catch(failed);
+        break;
+      case "resultResetName":
+        // An empty name: the core gives back the comment's name, or none (SDB-407).
+        void call(commands.renameResult(tab.id, result.id, "")).then(drawn).catch(failed);
         break;
       case "resultClose":
         // Closing frees the result in the core, pinned or not; never with unsaved edits.

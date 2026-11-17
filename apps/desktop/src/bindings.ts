@@ -5024,6 +5024,8 @@ export type ResultTabItem = ResultTabItem_Serialize | ResultTabItem_Deserialize;
 export type ResultTabItem_Deserialize = {
 	result: number,
 	name?: string | null,
+	/**  `name` is the one the user gave it (SDB-407). */
+	renamed: boolean,
 	pinned: boolean,
 };
 
@@ -5031,6 +5033,8 @@ export type ResultTabItem_Deserialize = {
 export type ResultTabItem_Serialize = {
 	result: number,
 	name: string | null,
+	/**  `name` is the one the user gave it (SDB-407). */
+	renamed: boolean,
 	pinned: boolean,
 };
 
@@ -5256,7 +5260,9 @@ export type ScriptEvent_Deserialize =
  *  pinned, the result whose place it took (a re-run) and the ones closed to stay within
  *  the limit, all freed already.
  */
-{ kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name?: string | null; pinned: boolean; replaces?: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
+{ kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name?: string | null; 
+/**  `name` is the one the user gave the tab it replaces (SDB-407). */
+renamed: boolean; pinned: boolean; replaces?: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */
@@ -5281,7 +5287,9 @@ export type ScriptEvent_Serialize =
  *  pinned, the result whose place it took (a re-run) and the ones closed to stay within
  *  the limit, all freed already.
  */
-{ kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name: string | null; pinned: boolean; replaces: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
+{ kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name: string | null; 
+/**  `name` is the one the user gave the tab it replaces (SDB-407). */
+renamed: boolean; pinned: boolean; replaces: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */

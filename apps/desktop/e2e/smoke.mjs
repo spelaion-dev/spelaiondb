@@ -2245,6 +2245,26 @@ try {
     await renameResult.waitFor({ state: "detached" });
     await resultTab("After the update").waitFor();
     assert.deepEqual(await tabNames(), ["Before", "After the update"]);
+    // The name the user gave can be taken off (SDB-407): Reset name, only on such a name (the
+    // menu of "Before", named by its comment, has none), gives "Result 2" back.
+    await resultTab("After the update").locator(".result-tab").click({ button: "right" });
+    assert.deepEqual(
+      await tabMenu("After the update").getByRole("menuitem").evaluateAll((items) => items.map((item) => item.firstElementChild.textContent)),
+      ["Run this result's query again", "Pin result", "Rename result…", "Reset name", "Close result"],
+    );
+    await tabMenu("After the update").getByRole("menuitem", { name: "Reset name" }).click();
+    await resultTab("Result 2").waitFor();
+    assert.deepEqual(await tabNames(), ["Before", "Result 2"]);
+    await resultTab("Result 2").locator(".result-tab").click({ button: "right" });
+    assert.equal(await tabMenu("Result 2").getByRole("menuitem", { name: "Reset name" }).count(), 0);
+    await page.keyboard.press("Escape");
+    await tabMenu("Result 2").waitFor({ state: "detached" });
+    await resultTab("Result 2").locator(".result-tab").focus();
+    await page.keyboard.press("F2");
+    await renameResult.getByLabel("Name").fill("After the update");
+    await renameResult.getByRole("button", { name: "Rename", exact: true }).click();
+    await renameResult.waitFor({ state: "detached" });
+    await resultTab("After the update").waitFor();
     // The pinned result's query again, from its menu (Shift+F10), into that same tab: it reads
     // the new value and keeps its place, its name and its pin.
     await resultTab("Before").locator(".result-tab").focus();

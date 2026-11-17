@@ -243,6 +243,9 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     run: editorCommand("resultPin"),
   },
   "results.rename": { enabled: (c) => activeResult(c) !== undefined, run: editorCommand("resultRename") },
+  // Only a name the user gave can be taken off: the tab shows its comment's name or "Result N"
+  // again, as the core answers (SDB-407).
+  "results.resetName": { enabled: (c) => Boolean(activeResult(c)?.renamed), run: editorCommand("resultResetName") },
   "results.close": { enabled: (c) => Boolean(activeResult(c)?.complete), run: editorCommand("resultClose") },
   "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
   "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },

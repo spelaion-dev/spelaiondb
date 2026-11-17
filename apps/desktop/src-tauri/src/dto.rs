@@ -1840,6 +1840,8 @@ pub enum ScriptEvent {
         result: u32,
         columns: Vec<ColumnItem>,
         name: Option<String>,
+        /// `name` is the one the user gave the tab it replaces (SDB-407).
+        renamed: bool,
         pinned: bool,
         replaces: Option<u32>,
         closed: Vec<u32>,
@@ -2098,6 +2100,8 @@ impl From<ResultPlacementItem> for spelaion_core::Placement {
 pub struct ResultTabItem {
     pub result: u32,
     pub name: Option<String>,
+    /// `name` is the one the user gave it (SDB-407).
+    pub renamed: bool,
     pub pinned: bool,
 }
 
@@ -2106,6 +2110,7 @@ impl From<spelaion_core::ResultTab> for ResultTabItem {
         Self {
             result: result_number(tab.result),
             name: tab.name,
+            renamed: tab.renamed,
             pinned: tab.pinned,
         }
     }
@@ -2146,6 +2151,7 @@ impl RunEvents {
         if let (
             ScriptEvent::ResultStarted {
                 name,
+                renamed,
                 pinned,
                 replaces,
                 closed,
@@ -2155,6 +2161,7 @@ impl RunEvents {
         ) = (&mut event, placed)
         {
             *name = placed.tab.name;
+            *renamed = placed.tab.renamed;
             *pinned = placed.tab.pinned;
             *replaces = placed.replaced.map(result_number);
             *closed = placed.closed.into_iter().map(result_number).collect();
@@ -2190,6 +2197,7 @@ impl From<CoreEvent> for ScriptEvent {
                     })
                     .collect(),
                 name: None,
+                renamed: false,
                 pinned: false,
                 replaces: None,
                 closed: Vec::new(),

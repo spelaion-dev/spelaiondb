@@ -43,6 +43,9 @@ pub struct ResultTab {
     pub result: ResultId,
     /// The name the user gave it, else the one its statement's first comment line gave it.
     pub name: Option<String>,
+    /// `name` is the one the user gave it (SDB-407): renaming it to nothing gives back the
+    /// comment's name, or none.
+    pub renamed: bool,
     pub pinned: bool,
 }
 
@@ -85,6 +88,7 @@ impl Kept {
         ResultTab {
             result: self.result,
             name: self.renamed.clone().or_else(|| self.title.clone()),
+            renamed: self.renamed.is_some(),
             pinned: self.pinned,
         }
     }
@@ -862,9 +866,11 @@ mod tests {
                 .as_deref(),
             Some("Mine")
         );
-        assert_eq!(
-            f.tabs.rename("a", one, " ").unwrap().name.as_deref(),
-            Some("Totals")
-        );
+        assert!(f.tabs.list("a")[0].renamed);
+        let back = f.tabs.rename("a", one, " ").unwrap();
+        assert_eq!(back.name.as_deref(), Some("Totals"));
+        // The comment's name is not one the user gave (SDB-407).
+        assert!(!back.renamed);
+        assert!(!f.tabs.list("a")[0].renamed);
     }
 }

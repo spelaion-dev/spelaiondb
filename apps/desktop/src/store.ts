@@ -14,6 +14,8 @@ export interface ResultMeta {
   run?: number;
   /** Its tab's name, as the core keeps it: the user's, else its statement's first comment. */
   name?: string;
+  /** `name` is the one the user gave it, which Reset name takes off (SDB-407). */
+  renamed?: boolean;
   /** Pinned in the core: no run replaces it until it is unpinned or closed. */
   pinned?: boolean;
   columns: ColumnItem[];
@@ -278,7 +280,7 @@ export const SAVE_QUERY_EVENT = "spelaion:save-query";
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
 export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | ResultTabCommand | EditorActionId;
 /** What a result tab's menu asks about the tab's active result (SDB-378). */
-export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "resultClose";
+export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "resultResetName" | "resultClose";
 
 /** Window event asking the editor tab `detail.tab` to do `detail.command` (SDB-18). */
 export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";

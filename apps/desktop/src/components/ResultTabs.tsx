@@ -98,6 +98,7 @@ export function ResultTabList({
             const at = results.findIndex((r) => r.id === menu.result);
             return at < 0 ? "" : label(results[at]!, at);
           })()}
+          renamed={results.find((r) => r.id === menu.result)?.renamed ?? false}
           onClose={(focus) => {
             const result = menu.result;
             setMenu(null);
@@ -110,7 +111,7 @@ export function ResultTabList({
 }
 
 /** A result tab's menu. Every item is a command of the registry, as in the command palette. */
-function ResultTabMenu({ session, x, y, name, onClose }: { session: string; x: number; y: number; name: string; onClose(focus: boolean): void }) {
+function ResultTabMenu({ session, x, y, name, renamed, onClose }: { session: string; x: number; y: number; name: string; renamed: boolean; onClose(focus: boolean): void }) {
   const { t } = useTranslation("editor");
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
@@ -169,6 +170,8 @@ function ResultTabMenu({ session, x, y, name, onClose }: { session: string; x: n
       {item("results.rerun")}
       {item("results.pin")}
       {item("results.rename")}
+      {/* Only when the user named it (SDB-407). */}
+      {renamed && item("results.resetName")}
       <hr />
       {item("results.close")}
     </div>,

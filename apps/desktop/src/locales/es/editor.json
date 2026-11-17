@@ -915,6 +915,7 @@
     "pin": "Fijar resultado",
     "unpin": "Soltar resultado",
     "rename": "Renombrar resultado…",
+    "resetName": "Restablecer el nombre",
     "close": "Cerrar resultado",
     "closeNamed": "Cerrar {{name}}",
     "menu": "Acciones de {{name}}",
