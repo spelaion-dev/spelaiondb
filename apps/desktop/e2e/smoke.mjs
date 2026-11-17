@@ -7839,6 +7839,15 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
   }, connectionText);
   wizard = page.locator(".modal.wizard");
+  // The pasted connection's row is outlined to show where it went, for a moment only: the
+  // outline used to stay for the rest of the session (SDB-204).
+  {
+    const outlined = page.locator(".connection-row.revealed", { hasText: "MariaDB (copy)" });
+    await outlined.waitFor();
+    const seen = Date.now();
+    await outlined.waitFor({ state: "detached", timeout: 2_000 });
+    assert.ok(Date.now() - seen <= 2_000, "the revealed row's outline goes away");
+  }
   await wizard.getByRole("heading", { name: "Edit MariaDB (copy)" }).waitFor();
   await wizard.getByRole("status").filter({ hasText: "was pasted as a personal connection" }).waitFor();
   await shot("13f-pasted-connection");
