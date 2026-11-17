@@ -1032,13 +1032,21 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // frees every one that is not pinned, none for a run into a new tab (SDB-378).
     const started = startRun(sent.text, refreshSource);
     const channel = new Channel<ScriptEvent>();
+    let finishEvent: (() => void) | undefined;
+    const finished = new Promise<void>((resolve) => { finishEvent = resolve; });
     // The last error, for the question a paused run asks (ADR-035).
     const failures = new Map<number, string>();
-    channel.onmessage = (event) => handle(event, sent, started.startedAt, queryPage, failures, started.run);
+    channel.onmessage = (event) => {
+      handle(event, sent, started.startedAt, queryPage, failures, started.run);
+      if (event.kind === "scriptFinished") finishEvent?.();
+    };
     const options = runOptionsOf(tab);
     try {
       if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, pageSort, confirmed, options, placement, channel));
       else await call(commands.runScript(tab.id, sent.text, confirmed, options, placement, channel));
+      // The command may resolve before the channel's final event updates the result metadata.
+      // Bound the wait if the channel closes without delivering it.
+      await Promise.race([finished, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
     } catch (e) {
       // Refused before it started (the guard, unsaved edits in a result it would replace):
       // nothing was replaced.
