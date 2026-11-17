@@ -90,6 +90,9 @@ export interface Tab {
   title?: string;
   /** Pinned tabs sort first and are left open by "close others / to the right / all". */
   pinned?: boolean;
+  /** A new script that started with the user's template (SDB-384): its editor opens with the
+   *  cursor after that text (UI only, never kept). */
+  fromTemplate?: boolean;
   /** The results panel fills the tab, hiding the SQL editor (UI only, never kept). */
   resultsMaximized?: boolean;
   connectionId: string | null;
@@ -222,6 +225,13 @@ function nextActive(tabs: Tab[], recent: string[], current: string | null): stri
 
 let tabCounter = 0;
 
+/** The text a new script starts with (SDB-384); empty for none. The core keeps and checks it;
+ *  `snippetStore.ts` puts here what the core answered. */
+let newScriptTemplate = "";
+export function setNewScriptTemplate(template: string) {
+  newScriptTemplate = template;
+}
+
 export type ConnectionDialog =
   | { kind: "add" }
   /** `notice`: shown above the form, such as "this is the copy just made". */
@@ -301,6 +311,9 @@ interface AppStore {
   sidebarSection: SidebarSection;
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
+  /** Opens an editor tab. Without `sql` it is a new script: it starts with the user's
+   *  template, if there is one. A tab opened for some text (a file, a history entry, generated
+   *  SQL) or for a table passes that text, or an empty one, and never gets the template. */
   addTab(connectionId: string | null, sql?: string): string;
   /** Opens a table data tab on a table (its first page loads when it appears), filtered by
    *  `filter` when given (a followed foreign key's, written by the core). */
@@ -393,24 +406,26 @@ export const useApp = create<AppStore>((set) => ({
   bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
-  addTab: (connectionId, sql = "") => {
+  addTab: (connectionId, sql) => {
     tabCounter += 1;
     const id = `tab-${tabCounter}`;
+    const fromTemplate = sql === undefined && newScriptTemplate !== "";
     const tab: Tab = {
       id,
       number: tabCounter,
       connectionId,
       status: "disconnected",
       serverVersion: null,
-      sql,
+      sql: sql ?? newScriptTemplate,
       run: null,
+      ...(fromTemplate ? { fromTemplate: true } : {}),
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, recentTabs: [id, ...s.recentTabs] }));
     return id;
   },
   addTableTab: (connectionId, schema, name, filter = ""): string => {
     const app: AppStore = useApp.getState();
-    const id: string = app.addTab(connectionId);
+    const id: string = app.addTab(connectionId, "");
     app.updateTab(id, { table: { schema, name, filter, orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
     return id;
   },
@@ -418,7 +433,7 @@ export const useApp = create<AppStore>((set) => ({
     const app = useApp.getState();
     const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === schema && tab.tableDetails.name === name && tab.tableDetails.kind === kind);
     if (existing) { app.setActiveTab(existing.id); return existing.id; }
-    const id = app.addTab(connectionId);
+    const id = app.addTab(connectionId, "");
     app.updateTab(id, { tableDetails: { schema, name, kind } });
     return id;
   },
@@ -427,7 +442,7 @@ export const useApp = create<AppStore>((set) => ({
     const key = JSON.stringify(scope);
     const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.diagram && JSON.stringify(tab.diagram) === key);
     if (existing) { app.setActiveTab(existing.id); return [existing.id, false]; }
-    const id = app.addTab(connectionId);
+    const id = app.addTab(connectionId, "");
     app.updateTab(id, { diagram: scope });
     return [id, true];
   },

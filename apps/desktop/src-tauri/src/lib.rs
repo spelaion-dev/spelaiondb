@@ -328,6 +328,74 @@ async fn set_editor_preferences(
         .map_err(|e| e.to_string())
 }
 
+/// The user's own editor snippets (SDB-384), by name.
+#[command]
+async fn editor_snippets(state: State<'_, AppState>) -> CmdResult<Vec<EditorSnippetItem>> {
+    state
+        .history
+        .editor_snippets()
+        .await
+        .map(|snippets| snippets.into_iter().map(Into::into).collect())
+        .map_err(|e| e.to_string())
+}
+
+/// Saves an editor snippet, replacing the one of the same name. The core refuses one that is
+/// too long, holds hidden characters or has a name that is not an identifier.
+#[command]
+async fn save_editor_snippet(
+    snippet: EditorSnippetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .save_editor_snippet(snippet.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Deletes the editor snippet of that name; whether there was one.
+#[command]
+async fn delete_editor_snippet(name: String, state: State<'_, AppState>) -> CmdResult<bool> {
+    state
+        .history
+        .delete_editor_snippet(name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The text a new script starts with; empty when there is none.
+#[command]
+async fn new_script_template(state: State<'_, AppState>) -> CmdResult<String> {
+    state
+        .history
+        .new_script_template()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the text a new script starts with (empty: none), checked by the core.
+#[command]
+async fn set_new_script_template(template: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .history
+        .set_new_script_template(template)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The core's limits for editor snippets and the template, for the settings page.
+#[command]
+async fn editor_snippet_limits() -> CmdResult<EditorSnippetLimits> {
+    let limit = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    Ok(EditorSnippetLimits {
+        name: limit(spelaion_core::MAX_SNIPPET_NAME),
+        description: limit(spelaion_core::MAX_SNIPPET_DESCRIPTION),
+        body: limit(spelaion_core::MAX_SNIPPET_BODY),
+        snippets: limit(spelaion_core::MAX_SNIPPETS),
+        template: limit(spelaion_core::MAX_SCRIPT_TEMPLATE),
+    })
+}
+
 #[command]
 async fn get_grid_preferences(state: State<'_, AppState>) -> CmdResult<GridPreferencesItem> {
     state
@@ -5249,6 +5317,12 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_explorer_preferences,
             get_editor_preferences,
             set_editor_preferences,
+            editor_snippets,
+            save_editor_snippet,
+            delete_editor_snippet,
+            new_script_template,
+            set_new_script_template,
+            editor_snippet_limits,
             get_grid_preferences,
             set_grid_preferences,
             get_map_preferences,

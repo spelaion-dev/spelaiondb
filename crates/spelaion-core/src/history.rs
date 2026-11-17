@@ -43,12 +43,27 @@ pub enum HistoryError {
     InvalidSnippetName,
     #[error("{0}")]
     NamePattern(#[from] spelaion_config::NamePatternError),
+    /// An editor snippet or the template of new scripts was refused (SDB-384).
+    #[error("{0}")]
+    EditorSnippet(crate::editor_snippets::SnippetError),
 }
 
 /// Longest name of a saved query, in characters.
 const MAX_SNIPPET_NAME: usize = 200;
 
 type Reply<T> = oneshot::Sender<Result<T, StoreError>>;
+
+/// A snippet or template save as the actor answers it: the store's own failure, or why the
+/// core refused it (`None` when it was saved).
+fn refusal(
+    saved: Result<(), crate::editor_snippets::SnippetError>,
+) -> Result<Option<crate::editor_snippets::SnippetError>, StoreError> {
+    match saved {
+        Ok(()) => Ok(None),
+        Err(crate::editor_snippets::SnippetError::Store(error)) => Err(error),
+        Err(refused) => Ok(Some(refused)),
+    }
+}
 
 enum Request {
     HistoryPage {
@@ -135,6 +150,25 @@ enum Request {
     },
     GetEditor {
         reply: Reply<EditorPreferences>,
+    },
+    GetEditorSnippets {
+        reply: Reply<Vec<spelaion_store::EditorSnippet>>,
+    },
+    /// The reply is why the snippet was refused, if it was.
+    SaveEditorSnippet {
+        snippet: spelaion_store::EditorSnippet,
+        reply: Reply<Option<crate::editor_snippets::SnippetError>>,
+    },
+    DeleteEditorSnippet {
+        name: String,
+        reply: Reply<bool>,
+    },
+    GetScriptTemplate {
+        reply: Reply<String>,
+    },
+    SetScriptTemplate {
+        template: String,
+        reply: Reply<Option<crate::editor_snippets::SnippetError>>,
     },
     SetEditor {
         preferences: EditorPreferences,
@@ -363,6 +397,25 @@ impl QueryHistory {
                         }
                         Request::SetEditor { preferences, reply } => {
                             let _ = reply.send(store.set_editor_preferences(&preferences));
+                        }
+                        Request::GetEditorSnippets { reply } => {
+                            let _ = reply.send(crate::editor_snippets::editor_snippets(&store));
+                        }
+                        Request::SaveEditorSnippet { snippet, reply } => {
+                            let _ = reply.send(refusal(
+                                crate::editor_snippets::save_editor_snippet(&store, &snippet),
+                            ));
+                        }
+                        Request::DeleteEditorSnippet { name, reply } => {
+                            let _ = reply.send(store.delete_editor_snippet(&name));
+                        }
+                        Request::GetScriptTemplate { reply } => {
+                            let _ = reply.send(crate::editor_snippets::new_script_template(&store));
+                        }
+                        Request::SetScriptTemplate { template, reply } => {
+                            let _ = reply.send(refusal(
+                                crate::editor_snippets::set_new_script_template(&store, &template),
+                            ));
                         }
                         Request::GetGrid { reply } => {
                             let _ = reply.send(store.get_grid_preferences());
@@ -760,6 +813,53 @@ impl QueryHistory {
 
     pub async fn editor_preferences(&self) -> Result<EditorPreferences, HistoryError> {
         self.request(|reply| Request::GetEditor { reply }).await
+    }
+
+    /// The user's own editor snippets (SDB-384), by name: only those that pass the core's
+    /// check.
+    pub async fn editor_snippets(
+        &self,
+    ) -> Result<Vec<spelaion_store::EditorSnippet>, HistoryError> {
+        self.request(|reply| Request::GetEditorSnippets { reply })
+            .await
+    }
+
+    /// Saves an editor snippet, replacing the one of the same name. The core checks it
+    /// (bounded sizes, no hidden characters, at most `MAX_SNIPPETS`) and refuses otherwise.
+    pub async fn save_editor_snippet(
+        &self,
+        snippet: spelaion_store::EditorSnippet,
+    ) -> Result<(), HistoryError> {
+        match self
+            .request(|reply| Request::SaveEditorSnippet { snippet, reply })
+            .await?
+        {
+            None => Ok(()),
+            Some(refused) => Err(HistoryError::EditorSnippet(refused)),
+        }
+    }
+
+    /// Deletes the editor snippet of that name; whether there was one.
+    pub async fn delete_editor_snippet(&self, name: String) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::DeleteEditorSnippet { name, reply })
+            .await
+    }
+
+    /// The text a new script starts with; empty when there is none.
+    pub async fn new_script_template(&self) -> Result<String, HistoryError> {
+        self.request(|reply| Request::GetScriptTemplate { reply })
+            .await
+    }
+
+    /// Saves the text a new script starts with (empty: none), checked like a snippet's text.
+    pub async fn set_new_script_template(&self, template: String) -> Result<(), HistoryError> {
+        match self
+            .request(|reply| Request::SetScriptTemplate { template, reply })
+            .await?
+        {
+            None => Ok(()),
+            Some(refused) => Err(HistoryError::EditorSnippet(refused)),
+        }
     }
     pub async fn set_editor_preferences(
         &self,

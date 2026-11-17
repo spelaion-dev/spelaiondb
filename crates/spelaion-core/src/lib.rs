@@ -14,6 +14,7 @@ mod conn_test;
 mod cursor;
 mod data_search;
 mod edit;
+mod editor_snippets;
 mod er;
 mod export;
 mod export_stream;
@@ -102,6 +103,10 @@ pub use data_search::{
 pub use edit::{
     CellInput, EditError, EditTarget, RowChange, apply_edits, check_edit_policy, edit_statements,
     editable_query_source, editable_query_table,
+};
+pub use editor_snippets::{
+    MAX_SCRIPT_TEMPLATE, MAX_SNIPPET_BODY, MAX_SNIPPET_DESCRIPTION, MAX_SNIPPET_NAME, MAX_SNIPPETS,
+    SnippetError, check_script_template, check_snippet,
 };
 pub use er::{
     Cardinality, DiagramError, DiagramScope, ErColumn, ErColumns, ErEdge, ErKeyMark, ErLayout,
@@ -204,10 +209,10 @@ pub use spelaion_store::{
     HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
 };
 pub use spelaion_store::{
-    BackupPreferences, Bookmark, EditorPreferences, ExplorerFilter, ExplorerPreferences,
-    FilterKind, GridPreferences, MapPreferences, RecentFile, SavedFile, SavedTab, SavedTabs,
-    ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX,
-    TileServerError, check_tile_server,
+    BackupPreferences, Bookmark, EditorPreferences, EditorSnippet, ExplorerFilter,
+    ExplorerPreferences, FilterKind, GridPreferences, MapPreferences, RecentFile, SavedFile,
+    SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX,
+    TILE_URL_MAX, TileServerError, check_tile_server,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,

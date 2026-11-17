@@ -70,9 +70,9 @@ pub use import::{
     read_stored_passwords, replacement_draft,
 };
 pub use load::{
-    CONNECTION_TYPES_FILE, Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, TypesLayer,
-    WORKSPACE_DIR, default_user_dir, ensure_private_dir, find_workspace, load, valid_type_id,
-    workspace_dir,
+    CONNECTION_TYPES_FILE, Config, ConnectionEntry, ConnectionId, PlainTextError, Source,
+    TunnelEntry, TypesLayer, WORKSPACE_DIR, check_plain_text, default_user_dir, ensure_private_dir,
+    find_workspace, load, valid_type_id, workspace_dir,
 };
 pub use masking::{MASK_EVERYTHING, MaskingRules, check_pattern, check_patterns};
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};

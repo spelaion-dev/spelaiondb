@@ -2335,6 +2335,53 @@ select {
   margin-bottom: 8px;
   font-weight: 600;
 }
+/* Settings › Snippets: the user's snippets, one per row, and the form that edits one. */
+.snippet-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.snippet-list li {
+  display: flex;
+  gap: var(--space-md);
+  align-items: baseline;
+}
+.snippet-name {
+  flex: 0 0 auto;
+  min-width: 8ch;
+  font-family: var(--font-code);
+  font-weight: 600;
+}
+.snippet-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snippet-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.snippet-text {
+  width: 100%;
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+  line-height: var(--leading-md);
+  resize: vertical;
+}
+.snippet-actions {
+  display: flex;
+  gap: var(--space-md);
+}
 
 @media (max-width: 1000px) {
   .history-panel {

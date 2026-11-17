@@ -370,7 +370,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, map: 13 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -2720,6 +2720,102 @@ try {
     await page.keyboard.press("Control+w");
     await page.locator(".tabbar .tab").nth(tabBefore).click();
     await page.waitForFunction((index) => document.querySelectorAll(".tabbar .tab")[index]?.classList.contains("active"), tabBefore);
+  }
+
+  step("your own snippets: made in Settings, expanded with Tab through its fields, over a built-in one, and a template for new scripts");
+  {
+    const lines = () => page.evaluate(() => [...document.querySelectorAll(".tab-panel:not([hidden]) .cm-content .cm-line")].map((line) => line.textContent).join("\n"));
+    const editorShows = (text) => page.waitForFunction((expected) => [...document.querySelectorAll(".tab-panel:not([hidden]) .cm-content .cm-line")].map((line) => line.textContent).join("\n") === expected, text);
+    const selected = (text) => page.waitForFunction((expected) => getSelection().toString() === expected, text);
+    await withSettings("snippets", async (settings) => {
+      await settings.getByText("You have no snippets yet.").waitFor();
+      const fill = async (name, description, text) => {
+        await settings.locator('input[name="snippetName"]').fill(name);
+        await settings.locator('input[name="snippetDescription"]').fill(description);
+        await settings.locator('textarea[name="snippetBody"]').fill(text);
+        await settings.getByRole("button", { name: "Save snippet" }).click();
+      };
+      await settings.getByRole("button", { name: "New snippet" }).click();
+      // The core decides what a snippet may hold: a name that is not an identifier and a text
+      // with a hidden character (a zero-width space) are refused, and nothing is saved.
+      await fill("top rows", "", "select 1;");
+      await settings.getByRole("alert").filter({ hasText: "a snippet's name is 1 to 32 letters, digits or underscores" }).waitFor();
+      await fill("top", "", "select 1;\u200b");
+      await settings.getByRole("alert").filter({ hasText: "a snippet's text can only hold text, line breaks and tabs" }).waitFor();
+      await fill("top", "The first rows of a table", "SELECT ${1:*} FROM ${2:table} LIMIT ${3:10};${0}");
+      await settings.locator('textarea[name="snippetBody"]').waitFor({ state: "detached" });
+      await settings.locator(".snippet-list li", { hasText: "The first rows of a table" }).waitFor();
+      // A snippet named like a built-in one replaces it.
+      await settings.getByRole("button", { name: "New snippet" }).click();
+      await fill("upd", "My update", "UPDATE ${1:t} SET ${2:c} = ${3:v};");
+      await settings.locator('textarea[name="snippetBody"]').waitFor({ state: "detached" });
+      await settings.getByText("replaces the built-in one").waitFor();
+      await settings.getByText("replaced by yours").waitFor();
+      // The template of new scripts.
+      await settings.locator('textarea[name="scriptTemplate"]').fill("-- smoke template\n");
+      // Like the other settings it is saved as it changes: when the box is left.
+      await settings.locator('textarea[name="scriptTemplate"]').blur();
+      await settings.getByRole("button", { name: "Remove template" }).waitFor();
+      await shot("05g-snippets-settings-light");
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
+      await shot("05g-snippets-settings-dark");
+      await page.evaluate(() => { document.documentElement.dataset.theme = "light"; window.dispatchEvent(new Event("spelaion-themechange")); });
+    });
+    // The name and Tab expand the snippet; Tab then visits its fields in order.
+    await replaceQuery(panel, "top");
+    await page.keyboard.press("Tab");
+    await editorShows("SELECT * FROM table LIMIT 10;");
+    await selected("*");
+    await page.keyboard.insertText("id");
+    await page.keyboard.press("Tab");
+    await selected("table");
+    await page.keyboard.insertText("orders");
+    await page.keyboard.press("Tab");
+    await selected("10");
+    await page.keyboard.insertText("5");
+    await editorShows("SELECT id FROM orders LIMIT 5;");
+    await page.keyboard.press("Shift+Tab");
+    await selected("orders");
+    // The user's `upd` is what expands now, not the built-in one.
+    await replaceQuery(panel, "upd");
+    await page.keyboard.press("Tab");
+    await editorShows("UPDATE t SET c = v;");
+    await selected("t");
+    // While typing, the snippet is offered next to the SQL completions, with its description.
+    await replaceQuery(panel, "");
+    await page.keyboard.type("to");
+    await page.locator(".cm-tooltip-autocomplete li", { hasText: "The first rows of a table" }).waitFor();
+    await shot("05g-snippet-completion");
+    await page.keyboard.press("Escape");
+    // A new script starts with the template, the cursor after it.
+    const tabsWithSnippets = await page.getByRole("tab").count();
+    await page.keyboard.press("Control+t");
+    await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count + 1, tabsWithSnippets);
+    await editorShows("-- smoke template\n");
+    await page.keyboard.insertText("select 1;");
+    await editorShows("-- smoke template\nselect 1;");
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count, tabsWithSnippets);
+    // Deleted again: the built-in snippet is back, and a new script is empty.
+    await withSettings("snippets", async (settings) => {
+      await settings.getByRole("button", { name: "Delete snippet top" }).click();
+      await settings.getByRole("button", { name: "Delete snippet upd" }).click();
+      await settings.getByText("You have no snippets yet.").waitFor();
+      await settings.getByRole("button", { name: "Remove template" }).click();
+      await settings.getByRole("button", { name: "Remove template" }).waitFor({ state: "detached" });
+    });
+    await replaceQuery(panel, "upd");
+    await page.keyboard.press("Tab");
+    await editorShows("UPDATE table SET column = value WHERE condition;");
+    await replaceQuery(panel, "top");
+    await page.keyboard.press("Tab");
+    assert.notEqual(await lines(), "SELECT * FROM table LIMIT 10;");
+    await page.keyboard.press("Control+t");
+    await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count + 1, tabsWithSnippets);
+    await editorShows("");
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count, tabsWithSnippets);
+    await replaceQuery(panel, "select 'unterminated");
   }
 
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");

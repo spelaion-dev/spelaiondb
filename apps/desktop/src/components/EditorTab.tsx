@@ -1408,6 +1408,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             onName={showName}
             onOutline={() => setOutlineOpen((open) => !open)}
             error={editorError}
+            cursorAtEnd={tab.fromTemplate}
           />
           {outlineOpen && (
             <ScriptOutline

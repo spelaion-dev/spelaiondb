@@ -13,10 +13,11 @@ import { call, commands, type NamePatternPreview, type NetworkProfileItem } from
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
+import { SnippetSettings } from "./SnippetSettings";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "map";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "map"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -75,6 +76,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "plugins" && <PluginsSettings />}
         {category === "scripts" && <ScriptSettings />}
         {category === "editor" && <EditorSettings />}
+        {category === "snippets" && <SnippetSettings />}
         {category === "map" && <MapSettings />}
       </section>
     </div>

@@ -121,6 +121,21 @@ export const commands = {
 	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
 	getEditorPreferences: () => typedError<EditorPreferencesItem, string>(__TAURI_INVOKE("get_editor_preferences")),
 	setEditorPreferences: (preferences: EditorPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_editor_preferences", { preferences })),
+	/**  The user's own editor snippets (SDB-384), by name. */
+	editorSnippets: () => typedError<EditorSnippetItem[], string>(__TAURI_INVOKE("editor_snippets")),
+	/**
+	 *  Saves an editor snippet, replacing the one of the same name. The core refuses one that is
+	 *  too long, holds hidden characters or has a name that is not an identifier.
+	 */
+	saveEditorSnippet: (snippet: EditorSnippetItem) => typedError<null, string>(__TAURI_INVOKE("save_editor_snippet", { snippet })),
+	/**  Deletes the editor snippet of that name; whether there was one. */
+	deleteEditorSnippet: (name: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_editor_snippet", { name })),
+	/**  The text a new script starts with; empty when there is none. */
+	newScriptTemplate: () => typedError<string, string>(__TAURI_INVOKE("new_script_template")),
+	/**  Saves the text a new script starts with (empty: none), checked by the core. */
+	setNewScriptTemplate: (template: string) => typedError<null, string>(__TAURI_INVOKE("set_new_script_template", { template })),
+	/**  The core's limits for editor snippets and the template, for the settings page. */
+	editorSnippetLimits: () => typedError<EditorSnippetLimits, string>(__TAURI_INVOKE("editor_snippet_limits")),
 	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
 	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
 	/**  The map view's background (ADR-045): tiles from the user's tile server, off by default. */
@@ -2300,6 +2315,30 @@ export type EditorPreferencesItem = {
 	keywordCase: string,
 	indent: number,
 	commaPosition: string,
+};
+
+/**
+ *  One of the user's own editor snippets (SDB-384): text the editor inserts when its name is
+ *  typed before Tab. The core checks it before it is saved.
+ */
+export type EditorSnippetItem = {
+	/**  What is typed before Tab. */
+	name: string,
+	description: string,
+	/**  The text inserted, with its fields (`${1:name}`). */
+	body: string,
+};
+
+/**
+ *  The limits the core holds an editor snippet and the template of new scripts to, for the
+ *  settings page to show (the core is what enforces them).
+ */
+export type EditorSnippetLimits = {
+	name: number,
+	description: number,
+	body: number,
+	snippets: number,
+	template: number,
 };
 
 export type EmbeddedBackupItem = {

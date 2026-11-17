@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./i18n";
 import { usePreferences } from "./preferences";
+import { useSnippets } from "./snippetStore";
 import "./styles.css";
 import { useUpdate } from "./update";
 
@@ -25,6 +26,9 @@ void usePreferences
   .load()
   .finally(() => {
     createRoot(root).render(<App />);
+    // The user's snippets and the template of new scripts: read once, before a tab is opened
+    // by hand. They are text for the editor; a failure only leaves the built-in snippets.
+    void useSnippets.getState().load();
     // After the first render: a slow network never delays the window.
     void useUpdate.getState().start();
   });

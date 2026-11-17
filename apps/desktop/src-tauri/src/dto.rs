@@ -883,6 +883,50 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
     }
 }
 
+/// One of the user's own editor snippets (SDB-384): text the editor inserts when its name is
+/// typed before Tab. The core checks it before it is saved.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSnippetItem {
+    /// What is typed before Tab.
+    pub name: String,
+    pub description: String,
+    /// The text inserted, with its fields (`${1:name}`).
+    pub body: String,
+}
+
+impl From<spelaion_core::EditorSnippet> for EditorSnippetItem {
+    fn from(snippet: spelaion_core::EditorSnippet) -> Self {
+        Self {
+            name: snippet.name,
+            description: snippet.description,
+            body: snippet.body,
+        }
+    }
+}
+
+impl From<EditorSnippetItem> for spelaion_core::EditorSnippet {
+    fn from(snippet: EditorSnippetItem) -> Self {
+        Self {
+            name: snippet.name,
+            description: snippet.description,
+            body: snippet.body,
+        }
+    }
+}
+
+/// The limits the core holds an editor snippet and the template of new scripts to, for the
+/// settings page to show (the core is what enforces them).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSnippetLimits {
+    pub name: u32,
+    pub description: u32,
+    pub body: u32,
+    pub snippets: u32,
+    pub template: u32,
+}
+
 /// Personal editor preferences; all fields checked by the core store.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
