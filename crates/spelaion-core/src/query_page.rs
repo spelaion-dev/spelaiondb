@@ -208,9 +208,22 @@ fn exact_literal_type(native_type: &str) -> bool {
     )
 }
 
+/// SQL Server's non-Unicode text types. A text literal is written `N'…'` (it keeps every
+/// character), and comparing such a column with it converts the column to `nvarchar`: with a
+/// SQL collation the comparison then follows Unicode rules while its ORDER BY follows the
+/// collation's own, and the two disagree on hyphens and apostrophes (SDB-404).
+fn sqlserver_non_unicode(engine: &str, native_type: &str) -> bool {
+    let lower = native_type.to_ascii_lowercase();
+    let base = lower.split('(').next().unwrap_or_default().trim();
+    engine == "sqlserver" && matches!(base, "varchar" | "char" | "text")
+}
+
 /// One column the pages are ordered by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OrderColumn {
+    /// SQL Server `varchar` or `char`: its literal is cast to `varchar`, so the comparison
+    /// follows the column's collation as its ORDER BY does.
+    non_unicode: bool,
     /// The column's name in the catalog.
     column: String,
     /// Its position in the result, and the name the result gives it there.
@@ -346,6 +359,7 @@ fn keyset(
         }
         let (position, result_name) = position_of(&info.name)?;
         order.push(OrderColumn {
+            non_unicode: sqlserver_non_unicode(engine, &info.native_type),
             column: info.name.clone(),
             position,
             result_name,
@@ -473,7 +487,21 @@ impl Keyset {
             // column may be NULL, its NULLs come after every value: a row with one is after
             // any value (`a > x OR a IS NULL`), nothing is after a NULL in that column (no
             // term for it), and two NULLs are equal there (`a IS NULL`).
-            let literals: Vec<String> = values.iter().map(|v| sql_literal(v, engine)).collect();
+            // A value read from a SQL Server `varchar` is written back as `varchar`: converted
+            // with the database's code page, which a column's value always fits unless the
+            // column has a collation of another code page (a known limit, in ADR-054).
+            let literals: Vec<String> = values
+                .iter()
+                .zip(&self.order)
+                .map(|(v, c)| {
+                    let literal = sql_literal(v, engine);
+                    if c.non_unicode && matches!(v, Value::Text(_)) {
+                        format!("CAST({literal} AS varchar(max))")
+                    } else {
+                        literal
+                    }
+                })
+                .collect();
             let null = |i: usize| matches!(values[i], Value::Null);
             let terms: Vec<String> = (0..self.order.len())
                 .filter(|&i| !null(i))
