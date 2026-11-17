@@ -257,6 +257,8 @@ async fn checked_servers_connect_and_browse() {
             Some(&server.family),
             "{label}"
         );
+        // Their transactions hold: edits and imports keep their one transaction (SDB-354).
+        assert_eq!(open.session.atomic_writes_refusal(), None, "{label}");
         let parent = unique("sdb_parent");
         let child = unique("sdb_child");
         let view = unique("sdb_view");
@@ -503,6 +505,21 @@ async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
             Some(&server.family),
             "{label}"
         );
+        // Several table edits at once and imports need a transaction that holds (SDB-354):
+        // CrateDB and GreptimeDB accept `BEGIN` and ignore it, RisingWave's writes are not
+        // transactional.
+        assert_eq!(
+            open.session.atomic_writes_refusal().is_some(),
+            !server.family.enforces_transactions(),
+            "{label}"
+        );
+        if matches!(
+            server.family,
+            ServerFamily::CrateDb | ServerFamily::Unchecked(_)
+        ) {
+            let reason = open.session.atomic_writes_refusal().unwrap();
+            assert!(reason.contains(label), "{label}: {reason}");
+        }
         let transactions = server.family.read_only_transactions();
         let read = open
             .session

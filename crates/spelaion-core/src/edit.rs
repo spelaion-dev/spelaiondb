@@ -306,6 +306,12 @@ pub enum EditError {
         "a transaction is open on this tab: commit or roll it back before applying table edits"
     )]
     TransactionOpen,
+    /// Several changes at once on a server whose transactions do not hold (SDB-354): one that
+    /// failed would leave the ones before it applied.
+    #[error(
+        "{0}: apply one change at a time, so that a change that fails cannot leave the others applied"
+    )]
+    NotAtomic(String),
     #[error(
         "change {index} would affect {rows} rows instead of one (the row changed or vanished meanwhile?), nothing was applied"
     )]
@@ -496,6 +502,13 @@ pub fn edit_statements(
 pub async fn apply_edits(session: &Session, statements: &[String]) -> Result<usize, EditError> {
     if statements.is_empty() {
         return Err(EditError::Nothing);
+    }
+    // One transaction makes several changes all or nothing; where it does not hold, only one
+    // change at a time can be (SDB-354).
+    if statements.len() > 1
+        && let Some(reason) = session.atomic_writes_refusal()
+    {
+        return Err(EditError::NotAtomic(reason));
     }
     // Edits are a transaction of their own (ADR-031): never nested in, nor committing, one the
     // user left open on this session.

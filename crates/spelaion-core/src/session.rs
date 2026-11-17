@@ -355,6 +355,23 @@ impl Session {
             .and_then(crate::ServerFamily::read_only_transactions_refusal)
     }
 
+    /// Why writes that rely on one transaction (several table edits at once, an import) cannot
+    /// be made atomic on this session, if they cannot: the engine has no transactions, or its
+    /// server accepts `BEGIN` and ignores it (SDB-354). Rolled back, they would leave the
+    /// statements before the failure applied.
+    pub fn atomic_writes_refusal(&self) -> Option<String> {
+        if !self.connection().capabilities().transactions {
+            return Some(format!("{} has no transactions", self.dialect().name()));
+        }
+        match &self.server_family {
+            Some(family) if !family.enforces_transactions() => Some(format!(
+                "{} accepts transactions but does not enforce them",
+                family.name()
+            )),
+            Some(_) | None => None,
+        }
+    }
+
     /// Makes the session refuse every script a read-only connection does not run (ADR-053).
     /// [`crate::open_connection`] sets it from the connection.
     pub fn with_read_only(mut self, read_only: bool) -> Self {

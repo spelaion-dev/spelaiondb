@@ -36,6 +36,12 @@ identify the rows of one table.
   Read-only connections refuse edits in the core.
 - After applying, the page is loaded again; nothing else is re-run.
 - The MCP keeps its own rules (ADR-008): this ADR does not give agents a way to write.
+- **Where a transaction does not hold (2026-11-17, SDB-354).** GreptimeDB and CrateDB accept
+  `BEGIN` and ignore it; an engine may have no transactions at all. There a batch that failed
+  half way kept the changes before the failure while the app said it rolled back. Several
+  changes at once are refused there, before anything runs (`Session::atomic_writes_refusal`,
+  from `Capabilities::transactions` and `ServerFamily::enforces_transactions`); one change at a
+  time still applies.
 
 ## Alternatives
 - Editing any result whose columns map to one table (DBeaver): needs parsing the query and
