@@ -138,6 +138,16 @@ export const commands = {
 	editorSnippetLimits: () => typedError<EditorSnippetLimits, string>(__TAURI_INVOKE("editor_snippet_limits")),
 	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
 	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
+	/**  How the grid shows values (SDB-385): the user's formats, zone and binary display. */
+	getDisplayFormat: () => typedError<DisplayFormatItem, string>(__TAURI_INVOKE("get_display_format")),
+	/**
+	 *  Saves how the grid shows values. The core checks it first (a pattern that cannot format
+	 *  its kind of value, a zone that does not exist) and nothing changes when it refuses. The
+	 *  windows served from now on use it.
+	 */
+	setDisplayFormat: (format: DisplayFormatItem) => typedError<null, string>(__TAURI_INVOKE("set_display_format", { format })),
+	/**  The time zones the display zone can be, by name. */
+	timeZones: () => typedError<string[], string>(__TAURI_INVOKE("time_zones")),
 	/**  The map view's background (ADR-045): tiles from the user's tile server, off by default. */
 	getMapPreferences: () => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("get_map_preferences")),
 	/**  Saves the map's preferences; the core checks the tile server first. */
@@ -330,7 +340,7 @@ export const commands = {
 	 *  the typed data, for the clipboard. One cell copied as plain text is its value alone,
 	 *  without a line break after it.
 	 */
-	copyRows: (result: number, session: string, range: CellRange_Deserialize, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
+	copyRows: (result: number, session: string, range: CellRange_Deserialize, format: TextFormat, header: boolean, displayed: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header, displayed })),
 	/**
 	 *  Column names for the clipboard: plain, quoted for the engine, qualified with the table
 	 *  (a table data tab's) or one per line; written by the core.
@@ -2219,6 +2229,26 @@ export type DiagramTextFormatItem = "mermaid" | "dbml";
 /**  The coordinates a value had before Z and M were left out. */
 export type Dimensions = "xy" | "xyz" | "xym" | "xyzm";
 
+/**
+ *  How the grid shows values (SDB-385): `strftime` patterns (empty: as the database prints
+ *  it), a number's marks, the display time zone and how binary reads. The core checks it.
+ */
+export type DisplayFormatItem = {
+	/**  Everything as the database prints it, whatever the rest says. */
+	asStored: boolean,
+	date: string,
+	time: string,
+	timestamp: string,
+	/**  `none`, `comma`, `dot`, `space` or `apostrophe`. */
+	grouping: string,
+	/**  `dot` or `comma`. */
+	decimal: string,
+	/**  An IANA name, `local` for this computer's, or empty. */
+	timeZone: string,
+	/**  `hex`, `utf8`, `latin1` or `base64`. */
+	binary: string,
+};
+
 /**  A constraint a structure form drops, by its name in the catalog. */
 export type DroppedConstraintItem = { kind: "constraint"; name: string } | { kind: "foreignKey"; name: string };
 
@@ -2821,6 +2851,13 @@ export type GridPreferencesItem = {
 	nullText: boolean,
 	boolCheckboxes: boolean,
 	resultTabs: number,
+	/**  Values colored by their type. */
+	colorize: boolean,
+	/**  The column header shows the column's type, and its comment where it is known. */
+	headerType: boolean,
+	headerComment: boolean,
+	/**  The grid's own font size, in pixels. */
+	fontSize: number,
 };
 
 export type HistoryFilterItem = HistoryFilterItem_Serialize | HistoryFilterItem_Deserialize;

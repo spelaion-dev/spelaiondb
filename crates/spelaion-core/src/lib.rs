@@ -13,6 +13,7 @@ mod column_stats;
 mod conn_test;
 mod cursor;
 mod data_search;
+mod display;
 mod edit;
 mod editor_snippets;
 mod er;
@@ -99,6 +100,10 @@ pub use data_search::{
     MAX_SEARCH_VALUE_CHARS, SNIPPET_CHARS, SearchColumn, SearchColumnKind, SearchHit, SearchTable,
     TableOutcome, TableSearchSql, TableStatus, column_kind, data_search, is_search_number,
     probe_sql, table_search_sql,
+};
+pub use display::{
+    BinaryDisplay, DecimalMark, Display, DisplayError, DisplayFormat, Grouping, KIND_KEY,
+    LOCAL_ZONE, MAX_PATTERN, ValueKind, ZONE_KEY, displayed_text, time_zones, window_ipc,
 };
 pub use edit::{
     CellInput, EditError, EditTarget, RowChange, apply_edits, check_edit_policy, edit_statements,

@@ -6486,6 +6486,110 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.press("Control+w");
   }
 
+  step("value display: a date and number format and a time zone from Settings; copies keep the database's text unless asked (SDB-385)");
+  {
+    const shownPanel = await newQuery("analytics", "select timestamptz '2026-11-16 20:07:16+00' as at, date '2026-11-16' as day, 1234567.89::decimal(12,2) as amount;");
+    await run(shownPanel);
+    await shownPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    const shownGrid = shownPanel.locator(".grid-scroller");
+    const ROW_NUM = 52;
+    const middle = 34 + 12;
+    const cellPoint = async (col) => {
+      const widths = (await shownGrid.getAttribute("data-column-widths")).split(",").map(Number);
+      const box = await shownGrid.boundingBox();
+      return { x: box.x + ROW_NUM + widths.slice(0, col).reduce((a, b) => a + b, 0) + 12, y: box.y + middle };
+    };
+    // Ctrl+C: the database's own text, whatever the grid shows.
+    const copyStored = async (col) => {
+      const at = await cellPoint(col);
+      const before = await page.evaluate(() => window.__copied.length);
+      await page.mouse.click(at.x, at.y);
+      await page.keyboard.press("Control+c");
+      return (await copied(before + 1)).trimEnd();
+    };
+    const cellMenu = shownPanel.locator(".result-grid-menu");
+    const copyMenu = shownPanel.getByRole("menu", { name: "Copy", exact: true });
+    const openCopyMenu = async (col) => {
+      const at = await cellPoint(col);
+      await page.mouse.click(at.x, at.y);
+      await page.mouse.click(at.x, at.y, { button: "right" });
+      await cellMenu.getByRole("menuitem", { name: "Copy ▸" }).hover();
+      await copyMenu.waitFor();
+    };
+    // "Copy as displayed": what the grid shows, only when the user picks it.
+    const copyShown = async (col) => {
+      const before = await page.evaluate(() => window.__copied.length);
+      await openCopyMenu(col);
+      await copyMenu.getByRole("menuitem", { name: "Copy as displayed", exact: true }).click();
+      return (await copied(before + 1)).trimEnd();
+    };
+    const stored = ["2026-11-16 20:07:16+00", "2026-11-16", "1234567.89"];
+    for (const [col, text] of stored.entries()) assert.equal(await copyStored(col), text);
+    // By default every value is as the database prints it: there is nothing else to copy.
+    await openCopyMenu(0);
+    assert.equal(await copyMenu.getByRole("menuitem", { name: "Copy as displayed", exact: true }).count(), 0);
+    await page.keyboard.press("Escape");
+    await cellMenu.waitFor({ state: "detached" });
+    // A date format, a number format and a time zone, in Settings.
+    await withSettings("appearance", async (settings) => {
+      const saved = (name, value) => page.waitForFunction(([n, v]) => {
+        const input = document.querySelector(`[name="${n}"]`);
+        return input && !input.matches(":disabled") && (input.type === "checkbox" ? String(input.checked) : input.value) === v;
+      }, [name, value]);
+      await settings.locator('input[name="displayAsStored"]').click();
+      await saved("displayAsStored", "false");
+      await settings.locator('select[name="display-date"]').selectOption("%d/%m/%Y");
+      await saved("display-date", "%d/%m/%Y");
+      await settings.locator('select[name="display-numbers"]').selectOption("dot-comma");
+      await saved("display-numbers", "dot-comma");
+      // A pattern a date cannot be printed with is refused by the core, and nothing changes.
+      await settings.locator('select[name="display-date"]').selectOption("custom");
+      const pattern = settings.locator('input[name="display-date-pattern"]');
+      await pattern.fill("%H:%M");
+      await pattern.press("Enter");
+      await settings.getByRole("alert").filter({ hasText: "Could not save the format" }).waitFor();
+      await page.waitForFunction(() => document.querySelector('input[name="display-date-pattern"]')?.value === "%d/%m/%Y");
+      // A zone that does not exist is refused too; Madrid's is saved.
+      const zone = settings.locator('input[name="display-time-zone"]');
+      await zone.fill("Mars/Olympus");
+      await zone.press("Enter");
+      await settings.getByRole("alert").filter({ hasText: "Mars/Olympus" }).waitFor();
+      await zone.fill("Europe/Madrid");
+      await zone.press("Enter");
+      await settings.getByRole("alert").waitFor({ state: "detached" });
+      await shot("12a5-value-display-settings");
+    });
+    // The grid shows the values in the new format …
+    const shown = ["2026-11-16 21:07:16 +01:00", "16/11/2026", "1.234.567,89"];
+    let first = "";
+    for (let i = 0; i < 20 && first !== shown[0]; i++) {
+      first = await copyShown(0);
+      if (first !== shown[0]) await page.waitForTimeout(250);
+    }
+    for (const [col, text] of shown.entries()) assert.equal(await copyShown(col), text);
+    // … and a plain copy is still the database's text: 20:07 UTC, shown as 21:07 in Madrid.
+    for (const [col, text] of stored.entries()) assert.equal(await copyStored(col), text);
+    await shot("12a5-value-display-light");
+    await setTheme("dark", "dark");
+    await shot("12a5-value-display-dark");
+    await setTheme("light", "light");
+    // Colors by type and a bigger font are the grid's own settings.
+    await setGridLook({ colorize: true });
+    await shot("12a5-value-display-colors");
+    await setGridLook({ colorize: false });
+    // Back to how the database prints it: the format stays saved, and is not applied.
+    await withSettings("appearance", async (settings) => {
+      await settings.locator('input[name="displayAsStored"]').click();
+      await page.waitForFunction(() => document.querySelector('input[name="displayAsStored"]')?.checked === true && document.querySelector('select[name="display-date"]')?.disabled === true);
+    });
+    await openCopyMenu(1);
+    assert.equal(await copyMenu.getByRole("menuitem", { name: "Copy as displayed", exact: true }).count(), 0);
+    await page.keyboard.press("Escape");
+    await cellMenu.waitFor({ state: "detached" });
+    assert.equal(await copyStored(1), "2026-11-16");
+    await page.keyboard.press("Control+w");
+  }
+
   step("a million rows: select, find, sort, filter by value and copy a column, the UI painting all along");
   {
     const big = await newQuery(

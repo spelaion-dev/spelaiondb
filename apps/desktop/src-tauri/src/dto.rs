@@ -1126,6 +1126,68 @@ pub struct GridPreferencesItem {
     pub null_text: bool,
     pub bool_checkboxes: bool,
     pub result_tabs: u32,
+    /// Values colored by their type.
+    pub colorize: bool,
+    /// The column header shows the column's type, and its comment where it is known.
+    pub header_type: bool,
+    pub header_comment: bool,
+    /// The grid's own font size, in pixels.
+    pub font_size: u32,
+}
+
+/// How the grid shows values (SDB-385): `strftime` patterns (empty: as the database prints
+/// it), a number's marks, the display time zone and how binary reads. The core checks it.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayFormatItem {
+    /// Everything as the database prints it, whatever the rest says.
+    pub as_stored: bool,
+    pub date: String,
+    pub time: String,
+    pub timestamp: String,
+    /// `none`, `comma`, `dot`, `space` or `apostrophe`.
+    pub grouping: String,
+    /// `dot` or `comma`.
+    pub decimal: String,
+    /// An IANA name, `local` for this computer's, or empty.
+    pub time_zone: String,
+    /// `hex`, `utf8`, `latin1` or `base64`.
+    pub binary: String,
+}
+
+impl From<&spelaion_core::DisplayFormat> for DisplayFormatItem {
+    fn from(format: &spelaion_core::DisplayFormat) -> Self {
+        Self {
+            as_stored: format.as_stored,
+            date: format.date.clone(),
+            time: format.time.clone(),
+            timestamp: format.timestamp.clone(),
+            grouping: format.grouping.as_str().into(),
+            decimal: format.decimal.as_str().into(),
+            time_zone: format.time_zone.clone(),
+            binary: format.binary.as_str().into(),
+        }
+    }
+}
+
+impl DisplayFormatItem {
+    /// The settings as the core reads them; a mark or a binary form it does not know is
+    /// refused, not guessed.
+    pub fn into_format(self) -> Result<spelaion_core::DisplayFormat, String> {
+        Ok(spelaion_core::DisplayFormat {
+            as_stored: self.as_stored,
+            date: self.date,
+            time: self.time,
+            timestamp: self.timestamp,
+            grouping: spelaion_core::Grouping::parse(&self.grouping)
+                .ok_or("unknown digit grouping")?,
+            decimal: spelaion_core::DecimalMark::parse(&self.decimal)
+                .ok_or("unknown decimal mark")?,
+            time_zone: self.time_zone,
+            binary: spelaion_core::BinaryDisplay::parse(&self.binary)
+                .ok_or("unknown binary display")?,
+        })
+    }
 }
 
 impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
@@ -1135,12 +1197,20 @@ impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
             null_text,
             bool_checkboxes,
             result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         } = p;
         Self {
             zebra,
             null_text,
             bool_checkboxes,
             result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         }
     }
 }
@@ -1152,12 +1222,20 @@ impl From<GridPreferencesItem> for spelaion_core::GridPreferences {
             null_text,
             bool_checkboxes,
             result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         } = p;
         Self {
             zebra,
             null_text,
             bool_checkboxes,
             result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         }
     }
 }

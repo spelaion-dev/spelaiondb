@@ -33,6 +33,9 @@ pub enum HistoryError {
     Store(#[from] StoreError),
     #[error("query history is unavailable")]
     Closed,
+    /// Display settings the core cannot use (SDB-385): nothing was saved.
+    #[error("{0}")]
+    Display(#[from] crate::DisplayError),
     #[error("could not start query history: {0}")]
     Start(#[source] std::io::Error),
     #[error("unsupported language; expected system, en or es")]
@@ -176,6 +179,13 @@ enum Request {
     },
     GetGrid {
         reply: Reply<GridPreferences>,
+    },
+    GetDisplay {
+        reply: Reply<spelaion_store::DisplayPreferences>,
+    },
+    SetDisplay {
+        preferences: spelaion_store::DisplayPreferences,
+        reply: Reply<()>,
     },
     GetMap {
         reply: Reply<MapPreferences>,
@@ -419,6 +429,12 @@ impl QueryHistory {
                         }
                         Request::GetGrid { reply } => {
                             let _ = reply.send(store.get_grid_preferences());
+                        }
+                        Request::GetDisplay { reply } => {
+                            let _ = reply.send(store.get_display_preferences());
+                        }
+                        Request::SetDisplay { preferences, reply } => {
+                            let _ = reply.send(store.set_display_preferences(&preferences));
                         }
                         Request::GetMap { reply } => {
                             let _ = reply.send(store.get_map_preferences());
@@ -894,6 +910,36 @@ impl QueryHistory {
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetBackup { preferences, reply })
             .await
+    }
+
+    /// How the grid shows values (SDB-385). What was saved is read leniently: a setting the
+    /// core does not know, or can no longer use (a zone that is gone), is its default.
+    pub async fn display_format(&self) -> Result<crate::DisplayFormat, HistoryError> {
+        let saved = self.request(|reply| Request::GetDisplay { reply }).await?;
+        Ok(display_format_of(&saved))
+    }
+
+    /// Saves how the grid shows values, after checking it (`DisplayFormat::compile`): a
+    /// pattern that cannot format its kind of value, or a zone that does not exist, is
+    /// refused and nothing changes. Returns the settings ready to format with.
+    pub async fn set_display_format(
+        &self,
+        format: crate::DisplayFormat,
+    ) -> Result<crate::Display, HistoryError> {
+        let display = format.compile()?;
+        let preferences = spelaion_store::DisplayPreferences {
+            as_stored: format.as_stored,
+            date: format.date,
+            time: format.time,
+            timestamp: format.timestamp,
+            grouping: format.grouping.as_str().into(),
+            decimal: format.decimal.as_str().into(),
+            time_zone: format.time_zone,
+            binary: format.binary.as_str().into(),
+        };
+        self.request(|reply| Request::SetDisplay { preferences, reply })
+            .await?;
+        Ok(display)
     }
 
     /// How the result grid draws its cells (zebra rows, NULL, booleans).
@@ -1587,6 +1633,48 @@ impl PendingEntry {
         self.entry.cancelled = cancelled;
         self.entry
     }
+}
+
+/// The display settings as they were saved, with whatever cannot be used any more left at its
+/// default: the grid must always open.
+fn display_format_of(saved: &spelaion_store::DisplayPreferences) -> crate::DisplayFormat {
+    let mut format = crate::DisplayFormat {
+        as_stored: saved.as_stored,
+        date: saved.date.clone(),
+        time: saved.time.clone(),
+        timestamp: saved.timestamp.clone(),
+        grouping: crate::Grouping::parse(&saved.grouping).unwrap_or_default(),
+        decimal: crate::DecimalMark::parse(&saved.decimal).unwrap_or_default(),
+        time_zone: saved.time_zone.clone(),
+        binary: crate::BinaryDisplay::parse(&saved.binary).unwrap_or_default(),
+    };
+    // One setting at a time: a bad one does not take the others with it.
+    let defaults = crate::DisplayFormat::default();
+    let usable = |candidate: &crate::DisplayFormat| candidate.compile().is_ok();
+    if !usable(&format) {
+        let only = |change: &dyn Fn(&mut crate::DisplayFormat)| {
+            let mut one = crate::DisplayFormat::default();
+            change(&mut one);
+            usable(&one)
+        };
+        if !only(&|f| f.date = format.date.clone()) {
+            format.date = defaults.date.clone();
+        }
+        if !only(&|f| f.time = format.time.clone()) {
+            format.time = defaults.time.clone();
+        }
+        if !only(&|f| f.timestamp = format.timestamp.clone()) {
+            format.timestamp = defaults.timestamp.clone();
+        }
+        if !only(&|f| f.time_zone = format.time_zone.clone()) {
+            format.time_zone = defaults.time_zone.clone();
+        }
+        if !usable(&format) {
+            format.grouping = defaults.grouping;
+            format.decimal = defaults.decimal;
+        }
+    }
+    format
 }
 
 #[cfg(test)]
