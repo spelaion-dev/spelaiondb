@@ -551,9 +551,10 @@ try {
   await step("JSON viewer switches presentation and formats an editable value without losing big numbers", async () => {
     await newQuery("JSON Viewer SQLite", `update customer set name = '{"n":12345678901234567890}' where id = 1;`);
     await run();
-    await visibleText(P, "Statement 1: OK");
+    await visibleText(P, "Statement 1: 1 row");
     await replaceQuery("select id, name from customer where id = 1;");
     await run(); await statusline("1 row");
+    await button("Add row", P);
     const box = await wd.evaluate((p) => { const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect(); return { x: r.x, y: r.y }; }, P);
     await wd.pointerAt(box.x + 52 + 110 + 20, box.y + 34 + 12);
     await wd.press("Enter");
