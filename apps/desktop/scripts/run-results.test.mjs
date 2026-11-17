@@ -2,7 +2,26 @@
 // `node --test`.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { afterRun, endStatementResults, withoutResults, withStartedResult } from "../src/runResults.ts";
+import { afterRun, endStatementResults, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../src/runResults.ts";
+
+test("refresh does not reuse column positions when result columns change", () => {
+  const col = { name: "name", logical: "text", nativeType: "text", masked: false };
+  assert.equal(sameResultColumns([col], [{ ...col }]), true);
+  for (const changed of [{ ...col, name: "other" }, { ...col, logical: "int" }, { ...col, nativeType: "varchar" }, { ...col, masked: true }]) {
+    assert.equal(sameResultColumns([col], [changed]), false);
+  }
+  assert.equal(sameResultColumns([col], []), false);
+});
+
+test("only successful single-statement runs offer grid refresh", () => {
+  const results = [{ id: 1, run: 1 }, { id: 2, run: 2 }];
+  const good = { statements: 1, executed: 1, failed: 0, stop: null };
+  assert.deepEqual(markRefreshable(results, 2, good), [results[0], { ...results[1], refreshable: true }]);
+  for (const summary of [{ ...good, statements: 2 }, { ...good, failed: 1 }, { ...good, executed: 0 }, { ...good, stop: "cancelled" }]) {
+    assert.equal(markRefreshable(results, 2, summary)[1].refreshable, false);
+  }
+  assert.equal(markRefreshable([...results, { id: 3, run: 2 }], 2, good)[1].refreshable, false, "a multi-result batch cannot be refreshed into one result tab");
+});
 
 const started = (statement, rows, paging) => ({ id: 10 + statement, statement, rows, complete: false, ...(paging ? { paging } : {}) });
 

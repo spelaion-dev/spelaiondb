@@ -31,6 +31,7 @@
   "resizeEditor": "Ajustar el tamaño del editor y los resultados",
   "sqlEditor": "Editor SQL",
   "results": {
+    "refreshColumnsChanged": "Las columnas del resultado han cambiado y no se han podido recuperar el orden ni los filtros anteriores.",
     "empty": "Escribe una consulta y pulsa Ctrl+Intro.",
     "result": "Resultado {{number}}",
     "messages": "Mensajes",

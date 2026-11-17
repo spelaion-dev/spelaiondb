@@ -3787,6 +3787,10 @@ try {
   const range = panel.locator(".table-range");
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   await panel.getByText("This page only", { exact: true }).waitFor();
+  const beforeRefresh = await panel.locator(".result-tab-item.active").getAttribute("data-result");
+  await panel.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.waitForFunction(([old]) => document.querySelector('.tab-panel:not([hidden]) .result-tab-item.active')?.getAttribute("data-result") !== old, [beforeRefresh]);
+  await range.filter({ hasText: "rows 1–500" }).waitFor();
   // Export takes every row the WHERE keeps, in the ORDER BY, not only the page on screen.
   await panel.getByRole("textbox", { name: "WHERE" }).fill("id > 49000");
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id desc");
@@ -5844,6 +5848,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.type("edited", { delay: 10 });
     assert.equal(await editor.inputValue(), "edited");
     await editor.press("Enter");
+    await panel.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true }).click();
+    await panel.getByText("Apply or discard the pending changes first").waitFor();
+    await panel.locator(".grid-scroller").focus();
     // The full value panel edits the same pending cell, and can be undone by row.
     await page.keyboard.press("Enter");
     const viewer = panel.locator(".cell-viewer");

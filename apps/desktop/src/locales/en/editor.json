@@ -31,6 +31,7 @@
   "resizeEditor": "Resize editor and results",
   "sqlEditor": "SQL editor",
   "results": {
+    "refreshColumnsChanged": "The result's columns changed, so its previous sort and filters could not be restored.",
     "empty": "Write a query and press Ctrl+Enter.",
     "result": "Result {{number}}",
     "messages": "Messages",
