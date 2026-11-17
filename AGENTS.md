@@ -7,9 +7,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 ## Before touching anything
 - Read `docs/architecture.md` and the ADRs in `docs/adr/`. ADRs rule: if a change
   contradicts them, do not make it; propose a new ADR that supersedes the old one.
-- Current state: **v0.5**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQL Server, SQLite
-  and DuckDB drivers, configuration, SSH tunnels, core, local store, `spelaiondb mcp` (read-only, writes per connection) and the
-  `spelaiondb` binary, and the first version of the desktop app (`apps/desktop`).
+- Current state: the version in the workspace's `Cargo.toml`; what each release added is in
+  `docs/releases/` (and the Plane modules). This file does not repeat it, so it cannot go stale.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and
   commit messages.
 
@@ -217,7 +216,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   refused when it loads, and agents never see it (`AgentView::EngineWithoutBarrier`), until its
   own barrier exists. Tests: `spelaion-core`'s `tests/mongodb.rs` with
   `SPELAION_TEST_MONGO=127.0.0.1:27017` (or `SPELAION_DEV_PLUGIN_MONGODB` in a development
-  build).
+  build). A `mongodb+srv` address is resolved by the core (`mongodb_srv.rs`: its DNS seed
+  list, then TLS always on), and the plugin is given one routed endpoint: a plugin never
+  discovers addresses that would bypass the connection's route.
 - **Redis is a plugin whose language is not SQL** (ADR-056), the same way: its driver lives in
   `spelaion-dev/spelaiondb-plugin-redis` (Redis and Valkey), pinned in `plugins.toml`. Its
   language is `spelaion-dialect`'s `redis.rs`: one command per line, quoted as `redis-cli`
@@ -421,6 +422,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `.key` (opened with the key built into Beekeeper), and only ever held as `Secret`s; other
   saved secrets are listed, never decrypted. Tested against tables a real Beekeeper wrote
   (`tests/fixtures/beekeeper`).
+  `heidisql.rs` reads HeidiSQL's exported settings file and, on Windows, its registry
+  sessions, with one reader for both: the format is untrusted (bounded inputs, malformed
+  settings fail closed) and no password reaches an error or the preview.
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no
@@ -619,6 +623,20 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
   tests that try to get around it (`tests/export_stream.rs`).
+  `pending.rs` keeps a table data page's pending edits (ADR-044): cells typed or changed in
+  bulk, rows to delete and rows to insert, in the core with the stored result they refer to,
+  each change a step undo and redo restore exactly; the stored result refuses to sort or filter
+  while edits are pending, so a position keeps naming the same row (`tests/bulk_edits.rs`).
+  `generate.rs` writes the explorer's "Generate SQL" for a table (SELECT by key or keys,
+  INSERT, upsert or MERGE where the engine has one, UPDATE, DELETE) with the engine's quoting
+  and `:named` placeholders; UPDATE and DELETE always carry a WHERE on what identifies a row
+  (the primary key, else a unique constraint, else every column) (`tests/generated_sql.rs`).
+  `plan/` is Visual EXPLAIN: each engine's reader (`postgres.rs`, `mysql.rs`, `sqlserver.rs`,
+  `sqlite.rs`, `duckdb.rs`) turns its plan into one tree, analysed the same way; the plan's
+  run (`run.rs`) is serialized and cancellable; `ANALYZE`, which runs the statement, needs a
+  confirmation of its own and is off on a read-only connection; explicit runs are recorded in
+  history; raw plan rows stay in the core, the page receives a bounded projection
+  (`tests/plans*.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement). Each stored result remembers the session
   that read it and that session's database (`ResultSource`; a statement that changed database
