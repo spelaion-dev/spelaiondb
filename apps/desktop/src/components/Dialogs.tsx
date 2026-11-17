@@ -249,8 +249,8 @@ function ParamsDialog() {
   if (!request) return null;
   const submit = () => request.resolve(values);
   return (
-    <Modal title={t("params.title")} onCancel={() => request.resolve(null)}>
-      <p className="muted small">{t("params.explanation")}</p>
+    <Modal title={t(request.variables ? "params.variablesTitle" : "params.title")} onCancel={() => request.resolve(null)}>
+      <p className="muted small">{t(request.variables ? "params.variablesExplanation" : "params.explanation")}</p>
       <div
         className="params-list"
         onKeyDown={(e) => {
@@ -259,7 +259,7 @@ function ParamsDialog() {
       >
         {request.names.map((name, i) => (
           <label key={name} className="field">
-            <span className="mono">:{name}</span>
+            <span className="mono">{request.variables ? `\${${name}}` : `:${name}`}</span>
             <input
               autoFocus={i === 0}
               value={values[name] ?? ""}

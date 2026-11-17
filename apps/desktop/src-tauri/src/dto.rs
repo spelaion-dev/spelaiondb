@@ -1491,6 +1491,22 @@ pub struct SnippetFolderItem {
     pub personal: bool,
 }
 
+/// One `${name}` variable of the editor's scripts and its value (SDB-383).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VariableItem {
+    pub name: String,
+    pub value: String,
+}
+
+/// The variables a script uses, in order, and the ones that have no value yet.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptVariablesItem {
+    pub names: Vec<String>,
+    pub missing: Vec<String>,
+}
+
 /// A saved query; `connection` is empty when it was saved without one.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

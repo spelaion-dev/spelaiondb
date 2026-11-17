@@ -207,7 +207,37 @@ const MIGRATIONS: &[&str] = &["create table audit (
         when new.key = 'editor.reconnect_on_start' and new.value not in ('on', 'off')
         begin select raise(abort, 'unsupported editor setting'); end;",
     library::MIGRATION,
+    // A connection's `${name}` variables for the editor's scripts (SDB-383), per workspace and
+    // connection like its explorer filter. Local values the user typed: never sent anywhere,
+    // never read by `spelaiondb mcp`.
+    "create table connection_variables (
+        workspace   text not null,
+        connection  text not null,
+        name        text not null check (length(name) between 1 and 64),
+        value       text not null,
+        primary key (workspace, connection, name)
+    );",
 ];
+
+/// The longest name of an editor variable (SDB-383), in bytes.
+pub const MAX_VARIABLE_NAME: usize = 64;
+/// The longest value of an editor variable, in bytes.
+pub const MAX_VARIABLE_VALUE: usize = 64 * 1024;
+
+/// Whether `name` can name an editor variable: a letter or `_`, then letters, digits and `_`.
+pub fn is_variable_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= MAX_VARIABLE_NAME
+        && bytes
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+        && bytes.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+/// Whether `value` can be an editor variable's value: bounded, and without the NUL character.
+pub fn is_variable_value(value: &str) -> bool {
+    value.len() <= MAX_VARIABLE_VALUE && !value.contains('\0')
+}
 
 /// Milliseconds since 1970 (UTC); 0 if the clock is before it.
 fn now_ms() -> i64 {
@@ -1106,6 +1136,62 @@ impl Store {
                 workspace, connection, lines[0], lines[1], lines[2], lines[3], lines[4], lines[5]
             ],
         )?;
+        Ok(())
+    }
+
+    /// A connection's editor variables (SDB-383), by name.
+    pub fn connection_variables(
+        &self,
+        workspace: &str,
+        connection: &str,
+    ) -> Result<Vec<(String, String)>, StoreError> {
+        let mut statement = self.conn.prepare(
+            "select name, value from connection_variables
+             where workspace = ?1 and connection = ?2 order by name",
+        )?;
+        let rows = statement.query_map(params![workspace, connection], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Sets one of a connection's editor variables, or removes it (`None`). A name or a value
+    /// that cannot be one is refused and nothing changes.
+    pub fn set_connection_variable(
+        &self,
+        workspace: &str,
+        connection: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), StoreError> {
+        if !is_variable_name(name) {
+            return Err(StoreError::new(
+                "a variable's name is a letter or _ followed by letters, digits and _, at most 64"
+                    .into(),
+            ));
+        }
+        match value {
+            None => {
+                self.conn.execute(
+                    "delete from connection_variables
+                     where workspace = ?1 and connection = ?2 and name = ?3",
+                    params![workspace, connection, name],
+                )?;
+            }
+            Some(value) => {
+                if !is_variable_value(value) {
+                    return Err(StoreError::new(
+                        "a variable's value is at most 64 KiB and has no NUL character".into(),
+                    ));
+                }
+                self.conn.execute(
+                    "insert into connection_variables (workspace, connection, name, value)
+                     values (?1, ?2, ?3, ?4)
+                     on conflict (workspace, connection, name) do update set value = excluded.value",
+                    params![workspace, connection, name, value],
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -2267,6 +2353,93 @@ mod tests {
         }
         drop(store);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn connection_variables_are_kept_per_workspace_and_connection() {
+        let path = temp("variables");
+        let store = Store::open(&path).unwrap();
+        assert!(store.connection_variables("w", "shop").unwrap().is_empty());
+        store
+            .set_connection_variable("w", "shop", "customer", Some("42"))
+            .unwrap();
+        store
+            .set_connection_variable("w", "shop", "_cols", Some("id, name\n-- with a comment"))
+            .unwrap();
+        store
+            .set_connection_variable("w", "shop", "customer", Some("43"))
+            .unwrap();
+        store
+            .set_connection_variable("w", "other", "customer", Some("1"))
+            .unwrap();
+        store
+            .set_connection_variable("elsewhere", "shop", "customer", Some("2"))
+            .unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.connection_variables("w", "shop").unwrap(),
+            [
+                (
+                    "_cols".to_string(),
+                    "id, name\n-- with a comment".to_string()
+                ),
+                ("customer".to_string(), "43".to_string()),
+            ]
+        );
+        assert_eq!(store.connection_variables("w", "other").unwrap().len(), 1);
+        // Removing one leaves the others, and removing it again changes nothing.
+        store
+            .set_connection_variable("w", "shop", "customer", None)
+            .unwrap();
+        store
+            .set_connection_variable("w", "shop", "customer", None)
+            .unwrap();
+        assert_eq!(store.connection_variables("w", "shop").unwrap().len(), 1);
+        assert_eq!(
+            store.connection_variables("elsewhere", "shop").unwrap(),
+            [("customer".to_string(), "2".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_variable_that_cannot_be_one_is_refused_and_nothing_is_saved() {
+        let store = Store::open(&temp("variables-refused")).unwrap();
+        for name in [
+            "",
+            "1x",
+            "a b",
+            "a-b",
+            "env:HOME",
+            "user.name",
+            &"a".repeat(65),
+        ] {
+            assert!(
+                store
+                    .set_connection_variable("w", "shop", name, Some("1"))
+                    .is_err(),
+                "{name}"
+            );
+            assert!(!is_variable_name(name), "{name}");
+        }
+        for value in ["a\0b".to_string(), "x".repeat(MAX_VARIABLE_VALUE + 1)] {
+            assert!(
+                store
+                    .set_connection_variable("w", "shop", "v", Some(&value))
+                    .is_err()
+            );
+        }
+        assert!(store.connection_variables("w", "shop").unwrap().is_empty());
+        // The longest name and value are accepted.
+        store
+            .set_connection_variable(
+                "w",
+                "shop",
+                &"a".repeat(MAX_VARIABLE_NAME),
+                Some(&"x".repeat(MAX_VARIABLE_VALUE)),
+            )
+            .unwrap();
+        assert_eq!(store.connection_variables("w", "shop").unwrap().len(), 1);
     }
 
     #[test]

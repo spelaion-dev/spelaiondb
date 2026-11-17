@@ -717,6 +717,29 @@ export const commands = {
 	 *  with the engine's quoting.
 	 */
 	bindParams: (session: string, sql: string, values: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("bind_params", { session, sql, values })),
+	/**
+	 *  The `${name}` variables of a script's statements, in order, and which of them have no
+	 *  value yet (neither the tab's nor its connection's), so the UI can ask for those.
+	 */
+	scriptVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<ScriptVariablesItem, string>(__TAURI_INVOKE("script_variables", { session, sql, tab })),
+	/**
+	 *  The script with its variables' values written in, by the core, before anything else reads
+	 *  it: the guard, the read-only checks and the run are given this text. Refused when a value
+	 *  would change how the script is split or read.
+	 */
+	substituteVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("substitute_variables", { session, sql, tab })),
+	/**  A connection's variables, by name (SDB-383): local values, kept in the local store. */
+	connectionVariables: (connection: string) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
+	/**
+	 *  Sets one of a connection's variables, or removes it (`null`). The store refuses a name or
+	 *  a value that cannot be one.
+	 */
+	setConnectionVariable: (connection: string, name: string, value: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_variable", { connection, name, value })),
+	/**
+	 *  Whether a name and a value can be a variable's, as the core decides it (for a tab's own
+	 *  variables, which never leave the page's memory).
+	 */
+	variableIsValid: (name: string, value: string) => typedError<boolean, string>(__TAURI_INVOKE("variable_is_valid", { name, value })),
 	/**  Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form. */
 	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
 	/**
@@ -4977,6 +5000,12 @@ export type ScriptSummaryItem_Serialize = {
 	fetchMs: number | null,
 };
 
+/**  The variables a script uses, in order, and the ones that have no value yet. */
+export type ScriptVariablesItem = {
+	names: string[],
+	missing: string[],
+};
+
 /**  A row that contains the value. */
 export type SearchHitItem = SearchHitItem_Serialize | SearchHitItem_Deserialize;
 
@@ -5780,6 +5809,12 @@ export type ValuePickerItem_Serialize = {
 };
 
 export type ValuePickerKind = "temporal" | "choice" | "foreignKey";
+
+/**  One `${name}` variable of the editor's scripts and its value (SDB-383). */
+export type VariableItem = {
+	name: string,
+	value: string,
+};
 
 export type WorkspaceInfo = WorkspaceInfo_Serialize | WorkspaceInfo_Deserialize;
 

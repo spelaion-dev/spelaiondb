@@ -1778,6 +1778,36 @@ select {
   color: var(--fg);
   box-shadow: inset 0 -2px var(--accent);
 }
+/* The variables dialog (SDB-383): rows of a name, its value and a remove button. */
+.modal.variables-dialog { width: 560px; max-width: calc(100vw - var(--space-2xl)); max-height: calc(100vh - var(--space-2xl)); overflow: auto; }
+.variables-heading { margin: var(--space-xl) 0 var(--space-xs); font-size: var(--text-md); font-weight: 600; }
+.variables-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.variables-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-height: var(--control-lg);
+  border-bottom: 1px solid var(--line);
+}
+.variables-name { flex: 0 0 30%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variables-list input, .variables-value { flex: 1 1 auto; min-width: 0; }
+.variables-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.variables-list button { flex: none; display: inline-flex; align-items: center; justify-content: center; width: var(--control-sm); height: var(--control-sm); padding: 0; }
+.variables-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-md) var(--space-lg);
+  align-items: end;
+  margin: var(--space-xl) 0 0;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+.variables-add legend { padding: 0; margin-bottom: var(--space-sm); font-weight: 600; }
+.variables-add .field { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; margin: 0; }
+.variables-add .field > span { color: var(--muted); font-size: var(--text-sm); }
+.variables-add .field input, .variables-add .field select { width: 100%; min-width: 0; }
+.variables-add button { justify-self: start; }
 /* A result tab (SDB-378): its name, a pin when no run replaces it, and its close button. */
 .result-tab-item {
   display: flex;

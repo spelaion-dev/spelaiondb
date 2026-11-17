@@ -65,6 +65,7 @@ mod test_files;
 mod transaction;
 mod value_pick;
 mod value_view;
+mod variables;
 mod write;
 
 pub use app_log::{AppLog, MAX_LOG_BYTES};
@@ -231,6 +232,10 @@ pub use value_view::{
     CellContent, CellView, DISPLAY_STATEMENT_CHARS, ImageFormat, LOAD_FILE_MAX, VIEW_LIMIT,
     VIEW_MAX, ValueError, file_change, pretty_xml, read_value_file, save_cell,
     statement_for_display, view_cell,
+};
+pub use variables::{
+    MAX_VARIABLE_NAME, MAX_VARIABLE_VALUE, VariableError, is_variable_name, is_variable_value,
+    script_variables, substitute_variables,
 };
 pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
