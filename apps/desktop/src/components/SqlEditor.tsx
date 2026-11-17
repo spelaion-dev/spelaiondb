@@ -422,16 +422,16 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       callbacks.current.onRun({ text: v.state.doc.toString(), from: 0 }, newTab);
       return true;
     }
+    // The core writes the text, as for the picker: a statement under another MySQL delimiter
+    // is sent with its DELIMITER lines, never cut at its body's `;`s.
     const doc = v.state.doc.toString();
-    call(commands.statementAt(engine, doc, indexToByte(doc, sel.head)))
-      .then((span) => {
-        if (!span || v.state.doc.toString() !== doc) return;
-        const from = byteToIndex(doc, span.start);
-        const to = byteToIndex(doc, span.end);
-        flash(v, from, to);
-        callbacks.current.onRun({ text: doc.slice(from, to), from }, newTab);
+    call(commands.statementToRun(engine, doc, indexToByte(doc, sel.head)))
+      .then((found) => {
+        if (!found || v.state.doc.toString() !== doc) return;
+        flash(v, byteToIndex(doc, found.statement.start), byteToIndex(doc, found.statement.end));
+        callbacks.current.onRun({ text: found.picked.text, from: byteToIndex(doc, found.picked.span.start) }, newTab);
       })
-      .catch((e: unknown) => console.error("statement_at", e));
+      .catch(failed);
     return true;
   };
   // Inserts a snippet's text over the selection (or from `from`), its first field selected.

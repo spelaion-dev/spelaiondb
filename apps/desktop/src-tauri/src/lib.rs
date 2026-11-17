@@ -3533,6 +3533,27 @@ async fn pick_statements(
         .map_err(|e| e.to_string())
 }
 
+/// The statement under the cursor (`offset` in UTF-8 bytes) as text to run, for Ctrl+Enter:
+/// written by the core so the run reads it as that one statement (a MySQL `DELIMITER` line
+/// before it still applies); `None` when there is no statement there.
+#[command]
+async fn statement_to_run(
+    engine: String,
+    sql: String,
+    offset: u32,
+) -> CmdResult<Option<StatementToRunItem>> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    spelaion_core::statement_to_run(dialect.as_ref(), &sql, offset as usize)
+        .map(|found| {
+            found.map(|(picked, statement)| StatementToRunItem {
+                picked: picked.into(),
+                statement: text_span(statement),
+            })
+        })
+        .map_err(|e| e.to_string())
+}
+
 /// From the statement under the cursor (`offset` in UTF-8 bytes) to the end of the script,
 /// as text to run; `None` when the script has no statement.
 #[command]
@@ -6081,6 +6102,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             run_target,
             pick_statements,
             statements_from_cursor,
+            statement_to_run,
             script_outline,
             neighbour_statement,
             create_database,

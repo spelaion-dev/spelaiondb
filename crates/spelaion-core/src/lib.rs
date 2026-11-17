@@ -97,7 +97,7 @@ pub use conn_test::{
 pub use cursor::{
     MAX_OUTLINE_ENTRIES, OUTLINE_SUMMARY_CHARS, Outline, OutlineEntry, PickedText, RunKind,
     RunPickError, RunTarget, from_cursor, neighbour_statement, outline, pick_statements,
-    run_target, statement_at,
+    run_target, statement_at, statement_to_run,
 };
 pub use data_search::{
     ColumnMatch, DEFAULT_ROWS_PER_TABLE, DataSearchError, DataSearchEvent, DataSearchOptions,

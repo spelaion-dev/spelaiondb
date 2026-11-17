@@ -778,6 +778,12 @@ export const commands = {
 	 */
 	statementsFromCursor: (engine: string, sql: string, offset: number) => typedError<PickedTextItem | null, string>(__TAURI_INVOKE("statements_from_cursor", { engine, sql, offset })),
 	/**
+	 *  The statement under the cursor (`offset` in UTF-8 bytes) as text to run, for Ctrl+Enter:
+	 *  written by the core so the run reads it as that one statement (a MySQL `DELIMITER` line
+	 *  before it still applies); `None` when there is no statement there.
+	 */
+	statementToRun: (engine: string, sql: string, offset: number) => typedError<StatementToRunItem | null, string>(__TAURI_INVOKE("statement_to_run", { engine, sql, offset })),
+	/**
 	 *  The statements of a script for the editor's outline panel: the core's splitter for the
 	 *  engine, the one that runs the script, with each statement's line and how it starts.
 	 */
@@ -5616,6 +5622,15 @@ export type StatStateItem = { kind: "done" } |
 { kind: "notForType" } | 
 /**  The engine refused it: its message. */
 { kind: "failed"; message: string };
+
+/**
+ *  What Ctrl+Enter runs: the text the core wrote for the statement under the cursor, and that
+ *  statement's own place in the script (flashed in the editor).
+ */
+export type StatementToRunItem = {
+	picked: PickedTextItem,
+	statement: TextSpan,
+};
 
 /**  What a structure form asks for on one table; the core writes the SQL. */
 export type TableAlterationItem = TableAlterationItem_Serialize | TableAlterationItem_Deserialize;

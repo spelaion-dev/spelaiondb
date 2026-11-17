@@ -188,6 +188,28 @@ pub fn pick_statements(
     Err(RunPickError::Inseparable)
 }
 
+/// The statement at byte `offset` (`statement_at`'s) as text to run, for Ctrl+Enter, with the
+/// statement's own place in the script; `None` when there is no statement there. The text is
+/// what `pick_statements` writes: the statement alone when the engine's splitter reads it alone
+/// as that one statement, otherwise the whole script with the other statements blanked, so a
+/// MySQL `DELIMITER` line before it still applies (SDB-403: a procedure body sent alone was
+/// split at its `;`s and run as its pieces).
+pub fn statement_to_run(
+    dialect: &dyn Dialect,
+    script: &str,
+    offset: usize,
+) -> Result<Option<(PickedText, StatementSpan)>, RunPickError> {
+    let Some(under) = statement_at(dialect, script, offset) else {
+        return Ok(None);
+    };
+    let spans = dialect.split_statements(script);
+    let index = spans
+        .iter()
+        .position(|s| *s == under)
+        .ok_or(RunPickError::Inseparable)?;
+    pick_statements(dialect, script, &[index]).map(|picked| Some((picked, under)))
+}
+
 /// From the statement at byte `offset` (`statement_at`'s) to the script's last one, as text to
 /// run; `None` when the script has no statement.
 pub fn from_cursor(
