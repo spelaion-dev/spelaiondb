@@ -939,6 +939,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const text = before?.refreshSql;
     if (!before?.refreshable || !text) return;
     const previousRun = runSeq.current;
+    setRefreshRestoring(true);
+    try {
     await run({ text, from: 0 }, false, before.paging?.pageSize ?? queryPageSize, before.paging?.sort ?? [], { kind: "into", result: resultId });
     if (runSeq.current !== previousRun + 1) return;
     const find = () => useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.run === previousRun + 1);
@@ -949,8 +951,6 @@ export function EditorTab({ tab }: { tab: Tab }) {
       return;
     }
     restoringView.current = true;
-    setRefreshRestoring(true);
-    try {
       // A keyset page is reached by reading its predecessors, never by guessing an offset.
       const loaded = before.total ?? before.rows;
       while (result.paging?.hasMore && result.rows < loaded) {
@@ -1635,7 +1635,7 @@ function Results({
           onSelect={onSelect}
         />
         {active && <div className="result-tools">
-          <ResultFilter
+          {!restoringView && <ResultFilter
             key={`filter-${active.id}-${active.refreshScrollRow === undefined ? 0 : 1}`}
             result={active}
             scope={serverSort ? "page" : active.paging?.hasMore ? "loaded" : undefined}
@@ -1644,7 +1644,7 @@ function Results({
             onFiltered={(filter, rows, total) => onFiltered(active.id, filter, rows, total)}
             onPending={(pending) => setFilteringResult(pending ? active.id : null)}
             locked={restoringView || !!active.paging?.loading || (editing !== undefined && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0))}
-          />
+          />}
           <ExportButton
             key={`export-${active.id}`}
             result={active}
