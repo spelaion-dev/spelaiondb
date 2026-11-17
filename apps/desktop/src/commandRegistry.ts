@@ -73,6 +73,7 @@ export const COMMANDS = [
   { id: "results.rerun", category: "data", label: "editor:resultTabs.rerun", menus: ["result"] },
   { id: "results.pin", category: "data", label: "editor:resultTabs.pin", menus: ["result"] },
   { id: "results.rename", category: "data", label: "editor:resultTabs.rename", menus: ["result"] },
+  { id: "results.resetName", category: "data", label: "editor:resultTabs.resetName", menus: ["result"] },
   { id: "results.close", category: "data", label: "editor:resultTabs.close", menus: ["result"] },
   { id: "editor.cancel", category: "editor", label: "app:commands.cancelQuery" },
   { id: "editor.variables", category: "editor", label: "editor:variables.command", menus: ["editor"] },
