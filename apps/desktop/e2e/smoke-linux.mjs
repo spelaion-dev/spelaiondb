@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { descendants, requestClose } from "./processes.mjs";
@@ -62,6 +62,7 @@ const clipboard = {
 };
 
 const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
+copyFileSync(join(demo, "data/shop.db"), join(userDir, "json-viewer.db"));
 // Personal connections of this run: SQL Server from testing/docker, and the demo's PostgreSQL
 // behind testing/docker's two bastions with its password asked (the demo's own bastion
 // connection reads the keychain). Passwords are asked, never stored. (The DuckDB one is made in
@@ -70,6 +71,7 @@ const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
 mkdirSync(join(userDir, "connections"), { recursive: true });
 writeFileSync(join(userDir, "connection-types.toml"), 'schema_version = 1\n[types.careful]\nname = "Careful"\ntone = "amber"\nconfirm_execution = true\n');
 const personal = {
+  "json-viewer.toml": `schema_version = 1\nname = "JSON Viewer SQLite"\nengine = "sqlite"\ndatabase = ${JSON.stringify(join(userDir, "json-viewer.db"))}\n`,
   "careful-sqlite.toml": `schema_version = 1\nname = "Careful SQLite"\nengine = "sqlite"\nenv = "careful"\ndatabase = ${JSON.stringify(join(demo, "data/shop.db"))}\n`,
   "sql-server-docker.toml": `schema_version = 1\nname = "SQL Server (Docker)"\nengine = "sqlserver"\nhost = "127.0.0.1"\nport = 11433\nuser = "sa"\npassword = { secret = "prompt" }\n`,
   "bastions.toml": `schema_version = 1\nname = "Postgres through the tunnel"\nengine = "postgres"\nhost = "postgres"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "verify-full"\nca = ${JSON.stringify(join(keys, "ca.crt"))}\n`,
@@ -547,7 +549,7 @@ try {
   });
 
   await step("JSON viewer switches presentation and formats an editable value without losing big numbers", async () => {
-    await newQuery("Shop (SQLite)", `update customer set name = '{"n":12345678901234567890}' where id = 1;`);
+    await newQuery("JSON Viewer SQLite", `update customer set name = '{"n":12345678901234567890}' where id = 1;`);
     await run();
     await visibleText(P, "Statement 1: OK");
     await replaceQuery("select id, name from customer where id = 1;");
