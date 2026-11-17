@@ -258,6 +258,8 @@ try {
       return { x: r.x, y: r.y };
     }, P);
     await wd.pointerAt(box.x + 30, box.y + 40);
+    await wd.press("x");
+    assert.equal(await wd.evaluate((p) => document.querySelectorAll(`${p} input.cell-editor`).length, P), 0, "typing does not edit a read-only result");
     await wd.press("Control+a");
     await wd.press("Control+Shift+c");
     let text = before;
@@ -280,6 +282,32 @@ try {
     await wd.waitFor((p) => !!document.querySelector(`${p} .status-connected`), [P], { what: "the second query tab to connect" });
     await run();
     await statusline("1 row");
+  });
+
+  await step("typing replaces an editable result cell and Escape cancels it", async () => {
+    await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 3;");
+    await run();
+    await statusline("3 rows");
+    await button("Add row", P);
+    const box = await wd.evaluate((p) => {
+      const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect();
+      return { x: r.x, y: r.y };
+    }, P);
+    await wd.pointerAt(box.x + 52 + 110 + 20, box.y + 34 + 12);
+    await wd.press("n");
+    const editor = await wd.element((p) => document.querySelector(`${p} input.cell-editor`), [P], { what: "the inline cell editor" });
+    await wd.insertText("ew");
+    assert.equal(await wd.evaluate((el) => el.value, editor), "new");
+    await wd.press("Escape");
+    await wd.waitDetached(editor, { what: "the cancelled editor to close" });
+    await visibleText(P, "No pending changes");
+    await wd.press("n");
+    await wd.element((p) => document.querySelector(`${p} input.cell-editor`), [P]);
+    await wd.insertText("ew");
+    await wd.press("Enter");
+    await visibleText(P, "Updated: 1");
+    await wd.press("Control+z");
+    await visibleText(P, "No pending changes");
   });
 
   await step("DuckDB: a new database file made in the add-connection form, a query on it", async () => {
