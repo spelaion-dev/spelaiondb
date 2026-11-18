@@ -121,8 +121,16 @@ async fn run(open: &OpenConnection, sql: &str) -> Result<(), String> {
 /// `sql` is refused before anything runs: by the app's check even confirmed, and by the
 /// session's own run without sending a statement.
 async fn refused(label: &str, open: &OpenConnection, sql: &str) {
+    let refusal_message = if open.session.is_connection_read_only() {
+        "the connection is read-only, so nothing was run"
+    } else {
+        "this session is read-only, so nothing was run"
+    };
     match check_run(&open.session, sql, &Safeguards::default(), true) {
-        Err(RunRefused::ReadOnly(_)) => {}
+        Err(RunRefused::ReadOnly(refusal)) => assert!(
+            refusal.to_string().starts_with(refusal_message),
+            "{label}: {sql}: {refusal}"
+        ),
         other => panic!("{label}: {sql}: the app's check let it through: {other:?}"),
     }
     let events: Vec<CoreEvent> = open.session.run_script(sql).collect().await;
@@ -131,7 +139,7 @@ async fn refused(label: &str, open: &OpenConnection, sql: &str) {
         match event {
             CoreEvent::StatementFailed { error, .. } => {
                 assert!(
-                    error.message.contains("nothing was run"),
+                    error.message.contains(refusal_message),
                     "{label}: {sql}: {}",
                     error.message
                 );

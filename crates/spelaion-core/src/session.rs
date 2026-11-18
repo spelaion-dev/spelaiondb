@@ -805,7 +805,9 @@ impl Session {
         // whatever the caller checked: the user's scripts, query pages and plans all come here.
         let refusal = match kind {
             RunKind::User if self.is_read_only() => {
-                crate::guard::check_read_only(dialect.as_ref(), &script).err()
+                crate::guard::check_read_only(dialect.as_ref(), &script)
+                    .err()
+                    .map(|refusal| refusal.for_session(self))
             }
             RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
         };

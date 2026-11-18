@@ -10113,13 +10113,13 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await chip.waitFor();
     await replaceQuery(controlPanel, "insert into control_tx values (1);");
     await run(controlPanel);
-    await controlPanel.getByText("nothing was run", { exact: false }).first().waitFor();
+    await controlPanel.getByText("this session is read-only, so nothing was run", { exact: false }).first().waitFor();
     // The chip ends it: the same write runs.
     await chip.click();
     await chip.waitFor({ state: "detached" });
     await run(controlPanel);
     await controlPanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
-    await controlPanel.getByText("nothing was run", { exact: false }).waitFor({ state: "detached" });
+    await controlPanel.getByText("this session is read-only, so nothing was run", { exact: false }).waitFor({ state: "detached" });
     // A transaction open: Disconnect all asks first, and Cancel keeps it.
     await controlPanel.locator(".transaction-controls").getByRole("checkbox", { name: "Auto-commit" }).click();
     await controlPanel.locator(".transaction-controls input[type=checkbox]:not(:checked)").waitFor();
