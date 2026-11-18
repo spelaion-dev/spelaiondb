@@ -26,6 +26,16 @@ impl Dialect for PostgresDialect {
         Some(copy_block(script, semicolon + 1).data)
     }
 
+    /// A psql meta-command (`\connect`, `\i`, `\set`…) is psql's, not SQL: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        statement
+            .starts_with('\\')
+            .then(|| spelaion_driver_api::RequestError {
+                position: 0,
+                message: "this is a psql command, not SQL, and SpelaionDB only runs SQL".into(),
+            })
+    }
+
     /// What lies outside strings, quoted names and comments, and outside the data of every
     /// `COPY … FROM STDIN` (SDB-162): each piece between two data blocks is read on its own, so
     /// a quote in the data never changes how the SQL after it is read.
@@ -167,6 +177,21 @@ fn is_routine(words: &[String]) -> bool {
     kind == "function" || kind == "procedure"
 }
 
+/// Whether byte `i` is the first one on its line but for blanks.
+fn at_line_start(b: &[u8], i: usize) -> bool {
+    b[..i]
+        .iter()
+        .rev()
+        .take_while(|&&c| c != b'\n')
+        .all(|&c| c == b' ' || c == b'\t' || c == b'\r')
+}
+
+/// `\restrict <key>` or `\unrestrict <key>`, the lines a plain pg_dump file starts and ends with.
+fn is_restrict(line: &str) -> bool {
+    let command = line[1..].split_ascii_whitespace().next().unwrap_or("");
+    command == "restrict" || command == "unrestrict"
+}
+
 /// The data of a `COPY … FROM STDIN` in a script (SDB-162).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CopyBlock {
@@ -232,6 +257,23 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
 
     while i < b.len() {
         match b[i] {
+            // A psql meta-command, on a line of its own before a statement: not SQL. A plain
+            // pg_dump file (PostgreSQL 17.6 and later) wraps itself in `\restrict <key>` and
+            // `\unrestrict <key>`, which only keep psql from running other meta-commands, and
+            // SpelaionDB runs none: they are skipped. Any other is a statement of its own,
+            // which the session refuses (`refuse_statement`), never glued to the next one.
+            b'\\' if !has_code && at_line_start(b, i) => {
+                let end = b[i..]
+                    .iter()
+                    .position(|&c| c == b'\n')
+                    .map_or(b.len(), |p| i + p);
+                if !is_restrict(&script[i..end]) {
+                    spans.push(trimmed(script, i, end));
+                }
+                i = (end + 1).min(b.len());
+                start = i;
+                words.clear();
+            }
             b'\'' => {
                 // E'…' supports backslash escapes.
                 i = skip_quoted(b, i, b'\'', escape_string(b, i));
@@ -746,6 +788,27 @@ mod tests {
         assert_eq!(
             parts("copy t to stdout;\nselect 1"),
             ["copy t to stdout", "select 1"]
+        );
+    }
+
+    #[test]
+    fn psql_meta_commands_are_never_glued_to_a_statement() {
+        let d = PostgresDialect;
+        // How pg_dump 17.6 and later starts and ends a plain dump: skipped.
+        let dump = "--\n-- PostgreSQL database dump\n--\n\n\\restrict AbC123\n\nSET a = 1;\nselect 2;\n\n\\unrestrict AbC123\n";
+        assert_eq!(parts(dump), ["SET a = 1", "select 2"]);
+        // Any other is a statement of its own, which the session refuses.
+        let other = "select 1;\n  \\connect other\nselect 2;\n\\i /tmp/x.sql\n";
+        assert_eq!(
+            parts(other),
+            ["select 1", "\\connect other", "select 2", "\\i /tmp/x.sql"]
+        );
+        assert!(d.refuse_statement("\\connect other").is_some());
+        assert!(d.refuse_statement("select 1").is_none());
+        // A backslash inside a statement or a string is not one.
+        assert_eq!(
+            parts("select 'a\n\\b';\nselect E'\\\\x'\n  , 1;"),
+            ["select 'a\n\\b'", "select E'\\\\x'\n  , 1"]
         );
     }
 
