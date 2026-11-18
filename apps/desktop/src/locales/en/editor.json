@@ -63,7 +63,10 @@
       "json": "JSON",
       "sqlInsert": "SQL INSERT statements",
       "markdown": "Markdown table",
-      "html": "HTML table"
+      "html": "HTML table",
+      "ndjson": "NDJSON (one JSON object per line)",
+      "parquet": "Parquet",
+      "arrowIpc": "Arrow IPC file"
     },
     "sortAsc": "Sort ascending",
     "sortDesc": "Sort descending",
@@ -723,7 +726,33 @@
     "notARead": "It was not run again: {{reason}}",
     "failedAgain": "Running it again in a new session failed: {{reason}}",
     "loadedInstead_one": "Export the row loaded instead",
-    "loadedInstead_other": "Export the {{formattedCount}} rows loaded instead"
+    "loadedInstead_other": "Export the {{formattedCount}} rows loaded instead",
+    "fileOptions": "File name and compression",
+    "namePattern": "File name",
+    "namePatternHint": "{table}, {schema}, {database}, {date}, {time} and {timestamp} are replaced; the extension is added.",
+    "timestampFormat": "Timestamp format",
+    "gzip": "Compress with gzip",
+    "gzipParquet": "Parquet compresses its own columns: the file stays Parquet.",
+    "sqlOptions": "SQL options",
+    "rowsPerInsert": "Rows per INSERT",
+    "omitSchema": "Leave the schema out of the table's name",
+    "keywordCase": "Keywords",
+    "keywordCases": {
+      "upper": "UPPER CASE",
+      "lower": "lower case"
+    },
+    "nameCase": "Names",
+    "nameCases": {
+      "asIs": "As they are",
+      "lower": "lower case",
+      "upper": "UPPER CASE"
+    },
+    "upsert": "Write upserts by the primary key",
+    "upsertHint": "ON CONFLICT, ON DUPLICATE KEY UPDATE or MERGE, as the engine writes them.",
+    "upsertTableOnly": "Upserts need a table: export every row of a table to write them.",
+    "jsonOptions": "JSON options",
+    "isoDates": "Timestamps in ISO 8601",
+    "jsonAsJson": "JSON columns as JSON, not as text"
   },
   "import": {
     "title": "Import data",

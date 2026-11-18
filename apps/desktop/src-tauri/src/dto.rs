@@ -3815,6 +3815,10 @@ pub enum TextFormat {
     Markdown,
     InList,
     Html,
+    /// Files only (SDB-391).
+    Ndjson,
+    Parquet,
+    ArrowIpc,
 }
 
 /// How column names are copied (see `spelaion_core::NameStyle`).
@@ -5667,9 +5671,118 @@ pub struct ExportFileOptions {
     pub encoding: TextEncodingItem,
     /// Columns of the result by position, in order (the shown ones); `None`: all.
     pub columns: Option<Vec<u32>>,
+    /// The file compressed with gzip (Parquet: its column chunks).
+    #[serde(default)]
+    pub gzip: bool,
+    #[serde(default)]
+    pub sql: SqlOptionsItem,
+    #[serde(default)]
+    pub json: JsonOptionsItem,
+}
+
+/// How a SQL export writes its statements (SDB-391); the core checks it.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlOptionsItem {
+    pub rows_per_insert: u32,
+    pub omit_schema: bool,
+    /// `upper` or `lower`.
+    pub keyword_case: String,
+    /// `asIs`, `lower` or `upper`.
+    pub name_case: String,
+    pub upsert: bool,
+}
+
+impl Default for SqlOptionsItem {
+    fn default() -> Self {
+        Self {
+            rows_per_insert: 1,
+            omit_schema: false,
+            keyword_case: "upper".into(),
+            name_case: "asIs".into(),
+            upsert: false,
+        }
+    }
+}
+
+impl SqlOptionsItem {
+    pub fn options(&self) -> Result<spelaion_core::SqlOptions, String> {
+        let options = spelaion_core::SqlOptions {
+            rows_per_insert: self.rows_per_insert as usize,
+            omit_schema: self.omit_schema,
+            keyword_case: match self.keyword_case.as_str() {
+                "upper" => spelaion_core::KeywordCase::Upper,
+                "lower" => spelaion_core::KeywordCase::Lower,
+                other => return Err(format!("{other} is not a keyword case")),
+            },
+            name_case: match self.name_case.as_str() {
+                "asIs" => spelaion_core::NameCase::AsIs,
+                "lower" => spelaion_core::NameCase::Lower,
+                "upper" => spelaion_core::NameCase::Upper,
+                other => return Err(format!("{other} is not a name case")),
+            },
+            upsert: self.upsert,
+        };
+        options.check()?;
+        Ok(options)
+    }
+}
+
+/// How JSON and NDJSON write values (SDB-391).
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonOptionsItem {
+    pub iso_dates: bool,
+    pub json_as_json: bool,
+}
+
+impl Default for JsonOptionsItem {
+    fn default() -> Self {
+        Self {
+            iso_dates: false,
+            json_as_json: true,
+        }
+    }
+}
+
+impl From<JsonOptionsItem> for spelaion_core::JsonOptions {
+    fn from(item: JsonOptionsItem) -> Self {
+        Self {
+            iso_dates: item.iso_dates,
+            json_as_json: item.json_as_json,
+        }
+    }
+}
+
+/// How export files are named (SDB-391): `{table}`, `{schema}`, `{database}`, `{date}`,
+/// `{time}` and `{timestamp}` (with `timestamp_format`). The core checks and renders it.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FileNamePatternItem {
+    pub pattern: String,
+    pub timestamp_format: String,
+}
+
+impl From<FileNamePatternItem> for spelaion_core::FileNamePattern {
+    fn from(item: FileNamePatternItem) -> Self {
+        Self {
+            pattern: item.pattern,
+            timestamp_format: item.timestamp_format,
+        }
+    }
 }
 
 impl ExportFileOptions {
+    /// The file's options besides its format, checked by the core.
+    pub fn file_options(&self) -> Result<spelaion_core::FileOptions, String> {
+        Ok(spelaion_core::FileOptions {
+            encoding: self.encoding.into(),
+            gzip: self.gzip,
+            sql: self.sql.options()?,
+            json: self.json.into(),
+        })
+    }
+
     pub fn csv(&self) -> Result<spelaion_core::CsvOptions, String> {
         let mut chars = self.delimiter.chars();
         let (Some(delimiter), None) = (chars.next(), chars.next()) else {

@@ -2987,6 +2987,9 @@ fn export_format(format: TextFormat) -> ExportFormat {
         TextFormat::SqlInsert => ExportFormat::SqlInsert {
             table: INSERT_TABLE.into(),
         },
+        TextFormat::Ndjson => ExportFormat::Ndjson,
+        TextFormat::Parquet => ExportFormat::Parquet,
+        TextFormat::ArrowIpc => ExportFormat::ArrowIpc,
     }
 }
 
@@ -3042,6 +3045,12 @@ async fn copy_rows(
         return Ok(spelaion_core::displayed_text(
             &stored, &rows, &columns, header, &display,
         ));
+    }
+    if matches!(
+        format,
+        TextFormat::Ndjson | TextFormat::Parquet | TextFormat::ArrowIpc
+    ) {
+        return Err("that format is for files, not for the clipboard".into());
     }
     let dialect = dialect_for(&state, &session).await;
     let stored = state
@@ -3172,6 +3181,7 @@ async fn export_result(
     }
     let dialect = dialect_for(&state, &session).await;
     let csv = options.csv()?;
+    let file_options = options.file_options()?;
     let stored = state
         .results
         .get(ResultId(result.into()))
@@ -3208,7 +3218,7 @@ async fn export_result(
         spelaion_core::export_to_file(
             &stored,
             &export,
-            options.encoding.into(),
+            &file_options,
             dialect.as_ref(),
             Path::new(&path),
         )
@@ -3248,12 +3258,51 @@ fn stream_export(options: &ExportFileOptions, table: &str) -> CmdResult<StreamEx
         header: options.header,
         csv: options.csv()?,
         encoding: options.encoding.into(),
+        gzip: options.gzip,
+        sql: options.sql.options()?,
+        json: options.json.into(),
         columns: options
             .columns
             .as_ref()
             .map(|c| c.iter().map(|&c| c as usize).collect()),
         batch_size: spelaion_core::DEFAULT_BATCH_ROWS,
     })
+}
+
+/// The file name an export suggests (SDB-391): `names` rendered by the core for `table` (or
+/// `result` for a query), with the format's extension. Never a path: the save dialog picks
+/// the folder.
+#[command]
+async fn export_file_name(
+    session: String,
+    names: FileNamePatternItem,
+    format: TextFormat,
+    gzip: bool,
+    table: Option<RelationRefItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let names: spelaion_core::FileNamePattern = names.into();
+    let database = match state.session(&session).await {
+        Ok(open) => open
+            .session
+            .connection()
+            .current_database()
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    let (schema, name) = match &table {
+        Some(table) => (table.schema.as_str(), table.name.as_str()),
+        None => ("", "result"),
+    };
+    let base = names.render_now(&spelaion_core::NameParts {
+        table: name,
+        schema,
+        database: &database,
+    })?;
+    Ok(format!("{base}.{}", export_format(format).extension(gzip)))
 }
 
 /// A new session for an export (ADR-034), opened like `connect_from_session` from the
@@ -3430,18 +3479,25 @@ async fn export_tables(
     export_id: u32,
     tables: Vec<RelationRefItem>,
     folder: String,
-    extension: String,
+    names: FileNamePatternItem,
     options: ExportFileOptions,
     on_progress: Channel<ExportProgressItem>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ExportTablesOutcome> {
-    if extension.is_empty() || !extension.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err("the file extension must be letters and digits".into());
-    }
+    let names: spelaion_core::FileNamePattern = names.into();
+    names.check()?;
     let settings = stream_export(&options, "")?;
     let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
     drop(tab);
+    // `{database}` in the names: the export session's, which follows the tab's connection.
+    let database = open
+        .session
+        .connection()
+        .current_database()
+        .await
+        .ok()
+        .flatten();
     let list: Vec<(String, String)> = tables.into_iter().map(|t| (t.schema, t.name)).collect();
     let progress = move |table: usize, p: spelaion_core::ExportProgress| {
         let _ = on_progress.send(ExportProgressItem {
@@ -3454,7 +3510,8 @@ async fn export_tables(
         &open.session,
         &list,
         Path::new(&folder),
-        &extension,
+        &names,
+        database.as_deref(),
         &settings,
         &cancel,
         &progress,
@@ -6138,6 +6195,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update_tunnel,
             delete_tunnel,
             copy_rows,
+            export_file_name,
             copy_defaults,
             copy_special,
             copy_updates,

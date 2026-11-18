@@ -164,6 +164,16 @@
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
   tests that try to get around it (`tests/export_stream.rs`).
+  Its formats (SDB-391): the text ones are `RowWriter`'s (with `SqlOptions`: rows per INSERT,
+  the schema, keyword and name case, and an upsert in each engine's form by the primary key
+  the core reads from the catalog, only for a table's export; `JsonOptions`: ISO dates, JSON
+  columns as JSON; NDJSON), and Parquet and Arrow IPC are `export_binary.rs`'s, written a
+  batch at a time (a Parquet row group per batch), typed from each column's logical and native
+  type (a decimal with a declared precision is a `Decimal128`, otherwise exact text). gzip
+  wraps the `.part` file (Parquet compresses its column chunks instead), and
+  `FileNamePattern` names the files (`{table}`, `{schema}`, `{database}`, `{date}`, `{time}`,
+  `{timestamp}`), made safe by `file_name`. `tests/export_formats.rs` reads every format back
+  on every engine, runs an upsert twice and checks masked columns.
   `pending.rs` keeps a table data page's pending edits (ADR-044): cells typed or changed in
   bulk, rows to delete and rows to insert, in the core with the stored result they refer to,
   each change a step undo and redo restore exactly; the stored result refuses to sort or filter

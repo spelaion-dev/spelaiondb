@@ -63,7 +63,10 @@
       "json": "JSON",
       "sqlInsert": "Sentencias INSERT de SQL",
       "markdown": "Tabla Markdown",
-      "html": "Tabla HTML"
+      "html": "Tabla HTML",
+      "ndjson": "NDJSON (un objeto JSON por línea)",
+      "parquet": "Parquet",
+      "arrowIpc": "Archivo Arrow IPC"
     },
     "sortAsc": "Ordenar ascendente",
     "sortDesc": "Ordenar descendente",
@@ -723,7 +726,33 @@
     "notARead": "No se volvió a ejecutar: {{reason}}",
     "failedAgain": "Falló al volver a ejecutarla en una sesión nueva: {{reason}}",
     "loadedInstead_one": "Exportar la fila cargada",
-    "loadedInstead_other": "Exportar las {{formattedCount}} filas cargadas"
+    "loadedInstead_other": "Exportar las {{formattedCount}} filas cargadas",
+    "fileOptions": "Nombre del archivo y compresión",
+    "namePattern": "Nombre del archivo",
+    "namePatternHint": "Se sustituyen {table}, {schema}, {database}, {date}, {time} y {timestamp}; la extensión se añade.",
+    "timestampFormat": "Formato de la marca de tiempo",
+    "gzip": "Comprimir con gzip",
+    "gzipParquet": "Parquet comprime sus propias columnas: el archivo sigue siendo Parquet.",
+    "sqlOptions": "Opciones de SQL",
+    "rowsPerInsert": "Filas por INSERT",
+    "omitSchema": "Quitar el esquema del nombre de la tabla",
+    "keywordCase": "Palabras clave",
+    "keywordCases": {
+      "upper": "MAYÚSCULAS",
+      "lower": "minúsculas"
+    },
+    "nameCase": "Nombres",
+    "nameCases": {
+      "asIs": "Tal como son",
+      "lower": "minúsculas",
+      "upper": "MAYÚSCULAS"
+    },
+    "upsert": "Escribir upserts por la clave primaria",
+    "upsertHint": "ON CONFLICT, ON DUPLICATE KEY UPDATE o MERGE, según los escribe el motor.",
+    "upsertTableOnly": "Los upserts necesitan una tabla: exporta todas las filas de una tabla para escribirlos.",
+    "jsonOptions": "Opciones de JSON",
+    "isoDates": "Marcas de tiempo en ISO 8601",
+    "jsonAsJson": "Columnas JSON como JSON, no como texto"
   },
   "import": {
     "title": "Importar datos",
