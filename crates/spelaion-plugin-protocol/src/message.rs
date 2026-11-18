@@ -53,6 +53,10 @@ pub mod method {
     pub const OBJECT_DEFINITION: &str = "object_definition";
     pub const RELATION_DEFINITION: &str = "relation_definition";
     pub const PROCEDURE_CALL: &str = "procedure_call";
+    // 1.2 (SDB-393).
+    pub const OBJECT_PROPERTIES: &str = "object_properties";
+    pub const TABLE_PARTITIONS: &str = "table_partitions";
+    pub const OBJECT_DEPENDENCIES: &str = "object_dependencies";
 
     // Notifications from the plugin.
     pub const SESSION_CLOSED: &str = "session.closed";

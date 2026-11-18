@@ -16,11 +16,11 @@ use spelaion_dialect::sqlite::SqliteDialect;
 pub type Row = Vec<SqlValue>;
 
 /// A string literal (`'it''s'`).
-fn literal(text: &str) -> String {
+pub(crate) fn literal(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
-fn text(row: &Row, i: usize) -> String {
+pub(crate) fn text(row: &Row, i: usize) -> String {
     match row.get(i) {
         Some(SqlValue::Text(s)) => s.clone(),
         Some(SqlValue::Integer(n)) => n.to_string(),
@@ -29,14 +29,14 @@ fn text(row: &Row, i: usize) -> String {
     }
 }
 
-fn optional_text(row: &Row, i: usize) -> Option<String> {
+pub(crate) fn optional_text(row: &Row, i: usize) -> Option<String> {
     match row.get(i) {
         None | Some(SqlValue::Null) => None,
         Some(_) => Some(text(row, i)),
     }
 }
 
-fn integer(row: &Row, i: usize) -> i64 {
+pub(crate) fn integer(row: &Row, i: usize) -> i64 {
     match row.get(i) {
         Some(SqlValue::Integer(n)) => *n,
         Some(SqlValue::Text(s)) => s.parse().unwrap_or(0),
@@ -45,7 +45,7 @@ fn integer(row: &Row, i: usize) -> i64 {
 }
 
 /// `sqlite_schema` of a given schema (main, temp or an attached database).
-fn schema_table(schema: &str) -> String {
+pub(crate) fn schema_table(schema: &str) -> String {
     format!("{}.sqlite_schema", SqliteDialect.quote_identifier(schema))
 }
 

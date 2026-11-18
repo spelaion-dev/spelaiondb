@@ -168,7 +168,25 @@ pub fn check_definition(clause: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::check_definition;
+    use super::{Dependencies, DependencyKind, check_definition};
+
+    #[test]
+    fn a_dependency_kind_a_newer_driver_names_reads_as_other() {
+        let read: Dependencies = serde_json::from_str(
+            r#"{"uses": [{"schema": "s", "name": "x", "kind": "synonym", "detail": null}],
+                "used_by": [], "untracked": ["view", "package"]}"#,
+        )
+        .unwrap();
+        assert_eq!(read.uses[0].kind, DependencyKind::Other);
+        assert_eq!(
+            read.untracked,
+            [DependencyKind::View, DependencyKind::Other]
+        );
+        assert_eq!(
+            serde_json::to_string(&DependencyKind::MaterializedView).unwrap(),
+            "\"materialized_view\""
+        );
+    }
 
     #[test]
     fn checks_get_one_pair_of_parentheses() {
@@ -230,6 +248,104 @@ pub struct ForeignKeyInfo {
     pub referenced_schema: String,
     pub referenced_table: String,
     pub referenced_columns: Vec<String>,
+}
+
+/// A property of a relation as its engine keeps it (SDB-393): its owner, tablespace, storage
+/// engine, collation… What a relation already says elsewhere (its comment, its columns, its
+/// sizes) is not repeated here.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ObjectProperty {
+    /// What it is: one of [`property`]'s names when the engine has that property, else the
+    /// engine's own word for it in snake case (`row_format`, `autoincrement`).
+    pub name: String,
+    pub value: String,
+}
+
+/// The names of the properties most engines have, as [`ObjectProperty::name`] writes them.
+pub mod property {
+    pub const OWNER: &str = "owner";
+    pub const TABLESPACE: &str = "tablespace";
+    /// MySQL's storage engine (`InnoDB`), PostgreSQL's access method (`heap`).
+    pub const ENGINE: &str = "engine";
+    pub const COLLATION: &str = "collation";
+    pub const CHARSET: &str = "charset";
+    pub const CREATED: &str = "created";
+    pub const UPDATED: &str = "updated";
+    /// Free text options of the table (`fillfactor=70`, SQLite's `WITHOUT ROWID`, `STRICT`).
+    pub const OPTIONS: &str = "options";
+    /// `permanent`, `unlogged`, `temporary`.
+    pub const PERSISTENCE: &str = "persistence";
+}
+
+/// How a partitioned table is partitioned, and its partitions (SDB-393).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Partitioning {
+    /// The method as the engine names it, lower case: `range`, `list`, `hash`, `key`…
+    pub method: String,
+    /// What the rows are partitioned by, as the engine writes it (`created_at`,
+    /// `YEAR(created)`).
+    pub key: String,
+    /// In the engine's order.
+    pub partitions: Vec<PartitionInfo>,
+}
+
+/// A partition of a partitioned table.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PartitionInfo {
+    /// Where the partition is, when it is a relation of its own (PostgreSQL): another schema
+    /// than the table's is possible. The table's schema otherwise.
+    pub schema: String,
+    pub name: String,
+    /// Which rows it holds, as the engine writes it (`FOR VALUES FROM (…) TO (…)`,
+    /// `VALUES LESS THAN (2025)`); `None` for a default partition the engine writes no bound for.
+    pub bound: Option<String>,
+    /// Planner row estimate.
+    pub estimated_rows: Option<i64>,
+    /// It is partitioned again.
+    pub subpartitioned: bool,
+}
+
+/// What a dependency is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyKind {
+    Table,
+    View,
+    MaterializedView,
+    Function,
+    Procedure,
+    Trigger,
+    ForeignKey,
+    Sequence,
+    Type,
+    Index,
+    /// A kind a newer driver names and this build does not know.
+    #[serde(other)]
+    Other,
+}
+
+/// An object on the other side of a dependency.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DependencyInfo {
+    pub schema: String,
+    pub name: String,
+    pub kind: DependencyKind,
+    /// What links them, when there is more to say (a foreign key's columns, the table a
+    /// trigger is on).
+    pub detail: Option<String>,
+}
+
+/// What a relation uses and what uses it (SDB-393), ordered by kind, schema and name.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Dependencies {
+    /// What it reads or points to: the tables a view reads, the tables its foreign keys
+    /// reference, the sequences and functions its columns use.
+    pub uses: Vec<DependencyInfo>,
+    /// What reads it or points to it: views, functions, triggers, foreign keys of other tables.
+    pub used_by: Vec<DependencyInfo>,
+    /// Kinds of dependency the engine does not record, so some may be missing from both lists
+    /// (SQLite does not record which triggers of other tables write a table).
+    pub untracked: Vec<DependencyKind>,
 }
 
 /// A foreign key of another table that points to the one asked about: what the table details'

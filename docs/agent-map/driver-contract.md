@@ -17,7 +17,14 @@
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
   (SQLite's in `spelaion-sqlite-schema`'s `catalog.rs`); each driver's test file checks them against its engine.
   `list_referencing_keys` is `describe_table`'s foreign keys seen from the other side: the keys
-  of every table that point to one (in each driver's `introspect.rs`). `list_columns` is every
+  of every table that point to one (in each driver's `introspect.rs`). `object_properties`,
+  `table_partitions` and `object_dependencies` (SDB-393, protocol 1.2) are a relation's owner,
+  tablespace, engine…, how it is partitioned, and what it uses and what uses it: their defaults
+  tell none (no properties, `None`), and dependencies an engine cannot tell are `None`, never an
+  empty list; `Dependencies::untracked` names the kinds it does not record. A plugin of an older
+  protocol is not asked (`spelaion-plugin-host`). SQLite's are `spelaion-sqlite-schema`'s
+  `details.rs` (a view's tables read from the program `EXPLAIN` shows, by root page).
+  `list_columns` is every
   column of a schema in one catalog query (metadata search, ADR-043), and `execute_bound` runs
   one read with text values bound to `bound_placeholder`'s placeholders (MySQL binds them to
   user variables with a prepared `SET`, then reads with the text protocol;

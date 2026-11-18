@@ -5,7 +5,7 @@
 //! runtime.
 
 use spelaion_dialect::sqlite as dialect;
-use spelaion_sqlite_schema::catalog;
+use spelaion_sqlite_schema::{catalog, details};
 mod exec;
 mod introspect;
 mod remote;
@@ -16,9 +16,10 @@ use async_trait::async_trait;
 use rusqlite::OpenFlags;
 use spelaion_driver_api::thread_cancel::{Canceller, Closer, Work};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, Driver, DriverError, EventStream,
-    ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo, ReferencingKey,
-    Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo, TextRows, TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, Dependencies, Driver, DriverError,
+    EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo,
+    ObjectProperty, ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo,
+    TextRows, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -404,6 +405,20 @@ impl Connection for SqliteConnection {
         let sql = catalog::relation_definition_sql(schema, name);
         let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
         catalog::relation_definition(schema, name, &rows)
+    }
+
+    async fn object_properties(&self, schema: &str, name: &str) -> Result<Vec<ObjectProperty>> {
+        details::properties(schema, name, |sql| {
+            self.ask(move |reply| Command::Catalog(sql, reply))
+        })
+        .await
+    }
+
+    async fn object_dependencies(&self, schema: &str, name: &str) -> Result<Option<Dependencies>> {
+        details::dependencies(schema, name, |sql| {
+            self.ask(move |reply| Command::Catalog(sql, reply))
+        })
+        .await
     }
 }
 

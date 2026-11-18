@@ -1,5 +1,6 @@
 //! Structure editing with forms (ADR-047): the columns of a table changed in a form (type,
-//! nullability, default, comment) and the constraints dropped with them become one script,
+//! nullability, default, comment), the table's own comment (SDB-393) and the constraints
+//! dropped with them become one script,
 //! written here from the catalog read again each time, shown in full, and applied together
 //! only as it was shown. SQLite, which cannot change a column in place, rebuilds the table
 //! (`rebuild.rs`).
@@ -34,7 +35,9 @@ pub struct EditableColumn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableStructure {
     pub columns: Vec<EditableColumn>,
-    /// Columns have comments (not SQLite).
+    /// The table's comment.
+    pub comment: Option<String>,
+    /// The table and its columns have comments (not SQLite).
     pub comments: bool,
     /// The changes are applied in one transaction (not MySQL or MariaDB, whose DDL commits).
     pub transactional: bool,
@@ -72,6 +75,9 @@ pub struct TableAlteration {
     pub table: String,
     pub columns: Vec<ColumnEdit>,
     pub drop: Vec<DroppedConstraint>,
+    /// The table's comment as the form holds it (`Some(None)` or an empty one removes it), or
+    /// `None` when the form does not show it. Changed only when it differs from the catalog's.
+    pub comment: Option<Option<String>>,
 }
 
 /// One statement of a plan.
@@ -314,6 +320,12 @@ pub async fn table_structure(
     let engine = session.dialect().name();
     let current = read_current(session, schema, table).await?;
     Ok(TableStructure {
+        comment: current
+            .info
+            .object
+            .comment
+            .clone()
+            .filter(|c| !c.is_empty()),
         columns: current.columns,
         comments: engine != "sqlite",
         transactional: engine != "mysql",
@@ -409,7 +421,17 @@ pub async fn alteration_plan(
     let engine = dialect.name();
     let current = read_current(session, &alteration.schema, &alteration.table).await?;
     let changes = diff(&current.columns, &alteration.columns, engine)?;
-    if changes.is_empty() && alteration.drop.is_empty() {
+    let table_comment = alteration
+        .comment
+        .as_ref()
+        .map(typed)
+        .filter(|comment| *comment != typed(&current.info.object.comment));
+    if table_comment.is_some() && engine == "sqlite" {
+        return Err(ObjectError::Unsupported(
+            "SQLite tables have no comments".into(),
+        ));
+    }
+    if changes.is_empty() && alteration.drop.is_empty() && table_comment.is_none() {
         return Err(ObjectError::Unsupported("nothing has changed".into()));
     }
     let (schema, table) = (alteration.schema.as_str(), alteration.table.as_str());
@@ -461,6 +483,21 @@ pub async fn alteration_plan(
         "sqlserver" => sqlserver(session, &target, schema, table, &changes, &mut steps).await?,
         _ => duckdb(dialect, &target, schema, table, &changes, &mut steps),
     }
+    if let Some(comment) = &table_comment {
+        steps.push(Step::Run(table_comment_sql(
+            dialect,
+            &target,
+            schema,
+            table,
+            comment.as_deref(),
+            current
+                .info
+                .object
+                .comment
+                .as_deref()
+                .is_some_and(|c| !c.is_empty()),
+        )));
+    }
     let begin = match engine {
         "mysql" => None,
         _ if steps.len() < 2 => None,
@@ -475,6 +512,47 @@ pub async fn alteration_plan(
         note: None,
         rebuild: false,
     })
+}
+
+/// The statement that sets (or, with `None`, removes) a table's comment: `COMMENT ON TABLE`
+/// (PostgreSQL, DuckDB), the table option (MySQL, MariaDB) or the `MS_Description` extended
+/// property (SQL Server), which is added, updated or dropped as `had_one` says.
+fn table_comment_sql(
+    dialect: &dyn Dialect,
+    target: &str,
+    schema: &str,
+    table: &str,
+    comment: Option<&str>,
+    had_one: bool,
+) -> String {
+    match dialect.name() {
+        "mysql" => format!(
+            "ALTER TABLE {target} COMMENT = {}",
+            ddl::mysql_string(
+                comment.unwrap_or_default(),
+                crate::sql_mode::backslash_escapes(dialect)
+            )
+        ),
+        "sqlserver" => {
+            let procedure = match (comment, had_one) {
+                (Some(_), true) => "sp_updateextendedproperty",
+                (Some(_), false) => "sp_addextendedproperty",
+                (None, _) => "sp_dropextendedproperty",
+            };
+            let value = comment
+                .map(|c| format!(", @value = {}", nstring(c)))
+                .unwrap_or_default();
+            format!(
+                "EXEC {procedure} @name = N'MS_Description'{value}, @level0type = N'SCHEMA', @level0name = {}, @level1type = N'TABLE', @level1name = {}",
+                nstring(schema),
+                nstring(table)
+            )
+        }
+        _ => format!(
+            "COMMENT ON TABLE {target} IS {}",
+            comment.map_or_else(|| "NULL".into(), literal)
+        ),
+    }
 }
 
 /// The explorer's target for a constraint the form drops, checked against the catalog.

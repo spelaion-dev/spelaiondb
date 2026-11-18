@@ -19,9 +19,10 @@ use std::time::Duration;
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use async_trait::async_trait;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ColumnInfo, ColumnMeta, ConnectParams, Connection, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LogicalType, Notice,
-    ObjectInfo, ObjectKind, PlanMode, Result, ResultSchema, SchemaInfo, TableInfo, TextRows,
+    CancelHandle, Capabilities, ColumnInfo, ColumnMeta, ConnectParams, Connection, Dependencies,
+    DependencyInfo, DependencyKind, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
+    InsertTarget, KeepAlive, LogicalType, Notice, ObjectInfo, ObjectKind, ObjectProperty,
+    PartitionInfo, Partitioning, PlanMode, Result, ResultSchema, SchemaInfo, TableInfo, TextRows,
     TransactionState,
 };
 use spelaion_plugin_protocol::{Frame, Message, RpcError, code, read_frame, write_frame};
@@ -154,6 +155,10 @@ fn minor_zero() {
             // It would read an unknown kind of run as an error, or worse: the core must never
             // send one.
             Some("execute") => std::process::exit(4),
+            // 1.2's requests (SDB-393): a plugin of 1.0 is never asked them.
+            Some("object_properties" | "table_partitions" | "object_dependencies") => {
+                std::process::exit(5)
+            }
             _ => Message::error(
                 id,
                 RpcError {
@@ -709,6 +714,69 @@ impl Connection for MadeConnection {
             foreign_keys: Vec::new(),
             constraints: Vec::new(),
         })
+    }
+
+    async fn object_properties(&self, schema: &str, name: &str) -> Result<Vec<ObjectProperty>> {
+        if name != "people" {
+            return Err(other(&format!("no table {schema}.{name}")));
+        }
+        Ok(vec![
+            ObjectProperty {
+                name: "owner".into(),
+                value: "app".into(),
+            },
+            ObjectProperty {
+                name: "made_up_flag".into(),
+                value: "on".into(),
+            },
+        ])
+    }
+
+    async fn table_partitions(&self, schema: &str, name: &str) -> Result<Option<Partitioning>> {
+        if name != "people" {
+            return Ok(None);
+        }
+        Ok(Some(Partitioning {
+            method: "range".into(),
+            key: "id".into(),
+            partitions: vec![
+                PartitionInfo {
+                    schema: schema.into(),
+                    name: "people_low".into(),
+                    bound: Some("FOR VALUES FROM (0) TO (100)".into()),
+                    estimated_rows: Some(40),
+                    subpartitioned: false,
+                },
+                PartitionInfo {
+                    schema: schema.into(),
+                    name: "people_rest".into(),
+                    bound: None,
+                    estimated_rows: None,
+                    subpartitioned: true,
+                },
+            ],
+        }))
+    }
+
+    async fn object_dependencies(&self, schema: &str, name: &str) -> Result<Option<Dependencies>> {
+        if name != "people" {
+            return Ok(None);
+        }
+        Ok(Some(Dependencies {
+            uses: vec![DependencyInfo {
+                schema: schema.into(),
+                name: "s".into(),
+                kind: DependencyKind::Sequence,
+                detail: Some("id".into()),
+            }],
+            used_by: vec![DependencyInfo {
+                schema: schema.into(),
+                name: "adults".into(),
+                kind: DependencyKind::View,
+                detail: None,
+            }],
+            untracked: vec![DependencyKind::Trigger],
+        }))
     }
 
     async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {

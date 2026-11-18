@@ -31,9 +31,10 @@ pub use dialect::{Dialect, RequestClass, RequestError, StatementSpan, code_range
 pub use error::DriverError;
 pub use filter::{LikeFilter, NameFilter, literal_pattern, pattern_matches};
 pub use introspect::{
-    ColumnInfo, ConstraintInfo, ConstraintKind, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind,
+    ColumnInfo, ConstraintInfo, ConstraintKind, Dependencies, DependencyInfo, DependencyKind,
+    ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, ObjectProperty, PartitionInfo, Partitioning,
     ReferencingKey, SchemaColumn, SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject,
-    ServerObjectKind, TableInfo, check_definition, terminated,
+    ServerObjectKind, TableInfo, check_definition, property, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use rows::{TextRows, TextRowsBuilder};
@@ -333,6 +334,25 @@ pub trait Connection: Send + Sync {
         Err(DriverError::Other(
             "this engine cannot list the keys that point to a table".into(),
         ))
+    }
+    /// The properties a relation of [`Connection::list_objects`] has in the catalog: owner,
+    /// tablespace, storage engine, collation… (SDB-393). Engines that keep none return none.
+    async fn object_properties(&self, _schema: &str, _name: &str) -> Result<Vec<ObjectProperty>> {
+        Ok(Vec::new())
+    }
+    /// How the table `schema.name` is partitioned, and its partitions (SDB-393). `None` for a
+    /// table that is not partitioned, and for an engine that does not tell.
+    async fn table_partitions(&self, _schema: &str, _name: &str) -> Result<Option<Partitioning>> {
+        Ok(None)
+    }
+    /// What the relation `schema.name` uses and what uses it, read from the catalog (SDB-393).
+    /// `None`: the engine cannot tell, which is never shown as an empty list.
+    async fn object_dependencies(
+        &self,
+        _schema: &str,
+        _name: &str,
+    ) -> Result<Option<Dependencies>> {
+        Ok(None)
     }
     /// Every column of every relation of [`Connection::list_objects`] in `schema`, ordered by
     /// table and then by position: the catalog the metadata search keeps (ADR-043). Drivers
