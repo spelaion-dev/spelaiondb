@@ -1280,13 +1280,15 @@ try {
     await queryPageNumber.press("Enter");
     await panel.locator(".statusline", { hasText: "900 rows" }).waitFor();
     await queryPages.getByText("rows 801–900").waitFor();
-    // Row 1,050 (Ctrl+G): loaded up to it, then selected.
+    // Row 1,050 (Ctrl+G): loaded up to it, then selected. What go to row guarantees is that row
+    // loaded and selected: shown at the grid's end, it can make the grid fetch its next page as
+    // scrolling to the end always does (SDB-421), so the count is 1,050 or one page more.
     await panel.locator(".grid-scroller").focus();
     await page.keyboard.press("Control+g");
     await panel.getByRole("dialog", { name: "Go to row" }).getByRole("textbox", { name: "Go to row" }).fill("1050");
     await page.keyboard.press("Enter");
-    await panel.locator(".statusline", { hasText: "1,050 rows" }).waitFor();
     await panel.getByRole("grid").getByRole("gridcell", { name: /^Row 1,050, id \(INTEGER\): 1050$/ }).waitFor();
+    await panel.locator(".statusline", { hasText: /^(1,050|1,150) rows/ }).waitFor();
     await queryPages.getByRole("button", { name: "First page" }).click();
     await queryPages.getByText("rows 1–100").waitFor();
   }
