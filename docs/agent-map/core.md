@@ -266,6 +266,13 @@
   statement and the session is lost (ADR-028), never as a finished one (`tests/panics.rs`); an
   import whose reader panicked commits nothing more; an MCP tool call that panics answers an
   error and is audited as failed.
+  `diagnostics.rs` (SDB-398) writes the report "Copy diagnostic info" and a failed screen's
+  "Copy report" copy: the version, the system, the plugins, the engines in use and the app
+  log's last lines. Every text that is not the app's own goes through its `Scrubber`: the
+  connection test's `Redactor`, the audit's redaction, every text of every connection and
+  network profile file, the user name, the home folder and other absolute paths, IP addresses
+  and host names. The app sends nothing (the issue page opens only on a click, at a fixed
+  address); any change there needs tests that try to leak a password, a host or a path.
   `startup.rs` is what the desktop app says when it cannot start (SDB-283): no personal folder,
   a local store it cannot open (a newer version's is never started over: it says to update) or
   no window; the app shows it in a native dialog (`apps/desktop/src-tauri/src/startup.rs`, never

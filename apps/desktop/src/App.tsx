@@ -35,6 +35,7 @@ import { manualUpdateKey, useUpdate } from "./update";
 import { useApp, useDialogs } from "./store";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
+import { ScreenBoundary } from "./components/ScreenBoundary";
 
 const SIDEBAR_DEFAULT = 290;
 const SIDEBAR_MIN = 210;
@@ -155,7 +156,9 @@ export default function App() {
   return (
     <div className="app" style={{ gridTemplateColumns: `${ACTIVITY_WIDTH}px ${sidebarOpen ? shownSidebarWidth : 0}px 0px minmax(0, 1fr)` }}>
       <ActivityBar />
-      <Sidebar hidden={sidebarSection !== "connections"} />
+      <ScreenBoundary screen="explorer" hidden={sidebarSection !== "connections"} className="sidebar">
+        <Sidebar hidden={sidebarSection !== "connections"} />
+      </ScreenBoundary>
       {sidebarSection === "processes" && <ProcessSidebar selected={processConnection} onSelect={setProcessConnection} />}
       {/* Always mounted: a data search goes on while another panel is shown. */}
       <SearchPanel hidden={sidebarSection !== "search"} />
@@ -222,15 +225,17 @@ export default function App() {
               tabs.map((t) => (
                 // All mounted (the editor keeps its state); only the active one is visible.
                 <div key={t.id} className="tab-panel" hidden={t.id !== activeTab}>
-                  {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
+                  <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
+                    {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
+                  </ScreenBoundary>
                 </div>
               ))
             )}
           </div>
           {sidebarSection === "processes" && (selectedProcessConnection
-            ? <ProcessMonitor key={selectedProcessConnection.id} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} />
+            ? <ScreenBoundary screen="process monitor"><ProcessMonitor key={selectedProcessConnection.id} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} /></ScreenBoundary>
             : <div className="process-welcome"><h2>{t("shell:processMonitor.title")}</h2><p>{t("shell:processMonitor.choose")}</p></div>)}
-          {sidebarSection === "mcp" && <McpPage />}
+          {sidebarSection === "mcp" && <ScreenBoundary screen="mcp"><McpPage /></ScreenBoundary>}
           {historyOpen && <HistoryPanel />}
           {snippetsOpen && <SnippetsPanel />}
         </div>

@@ -15,6 +15,8 @@ import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { SnippetSettings } from "./SnippetSettings";
+import { ScreenBoundary } from "./ScreenBoundary";
+import { copyDiagnostics, openIssuePage } from "../diagnostics";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 
 type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map";
@@ -46,7 +48,9 @@ export function SettingsDialog({ onClose }: { onClose(): void }) {
             ×
           </button>
         </div>
-        <Settings category={category} onCategory={setCategory} />
+        <ScreenBoundary screen={`settings ${category}`}>
+          <Settings category={category} onCategory={setCategory} />
+        </ScreenBoundary>
       </div>
     </div>
   );
@@ -932,6 +936,29 @@ function UpdateSettings() {
           {t("updates.error")} {error}
         </p>
       )}
+      <ReportProblem />
     </>
+  );
+}
+
+/** "Copy diagnostic info" and the GitHub issue page, next to the version (SDB-398). */
+function ReportProblem() {
+  const { t } = useTranslation("settings");
+  const [note, setNote] = useState<{ text: string; failed: boolean } | null>(null);
+  const detail = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  return (
+    <fieldset className="settings-choice">
+      <legend>{t("updates.problem")}</legend>
+      <p className="muted small">{t("updates.problemHint")}</p>
+      <div>
+        <button onClick={() => copyDiagnostics().then(() => setNote({ text: t("updates.diagnosticsCopied"), failed: false }), (e: unknown) => setNote({ text: t("updates.diagnosticsError", { detail: detail(e) }), failed: true }))}>
+          {t("app:commands.copyDiagnostics")}
+        </button>{" "}
+        <button onClick={() => openIssuePage().catch((e: unknown) => setNote({ text: t("updates.openIssueError", { detail: detail(e) }), failed: true }))}>
+          {t("app:commands.openIssue")}
+        </button>
+      </div>
+      {note && <p className={note.failed ? "error small" : "small"} role="status">{note.text}</p>}
+    </fieldset>
   );
 }

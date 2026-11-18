@@ -4,6 +4,7 @@
 mod backup;
 mod clipboard_text;
 mod connection_import;
+mod diagnostics;
 mod diagram;
 mod dto;
 mod file_dialog;
@@ -6094,6 +6095,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update::update_install,
             update::update_open_releases_page,
             plugins::plugins_overview,
+            diagnostics::diagnostic_info,
+            diagnostics::open_issue_page,
             plugins::plugins_refresh_catalogue,
             plugins::plugins_install,
             plugins::plugins_cancel_install,

@@ -232,6 +232,17 @@ export const commands = {
 	 */
 	pluginsOverview: () => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_overview")),
 	/**
+	 *  The diagnostic report, scrubbed by the core: the app's version and system, its plugins and
+	 *  builds, the engines in use (never a connection's name or host) and the app log's last lines,
+	 *  and the failed screen when there is one.
+	 */
+	diagnosticInfo: (failure: ScreenFailureItem | null) => typedError<string, string>(__TAURI_INVOKE("diagnostic_info", { failure })),
+	/**
+	 *  Opens the new-issue page in the system's browser, on the user's click. Only that fixed
+	 *  address can be opened, and it carries nothing of the report.
+	 */
+	openIssuePage: () => typedError<null, string>(__TAURI_INVOKE("open_issue_page")),
+	/**
 	 *  Reads the published catalogue and accepts it, if the "check for updates" setting allows it
 	 *  and this SpelaionDB has the catalogue's key (else the core's error says which). For when
 	 *  the Plugins page opens. The engines are swapped when it is accepted.
@@ -5373,6 +5384,16 @@ export type SchemaObjectItem_Serialize = {
 
 /**  The kinds of `list_schema_objects` (ADR-024): the explorer has a folder for each. */
 export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
+
+/**  A screen that failed, as the page's error boundary saw it. */
+export type ScreenFailureItem = {
+	/**  Which screen: `explorer`, `tab`, `settings`… */
+	screen: string,
+	/**  The error's name and message. */
+	error: string,
+	/**  The components' stack. */
+	stack: string,
+};
 
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 

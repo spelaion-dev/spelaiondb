@@ -4022,6 +4022,24 @@ try {
   await page.keyboard.press("Enter");
   await palette.waitFor({ state: "detached" });
   assert.equal(await copied(copiedBeforePalette + 1), "orders");
+  {
+    // Copy diagnostic info (SDB-398): the version and the engines in use are there; no
+    // connection's name, host, user or file, and no path of this computer.
+    await page.keyboard.press("Control+Shift+P");
+    await paletteBox.fill("diagnostic");
+    assert.equal((await paletteLabels())[0], "General: Copy diagnostic info");
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Enter");
+    await palette.waitFor({ state: "detached" });
+    const report = await copied(before + 1);
+    const version = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("plugin:app|version"));
+    assert.ok(report.includes(`Version: ${version}`), report);
+    assert.match(report, /Engines in use: .*sqlite/, report);
+    assert.match(report, /Plugins:\n {2}spelaiondb-plugin-/, report);
+    for (const leak of ["127.0.0.1", "localhost", "bastion2", "Shop (SQLite)", "Postgres (Docker)", "MySQL (Docker)", "spelaion_test", "shop.db", userDir, userDir.replaceAll("\\", "/"), demo, demo.replaceAll("\\", "/")]) {
+      assert.ok(!report.includes(leak), `${leak} is in the diagnostic info:\n${report}`);
+    }
+  }
   // Link with editor: the active tab (big_orders' data) is shown in the tree as it changes.
   await viewsFolder.click();
   assert.equal(await viewsFolder.getAttribute("aria-expanded"), "false");
