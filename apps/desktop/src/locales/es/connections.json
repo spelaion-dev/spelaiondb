@@ -373,8 +373,7 @@
     "unsupported": "La aplicación aún no tiene driver para esa base de datos."
   },
   "importer": {
-    "or": "O trae tus conexiones de otro cliente:",
-    "button": "Importar de {{client}}…",
+    "open": "Importar conexiones de otro cliente…",
     "title": "Importar de {{client}}",
     "from": "Desde",
     "defaultFolder": "Las carpetas de {{client}}",

@@ -261,7 +261,7 @@ export function setNewScriptTemplate(template: string) {
 }
 
 export type ConnectionDialog =
-  | { kind: "add" }
+  | { kind: "add"; openImportMenu?: boolean }
   /** `notice`: shown above the form, such as "this is the copy just made". */
   | { kind: "edit"; id: string; notice?: string };
 

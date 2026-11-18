@@ -9153,7 +9153,17 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate((dir) => (window.__spelaionImportDirs = { dbeaver: dir }), join(userDir, "dbeaver"));
 
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from DBeaver…" }).click();
+    const imports = page.getByRole("button", { name: "Import connections from another client…" });
+    await imports.press("Enter");
+    const menu = page.getByRole("menu", { name: "Import connections from another client…" });
+    await menu.getByRole("menuitem", { name: "DBeaver", exact: true }).waitFor();
+    await page.keyboard.press("ArrowDown");
+    assert.ok(await menu.getByRole("menuitem", { name: "DataGrip", exact: true }).evaluate(el => el === document.activeElement));
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+    assert.ok(await imports.evaluate(el => el === document.activeElement));
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from DBeaver" }).waitFor();
     const list = importer.getByRole("list", { name: "DBeaver connections" });
@@ -9199,7 +9209,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // configurations), never the user's; the project is picked like a folder.
     await page.evaluate((dir) => (window.__spelaionImportDirs = { datagrip: dir }), datagripProject);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from DataGrip…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "DataGrip", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from DataGrip" }).waitFor();
     const list = importer.getByRole("list", { name: "DataGrip connections" });
@@ -9255,7 +9266,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const exportFile = join(tableplusFixtures, "export.tableplusconnection");
     await page.evaluate((file) => (window.__spelaionImportDirs = { tableplus: file }), exportFile);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from TablePlus…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "TablePlus", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from TablePlus" }).waitFor();
     // The export is encrypted: nothing is listed until its password opens it.
@@ -9309,7 +9321,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const exportFile = join(root, "crates/spelaion-config/tests/fixtures/heidisql/heidisql-12.22.txt");
     await page.evaluate((file) => (window.__spelaionImportDirs = { heidisql: file }), exportFile);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from HeidiSQL…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "HeidiSQL", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from HeidiSQL" }).waitFor();
     const list = importer.getByRole("list", { name: "HeidiSQL connections" });
@@ -9339,7 +9352,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   {
     // SPELAION_WORKBENCH_DIR is Workbench's folder here: nothing to pick.
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from MySQL Workbench…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "MySQL Workbench", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from MySQL Workbench" }).waitFor();
     const list = importer.getByRole("list", { name: "MySQL Workbench connections" });
@@ -9381,8 +9395,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // The export a real pgAdmin 4 wrote (crates/spelaion-config/tests/fixtures/pgadmin/README.md).
     const exportFile = join(root, "crates/spelaion-config/tests/fixtures/pgadmin/pgadmin-9.19-servers.json");
     await page.evaluate((file) => (window.__spelaionImportDirs = { pgadmin: file }), exportFile);
-    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from pgAdmin…" }).click();
+    await page.keyboard.press("Control+Shift+p");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("Import connections from another client");
+    await palette.getByRole("option", { name: /Import connections from another client/ }).click();
+    const menu = page.getByRole("menu", { name: "Import connections from another client…" });
+    await menu.getByRole("menuitem", { name: "pgAdmin", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from pgAdmin" }).waitFor();
     // An export file can be picked instead of pgAdmin's own database.
@@ -9449,7 +9467,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     copyFileSync(join(fixtures, ".key"), join(dataDir, ".key"));
     await page.evaluate((dir) => (window.__spelaionImportDirs = { beekeeper: dir }), dataDir);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from Beekeeper Studio…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "Beekeeper Studio", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from Beekeeper Studio" }).waitFor();
     const list = importer.getByRole("list", { name: "Beekeeper Studio connections" });

@@ -255,7 +255,7 @@ export default function App() {
         </div>
       </main>
       {connectionDialog && (
-        <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : "add"} dialog={connectionDialog} />
+        <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : connectionDialog.openImportMenu ? "import" : "add"} dialog={connectionDialog} />
       )}
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
       {movingConnection && <MoveConnection key={movingConnection.id} connection={movingConnection} />}

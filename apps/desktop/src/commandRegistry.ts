@@ -40,6 +40,7 @@ export interface CommandSpec {
 export const COMMANDS = [
   { id: "palette.show", category: "general", label: "app:commands.palette", shortcut: "Ctrl+Shift+P", scope: "global", hidden: true },
   { id: "object.openByName", category: "general", label: "app:commands.openObject", shortcut: "Ctrl+Shift+D", scope: "global" },
+  { id: "connection.import", category: "general", label: "connections:importer.open" },
   { id: "connection.add", category: "general", label: "connections:add", menus: ["welcome"] },
   { id: "data.importClipboard", category: "general", label: "app:commands.importClipboard", shortcut: "Ctrl+Alt+V", scope: "global" },
   // Every connection's sessions at once (SDB-395): editor tabs and the explorer's.
