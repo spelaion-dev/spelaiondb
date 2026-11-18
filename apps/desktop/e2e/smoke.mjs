@@ -918,7 +918,7 @@ try {
   const gridBox = await grid.boundingBox();
   // First data cell: below the 34 px header, right of the row numbers.
   await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12);
-  await page.keyboard.press("Control+a");
+  await panel.getByRole("button", { name: "Select all cells", exact: true }).click();
   await page.keyboard.press("Control+c");
   const all = (await copied(1)).trimEnd().split("\n");
   assert.equal(all.length, 6);
@@ -1230,6 +1230,9 @@ try {
   await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
   const queryPages = panel.getByRole("group", { name: "Query result pages" });
   await queryPages.getByText("rows 1–500").waitFor();
+  await panel.getByRole("button", { name: "Select all cells", exact: true }).click();
+  await panel.locator(".grid-selection").getByText("All 500 rows selected", { exact: true }).waitFor();
+  await page.keyboard.press("Control+Home");
   const accessibleGrid = panel.getByRole("grid");
   await accessibleGrid.focus();
   await accessibleGrid.getByRole("gridcell", { name: /Row 1, id \(INTEGER\): 1/ }).waitFor();
@@ -1673,6 +1676,13 @@ try {
   assert.equal((await widthsNow())[1], 0, "customer_id has no width while hidden");
   const hiddenButton = panel.locator(".grid-footer .grid-hidden");
   await hiddenButton.getByText("1 hidden column", { exact: true }).waitFor();
+  // The corner selects the loaded rows beyond the viewport and returns keyboard input to the grid.
+  await topLeftCell();
+  const corner = panel.getByRole("button", { name: "Select all cells", exact: true });
+  assert.equal(await corner.getAttribute("title"), "Select all cells (Ctrl+A)");
+  await corner.click();
+  await selectionText.getByText("All 50,000 rows selected", { exact: true }).waitFor();
+  assert.ok(await sortGrid.evaluate(el => el === document.activeElement));
   // Selections and copies skip it: id, then created.
   await topLeftCell();
   await page.keyboard.press("Shift+ArrowRight");
@@ -6639,8 +6649,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     for (let i = 0; i < 40 && !(box = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
     const before = await page.evaluate(() => window.__copied.length);
-    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
-    await page.keyboard.press("Control+a");
+    await panel.getByRole("button", { name: "Select all cells", exact: true }).click();
     await page.keyboard.press("Control+c");
     assert.deepEqual((await copied(before + 1)).trimEnd().split("\n"), ["1\tedited from viewer\t1", "2\ttwo\t", "4\tfour\t1", "5\tedited from viewer\t1"]);
   }

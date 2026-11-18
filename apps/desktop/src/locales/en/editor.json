@@ -94,6 +94,7 @@
     "jumpTitle": "Jump to column",
     "jumpPlaceholder": "Column name…",
     "jumpNone": "No column matches",
+    "selectAll": "Select all cells",
     "columnFilters": "Column filters",
     "filteredBy": "Filtered by",
     "removeFilter": "Remove the filter {{filter}}",
