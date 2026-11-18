@@ -335,6 +335,15 @@ try {
     await panel.locator(".cm-content").click();
     await page.keyboard.press("Control+Shift+Enter");
   }
+  // A grid menu's submenu (Filter ▸, Copy ▸…), opened by focusing its item: the menu opens it
+  // when the item has the focus, as with the keyboard. A hover is not deterministic: when the
+  // menu opens with that item already under the pointer, moving onto it fires no mouseenter
+  // and the submenu never opens (SDB-420).
+  async function openSubmenu(item) {
+    await item.waitFor();
+    await item.focus();
+    await item.page().waitForFunction((el) => el.getAttribute("aria-expanded") === "true", await item.elementHandle());
+  }
   async function replaceQuery(panel, sql) {
     await panel.locator(".cm-content").click();
     await page.keyboard.press("Control+A");
@@ -2005,7 +2014,7 @@ try {
 
   step("filter by this value: contains, from the cell menu, on the loaded rows");
   await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12, { button: "right" });
-  await cellMenu.getByRole("menuitem", { name: "Filter ▸" }).hover();
+  await openSubmenu(cellMenu.getByRole("menuitem", { name: "Filter ▸" }));
   await panel.getByRole("menuitem", { name: "id contains '1'" }).click();
   await panel.locator(".filter-chip", { hasText: "id contains '1'" }).waitFor();
   await panel.locator(".statusline", { hasText: /^[\d,]+ of 50,000 rows/ }).waitFor();
@@ -4445,7 +4454,7 @@ try {
   {
     const grid = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.click(grid.x + 52 + 20, grid.y + 34 + 12, { button: "right" });
-    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await openSubmenu(panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
     await panel.getByText("Added to the table's WHERE").waitFor();
     await panel.getByRole("menuitem", { name: "id = 50000", exact: true }).click();
     await range.filter({ hasText: "rows 1–1" }).waitFor();
@@ -4458,7 +4467,7 @@ try {
     const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
     const createdX = box.x + 52 + widths[0] + widths[1] + 20;
     await page.mouse.click(createdX, box.y + 34 + 12, { button: "right" });
-    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await openSubmenu(panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
     await panel.getByRole("menuitem", { name: /^created contains '/ }).click();
     await page.waitForFunction(() => document.querySelector('input[aria-label="WHERE"]')?.value.includes(" AND "));
     assert.match(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), /^id = 50000 AND created LIKE '%\d{4}-\d{2}-\d{2}%' ESCAPE '!'$/);
@@ -4589,6 +4598,8 @@ try {
     await range.filter({ hasText: "rows 1–264" }).waitFor();
     assert.equal(await where.inputValue(), "total > 1990");
     await panel.locator(".table-default-badge", { hasText: "Default" }).waitFor();
+    // The reopened page has finished (its rows painted) before its grid is right-clicked.
+    await panel.locator(".statusline", { hasText: /rows · \d+ ms/ }).waitFor();
     // The custom filter's value, picked from the values the server counted with the tab's filter.
     {
       let box = null;
@@ -4597,7 +4608,9 @@ try {
         if (!box) await page.waitForTimeout(100);
       }
       await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12, { button: "right" });
-      await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+      const cellMenu = panel.locator(".result-grid-menu");
+      await cellMenu.waitFor();
+      await openSubmenu(cellMenu.getByRole("menuitem", { name: "Filter ▸" }));
       await panel.getByRole("menuitem", { name: "Custom filter…" }).click();
       const dialog = page.getByRole("dialog", { name: "Custom filter" });
       await dialog.getByLabel("Column").selectOption({ label: "customer_id" });
@@ -4655,7 +4668,7 @@ try {
     const addFilter = async (value) => {
       const box = await settledBox(names.locator(".grid-scroller"));
       await page.mouse.click(box.x + 80, box.y + 34 + 12, { button: "right" });
-      await names.getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await openSubmenu(names.getByRole("menuitem", { name: "Filter ▸" }));
       await names.getByRole("menuitem", { name: "Custom filter…" }).click();
       const dialog = page.getByRole("dialog", { name: "Custom filter" });
       // Only a table data tab offers the server's most frequent values.
@@ -6386,7 +6399,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   };
   const filterBy = async (op, value) => {
     await rightClickFirstCell();
-    await panel.getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await openSubmenu(panel.getByRole("menuitem", { name: "Filter ▸" }));
     await panel.getByRole("menuitem", { name: "Custom filter…" }).click();
     const dialog = page.getByRole("dialog", { name: "Custom filter" });
     await dialog.getByLabel("Column").selectOption({ label: "Command" });
@@ -6416,7 +6429,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(sleeping + busy, processlistTotal);
   // From the cell's own menu: the filter for its value, then reset.
   await rightClickFirstCell();
-  await panel.getByRole("menuitem", { name: "Filter ▸" }).hover();
+  await openSubmenu(panel.getByRole("menuitem", { name: "Filter ▸" }));
   await panel.getByRole("menuitem", { name: /^Id <> \d+$/ }).click();
   await panel.locator(".filter-chip").nth(1).waitFor();
   await panel.getByRole("button", { name: "Reset filters" }).click();
@@ -7478,7 +7491,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       await page.waitForTimeout(300);
       // The row at the top is 12345 (rows are 24 px high).
       await page.mouse.click(box.x + rowNum + idW + 20, box.y + 34 + 12, { button: "right" });
-      await big.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await openSubmenu(big.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
       await big.getByRole("menuitem", { name: "name contains 'item 12345'" }).click();
       await big.locator(".statusline", { hasText: "11 of 1,000,000 rows" }).waitFor({ timeout: 60_000 });
     });
@@ -9676,7 +9689,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     };
     // A filter before the edits: ids 1, 10, 11 and 12.
     await page.mouse.click(...(await at(0, 0)), { button: "right" });
-    await shown.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await openSubmenu(shown.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
     await shown.getByRole("menuitem", { name: "id contains '1'" }).click();
     await shown.locator(".statusline", { hasText: /^4 of 12 rows/ }).waitFor();
     // The name of id 10, the second row shown, changed and not applied.
