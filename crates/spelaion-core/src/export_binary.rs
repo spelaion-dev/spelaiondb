@@ -196,7 +196,8 @@ impl BinaryFile {
             | ExportFormat::Markdown
             | ExportFormat::InList
             | ExportFormat::Html
-            | ExportFormat::Ndjson => {
+            | ExportFormat::Ndjson
+            | ExportFormat::Xlsx => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "only Parquet and Arrow are written a batch at a time",

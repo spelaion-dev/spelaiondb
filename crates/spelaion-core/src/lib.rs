@@ -21,6 +21,7 @@ mod er;
 mod export;
 mod export_binary;
 mod export_stream;
+mod export_xlsx;
 mod file_folder;
 mod filter;
 mod find;

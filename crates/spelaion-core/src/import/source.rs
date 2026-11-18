@@ -1,5 +1,5 @@
 //! Reading what is imported (ADR-038): a file or the clipboard's text, as CSV, TSV, a JSON array
-//! or a Markdown table. The input is untrusted: every limit here (the record size, the columns,
+//! or a Markdown table, or a sheet of an XLSX workbook (`xlsx.rs`, SDB-390). The input is untrusted: every limit here (the record size, the columns,
 //! the size of what is read whole) stops a file that would otherwise take all the memory, and
 //! nothing read from it ever becomes SQL text (names are quoted by the engine's dialect, values
 //! are bound).
@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 
 use super::ImportError;
+use super::xlsx::SheetRows;
 use crate::sql_file::{decode_utf16, windows_1252_char};
 
 /// How the source is written.
@@ -22,6 +23,8 @@ pub enum ImportFormat {
     Json,
     /// A pipe table: a header row, a `|---|` line, then the rows.
     Markdown,
+    /// A sheet of an Excel workbook (`.xlsx`, `.xlsm`), from a file only.
+    Xlsx,
 }
 
 /// The text encoding of a file. The clipboard is always text.
@@ -71,6 +74,8 @@ pub struct ParseOptions {
     /// The time zone of timestamps that have none, for columns that keep one: `UTC` or an
     /// offset such as `+02:00`.
     pub time_zone: Option<String>,
+    /// The sheet of a workbook (XLSX), by name; `None`: the first one.
+    pub sheet: Option<String>,
 }
 
 impl Default for ParseOptions {
@@ -88,6 +93,7 @@ impl Default for ParseOptions {
             date_format: None,
             timestamp_format: None,
             time_zone: None,
+            sheet: None,
         }
     }
 }
@@ -113,6 +119,7 @@ pub fn format_for_path(path: &Path) -> Option<ImportFormat> {
         "tsv" | "tab" => Some(ImportFormat::Tsv),
         "json" => Some(ImportFormat::Json),
         "md" | "markdown" => Some(ImportFormat::Markdown),
+        "xlsx" | "xlsm" => Some(ImportFormat::Xlsx),
         _ => None,
     }
 }
@@ -127,6 +134,19 @@ pub fn guess_options(source: &ImportSource) -> Result<ParseOptions, ImportError>
             let mut file = File::open(path).map_err(|e| io_error(path, &e))?;
             let read = read_up_to(&mut file, &mut head).map_err(|e| io_error(path, &e))?;
             head.truncate(read);
+            if head.starts_with(b"\xD0\xCF\x11\xE0") {
+                return Err(ImportError::Source(format!(
+                    "{} is an Excel 97-2003 workbook (.xls): save it as .xlsx to import it",
+                    path.display()
+                )));
+            }
+            if head.starts_with(b"PK\x03\x04") || format_for_path(path) == Some(ImportFormat::Xlsx)
+            {
+                return Ok(ParseOptions {
+                    format: ImportFormat::Xlsx,
+                    ..ParseOptions::default()
+                });
+            }
             let (encoding, skip) = sniff_encoding(&head);
             match encoding {
                 SourceEncoding::Utf16Le => {
@@ -149,7 +169,7 @@ pub fn guess_options(source: &ImportSource) -> Result<ParseOptions, ImportError>
     let delimiter = match format {
         ImportFormat::Csv => csv_delimiter(&sample),
         ImportFormat::Tsv => '\t',
-        ImportFormat::Json | ImportFormat::Markdown => ',',
+        ImportFormat::Json | ImportFormat::Markdown | ImportFormat::Xlsx => ',',
     };
     Ok(ParseOptions {
         format,
@@ -337,6 +357,8 @@ pub(crate) struct RowReader {
     cells: CellRules,
     /// Data rows returned so far.
     pub rows: u64,
+    /// The worksheets of a workbook (XLSX), in order; empty for the other formats.
+    pub sheets: Vec<String>,
 }
 
 enum Inner {
@@ -346,6 +368,11 @@ enum Inner {
         pending: Option<Vec<String>>,
     },
     Whole(std::vec::IntoIter<Vec<Option<String>>>),
+    Sheet {
+        rows: Box<SheetRows>,
+        /// The first row, when it is data (no header).
+        pending: Option<Vec<Option<String>>>,
+    },
 }
 
 struct CellRules {
@@ -393,6 +420,9 @@ impl RowReader {
                 }),
             empty_as_null: options.empty_as_null,
         };
+        if options.format == ImportFormat::Xlsx {
+            return Self::sheet(source, options, cells);
+        }
         let whole = matches!(options.format, ImportFormat::Json | ImportFormat::Markdown);
         let (mut input, encoding) = open_text(source, options.encoding, whole)?;
         let (columns, inner) = match options.format {
@@ -450,6 +480,7 @@ impl RowReader {
                 let (columns, rows) = markdown_rows(&text, &cells)?;
                 (columns, Inner::Whole(rows.into_iter()))
             }
+            ImportFormat::Xlsx => unreachable!("read by RowReader::sheet"),
         };
         Ok(Self {
             columns,
@@ -457,6 +488,46 @@ impl RowReader {
             inner,
             cells,
             rows: 0,
+            sheets: Vec::new(),
+        })
+    }
+
+    /// A sheet of a workbook: its first row the columns' names when `header`; a row ends at
+    /// its last cell, so the first row's empty cells at its end are not columns.
+    fn sheet(
+        source: &ImportSource,
+        options: &ParseOptions,
+        cells: CellRules,
+    ) -> Result<Self, ImportError> {
+        let ImportSource::File(path) = source else {
+            return Err(ImportError::Invalid(
+                "an Excel workbook is read from its file, not from pasted text".into(),
+            ));
+        };
+        let mut rows = Box::new(SheetRows::open(path, options.sheet.as_deref())?);
+        let mut first = rows.next_row()?.unwrap_or_default();
+        while first
+            .last()
+            .is_some_and(|cell| cell.as_deref().is_none_or(str::is_empty))
+        {
+            first.pop();
+        }
+        let (columns, pending) = if options.header {
+            (column_names(first.into_iter()), None)
+        } else {
+            (
+                column_names((0..first.len()).map(|_| None)),
+                (!first.is_empty()).then_some(first),
+            )
+        };
+        let sheets = rows.sheets.clone();
+        Ok(Self {
+            columns,
+            encoding: SourceEncoding::Utf8,
+            inner: Inner::Sheet { rows, pending },
+            cells,
+            rows: 0,
+            sheets,
         })
     }
 
@@ -467,6 +538,37 @@ impl RowReader {
         let width = self.columns.len();
         let row = match &mut self.inner {
             Inner::Whole(rows) => rows.next(),
+            Inner::Sheet { rows, pending } => {
+                let record = match pending.take() {
+                    Some(record) => Some(record),
+                    None => rows.next_row()?,
+                };
+                match record {
+                    None => None,
+                    Some(mut record) => {
+                        if record.len() > width {
+                            if record[width..]
+                                .iter()
+                                .all(|v| v.as_deref().is_none_or(|v| v.trim().is_empty()))
+                            {
+                                record.truncate(width);
+                            } else {
+                                return Err(ImportError::Source(format!(
+                                    "row {}: a value in column {}, past the {width} columns of the first row",
+                                    self.rows + 1,
+                                    record.len()
+                                )));
+                            }
+                        }
+                        Some(
+                            record
+                                .into_iter()
+                                .map(|v| v.and_then(|v| self.cells.apply(v)))
+                                .collect(),
+                        )
+                    }
+                }
+            }
             Inner::Delimited { parser, pending } => {
                 let record = match pending.take() {
                     Some(record) => Some(record),

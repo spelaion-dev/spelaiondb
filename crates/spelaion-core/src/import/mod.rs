@@ -1,5 +1,5 @@
 //! Importing data into a table (ADR-038): a file or pasted text, read as CSV, TSV, a JSON array
-//! or a Markdown table, into an existing table or a new one.
+//! or a Markdown table, or a sheet of an XLSX file (SDB-390), into an existing table or a new one.
 //!
 //! 1. [`preview`] reads a sample of the source: its columns, the type each one looks like and
 //!    the first rows. Nothing touches the database.
@@ -20,6 +20,7 @@
 
 mod detect;
 mod source;
+mod xlsx;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -122,6 +123,9 @@ pub struct ImportPreview {
     pub more: bool,
     /// A name for a new table: the file's name, or `imported` for pasted text.
     pub suggested_table: String,
+    /// The worksheets of a workbook (XLSX), in order: the sheet read is the options' or the
+    /// first. Empty for the other formats.
+    pub sheets: Vec<String>,
 }
 
 /// Reads the start of `source` (blocking: call it off the async runtime). `options: None`
@@ -185,6 +189,7 @@ pub fn preview(
         columns,
         rows,
         suggested_table: suggested_table(source),
+        sheets: reader.sheets.clone(),
         options,
     })
 }
