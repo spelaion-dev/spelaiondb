@@ -3392,6 +3392,8 @@ export type ImportScan_Deserialize = {
 	 *  on its own, so the user chooses a folder or file first.
 	 */
 	needsChoice: boolean,
+	/**  At least one connection can be imported with a saved password. */
+	canSavePasswords: boolean,
 	/**
 	 *  The client keeps its connections somewhere this system reads when nothing is chosen
 	 *  (its folders, or HeidiSQL's registry on Windows), so the UI can offer to go back to it.
@@ -3412,6 +3414,8 @@ export type ImportScan_Serialize = {
 	 *  on its own, so the user chooses a folder or file first.
 	 */
 	needsChoice: boolean,
+	/**  At least one connection can be imported with a saved password. */
+	canSavePasswords: boolean,
 	/**
 	 *  The client keeps its connections somewhere this system reads when nothing is chosen
 	 *  (its folders, or HeidiSQL's registry on Windows), so the UI can offer to go back to it.

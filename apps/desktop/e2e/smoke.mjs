@@ -8930,7 +8930,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await importer.getByRole("combobox", { name: "What to do with PG via bastion" }).selectOption({ label: "Import it as a copy" });
     await importer.getByRole("combobox", { name: "What to do with Analytics" }).selectOption({ label: "Import it as a copy" });
     await importer.getByRole("textbox", { name: "Put them in" }).fill("DataGrip");
-    await importer.getByRole("checkbox", { name: "Store the passwords DataGrip saved in the system keychain" }).uncheck();
+    await importer.getByRole("checkbox", { name: "Store the passwords DataGrip saved in the system keychain" }).waitFor({ state: "detached" });
     await shot("sdb-50-import-datagrip");
     await importer.getByRole("button", { name: "Import 7 connections" }).click();
     await importer
@@ -9025,7 +9025,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       else await list.getByRole("checkbox", { name, exact: true }).check();
     }
     await importer.getByRole("textbox", { name: "Put them in" }).fill("HeidiSQL");
-    await importer.getByRole("checkbox", { name: "Store the passwords HeidiSQL saved in the system keychain" }).uncheck();
+    await importer.getByRole("checkbox", { name: "Store the passwords HeidiSQL saved in the system keychain" }).waitFor({ state: "detached" });
     await shot("sdb-52-import-heidisql");
     await importer.getByRole("button", { name: "Import 2 connections" }).click();
     await importer.getByRole("status").filter({ hasText: "Imported 2 connections." }).waitFor();
@@ -9061,6 +9061,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await item("Shop MariaDB TLS").getByText("4 settings are not imported").click();
     await item("Shop MariaDB TLS").getByText("SQL mode: ANSI_QUOTES", { exact: false }).waitFor();
     await item("Shop MariaDB TLS").getByText("it is in its vault", { exact: false }).waitFor();
+    await importer.getByRole("checkbox", { name: "Store the passwords MySQL Workbench saved in the system keychain" }).waitFor({ state: "detached" });
     await importer.getByRole("textbox", { name: "Put them in" }).fill("Workbench");
     await shot("sdb-53-import-workbench");
     await importer.getByRole("button", { name: "Import 2 connections" }).click();
@@ -9110,6 +9111,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       if (await duplicate.count()) await duplicate.selectOption({ label: "Import it as a copy" });
       else await list.getByRole("checkbox", { name, exact: true }).check();
     }
+    await importer.getByRole("checkbox", { name: "Store the passwords pgAdmin saved in the system keychain" }).waitFor({ state: "detached" });
     await importer.getByRole("textbox", { name: "Put them in" }).fill("pgAdmin");
     await shot("sdb-54-import-pgadmin");
     await importer.getByRole("button", { name: "Import 3 connections" }).click();
