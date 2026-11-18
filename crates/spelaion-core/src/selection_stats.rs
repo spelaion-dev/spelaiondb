@@ -526,9 +526,42 @@ pub(crate) fn compute(
     block: &CellBlock,
     ticket: &StatsTicket,
 ) -> Result<Option<SelectionStats>, ViewError> {
+    let end = block
+        .first_row
+        .saturating_add(block.rows)
+        .min(result.rows());
+    compute_positions(
+        result,
+        &block.columns,
+        block.first_row.min(end)..end,
+        ticket,
+    )
+}
+
+/// Computes over distinct selected row positions, in their display order.
+pub(crate) fn compute_selected(
+    result: &StoredResult,
+    columns: &[usize],
+    rows: &[usize],
+    ticket: &StatsTicket,
+) -> Result<Option<SelectionStats>, ViewError> {
+    let mut positions = rows.to_vec();
+    positions.sort_unstable();
+    positions.dedup();
+    // Invalid positions are clipped just as a contiguous selection is clipped at the end.
+    positions.retain(|&row| row < result.rows());
+    compute_positions(result, columns, positions.into_iter(), ticket)
+}
+
+fn compute_positions(
+    result: &StoredResult,
+    selected_columns: &[usize],
+    positions: impl Iterator<Item = usize>,
+    ticket: &StatsTicket,
+) -> Result<Option<SelectionStats>, ViewError> {
     let schema = result.schema();
-    let mut columns: Vec<(usize, LogicalType)> = Vec::with_capacity(block.columns.len());
-    for &column in &block.columns {
+    let mut columns: Vec<(usize, LogicalType)> = Vec::with_capacity(selected_columns.len());
+    for &column in selected_columns {
         let meta = schema
             .columns
             .get(column)
@@ -537,17 +570,13 @@ pub(crate) fn compute(
             columns.push((column, meta.logical));
         }
     }
-    let end = block
-        .first_row
-        .saturating_add(block.rows)
-        .min(result.rows());
     let mut stats = SelectionStats::default();
     let mut counts: HashMap<Box<str>, (u64, u64)> = HashMap::new();
     let mut sum: Option<Sum> = None;
     let mut numbers: Vec<Num> = Vec::new();
     let mut range = Range::Empty;
     let mut text = String::new();
-    for position in block.first_row..end {
+    for position in positions {
         let (batch, row) = result.locate(result.original_row(position));
         for &(column, logical) in &columns {
             if stats.cells % CHECK_EVERY == 0 && ticket.is_stale() {
@@ -708,6 +737,19 @@ mod tests {
     }
 
     #[test]
+    fn selected_rows_count_only_distinct_positions() {
+        let (store, id) = store();
+        let stored = store.get(id).unwrap();
+        let result = stored.read().unwrap();
+        let stats = result
+            .selection_stats_rows(&[0], &[4, 1, 4], &result.stats_ticket())
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.cells, 2);
+        assert_eq!(stats.sum.as_deref(), Some("7"));
+    }
+
+    #[test]
     fn integers_add_up_exactly() {
         let (store, id) = store();
         let r = store.get(id).unwrap();
@@ -803,10 +845,10 @@ mod tests {
         let (store, id) = store();
         let r = store.get(id).unwrap();
         let mut r = r.write().unwrap();
-        r.sort(Some(SortKey {
+        r.sort(&[SortKey {
             column: 0,
             descending: true,
-        }))
+        }])
         .unwrap();
         // The first two rows of the view are now ids 12 and 5.
         let s = run(&r, &block(0, 2, &[0]));

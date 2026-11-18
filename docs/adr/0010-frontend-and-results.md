@@ -129,6 +129,15 @@
 - **A chart is points, not rows** (ADR-040): the core combines the view's rows by X into at most
   2,000 points and the UI draws them as SVG; what was combined is said under the chart.
 
+## The transposed view (2026-11-17, SDB-386)
+- **Rows shown as columns are a result of their own in the core** (`transpose.rs`): the current
+  row, or up to 1,000 selected rows, become a complete stored result with one row per column
+  (its name, its type, then each row's text, headed by the row's number as the grid shows it).
+  The grid asks for its windows like any other, so copies, the cell viewer, Ctrl+F and the calc
+  panel work on it unchanged, and no row crosses to React. Its cells hold the database's text,
+  since a column of it mixes the types of a row; a masked cell holds the mask (it is made from
+  the stored, masked rows). It is read-only and freed when it closes.
+
 ## Alternatives
 Monaco (heavier), AG Grid (DOM, more editing features, heavier).
 

@@ -1,9 +1,11 @@
 //! Query result pages (ADR-054) on every engine: a query is paged only when each page can be
 //! fetched exactly, and then every row that exists throughout appears once, in order, while
 //! another session deletes and inserts between pages and the ORDER BY has ties everywhere. A
-//! query that is not paged runs as written. SQLite always runs; the servers need
-//! `SPELAION_TEST_PG`, `SPELAION_TEST_MYSQL`, `SPELAION_TEST_MARIADB` and `SPELAION_TEST_MSSQL`
-//! (skipped without them, which does not count as tested).
+//! query that is not paged runs as written. The grid's sort of a paged query orders the pages
+//! by columns that repeat and hold NULLs the same way. SQLite always runs, and DuckDB through
+//! its plugin; the servers need `SPELAION_TEST_PG`, `SPELAION_TEST_MYSQL`,
+//! `SPELAION_TEST_MARIADB` and `SPELAION_TEST_MSSQL` (skipped without them, which does not
+//! count as tested).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -176,6 +178,24 @@ async fn engines(table: &str, sqlite_file: &std::path::Path) -> Vec<Engine> {
             received: None,
         });
     }
+    // DuckDB: both sessions on one file, which its plugin's one process shares.
+    let duck_file = sqlite_file.with_extension("duckdb");
+    let _ = std::fs::remove_file(&duck_file);
+    engines::ensure_database(spelaion_config::Engine::Duckdb, &duck_file).await;
+    let duck = ConnectParams {
+        database: duck_file.display().to_string(),
+        ..Default::default()
+    };
+    let driver = engines::duckdb();
+    out.push(Engine {
+        label: "duckdb",
+        reader: connect(&*driver, &duck).await,
+        writer: connect(&*driver, &duck).await,
+        fill: format!(
+            "insert into {table} select g, g % 3, 'v' || g from range(1, {ROWS} + 1) t(g)"
+        ),
+        received: None,
+    });
     let lite = ConnectParams {
         database: sqlite_file.display().to_string(),
         ..Default::default()
@@ -217,10 +237,10 @@ async fn pages_show_every_row_that_existed_throughout_exactly_once_while_others_
             // Ties everywhere: three values of grp for 3000 rows.
             let sql = format!("select id, grp, v from {t} order by grp desc");
             assert!(
-                spelaion_core::query_pages_exactly(&engine.reader, &sql).await,
+                spelaion_core::query_pages_exactly(&engine.reader, &sql, &[]).await,
                 "{label}"
             );
-            let page = spelaion_core::first_query_page_sql(&engine.reader, &sql, PAGE)
+            let page = spelaion_core::first_query_page_sql(&engine.reader, &sql, PAGE, &[])
                 .await
                 .unwrap_or_else(|| panic!("{label}: not paged"));
             let id = result(label, &engine.reader, &page).await;
@@ -259,9 +279,10 @@ async fn pages_show_every_row_that_existed_throughout_exactly_once_while_others_
                     )
                     .await;
                 }
-                let added = spelaion_core::append_query_page(&engine.reader, id, &sql, PAGE, shown)
-                    .await
-                    .unwrap_or_else(|e| panic!("{label}: page {pages}: {e}"));
+                let added =
+                    spelaion_core::append_query_page(&engine.reader, id, &sql, PAGE, shown, &[])
+                        .await
+                        .unwrap_or_else(|e| panic!("{label}: page {pages}: {e}"));
                 pages += 1;
                 if (added as u64) < PAGE {
                     break;
@@ -302,11 +323,11 @@ async fn pages_show_every_row_that_existed_throughout_exactly_once_while_others_
             // Not paged (the key is not in the result): it runs as written, every row at once.
             let whole = format!("select grp, v from {t} order by grp");
             assert!(
-                !spelaion_core::query_pages_exactly(&engine.reader, &whole).await,
+                !spelaion_core::query_pages_exactly(&engine.reader, &whole, &[]).await,
                 "{label}"
             );
             assert!(
-                spelaion_core::first_query_page_sql(&engine.reader, &whole, PAGE)
+                spelaion_core::first_query_page_sql(&engine.reader, &whole, PAGE, &[])
                     .await
                     .is_none(),
                 "{label}"
@@ -358,4 +379,428 @@ async fn pages_show_every_row_that_existed_throughout_exactly_once_while_others_
     }
     let _ = std::fs::remove_dir_all(&dir);
     eprintln!("tested on {tested:?}");
+}
+
+/// A cell of a sorted column as the test compares it: a value, or NULL after every value.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Cell {
+    Number(i64),
+    Text(String),
+    Null,
+}
+
+/// One row of the sorted table: its id, `grp` and `v`.
+type Row = (i64, Cell, Cell);
+
+/// Every row of a result of `id, grp, v`.
+fn rows_of(session: &Session, id: ResultId) -> Vec<Row> {
+    let stored = session.results().get(id).unwrap();
+    let stored = stored.read().unwrap();
+    (0..stored.rows())
+        .map(|row| {
+            let key = match stored.value_at(row, 0).unwrap() {
+                Value::Int(n) => n,
+                other => other.to_string().parse().unwrap(),
+            };
+            let grp = match stored.value_at(row, 1).unwrap() {
+                Value::Null => Cell::Null,
+                Value::Int(n) => Cell::Number(n),
+                other => Cell::Number(other.to_string().parse().unwrap()),
+            };
+            let v = match stored.value_at(row, 2).unwrap() {
+                Value::Null => Cell::Null,
+                Value::Text(text) => Cell::Text(text),
+                other => Cell::Text(other.to_string()),
+            };
+            (key, grp, v)
+        })
+        .collect()
+}
+
+/// The grid's sort of a paged query (SDB-380) on every engine: the pages are read again from
+/// the server ordered by columns that repeat and hold NULLs, NULLs last in each key whatever
+/// the engine and the direction, then the primary key. While another session deletes and
+/// inserts between pages, every row that exists throughout appears once, in that order. Then
+/// a table data tab's header sort: its numbered pages, ordered by columns that repeat and
+/// hold NULLs and then the key, show every row once.
+#[tokio::test]
+async fn pages_sorted_by_columns_with_nulls_and_ties_show_every_row_once_on_every_engine() {
+    use spelaion_core::{ColumnSort, SortKey, TablePage};
+    let table = format!("sorted_pages_{}", std::process::id());
+    let dir = std::env::temp_dir().join(format!("spelaion-sorted-pages-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let sqlite_file = dir.join("pages.sqlite");
+    std::fs::write(&sqlite_file, b"").unwrap();
+    let mut tested = Vec::new();
+    for engine in engines(&table, &sqlite_file).await {
+        let label = engine.label;
+        let t = table.as_str();
+        let body = async {
+            run(
+                label,
+                &engine.writer,
+                &format!("drop table if exists {t}; create table {t} (id int not null primary key, grp int, v varchar(20))"),
+            )
+            .await;
+            run(label, &engine.writer, &engine.fill).await;
+            // Three values of grp and a NULL every fifth row; half the rows share one v, and
+            // every seventh has none.
+            for change in [
+                format!("update {t} set v = 'same' where id % 2 = 0"),
+                format!("update {t} set v = null where id % 7 = 0"),
+                format!("update {t} set grp = null where id % 5 = 0"),
+            ] {
+                run(label, &engine.writer, &change).await;
+            }
+            let sql = format!("select id, grp, v from {t}");
+            let key = |column, descending| SortKey { column, descending };
+            let mut round = 0;
+            for sort in [
+                vec![key(1, true), key(2, false)],
+                vec![key(2, true)],
+                vec![key(1, false), key(2, true), key(0, true)],
+            ] {
+                round += 1;
+                assert!(
+                    spelaion_core::query_pages_exactly(&engine.reader, &sql, &sort).await,
+                    "{label}: {sort:?}"
+                );
+                let existing: BTreeSet<i64> = {
+                    let all = result(label, &engine.writer, &format!("select id from {t}")).await;
+                    let ids = column(&engine.writer, all, 0)
+                        .iter()
+                        .map(|v| v.parse().unwrap())
+                        .collect();
+                    engine.writer.results().remove(all);
+                    ids
+                };
+                let page = spelaion_core::first_query_page_sql(&engine.reader, &sql, PAGE, &sort)
+                    .await
+                    .unwrap_or_else(|| panic!("{label}: not paged"));
+                let id = result(label, &engine.reader, &page).await;
+                let mut deleted = BTreeSet::new();
+                let mut pages = 1;
+                loop {
+                    let shown = engine
+                        .reader
+                        .results()
+                        .get(id)
+                        .unwrap()
+                        .read()
+                        .unwrap()
+                        .rows() as u64;
+                    // Rows shown and not yet shown go, with and without NULLs.
+                    let gone: Vec<i64> = (0..5)
+                        .map(|j| (round * 1009 + pages * 389 + j * 601) % ROWS + 1)
+                        .collect();
+                    deleted.extend(gone.iter().copied());
+                    let list = gone
+                        .iter()
+                        .map(i64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    run(
+                        label,
+                        &engine.writer,
+                        &format!("delete from {t} where id in ({list})"),
+                    )
+                    .await;
+                    // New rows in every group, the NULL one too, with and without a v.
+                    for j in 0..5 {
+                        let new = 100_000 + round * 10_000 + pages * 10 + j;
+                        let grp = if j == 3 {
+                            "null".to_string()
+                        } else {
+                            (j % 3).to_string()
+                        };
+                        let v = if j == 4 { "null" } else { "'new'" };
+                        run(
+                            label,
+                            &engine.writer,
+                            &format!("insert into {t} values ({new}, {grp}, {v})"),
+                        )
+                        .await;
+                    }
+                    let added = spelaion_core::append_query_page(
+                        &engine.reader,
+                        id,
+                        &sql,
+                        PAGE,
+                        shown,
+                        &sort,
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("{label}: {sort:?}: page {pages}: {e}"));
+                    pages += 1;
+                    if (added as u64) < PAGE {
+                        break;
+                    }
+                    assert!(pages < 100, "{label}: pages never end");
+                }
+                let rows = rows_of(&engine.reader, id);
+                let mut seen: HashMap<i64, usize> = HashMap::new();
+                for (key, _, _) in &rows {
+                    *seen.entry(*key).or_default() += 1;
+                }
+                let twice: Vec<_> = seen.iter().filter(|(_, n)| **n > 1).collect();
+                assert!(
+                    twice.is_empty(),
+                    "{label}: {sort:?}: rows shown twice: {twice:?}"
+                );
+                let missing: Vec<i64> = existing
+                    .iter()
+                    .filter(|key| !deleted.contains(key) && !seen.contains_key(key))
+                    .copied()
+                    .collect();
+                assert!(
+                    missing.is_empty(),
+                    "{label}: {sort:?}: rows never shown: {missing:?}"
+                );
+                // In the sort's order, NULLs last in each key in both directions, then the key.
+                let cell = |row: &Row, column: usize| match column {
+                    0 => Cell::Number(row.0),
+                    1 => row.1.clone(),
+                    _ => row.2.clone(),
+                };
+                let before = |a: &Row, b: &Row| {
+                    for k in &sort {
+                        let (x, y) = (cell(a, k.column), cell(b, k.column));
+                        if x == y {
+                            continue;
+                        }
+                        return match (&x, &y) {
+                            (Cell::Null, _) => false,
+                            (_, Cell::Null) => true,
+                            _ if k.descending => x > y,
+                            _ => x < y,
+                        };
+                    }
+                    a.0 < b.0
+                };
+                for pair in rows.windows(2) {
+                    assert!(
+                        before(&pair[0], &pair[1]),
+                        "{label}: {sort:?}: out of order: {:?} before {:?}",
+                        pair[0],
+                        pair[1]
+                    );
+                }
+                assert!(pages > 10, "{label}: only {pages} pages");
+                let nulls = rows.iter().filter(|r| r.1 == Cell::Null).count();
+                let no_v = rows.iter().filter(|r| r.2 == Cell::Null).count();
+                assert!(
+                    nulls > 400 && no_v > 300,
+                    "{label}: {nulls} and {no_v} NULLs"
+                );
+                engine.reader.results().remove(id);
+            }
+
+            // A sort the pages cannot follow is not paged: the app then sorts loaded rows.
+            assert!(
+                !spelaion_core::query_pages_exactly(&engine.reader, &sql, &[key(7, false)]).await,
+                "{label}"
+            );
+            assert!(
+                spelaion_core::first_query_page_sql(&engine.reader, &sql, PAGE, &[key(7, false)])
+                    .await
+                    .is_none(),
+                "{label}"
+            );
+
+            // The table data tab: the core writes the ORDER BY from the table's columns, the
+            // key follows it, and the numbered pages hold every row once.
+            let schema = spelaion_core::active_schema(&engine.reader)
+                .await
+                .unwrap()
+                .unwrap_or_default();
+            let by = |column: &str, descending| ColumnSort {
+                column: column.into(),
+                descending,
+            };
+            let order_by = spelaion_core::table_order_by(
+                &engine.reader,
+                &schema,
+                t,
+                &[by("grp", true), by("v", false)],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+            assert!(
+                spelaion_core::table_order_by(
+                    &engine.reader,
+                    &schema,
+                    t,
+                    &[by("grp desc, (select 1)", false)],
+                )
+                .await
+                .is_err(),
+                "{label}"
+            );
+            let count: usize = first(label, &engine.writer, &format!("select count(*) from {t}"))
+                .await
+                .parse()
+                .unwrap();
+            let mut shown: Vec<Row> = Vec::new();
+            let mut offset = 0;
+            loop {
+                let page = spelaion_core::table_page_sql_by_key(
+                    &engine.reader,
+                    &TablePage {
+                        schema: schema.clone(),
+                        name: t.into(),
+                        filter: String::new(),
+                        order_by: order_by.clone(),
+                        limit: PAGE,
+                        offset,
+                    },
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+                let id = result(label, &engine.reader, &page).await;
+                let rows = rows_of(&engine.reader, id);
+                engine.reader.results().remove(id);
+                let last = (rows.len() as u64) < PAGE;
+                shown.extend(rows);
+                if last {
+                    break;
+                }
+                offset += PAGE;
+                assert!(offset < 100_000, "{label}: pages never end");
+            }
+            let distinct: BTreeSet<i64> = shown.iter().map(|r| r.0).collect();
+            assert_eq!(shown.len(), count, "{label}: rows in the table's pages");
+            assert_eq!(
+                distinct.len(),
+                count,
+                "{label}: a row twice in the table's pages"
+            );
+            // Within equal grp and v the key orders the rows, wherever the engine puts NULLs.
+            for pair in shown.windows(2) {
+                if pair[0].1 == pair[1].1 && pair[0].2 == pair[1].2 {
+                    assert!(
+                        pair[0].0 < pair[1].0,
+                        "{label}: {:?} before {:?}",
+                        pair[0],
+                        pair[1]
+                    );
+                }
+            }
+        };
+        let writer = &engine.writer;
+        let drop = vec![format!("drop table if exists {t}")];
+        cleaning_up(body, |panicked| async move {
+            run_cleanup(label, writer, &drop, panicked).await
+        })
+        .await;
+        tested.push(label);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    eprintln!("tested on {tested:?}");
+}
+
+/// SQL Server: a `varchar` key of a SQL collation sorts with the collation's non-Unicode rules,
+/// where a hyphen or an apostrophe is a character like any other. Compared with an `N'…'`
+/// literal it would be converted to `nvarchar` and compared with Unicode rules, which weigh
+/// them otherwise, and a page boundary between such values would show a row twice or hide one
+/// (SDB-404). Pages one row long must show every row once, in the server's own `ORDER BY`
+/// order.
+#[tokio::test]
+async fn sqlserver_pages_by_a_varchar_key_follow_its_collation() {
+    let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1") else {
+        return;
+    };
+    params.tls = TlsMode::Require;
+    params.database = "master".into();
+    let master = connect(&*engines::sqlserver(), &params).await;
+    run(
+        "sqlserver",
+        &master,
+        "if db_id('spelaion') is null create database spelaion",
+    )
+    .await;
+    params.database = "spelaion".into();
+    let session = connect(&*engines::sqlserver(), &params).await;
+    let cleanup = connect(&*engines::sqlserver(), &params).await;
+    let t = format!("collation_pages_{}", std::process::id());
+    let values = [
+        "co-op",
+        "coop",
+        "co'op",
+        "co op",
+        "cop",
+        "co-operate",
+        "cooperate",
+        "coo",
+        "co--op",
+        "c-o-o-p",
+        "'coop",
+        "-coop",
+        "coo-p",
+        "COOP",
+        "Co-Op",
+        "co_op",
+        "co.op",
+        // Outside ASCII, in the database's code page (1252).
+        "coöp",
+        "cöop",
+        "coop-é",
+        "co'-op",
+    ];
+    let body = async {
+        run(
+            "sqlserver",
+            &session,
+            &format!(
+                "drop table if exists {t}; create table {t} (code varchar(20) collate SQL_Latin1_General_CP1_CS_AS not null primary key, n int not null)"
+            ),
+        )
+        .await;
+        for (n, value) in values.iter().enumerate() {
+            let literal = value.replace("'", "''");
+            run(
+                "sqlserver",
+                &session,
+                &format!("insert into {t} values ('{literal}', {n})"),
+            )
+            .await;
+        }
+        let ordered = result(
+            "sqlserver",
+            &session,
+            &format!("select code from {t} order by code"),
+        )
+        .await;
+        let expected = column(&session, ordered, 0);
+        session.results().remove(ordered);
+        assert_eq!(expected.len(), values.len());
+
+        let sql = format!("select code, n from {t}");
+        if !spelaion_core::query_pages_exactly(&session, &sql, &[]).await {
+            // Not paged: it runs as written, which is exact too.
+            eprintln!("not paged by a varchar key of a SQL collation");
+            return;
+        }
+        let page = spelaion_core::first_query_page_sql(&session, &sql, 1, &[])
+            .await
+            .expect("paged");
+        let id = result("sqlserver", &session, &page).await;
+        for _ in 0..values.len() + 2 {
+            let shown = session.results().get(id).unwrap().read().unwrap().rows() as u64;
+            let added = spelaion_core::append_query_page(&session, id, &sql, 1, shown, &[])
+                .await
+                .expect("a page");
+            if added == 0 {
+                break;
+            }
+        }
+        let paged = column(&session, id, 0);
+        session.results().remove(id);
+        assert_eq!(paged, expected, "pages differ from the server's ORDER BY");
+    };
+    let drop = vec![format!("drop table if exists {t}")];
+    cleaning_up(body, |panicked| async move {
+        run_cleanup("sqlserver", &cleanup, &drop, panicked).await
+    })
+    .await;
 }

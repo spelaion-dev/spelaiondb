@@ -16,6 +16,7 @@ import { usePreferences } from "../preferences";
 import { canShowTiles, MapView, type MapFeature } from "./MapView";
 import { chooseOpenFile, chooseSavePath } from "../dialogs";
 import { usePicker, ValuePicker, type PickedEdit, type PickerSource } from "./ValuePicker";
+import { formatJson } from "../formatJson";
 
 type View =
   | { kind: "null" }
@@ -46,7 +47,8 @@ function view(value: string | null, column: ColumnItem): View {
   const trimmed = value.trimStart();
   if (column.logical === "json" || trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      return { kind: "json", text: JSON.stringify(JSON.parse(value), null, 2) };
+      const formatted = formatJson(value);
+      if (formatted !== null) return { kind: "json", text: formatted };
     } catch {
       // Not JSON after all: shown as text.
     }
@@ -97,9 +99,9 @@ export function chooseValueFile(t: TFunction<"editor">): Promise<string | null> 
   return chooseOpenFile(t("viewer.loadTitle"), [{ name: t("viewer.allFiles"), extensions: ["*"] }]);
 }
 
-export type ViewerMode = "cell" | "row" | "references" | "calc";
+export type ViewerMode = "cell" | "row" | "references" | "calc" | "group";
 
-const MODE_LABELS: Record<ViewerMode, string> = { cell: "viewer.cellMode", row: "viewer.rowMode", references: "viewer.referencesMode", calc: "viewer.calcMode" };
+const MODE_LABELS: Record<ViewerMode, string> = { cell: "viewer.cellMode", row: "viewer.rowMode", references: "viewer.referencesMode", calc: "viewer.calcMode", group: "viewer.groupMode" };
 
 /** The side panel's views: the cell, its row, in a table data tab the row's references, and the
  *  numbers about the selection. */
@@ -163,6 +165,9 @@ export function CellViewer(props: {
   const [fileNote, setFileNote] = useState<{ cell: string; text: string; error: boolean } | null>(null);
   const [loadingFile, setLoadingFile] = useState(false);
   const [binaryView, setBinaryView] = useState<"image" | "hex">("image");
+  const [jsonView, setJsonView] = useState<"formatted" | "raw">(props.editable ? "raw" : "formatted");
+  const grid = usePreferences((state) => state.grid);
+  const setGrid = usePreferences((state) => state.setGrid);
   const [geometryView, setGeometryView] = useState<"map" | "value">("map");
   const [mapScope, setMapScope] = useState<"cell" | "column">("cell");
   /** The last column a geometry was seen in: its map stays while another row's value loads. */
@@ -190,6 +195,8 @@ export function CellViewer(props: {
   const withheld = !hasEdit && (item?.kind === "withheld" || item?.kind === "tooBig");
   /** The value as text (`\x…` for bytes), when it is known: what Copy copies and the editor edits. */
   const value = item && !withheld ? { text: hasEdit ? editText : item.text } : null;
+  const jsonCandidate = value?.text != null && (meta.logical === "json" || /^[\s]*[\[{]/.test(value.text));
+  const formattedJson = useMemo(() => jsonCandidate && value?.text != null ? formatJson(value.text) : null, [jsonCandidate, value?.text]);
   const imageInfo = image?.cell === cell ? image : null;
   /** The value read as a geometry by the core, while it is the stored one. */
   const geometry = !hasEdit && item && !withheld ? item.geometry : null;
@@ -318,8 +325,8 @@ export function CellViewer(props: {
         />
       </div>
     ) : (
-      <pre className={`cell-viewer-value cell-viewer-${shown.kind}`} tabIndex={0}>
-        {shown.text}
+      <pre className={`cell-viewer-value cell-viewer-${shown.kind}${grid.viewerWrap ? "" : " no-wrap"}`} tabIndex={0}>
+        {jsonCandidate && jsonView === "raw" && value?.text != null ? value.text : shown.text}
       </pre>
     )
   );
@@ -339,6 +346,11 @@ export function CellViewer(props: {
         </div>
         <div className="cell-viewer-controls">
           {modes}
+          {jsonCandidate && <div className="viewer-modes" role="group" aria-label={t("viewer.jsonDisplay")}>
+            <button className="ghost small" aria-pressed={jsonView === "raw"} onClick={() => setJsonView("raw")}>{t("viewer.jsonRaw")}</button>
+            <button className="ghost small" aria-pressed={jsonView === "formatted"} disabled={formattedJson === null} onClick={() => setJsonView("formatted")}>{t("viewer.jsonFormatted")}</button>
+          </div>}
+          <button className="ghost small" aria-pressed={grid.viewerWrap} onClick={() => void setGrid({ ...usePreferences.getState().grid, viewerWrap: !grid.viewerWrap })}>{t("viewer.wrap")}</button>
           {!hasEdit && item?.kind === "bytes" && item.imageUrl && (
             <div className="viewer-modes" role="group" aria-label={t("viewer.showAs")}>
               <button className="ghost small" aria-pressed={binaryView === "image"} onClick={() => setBinaryView("image")}>{t("viewer.asImage")}</button>
@@ -403,13 +415,14 @@ export function CellViewer(props: {
         <>
           {map ? (
             map
-          ) : binary || withheld ? (
+          ) : binary || withheld || (jsonCandidate && formattedJson !== null && jsonView === "formatted") ? (
             preview
           ) : (
             <>
               <div className="viewer-value-heading">{t("viewer.editValue")}</div>
               <textarea
-                className={`cell-viewer-value cell-viewer-editor ${picker ? "with-picker" : ""}`}
+                className={`cell-viewer-value cell-viewer-editor ${picker ? "with-picker" : ""}${grid.viewerWrap ? "" : " no-wrap"}`}
+                wrap={grid.viewerWrap ? "soft" : "off"}
                 aria-label={t("edit.cellLabel", { column: meta.name })}
                 spellCheck={false}
                 value={value?.text ?? ""}
@@ -433,6 +446,9 @@ export function CellViewer(props: {
           {binary && shown?.kind === "null" && <p className="muted cell-viewer-null">NULL</p>}
           <footer className="viewer-edit-actions" role="toolbar" aria-label={t("viewer.editActions")}>
             <span className="muted small">{t(hasEdit ? "viewer.pendingEdit" : binary ? "viewer.binaryHint" : "viewer.editHint")}</span>
+            {jsonCandidate && <button className="ghost small" disabled={formattedJson === null} onClick={() => {
+              if (formattedJson !== null) { props.onEdit?.(row, column, formattedJson === item?.text ? undefined : formattedJson); setJsonView("raw"); }
+            }}>{t("viewer.formatJson")}</button>}
             {canLoad && (
               <button
                 className="ghost small"

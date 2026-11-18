@@ -187,6 +187,56 @@ impl ServerFamily {
         }
     }
 
+    /// A transaction holds: a statement that fails after others in it leaves none of them
+    /// applied once it is rolled back. Table edits and imports rely on it (ADR-014, ADR-038).
+    /// False for servers that accept `BEGIN` and ignore it (GreptimeDB, CrateDB, checked;
+    /// Databend's MySQL handler, Doris and RisingWave, whose writes are not transactional) and
+    /// for a fork not checked here (SDB-354).
+    pub fn enforces_transactions(&self) -> bool {
+        match self {
+            ServerFamily::PostgreSql
+            | ServerFamily::CockroachDb
+            | ServerFamily::YugabyteDb
+            | ServerFamily::Materialize
+            | ServerFamily::MySql
+            | ServerFamily::MariaDb
+            | ServerFamily::OceanBase
+            | ServerFamily::TiDb
+            | ServerFamily::SingleStore => true,
+            ServerFamily::RisingWave
+            | ServerFamily::CrateDb
+            | ServerFamily::Unchecked(_)
+            | ServerFamily::Doris
+            | ServerFamily::GreptimeDb
+            | ServerFamily::Databend => false,
+        }
+    }
+
+    /// A table's primary key, as its catalog reports it, is enforced unique: no two rows share
+    /// it. Query pages (ADR-054) are keyed by it only then (SDB-405): a key two rows share
+    /// would let a page boundary fall between them and hide one. False for what does not
+    /// enforce it (Materialize, Doris's duplicate-key tables, GreptimeDB's tags, Databend) or
+    /// has not been checked here.
+    pub fn enforces_unique_keys(&self) -> bool {
+        match self {
+            ServerFamily::PostgreSql
+            | ServerFamily::CockroachDb
+            | ServerFamily::YugabyteDb
+            | ServerFamily::MySql
+            | ServerFamily::MariaDb
+            | ServerFamily::OceanBase
+            | ServerFamily::TiDb => true,
+            ServerFamily::RisingWave
+            | ServerFamily::Materialize
+            | ServerFamily::CrateDb
+            | ServerFamily::Unchecked(_)
+            | ServerFamily::SingleStore
+            | ServerFamily::Doris
+            | ServerFamily::GreptimeDb
+            | ServerFamily::Databend => false,
+        }
+    }
+
     /// The engine's read-only transaction stops the writes the core relies on it for (every
     /// write on PostgreSQL; every write but DDL on MySQL, whose DDL the classifier refuses
     /// before it is sent, ADR-020): agents' reads and the core's streaming reads rely on it.

@@ -6,13 +6,14 @@
 
 import { call, commands as core, type ConnectionItem, type ObjectItem, type SchemaObjectItem } from "./api";
 import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./commandRegistry";
-import { closeQueryTab, connectTabFromExplorer, explorerDatabase } from "./connect";
+import { closeQueryTab, connectTabFromExplorer, explorerDatabase, newQueryOnConnection } from "./connect";
 import { readClipboardText } from "./clipboardText";
 import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
 import { openDiagram } from "./diagramTabs";
-import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type Tab } from "./store";
+import { usePreferences } from "./preferences";
+import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, GRID_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type ResultMeta, type Tab } from "./store";
 import {
   closable,
   closeAllTabs,
@@ -53,6 +54,12 @@ function tabOf(context: CommandContext): Tab | undefined {
 function editorTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
   return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram ? tab : undefined;
+}
+
+/** The result a SQL editor tab shows now, whose tab the result commands act on. */
+function activeResult(context: CommandContext): ResultMeta | undefined {
+  const run = editorTab(context)?.run;
+  return run?.results.find((result) => result.id === run.activeResult);
 }
 
 function editorCommand(command: EditorCommand): CommandBinding["run"] {
@@ -222,8 +229,35 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   "editor.run": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runCurrent") },
   "editor.runScript": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runScript") },
+  "editor.runFromCursor": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runFromCursor") },
+  "editor.runNewTab": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runNewTab") },
+  // The active result's tab (SDB-378). What a run replaces, the pin and the name are the
+  // core's; a re-run is a new run, through the guard like any other.
+  "results.rerun": {
+    enabled: (c) => Boolean(activeResult(c)?.complete && (activeResult(c)?.paging?.sql ?? activeResult(c)?.sql)) && !editorTab(c)?.run?.running,
+    run: editorCommand("resultRerun"),
+  },
+  "results.pin": {
+    enabled: (c) => activeResult(c) !== undefined,
+    label: (c) => (activeResult(c)?.pinned ? "editor:resultTabs.unpin" : "editor:resultTabs.pin"),
+    run: editorCommand("resultPin"),
+  },
+  "results.rename": { enabled: (c) => activeResult(c) !== undefined, run: editorCommand("resultRename") },
+  // Only a name the user gave can be taken off: the tab shows its comment's name or "Result N"
+  // again, as the core answers (SDB-407).
+  "results.resetName": { enabled: (c) => Boolean(activeResult(c)?.renamed), run: editorCommand("resultResetName") },
+  "results.close": { enabled: (c) => Boolean(activeResult(c)?.complete), run: editorCommand("resultClose") },
   "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
   "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },
+  // The active result's grid opens its "Go to row" (SDB-386).
+  "results.goToRow": {
+    enabled: (c) => (activeResult(c)?.rows ?? 0) > 0,
+    run: (c) => {
+      const result = activeResult(c);
+      if (result) window.dispatchEvent(new CustomEvent(GRID_COMMAND_EVENT, { detail: { result: result.id, command: "goToRow" } }));
+    },
+  },
+  "editor.variables": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("variables") },
   "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
   "editor.lineComment": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("lineComment") },
@@ -238,9 +272,19 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "editor.selectStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("selectStatement") },
   "editor.copyStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("copyStatement") },
   "editor.selectOccurrences": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("selectOccurrences") },
+  // The table under the cursor is looked up in the tab's connection: without one there is none.
+  "editor.openObject": { enabled: (c) => editorTab(c)?.status === "connected", run: editorCommand("openObject") },
+  "editor.revealInExplorer": { enabled: (c) => editorTab(c)?.status === "connected", run: editorCommand("revealInExplorer") },
+  "editor.nextStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("nextStatement") },
+  "editor.previousStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("previousStatement") },
+  "editor.outline": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("outline") },
   "editor.insertSelect": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertSelect") },
   "editor.insertInsert": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertInsert") },
   "editor.insertUpdate": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("insertUpdate") },
+  // A personal preference of every editor (SDB-389): it needs no editor to change.
+  "editor.zoomIn": { run: () => void usePreferences.getState().zoomEditor(1) },
+  "editor.zoomOut": { run: () => void usePreferences.getState().zoomEditor(-1) },
+  "editor.zoomReset": { run: () => void usePreferences.getState().zoomEditor(0) },
   "view.explorer": { run: () => toggleSection("connections") },
   "view.explorerFilter": {
     run: () => {
@@ -361,9 +405,7 @@ export function objectActions(item: PaletteObject): PaletteObjectAction[] {
           id: "newQuery",
           label: "shell:newQuery",
           run: () => {
-            const app = useApp.getState();
-            const tab = app.addTab(connection.id);
-            if (app.explorerConnected.includes(connection.id)) connectTabFromExplorer(tab, `meta:${connection.id}`);
+            newQueryOnConnection(connection.id);
           },
         },
         { id: "showInExplorer", label: "app:palette.actions.showInExplorer", run: () => showInExplorer({ connectionId: connection.id }) },

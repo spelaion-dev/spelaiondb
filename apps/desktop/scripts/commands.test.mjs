@@ -33,6 +33,7 @@ const MENUS = {
   file: { file: "components/FileMenu.tsx", fn: "FileMenu", pattern: /<CommandMenuItem id="([^"]+)"/g },
   activity: { file: "components/ActivityBar.tsx", fn: "ActivityBar", pattern: /<ActivityButton command="([^"]+)"/g },
   welcome: { file: "App.tsx", fn: "App", pattern: /<WelcomeButton command="([^"]+)"/g },
+  result: { file: "components/ResultTabs.tsx", fn: "ResultTabMenu", pattern: /item\("([^"]+)"\)/g },
 };
 
 /** Menu items each menu may write without a command: rows that are data, listed by the palette. */
@@ -74,6 +75,7 @@ test("every label exists in English and Spanish", () => {
     ...COMMANDS.map((c) => `app:commands.categories.${c.category}`),
     // Labels that follow the state (commands.ts).
     "app:tabs.unpin",
+    "editor:resultTabs.unpin",
     "app:commands.restoreEditor",
     "app:commands.saveQuery",
   ];
@@ -112,7 +114,9 @@ test("shortcuts are written as the guidelines say, unique, and in the shortcut m
     assert.ok(command.scope, `${command.id} says who handles ${command.shortcut}`);
     assert.ok(!seen.has(command.shortcut), `${command.shortcut} used twice`);
     seen.add(command.shortcut);
-    const where = command.scope === "global" ? "Anywhere" : command.scope === "grid" ? "Table data edits" : "SQL editor";
+    // The grid's own commands: pending table edits, or the result grid's ("Go to row").
+    const grid = command.id.startsWith("edits.") ? "Table data edits" : "Result grid";
+    const where = command.scope === "global" ? "Anywhere" : command.scope === "grid" ? grid : "SQL editor";
     assert.ok(row(where).includes(command.shortcut), `${command.shortcut} (${command.id}) in the "${where}" row of the shortcut map`);
   }
 });
@@ -154,7 +158,14 @@ test("global shortcuts find their command; AltGr characters and editor keys do n
 
 test("the editor menu and keymap derive actions from the central palette registry", () => {
   const editor = menuCommands("editor");
-  assert.equal(editor.length, 16);
+  assert.equal(editor.length, 27);
+  // The editor's zoom (SDB-389): Ctrl+= / Ctrl+- / Ctrl+0, the editor's own keys.
+  assert.deepEqual(editor.filter((command) => command.id.startsWith("editor.zoom")).map((command) => command.shortcut), ["Ctrl+=", "Ctrl+-", "Ctrl+0"]);
+  for (const key of ["=", "-", "0", "+"]) assert.equal(globalCommandFor(press(key, { ctrlKey: true })), null, `Ctrl+${key} is the editor's`);
+  // Variables… opens the tab's variables (SDB-383): a menu item without a key, like Explain.
+  assert.ok(editor.some(command => command.id === "editor.variables" && command.shortcut === undefined));
+  // Run in a new result tab is the editor's own key, like its other actions (SDB-378).
+  assert.ok(editor.some(command => command.id === "editor.runNewTab" && command.shortcut === "Alt+Enter"));
   assert.ok(editor.some(command => command.id === "editor.explain" && command.shortcut === undefined));
   for (const command of editor) {
     assert.equal(command.scope, command.shortcut ? "editor" : undefined);

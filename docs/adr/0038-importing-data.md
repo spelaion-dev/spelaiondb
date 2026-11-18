@@ -87,6 +87,10 @@ saying so, and values never become SQL text.
     (Import data into a new table…), and Ctrl+Alt+V (Import data from the clipboard, in the
     command palette too), which opens the dialog with the clipboard's text for the active tab's
     connection.
+13. **Only where transactions hold (2026-11-17, SDB-354).** The load rolls back the transaction
+    that fails; on an engine without transactions, or a server that accepts `BEGIN` and ignores
+    it (GreptimeDB, CrateDB), the rows before the failure would stay and the summary would say
+    otherwise. The import is refused there before anything runs, with the reason.
 
 ## Left out (each can be an item of its own)
 - Truncating before loading, "on duplicate key" (ignore, replace, update), switching off foreign

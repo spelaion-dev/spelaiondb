@@ -539,8 +539,15 @@ async fn sql_files_run_on_servers_and_stop_on_cancel() {
             "{engine}"
         );
 
+        // A cancel stops the rest of the file too, though the run goes on after errors: on
+        // MySQL the killed `sleep` does not even fail (SDB-365).
+        exec(&conn, "drop table if exists after_cancel").await;
         let long = ws.out().join("long.sql");
-        std::fs::write(&long, format!("{sleep};\nselect 1;\n")).unwrap();
+        std::fs::write(
+            &long,
+            format!("{sleep};\ncreate table after_cancel (id int);\n"),
+        )
+        .unwrap();
         let cancel = Arc::new(BackupCancel::new());
         let stopper = cancel.clone();
         tokio::spawn(async move {
@@ -565,10 +572,101 @@ async fn sql_files_run_on_servers_and_stop_on_cancel() {
             matches!(cancelled, Err(BackupError::Cancelled)),
             "{engine}: {cancelled:?}"
         );
+        assert_eq!(
+            value(
+                &conn,
+                "select count(*) from information_schema.tables where table_name = 'after_cancel'"
+            )
+            .await,
+            "0",
+            "{engine}: the statement after the cancelled one ran"
+        );
         exec(&conn, "drop table run_items").await;
         conn.close().await;
     }
     if ran == 0 {
         eprintln!("no server variables: test skipped");
     }
+}
+
+/// A cancelled file run runs nothing after the cancel, whatever it does on errors (SDB-365):
+/// the statement that was running stops and the rest of the file is never sent. SQLite, so it
+/// needs no server.
+#[tokio::test]
+async fn a_cancelled_file_run_runs_nothing_after_the_cancel() {
+    let ws = Workspace::new("runfile-cancel");
+    std::fs::write(ws.data("app.db"), "").unwrap();
+    ws.connection("app", "engine = \"sqlite\"\ndatabase = \"data/app.db\"\n");
+    let conn = ws.open("app", None).await;
+    let file = ws.out().join("long.sql");
+    // Counts for far longer than the test waits; SQLite's interrupt stops it.
+    std::fs::write(
+        &file,
+        "with recursive n(i) as (select 1 union all select i + 1 from n where i < 100000000000) \
+         select count(*) from n;\ncreate table after_cancel (id integer);\n",
+    )
+    .unwrap();
+    for on_error in [OnError::Continue, OnError::Stop] {
+        let cancel = Arc::new(BackupCancel::new());
+        let stopper = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            stopper.cancel().await;
+        });
+        let cancelled = tokio::time::timeout(
+            Duration::from_secs(15),
+            run_sql_file(
+                &conn.session,
+                &file,
+                false,
+                true,
+                on_error,
+                &cancel,
+                &|_| {},
+            ),
+        )
+        .await
+        .expect("the cancel stopped the run");
+        assert!(
+            matches!(cancelled, Err(BackupError::Cancelled)),
+            "{on_error:?}: {cancelled:?}"
+        );
+        assert_eq!(
+            value(
+                &conn,
+                "select count(*) from sqlite_master where name = 'after_cancel'"
+            )
+            .await,
+            "0",
+            "{on_error:?}: the statement after the cancelled one ran"
+        );
+    }
+
+    // A cancel that came before the run started: nothing of the file is sent.
+    let cancel = BackupCancel::new();
+    cancel.cancel().await;
+    let early = tokio::time::timeout(
+        Duration::from_secs(15),
+        run_sql_file(
+            &conn.session,
+            &file,
+            false,
+            true,
+            OnError::Continue,
+            &cancel,
+            &|_| {},
+        ),
+    )
+    .await
+    .expect("a cancelled run does not start");
+    assert!(matches!(early, Err(BackupError::Cancelled)), "{early:?}");
+    assert_eq!(
+        value(
+            &conn,
+            "select count(*) from sqlite_master where name = 'after_cancel'"
+        )
+        .await,
+        "0"
+    );
+    conn.close().await;
 }

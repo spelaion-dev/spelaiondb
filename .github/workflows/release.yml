@@ -37,6 +37,8 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.notes.outputs.notes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,10 +52,13 @@ jobs:
             echo "tag $GITHUB_REF_NAME, app $app and crates $crates must match"; exit 1; }
           test -f "docs/releases/$GITHUB_REF_NAME.md" || {
             echo "missing docs/releases/$GITHUB_REF_NAME.md"; exit 1; }
-      - run: |
+      - id: notes
+        run: |
           scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
             --title "SpelaionDB ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          delimiter="$(uuidgen)"
+          { echo "notes<<$delimiter"; cat "$RUNNER_TEMP/notes.md"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -145,6 +150,8 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
+          # The action writes this input into latest.json; it does not read the draft's body.
+          releaseBody: ${{ needs.create.outputs.notes }}
           releaseDraft: true
           # Not a pre-release: the app's updater follows /releases/latest, which skips them
           # (ADR-021).
@@ -215,12 +222,20 @@ jobs:
 
   publish:
     name: Publish
-    needs: [app, cli]
+    needs: [create, app, cli]
     if: github.ref_type == 'tag'
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the updater manifest before publishing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_NOTES: ${{ needs.create.outputs.notes }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir "$RUNNER_TEMP"
+          node scripts/check-updater-manifest.mjs "$RUNNER_TEMP/latest.json" "${GITHUB_REF_NAME#v}"
       - run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -24,9 +24,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
-use arrow::array::{ArrayRef, RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::ipc::writer::StreamWriter;
 use futures_util::StreamExt;
 use spelaion_config::{
     Config, ConnectionDraft, ConnectionId, Resolver, Source, SystemBackend, TrustStore,
@@ -35,8 +32,8 @@ use spelaion_config::{
 use spelaion_core::{
     AppLog, Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect,
     OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth,
-    SortKey, StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text,
-    open_connection, start_over,
+    StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
+    start_over,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -63,6 +60,12 @@ struct AppState {
     plugins: plugins::PluginOps,
     tunnels: Arc<TunnelPool>,
     results: Arc<ResultStore>,
+    /// Each editor tab's result tabs over `results` (SDB-378): what a run replaces, the pins
+    /// and the names are the core's.
+    result_tabs: Arc<spelaion_core::ResultTabs>,
+    /// How the grid shows values (SDB-385), checked and ready: read as each window is served.
+    /// Swapped whole when the user changes it.
+    display: std::sync::RwLock<Arc<spelaion_core::Display>>,
     plans: Arc<spelaion_core::plan::PlanStore>,
     startup_plan: std::sync::Mutex<Option<String>>,
     sessions: Mutex<HashMap<String, DesktopSession>>,
@@ -84,6 +87,9 @@ struct AppState {
     backups: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::backup::BackupCancel>>>,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
+    /// Loads of query rows running ("Load every row", page and row jumps; SDB-386), by the id
+    /// the UI gave them.
+    loads: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::LoadCancel>>>,
 }
 
 struct DesktopSession {
@@ -137,6 +143,36 @@ impl AppState {
         change: impl FnOnce(&mut TrustStore) -> Result<T, E>,
     ) -> CmdResult<T> {
         TrustStore::update(&self.user_dir, change).map_err(|e| e.to_string())
+    }
+
+    /// Starts placing the results of a run the core accepted in the editor tab `editor`
+    /// (SDB-378): the core frees what the run replaces, within the user's limit of kept
+    /// result tabs, and refuses when that would lose unsaved edits.
+    async fn begin_results(
+        &self,
+        editor: &str,
+        placement: spelaion_core::Placement,
+        open: &OpenConnection,
+        sql: &str,
+        original: Option<&str>,
+    ) -> CmdResult<spelaion_core::RunResults> {
+        // A store that cannot be read keeps the default number of tabs.
+        let limit = self
+            .history
+            .grid_preferences()
+            .await
+            .map(|preferences| preferences.result_tabs as usize)
+            .unwrap_or(spelaion_core::DEFAULT_RESULT_TABS);
+        self.result_tabs
+            .begin_run(
+                editor,
+                placement,
+                open.session.dialect(),
+                sql,
+                original,
+                limit,
+            )
+            .map_err(|e| e.to_string())
     }
 
     async fn reload(&self) {
@@ -250,6 +286,51 @@ async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
         .map_err(|e| e.to_string())
 }
 
+/// The interface size in percent (SDB-389).
+#[command]
+async fn get_interface_size(state: State<'_, AppState>) -> CmdResult<u16> {
+    state
+        .history
+        .interface_size()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the interface size, then draws the window at it: the webview's own zoom, so every
+/// size on the page and every canvas scales together. The core refuses a size that is not
+/// one of its steps, and then nothing changes.
+#[command]
+async fn set_interface_size(
+    size: u16,
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_interface_size(size)
+        .await
+        .map_err(|e| e.to_string())?;
+    window
+        .set_zoom(interface_scale(size))
+        .map_err(|e| e.to_string())
+}
+
+/// The steps the interface size and the editor's zoom move through, as the core lists them.
+#[command]
+fn size_steps() -> SizeStepsItem {
+    SizeStepsItem {
+        interface_sizes: spelaion_core::INTERFACE_SIZES.to_vec(),
+        default_interface_size: spelaion_core::DEFAULT_INTERFACE_SIZE,
+        editor_zooms: spelaion_core::EDITOR_ZOOMS.to_vec(),
+        default_editor_zoom: spelaion_core::DEFAULT_EDITOR_ZOOM,
+    }
+}
+
+/// The webview's zoom factor for an interface size in percent.
+fn interface_scale(size: u16) -> f64 {
+    f64::from(size) / 100.0
+}
+
 #[command]
 async fn get_explorer_preferences(
     state: State<'_, AppState>,
@@ -295,6 +376,74 @@ async fn set_editor_preferences(
         .map_err(|e| e.to_string())
 }
 
+/// The user's own editor snippets (SDB-384), by name.
+#[command]
+async fn editor_snippets(state: State<'_, AppState>) -> CmdResult<Vec<EditorSnippetItem>> {
+    state
+        .history
+        .editor_snippets()
+        .await
+        .map(|snippets| snippets.into_iter().map(Into::into).collect())
+        .map_err(|e| e.to_string())
+}
+
+/// Saves an editor snippet, replacing the one of the same name. The core refuses one that is
+/// too long, holds hidden characters or has a name that is not an identifier.
+#[command]
+async fn save_editor_snippet(
+    snippet: EditorSnippetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .save_editor_snippet(snippet.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Deletes the editor snippet of that name; whether there was one.
+#[command]
+async fn delete_editor_snippet(name: String, state: State<'_, AppState>) -> CmdResult<bool> {
+    state
+        .history
+        .delete_editor_snippet(name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The text a new script starts with; empty when there is none.
+#[command]
+async fn new_script_template(state: State<'_, AppState>) -> CmdResult<String> {
+    state
+        .history
+        .new_script_template()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the text a new script starts with (empty: none), checked by the core.
+#[command]
+async fn set_new_script_template(template: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .history
+        .set_new_script_template(template)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The core's limits for editor snippets and the template, for the settings page.
+#[command]
+async fn editor_snippet_limits() -> CmdResult<EditorSnippetLimits> {
+    let limit = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    Ok(EditorSnippetLimits {
+        name: limit(spelaion_core::MAX_SNIPPET_NAME),
+        description: limit(spelaion_core::MAX_SNIPPET_DESCRIPTION),
+        body: limit(spelaion_core::MAX_SNIPPET_BODY),
+        snippets: limit(spelaion_core::MAX_SNIPPETS),
+        template: limit(spelaion_core::MAX_SCRIPT_TEMPLATE),
+    })
+}
+
 #[command]
 async fn get_grid_preferences(state: State<'_, AppState>) -> CmdResult<GridPreferencesItem> {
     state
@@ -303,6 +452,36 @@ async fn get_grid_preferences(state: State<'_, AppState>) -> CmdResult<GridPrefe
         .await
         .map(GridPreferencesItem::from)
         .map_err(|e| e.to_string())
+}
+
+/// How the grid shows values (SDB-385): the user's formats, zone and binary display.
+#[command]
+async fn get_display_format(state: State<'_, AppState>) -> CmdResult<DisplayFormatItem> {
+    let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
+    Ok(DisplayFormatItem::from(display.format()))
+}
+
+/// Saves how the grid shows values. The core checks it first (a pattern that cannot format
+/// its kind of value, a zone that does not exist) and nothing changes when it refuses. The
+/// windows served from now on use it.
+#[command]
+async fn set_display_format(
+    format: DisplayFormatItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let display = state
+        .history
+        .set_display_format(format.into_format()?)
+        .await
+        .map_err(|e| e.to_string())?;
+    *state.display.write().map_err(|_| "lock poisoned")? = Arc::new(display);
+    Ok(())
+}
+
+/// The time zones the display zone can be, by name.
+#[command]
+async fn time_zones() -> CmdResult<Vec<String>> {
+    Ok(spelaion_core::time_zones())
 }
 
 #[command]
@@ -1689,6 +1868,11 @@ async fn connect(
                     can_remember: save_to.is_some(),
                 });
             }
+            Err(OpenError::Tunnel(
+                spelaion_ssh::SshError::Cancelled | spelaion_ssh::SshError::HostKeyRejected { .. },
+            )) => {
+                return Ok(ConnectOutcome::Cancelled);
+            }
             // SQLSTATE 28xxx: authorization rejected (password or user). Only then does it make
             // sense to ask for the password again; any other failure is shown as is.
             Err(OpenError::Driver(DriverError::Database {
@@ -2260,10 +2444,14 @@ async fn run_script(
     sql: String,
     confirmed: bool,
     options: RunOptionsItem,
+    placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    start_script(&state, &session, sql, confirmed, options, on_event, None).await
+    start_script(
+        &state, &session, sql, confirmed, options, placement, on_event, None,
+    )
+    .await
 }
 
 /// Answers a run paused after an error (ADR-035). The core refuses a ticket that is not the
@@ -2281,15 +2469,18 @@ async fn answer_script_error(
         .map_err(|e| e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_script(
     state: &AppState,
     session: &str,
     sql: String,
     confirmed: bool,
     options: RunOptionsItem,
+    placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     original: Option<String>,
 ) -> CmdResult<()> {
+    let editor = session;
     let (open, workspace) = {
         let sessions = state.sessions.lock().await;
         let session = sessions
@@ -2303,6 +2494,13 @@ async fn start_script(
     // is refused by the core, whatever its error mode.
     spelaion_core::check_run(&open.session, &sql, &open.resolved.safeguards(), confirmed)
         .map_err(|e| e.to_string())?;
+    // Only a run the core accepted replaces results, and the core decides which (SDB-378).
+    let mut placed = RunEvents::new(
+        state
+            .begin_results(editor, placement.into(), &open, &sql, original.as_deref())
+            .await?,
+    );
+    let _ = on_event.send(placed.started());
     let events = state.history.run_script_in_context(
         &open.session,
         &sql,
@@ -2339,44 +2537,52 @@ async fn start_script(
         while let Some(event) = events.next().await {
             // Keep consuming after the tab closes: executed statements still need their
             // completion/error recorded, and later statements must not be silently aborted.
-            let _ = on_event.send(ScriptEvent::from(event));
+            let _ = on_event.send(placed.event(event));
         }
     });
     Ok(())
 }
 
-/// Whether a SELECT matches the conservative rules for fetching pages.
+/// Whether a SELECT matches the conservative rules for fetching pages, ordered by the grid's
+/// `sort` first (result columns by position; none for the query's own order).
 #[command]
 async fn query_page_supported(
     session: String,
     sql: String,
+    sort: Vec<SortKeyItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<bool> {
     let open = state.session(&session).await?;
-    Ok(spelaion_core::query_pages_exactly(&open.session, &sql).await)
+    Ok(spelaion_core::query_pages_exactly(&open.session, &sql, &sort_keys(sort)).await)
 }
 
-/// Run the first page, keeping the original SQL in the user's query history.
+/// Run the first page, keeping the original SQL in the user's query history. `sort` is the
+/// grid's sort: the core writes the page's order from it.
+#[allow(clippy::too_many_arguments)]
 #[command]
 async fn run_query_page(
     session: String,
     sql: String,
     limit: u32,
+    sort: Vec<SortKeyItem>,
     confirmed: bool,
     options: RunOptionsItem,
+    placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let open = state.session(&session).await?;
-    let paged = spelaion_core::first_query_page_sql(&open.session, &sql, limit.into())
-        .await
-        .ok_or("this query cannot be paged")?;
+    let paged =
+        spelaion_core::first_query_page_sql(&open.session, &sql, limit.into(), &sort_keys(sort))
+            .await
+            .ok_or("this query cannot be paged")?;
     start_script(
         &state,
         &session,
         paged,
         confirmed,
         options,
+        placement,
         on_event,
         Some(sql),
     )
@@ -2392,6 +2598,7 @@ async fn append_query_page(
     sql: String,
     limit: u32,
     offset: u32,
+    sort: Vec<SortKeyItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
     let open = state.session(&session).await?;
@@ -2401,6 +2608,7 @@ async fn append_query_page(
         &sql,
         limit.into(),
         offset.into(),
+        &sort_keys(sort),
     )
     .await?;
     Ok(u32::try_from(added).unwrap_or(u32::MAX))
@@ -2414,6 +2622,153 @@ async fn count_query_rows(
 ) -> CmdResult<f64> {
     let open = state.session(&session).await?;
     Ok(spelaion_core::count_query_rows(&open.session, &sql).await? as f64)
+}
+
+/// The transposed view of `rows` of a result (SDB-386): positions of its current view, shown
+/// as columns, one row per column of the result, numbered from `first_number` as the grid
+/// numbers them. A result of its own in the core, freed with `release_result`; the labels head
+/// its first two columns in the user's language.
+#[command]
+async fn transpose_rows(
+    result: u32,
+    rows: Vec<u32>,
+    first_number: u32,
+    column_label: String,
+    type_label: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TransposedItem> {
+    let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
+    spelaion_core::transpose(
+        &state.results,
+        ResultId(result.into()),
+        &rows,
+        first_number.into(),
+        &column_label,
+        &type_label,
+    )
+    .map(TransposedItem::from)
+    .map_err(|e| e.to_string())
+}
+
+/// How many rows "Load every row" would load and roughly how much memory they take: the rows
+/// counted on the server, the memory from what a loaded row of `result` takes now.
+#[command]
+async fn load_estimate(
+    session: String,
+    result: u32,
+    source: LoadSourceItem,
+    state: State<'_, AppState>,
+) -> CmdResult<LoadEstimateItem> {
+    let open = state.session(&session).await?;
+    let target = ResultId(result.into());
+    let estimate = match source {
+        LoadSourceItem::Query { sql } => {
+            spelaion_core::estimate_query_load(&open.session, target, &sql).await?
+        }
+        LoadSourceItem::Table {
+            schema,
+            name,
+            filter,
+        } => {
+            spelaion_core::estimate_table_load(&open.session, target, &schema, &name, &filter)
+                .await?
+        }
+    };
+    Ok(estimate.into())
+}
+
+/// Loads keyset pages of a paged query (ADR-054) into `result`, which holds `offset` rows,
+/// until it holds `until` rows (every row without it) or the query has no more. The rows held
+/// go to `on_progress` after each page; `cancel_load_rows` with the same `load_id` stops it,
+/// keeping the pages loaded before.
+#[allow(clippy::too_many_arguments)]
+#[command]
+async fn load_query_rows(
+    session: String,
+    load_id: u32,
+    result: u32,
+    sql: String,
+    offset: u32,
+    sort: Vec<SortKeyItem>,
+    until: Option<u32>,
+    on_progress: Channel<u32>,
+    state: State<'_, AppState>,
+) -> CmdResult<LoadedRowsItem> {
+    let open = state.session(&session).await?;
+    let cancel = Arc::new(spelaion_core::LoadCancel::new());
+    state
+        .loads
+        .lock()
+        .expect("lock poisoned")
+        .insert(load_id, cancel.clone());
+    let progress = move |rows: u64| {
+        let _ = on_progress.send(u32::try_from(rows).unwrap_or(u32::MAX));
+    };
+    let outcome = spelaion_core::load_query_rows(
+        &open.session,
+        ResultId(result.into()),
+        &sql,
+        offset.into(),
+        &sort_keys(sort),
+        until.map(u64::from),
+        spelaion_core::LOAD_PAGE_ROWS,
+        &cancel,
+        &progress,
+    )
+    .await;
+    state.loads.lock().expect("lock poisoned").remove(&load_id);
+    Ok(outcome?.into())
+}
+
+/// Stops a load of query rows: the page being read and every page after it.
+#[command]
+async fn cancel_load_rows(
+    session: String,
+    load_id: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let cancel = state
+        .loads
+        .lock()
+        .expect("lock poisoned")
+        .get(&load_id)
+        .cloned();
+    if let Some(cancel) = cancel {
+        let open = state.session(&session).await?;
+        cancel.cancel(&open.session).await;
+    }
+    Ok(())
+}
+
+/// Every row of a table data tab's table that its filter keeps, in its pages' order: "Load
+/// every row" (SDB-386). Written and checked by the core like a page.
+#[command]
+async fn table_rows_sql(
+    session: String,
+    schema: String,
+    name: String,
+    filter: String,
+    order_by: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    spelaion_core::table_rows_sql_by_key(&open.session, &schema, &name, &filter, &order_by).await
+}
+
+/// The last page of a table data tab: its rows counted now, and the page that holds the last.
+#[command]
+async fn last_table_page(
+    session: String,
+    schema: String,
+    name: String,
+    filter: String,
+    page_size: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<LastPageItem> {
+    let open = state.session(&session).await?;
+    spelaion_core::last_table_page(&open.session, &schema, &name, &filter, page_size.into())
+        .await
+        .map(LastPageItem::from)
 }
 
 /// The `:name` placeholders of a script, in order, so the UI can ask for their values.
@@ -2442,6 +2797,106 @@ async fn bind_params(
     let open = state.session(&session).await?;
     spelaion_core::bind_params(open.session.dialect().as_ref(), &sql, &values)
         .map_err(|e| e.to_string())
+}
+
+/// The values a tab's `${name}` variables take (SDB-383): its connection's, from the local
+/// store, under the tab's own (`tab`), which win. Nothing else is ever read for a name.
+async fn variable_values(
+    state: &AppState,
+    session: &str,
+    tab: HashMap<String, String>,
+) -> CmdResult<(Arc<OpenConnection>, HashMap<String, String>)> {
+    let (open, workspace) = {
+        let sessions = state.sessions.lock().await;
+        let entry = sessions
+            .get(session)
+            .ok_or_else(|| format!("there is no open connection for {session}"))?;
+        (entry.open.clone(), entry.history_workspace.clone())
+    };
+    let mut values: HashMap<String, String> = state
+        .history
+        .connection_variables(workspace, open.resolved.id.to_string())
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+    values.extend(tab);
+    Ok((open, values))
+}
+
+/// The `${name}` variables of a script's statements, in order, and which of them have no
+/// value yet (neither the tab's nor its connection's), so the UI can ask for those.
+#[command]
+async fn script_variables(
+    session: String,
+    sql: String,
+    tab: HashMap<String, String>,
+    state: State<'_, AppState>,
+) -> CmdResult<ScriptVariablesItem> {
+    let (open, values) = variable_values(&state, &session, tab).await?;
+    let names = spelaion_core::script_variables(open.session.dialect().as_ref(), &sql);
+    let missing = names
+        .iter()
+        .filter(|name| !values.contains_key(*name))
+        .cloned()
+        .collect();
+    Ok(ScriptVariablesItem { names, missing })
+}
+
+/// The script with its variables' values written in, by the core, before anything else reads
+/// it: the guard, the read-only checks and the run are given this text. Refused when a value
+/// would change how the script is split or read.
+#[command]
+async fn substitute_variables(
+    session: String,
+    sql: String,
+    tab: HashMap<String, String>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let (open, values) = variable_values(&state, &session, tab).await?;
+    spelaion_core::substitute_variables(open.session.dialect().as_ref(), &sql, &values)
+        .map_err(|e| e.to_string())
+}
+
+/// A connection's variables, by name (SDB-383): local values, kept in the local store.
+#[command]
+async fn connection_variables(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<VariableItem>> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    Ok(state
+        .history
+        .connection_variables(workspace, connection)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(name, value)| VariableItem { name, value })
+        .collect())
+}
+
+/// Sets one of a connection's variables, or removes it (`null`). The store refuses a name or
+/// a value that cannot be one.
+#[command]
+async fn set_connection_variable(
+    connection: String,
+    name: String,
+    value: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    state
+        .history
+        .set_connection_variable(workspace, connection, name, value)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Whether a name and a value can be a variable's, as the core decides it (for a tab's own
+/// variables, which never leave the page's memory).
+#[command]
+async fn variable_is_valid(name: String, value: String) -> CmdResult<bool> {
+    Ok(spelaion_core::is_variable_name(&name) && spelaion_core::is_variable_value(&value))
 }
 
 fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelaion_core::RiskyStatement> {
@@ -2501,18 +2956,45 @@ async fn dialect_for(state: &AppState, session: &str) -> Arc<dyn Dialect> {
 /// the typed data, for the clipboard. One cell copied as plain text is its value alone,
 /// without a line break after it.
 #[command]
+#[allow(clippy::too_many_arguments)]
 async fn copy_rows(
     result: u32,
     session: String,
     range: CellRange,
     format: TextFormat,
     header: bool,
+    displayed: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
-    if range.rows > MAX_COPY_ROWS {
+    let selected_count = range
+        .selected_rows
+        .as_ref()
+        .map_or(range.rows as usize, Vec::len);
+    if selected_count > MAX_COPY_ROWS as usize {
         return Err(format!(
             "{} rows are too many to copy (at most {MAX_COPY_ROWS}): export them to a file",
-            range.rows
+            selected_count
+        ));
+    }
+    // "Copy as displayed" (SDB-385): the cells as the grid shows them, only when the user
+    // picks it. Every other copy keeps the database's own text.
+    if displayed {
+        let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
+        let stored = state
+            .results
+            .get(ResultId(result.into()))
+            .ok_or("result freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
+        // The rows chosen one by one, or the block (#315's selection).
+        let rows: Vec<usize> = match &range.selected_rows {
+            Some(rows) => rows.iter().map(|&row| row as usize).collect(),
+            None => {
+                (range.first_row as usize..range.first_row as usize + range.rows as usize).collect()
+            }
+        };
+        return Ok(spelaion_core::displayed_text(
+            &stored, &rows, &columns, header, &display,
         ));
     }
     let dialect = dialect_for(&state, &session).await;
@@ -2533,7 +3015,95 @@ async fn copy_rows(
         header,
         csv: spelaion_core::CsvOptions::default(),
     };
-    copy_text(&stored, &options, dialect.as_ref()).map_err(|e| e.to_string())
+    if let Some(rows) = range.selected_rows {
+        let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
+        spelaion_core::copy_selected_rows(&stored, &options, &rows, dialect.as_ref())
+            .map_err(|e| e.to_string())
+    } else {
+        copy_text(&stored, &options, dialect.as_ref()).map_err(|e| e.to_string())
+    }
+}
+
+/// The rows a range selects, by position in the view: the rows chosen one by one, or the
+/// block (#315's selection). Refused past [`MAX_COPY_ROWS`].
+fn copied_rows(range: &CellRange) -> CmdResult<Vec<usize>> {
+    let rows: Vec<usize> = match &range.selected_rows {
+        Some(rows) => rows.iter().map(|&row| row as usize).collect(),
+        None => {
+            (range.first_row as usize..range.first_row as usize + range.rows as usize).collect()
+        }
+    };
+    if rows.len() > MAX_COPY_ROWS as usize {
+        return Err(format!(
+            "{} rows are too many to copy (at most {MAX_COPY_ROWS}): export them to a file",
+            rows.len()
+        ));
+    }
+    Ok(rows)
+}
+
+/// The copy defaults (SDB-388): what "Copy special…" chose last.
+#[command]
+async fn copy_defaults(state: State<'_, AppState>) -> CmdResult<CopySpecialItem> {
+    state
+        .history
+        .copy_defaults()
+        .await
+        .map(CopySpecialItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// "Copy special…" (SDB-388): a selection as delimited text, written by the core with the
+/// options given, which become the copy defaults once checked. The values are the database's
+/// own text, never the grid's display formats (a masked column's is the mask, ADR-051).
+#[command]
+async fn copy_special(
+    result: u32,
+    range: CellRange,
+    options: CopySpecialItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let rows = copied_rows(&range)?;
+    let options = options.into_options()?;
+    state
+        .history
+        .set_copy_defaults(options.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
+    spelaion_core::copy_special(&stored, &rows, &columns, &options).map_err(|e| e.to_string())
+}
+
+/// The selected rows as UPDATE statements, one per row by the table's primary key (SDB-388).
+/// The core decides the table and its key from the catalog, as it does for edits, and refuses
+/// anything else with the reason: a join, rows without the whole key, a masked column, rows
+/// read through another session.
+#[command]
+async fn copy_updates(
+    result: u32,
+    session: String,
+    range: CellRange,
+    source: UpdateSourceItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let rows = copied_rows(&range)?;
+    let open = state.session(&session).await?;
+    let update =
+        spelaion_core::update_copy_table(&open.session, ResultId(result.into()), source.into())
+            .await
+            .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
+    spelaion_core::copy_updates(&update, &stored, &rows, &columns).map_err(|e| e.to_string())
 }
 
 /// Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
@@ -2548,6 +3118,12 @@ async fn export_result(
     range: Option<CellRange>,
     state: State<'_, AppState>,
 ) -> CmdResult<ExportSummaryItem> {
+    if range
+        .as_ref()
+        .is_some_and(|range| range.selected_rows.is_some())
+    {
+        return Err("export requires a contiguous selection".into());
+    }
     let dialect = dialect_for(&state, &session).await;
     let csv = options.csv()?;
     let stored = state
@@ -2918,42 +3494,144 @@ async fn statement_at(engine: String, sql: String, offset: u32) -> CmdResult<Opt
     )
 }
 
-/// Sorts a result by one column in the core (`None` restores the server's order). The
-/// grid then asks for its windows again.
+/// What the editor's Run will send for this cursor and selection (UTF-8 bytes), for its
+/// label and for the statement picker: the core decides and splits, the page only asks.
+/// `engine` is `None` for a tab with no connection.
+#[command]
+async fn run_target(
+    engine: Option<String>,
+    sql: String,
+    cursor: u32,
+    selection_start: Option<u32>,
+    selection_end: Option<u32>,
+) -> CmdResult<RunTargetItem> {
+    let dialect = match engine {
+        Some(engine) => Some(
+            spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?,
+        ),
+        None => None,
+    };
+    let selection = selection_start
+        .zip(selection_end)
+        .map(|(start, end)| start as usize..end as usize);
+    Ok(spelaion_core::run_target(dialect.as_deref(), &sql, cursor as usize, selection).into())
+}
+
+/// The statements `picked` of a script (positions among its statements) as text to run,
+/// written by the core, which refuses when they would not run as they read in the script.
+#[command]
+async fn pick_statements(
+    engine: String,
+    sql: String,
+    picked: Vec<u32>,
+) -> CmdResult<PickedTextItem> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    let picked: Vec<usize> = picked.into_iter().map(|index| index as usize).collect();
+    spelaion_core::pick_statements(dialect.as_ref(), &sql, &picked)
+        .map(PickedTextItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// The statement under the cursor (`offset` in UTF-8 bytes) as text to run, for Ctrl+Enter:
+/// written by the core so the run reads it as that one statement (a MySQL `DELIMITER` line
+/// before it still applies); `None` when there is no statement there.
+#[command]
+async fn statement_to_run(
+    engine: String,
+    sql: String,
+    offset: u32,
+) -> CmdResult<Option<StatementToRunItem>> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    spelaion_core::statement_to_run(dialect.as_ref(), &sql, offset as usize)
+        .map(|found| {
+            found.map(|(picked, statement)| StatementToRunItem {
+                picked: picked.into(),
+                statement: text_span(statement),
+            })
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// From the statement under the cursor (`offset` in UTF-8 bytes) to the end of the script,
+/// as text to run; `None` when the script has no statement.
+#[command]
+async fn statements_from_cursor(
+    engine: String,
+    sql: String,
+    offset: u32,
+) -> CmdResult<Option<PickedTextItem>> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    spelaion_core::from_cursor(dialect.as_ref(), &sql, offset as usize)
+        .map(|picked| picked.map(PickedTextItem::from))
+        .map_err(|e| e.to_string())
+}
+
+/// The statements of a script for the editor's outline panel: the core's splitter for the
+/// engine, the one that runs the script, with each statement's line and how it starts.
+#[command]
+async fn script_outline(engine: String, sql: String) -> CmdResult<OutlineItem> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    tokio::task::spawn_blocking(move || spelaion_core::outline(dialect.as_ref(), &sql).into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The statement after (`forward`) or before the one at the cursor (`offset` in UTF-8
+/// bytes), for the editor's "next / previous statement"; `None` at the last or first one.
+#[command]
+async fn neighbour_statement(
+    engine: String,
+    sql: String,
+    offset: u32,
+    forward: bool,
+) -> CmdResult<Option<TextSpan>> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
+    Ok(
+        spelaion_core::neighbour_statement(dialect.as_ref(), &sql, offset as usize, forward)
+            .map(TextSpan::from),
+    )
+}
+
+/// Sorts a result by columns in the core, the first key being the most significant (no keys
+/// restore the server's order). The grid then asks for its windows again.
 #[command]
 async fn sort_result(
     result: u32,
-    column: Option<u32>,
-    descending: bool,
+    keys: Vec<SortKeyItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let stored = state
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
-    let key = column.map(|column| SortKey {
-        column: column as usize,
-        descending,
-    });
+    let keys = sort_keys(keys);
     tokio::task::spawn_blocking(move || {
         stored
             .write()
             .map_err(|_| "result lock poisoned".to_string())?
-            .sort(key)
+            .sort(&keys)
             .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-/// Filters a result by column conditions in the core (all must hold; an empty list removes
-/// them), on top of the text filter. The grid then asks for its windows again.
+/// Filters a result by column conditions in the core (an empty list removes them), on top
+/// of the text filter: all of them must hold, or any when `mode` says so, and text tells
+/// upper case from lower case only when it asks. The grid then asks for its windows again.
 #[command]
 async fn filter_columns(
     result: u32,
     filters: Vec<ColumnFilterItem>,
+    mode: Option<FilterModeItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<FilterOutcome> {
+    let mode = spelaion_core::FilterMode::from(mode.unwrap_or_default());
     let stored = state
         .results
         .get(ResultId(result.into()))
@@ -2963,7 +3641,9 @@ async fn filter_columns(
         let mut stored = stored
             .write()
             .map_err(|_| "result lock poisoned".to_string())?;
-        let rows = stored.filter_columns(filters).map_err(|e| e.to_string())?;
+        let rows = stored
+            .filter_columns_as(filters, mode)
+            .map_err(|e| e.to_string())?;
         let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
         Ok(FilterOutcome {
             rows: n(rows),
@@ -3101,6 +3781,9 @@ async fn selection_stats(
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
+    let selected_rows = range
+        .selected_rows
+        .map(|rows| rows.into_iter().map(|row| row as usize).collect::<Vec<_>>());
     let block = spelaion_core::CellBlock {
         first_row: range.first_row as usize,
         rows: range.rows as usize,
@@ -3111,9 +3794,106 @@ async fn selection_stats(
             .read()
             .map_err(|_| "result lock poisoned".to_string())?;
         let ticket = read.stats_ticket();
-        read.selection_stats(&block, &ticket)
-            .map(|stats| stats.map(SelectionStatsItem::from))
+        if let Some(rows) = selected_rows {
+            read.selection_stats_rows(&block.columns, &rows, &ticket)
+        } else {
+            read.selection_stats(&block, &ticket)
+        }
+        .map(|stats| stats.map(SelectionStatsItem::from))
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The groups of a result's current view by some of its columns, with each group's count
+/// (the grouping panel). Only the columns travel: the core counts over the stored result and
+/// returns the largest groups. A newer grouping on the same result, or `cancel_grouping`,
+/// stops this one (`None`).
+#[command]
+async fn group_result(
+    result: u32,
+    columns: Vec<u32>,
+    duplicates_only: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<GroupingItem>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let request = spelaion_core::GroupRequest {
+        columns: columns.into_iter().map(|c| c as usize).collect(),
+        duplicates_only,
+    };
+    // The ticket is taken before the work is queued: a grouping asked for later always
+    // stops this one, even if this one has not started yet.
+    let ticket = stored
+        .read()
+        .map_err(|_| "result lock poisoned".to_string())?
+        .group_ticket();
+    tokio::task::spawn_blocking(move || {
+        let read = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        read.grouping(&request, &ticket)
+            .map(|grouping| grouping.map(GroupingItem::from))
             .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops the grouping running on a result (the grouping panel's Cancel, or its closing).
+#[command]
+async fn cancel_grouping(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(stored) = state.results.get(ResultId(result.into())) {
+        stored
+            .read()
+            .map_err(|_| "result lock poisoned")?
+            .cancel_group();
+    }
+    Ok(())
+}
+
+/// Filters a result to one group of a grouping: the core adds to the column filters in force
+/// one condition per grouped column, written from the group's first row (`first_row` of the
+/// view the grouping was made over, `generation`). The page sends no value; a grouping made
+/// over rows that changed since is refused.
+#[command]
+async fn filter_to_group(
+    result: u32,
+    columns: Vec<u32>,
+    first_row: f64,
+    generation: f64,
+    state: State<'_, AppState>,
+) -> CmdResult<GroupFilterOutcome> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let columns: Vec<usize> = columns.into_iter().map(|c| c as usize).collect();
+    if !(first_row >= 0.0 && generation >= 0.0) {
+        return Err("no such group".into());
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut stored = stored
+            .write()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let filtered = stored
+            .filter_to_group(&columns, first_row as usize, generation as u64)
+            .map_err(|e| e.to_string())?;
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        Ok(GroupFilterOutcome {
+            filters: filtered
+                .filters
+                .into_iter()
+                .map(ColumnFilterItem::from)
+                .collect(),
+            mode: stored.filter_mode().into(),
+            rows: n(filtered.rows),
+            total: n(stored.total_rows()),
+            case_switched: filtered.case_switched,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3247,6 +4027,185 @@ async fn column_stats(
     };
     close_export_session(&state, stats_id, open).await;
     outcome
+}
+
+/// A table data tab column's most frequent values, to pick a filter's value from: counted by
+/// the server like `column_stats` (a new session of the tab's connection, every statement a
+/// read), with the tab's filter. The core refuses a masked column before anything is read
+/// (ADR-051). `cancel_column_stats` with the same `stats_id` stops it.
+#[command]
+#[allow(clippy::too_many_arguments)]
+async fn column_top_values(
+    source: String,
+    stats_id: u32,
+    table: ColumnStatsTarget,
+    result: u32,
+    column: u32,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<TopValuesOutcome> {
+    let (name, logical) = {
+        let stored = state
+            .results
+            .get(ResultId(result.into()))
+            .ok_or("result freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        let meta = stored
+            .schema()
+            .columns
+            .get(column as usize)
+            .ok_or("no such column")?;
+        (meta.name.clone(), meta.logical)
+    };
+    let request = spelaion_core::ColumnStatsRequest {
+        schema: table.schema,
+        table: table.name,
+        column: name,
+        logical,
+        filter: table.filter,
+        sample_rows: spelaion_core::STATS_SAMPLE_ROWS,
+        top: spelaion_core::TOP_VALUES,
+    };
+    // Checked before connecting: a masked column or a filter that would change the
+    // statements never opens a session.
+    {
+        let tab = state.session(&source).await?;
+        if tab
+            .session
+            .masking()
+            .masks_table_column(&request.table, &request.column)
+        {
+            return Ok(TopValuesOutcome::Masked);
+        }
+        spelaion_core::column_stats_sql(tab.session.dialect().as_ref(), &request, false)
+            .map_err(|e| e.to_string())?;
+    }
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, stats_id).await?;
+    let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
+    drop(tab);
+    let outcome = match context {
+        Err(message) => Err(message),
+        Ok(()) => match spelaion_core::column_top_values(&open.session, &request, &cancel).await {
+            Ok(top) => Ok(TopValuesOutcome::Done {
+                values: top
+                    .values
+                    .into_iter()
+                    .map(|value| PickableValueItem {
+                        value: value.value,
+                        count: value.count as f64,
+                    })
+                    .collect(),
+                sampled: top.sampled,
+                sample_rows: request.sample_rows as f64,
+            }),
+            Err(spelaion_core::ColumnStatsError::Cancelled) => Ok(TopValuesOutcome::Cancelled),
+            Err(spelaion_core::ColumnStatsError::Masked) => Ok(TopValuesOutcome::Masked),
+            Err(e) => Err(e.to_string()),
+        },
+    };
+    close_export_session(&state, stats_id, open).await;
+    outcome
+}
+
+/// The store's name for a table of a connection, and the dialect its filters are checked
+/// with (the connection's engine: the tab may not be connected yet).
+async fn filtered_table(
+    state: &AppState,
+    connection: String,
+    schema: String,
+    name: String,
+) -> CmdResult<(spelaion_core::FilteredTable, Arc<dyn Dialect>)> {
+    let id = parse_id(&connection);
+    let config = state.config.read().await;
+    let entry = config
+        .connection(&id)
+        .ok_or_else(|| format!("unknown connection: {connection}"))?;
+    let dialect =
+        spelaion_core::dialect_of(entry.file.engine).ok_or("no driver for this engine")?;
+    let workspace = history_workspace(&config, id.source);
+    Ok((
+        spelaion_core::FilteredTable {
+            workspace,
+            connection,
+            schema,
+            name,
+        },
+        dialect,
+    ))
+}
+
+/// What a table data tab remembers of its table's filters (SDB-381): the history, newest
+/// first, and the default the tab opens with. Local data; the core checks each filter again
+/// as it reads it, and a default that no longer passes comes back as refused, never as a
+/// filter.
+#[command]
+async fn table_filters(
+    connection: String,
+    schema: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TableFiltersItem> {
+    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    state
+        .history
+        .table_filters(dialect.as_ref(), table)
+        .await
+        .map(TableFiltersItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Remembers a filter the tab just used, checked by the core first.
+#[command]
+async fn record_table_filter(
+    connection: String,
+    schema: String,
+    name: String,
+    filter: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TableFiltersItem> {
+    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    state
+        .history
+        .record_table_filter(dialect.as_ref(), table, &filter)
+        .await
+        .map(TableFiltersItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Takes one filter out of a table's history.
+#[command]
+async fn forget_table_filter(
+    connection: String,
+    schema: String,
+    name: String,
+    filter: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TableFiltersItem> {
+    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    state
+        .history
+        .forget_table_filter(dialect.as_ref(), table, &filter)
+        .await
+        .map(TableFiltersItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the filter a table's tab opens with (checked by the core), or drops it (`None`).
+#[command]
+async fn set_table_default_filter(
+    connection: String,
+    schema: String,
+    name: String,
+    filter: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<TableFiltersItem> {
+    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    state
+        .history
+        .set_table_default_filter(dialect.as_ref(), table, filter.as_deref())
+        .await
+        .map(TableFiltersItem::from)
+        .map_err(|e| e.to_string())
 }
 
 /// Every column of a schema's relations, read with one catalog query on the explorer's
@@ -3667,11 +4626,50 @@ async fn search_referenced(
         .map_err(|e| e.to_string())
 }
 
-/// Frees a result the UI no longer shows.
+/// Frees a result the UI no longer shows: closing a result tab, pinned or not, frees it.
 #[command]
 async fn release_result(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    state.results.remove(ResultId(result.into()));
+    state.result_tabs.close(ResultId(result.into()));
     Ok(())
+}
+
+/// Frees every result of an editor tab that was closed; a result that a run still going
+/// there starts later is freed by the core as it starts.
+#[command]
+async fn release_results(session: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state.result_tabs.close_editor(&session);
+    Ok(())
+}
+
+/// Pins a result tab, so no run replaces it, or unpins it (SDB-378).
+#[command]
+async fn pin_result(
+    session: String,
+    result: u32,
+    pinned: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<ResultTabItem> {
+    state
+        .result_tabs
+        .pin(&session, ResultId(result.into()), pinned)
+        .map(ResultTabItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Names a result tab; an empty name gives back the one its statement's comment gave it.
+/// The core cleans the name and answers what the tab is called now.
+#[command]
+async fn rename_result(
+    session: String,
+    result: u32,
+    name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ResultTabItem> {
+    state
+        .result_tabs
+        .rename(&session, ResultId(result.into()), &name)
+        .map(ResultTabItem::from)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -4124,15 +5122,19 @@ async fn row_references(
     Ok(references.into_iter().map(RowReferenceItem::from).collect())
 }
 
-/// An identifier quoted for the session's engine (for an ORDER BY the UI writes).
+/// The ORDER BY of a table data tab sorted by its headers, written by the core from the
+/// table's own columns (read from the catalog now): the UI names columns, never writes SQL.
 #[command]
-async fn quote_identifier(
+async fn table_order_by(
     session: String,
-    identifier: String,
+    schema: String,
+    name: String,
+    sort: Vec<ColumnSortItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let open = state.session(&session).await?;
-    Ok(open.session.dialect().quote_identifier(&identifier))
+    let sort: Vec<spelaion_core::ColumnSort> = sort.into_iter().map(Into::into).collect();
+    spelaion_core::table_order_by(&open.session, &schema, &name, &sort).await
 }
 
 /// Objects' names as the engine writes them (`schema.table`, quoted where it needs to be),
@@ -4873,37 +5875,11 @@ fn fetch_window(
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
-    let columns = &stored.schema().columns;
-    let schema = Arc::new(Schema::new(
-        columns
-            .iter()
-            .map(|c| Field::new(&c.name, DataType::Utf8, true))
-            .collect::<Vec<_>>(),
-    ));
-    let mut out = Vec::new();
-    let mut writer = StreamWriter::try_new(&mut out, &schema).map_err(|e| e.to_string())?;
-    for batch in stored.window(start as usize, len as usize) {
-        let arrays: Vec<ArrayRef> = columns
-            .iter()
-            .enumerate()
-            .map(|(i, meta)| {
-                let column = batch.column(i);
-                let text: StringArray = (0..batch.num_rows())
-                    .map(
-                        |row| match Value::from_array(column.as_ref(), row, meta.logical) {
-                            Some(Value::Null) | None => None,
-                            Some(value) => Some(value.to_string()),
-                        },
-                    )
-                    .collect();
-                Arc::new(text) as ArrayRef
-            })
-            .collect();
-        let text_batch = RecordBatch::try_new(schema.clone(), arrays).map_err(|e| e.to_string())?;
-        writer.write(&text_batch).map_err(|e| e.to_string())?;
-    }
-    writer.finish().map_err(|e| e.to_string())?;
-    drop(writer);
+    // Each cell as the database prints it and, where the user's display settings show it
+    // otherwise, as they show it (SDB-385): the core writes both.
+    let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
+    let out = spelaion_core::window_ipc(&stored, start as usize, len as usize, &display)
+        .map_err(|e| e.to_string())?;
     Ok(Response::new(out))
 }
 
@@ -4965,14 +5941,26 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_language,
             get_theme,
             set_theme,
+            get_interface_size,
+            set_interface_size,
+            size_steps,
             get_update_check,
             set_update_check,
             get_explorer_preferences,
             set_explorer_preferences,
             get_editor_preferences,
             set_editor_preferences,
+            editor_snippets,
+            save_editor_snippet,
+            delete_editor_snippet,
+            new_script_template,
+            set_new_script_template,
+            editor_snippet_limits,
             get_grid_preferences,
             set_grid_preferences,
+            get_display_format,
+            set_display_format,
+            time_zones,
             get_map_preferences,
             set_map_preferences,
             column_map,
@@ -5024,6 +6012,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update_tunnel,
             delete_tunnel,
             copy_rows,
+            copy_defaults,
+            copy_special,
+            copy_updates,
             copy_column_names,
             copy_column_in_list,
             find_in_result,
@@ -5032,10 +6023,18 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             clear_find,
             selection_stats,
             cancel_selection_stats,
+            group_result,
+            cancel_grouping,
+            filter_to_group,
             result_chart,
             cancel_chart,
             save_chart_image,
             column_stats,
+            column_top_values,
+            table_filters,
+            record_table_filter,
+            forget_table_filter,
+            set_table_default_filter,
             cancel_column_stats,
             list_columns,
             data_search_limits,
@@ -5071,7 +6070,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             count_rows,
             table_page_sql,
             count_table_rows,
-            quote_identifier,
+            table_order_by,
             qualified_names,
             browse_statement,
             object_actions,
@@ -5105,10 +6104,21 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_snippets,
             delete_snippet,
             statement_at,
+            run_target,
+            pick_statements,
+            statements_from_cursor,
+            statement_to_run,
+            script_outline,
+            neighbour_statement,
             create_database,
             script_risks,
             script_params,
             bind_params,
+            script_variables,
+            substitute_variables,
+            connection_variables,
+            set_connection_variable,
+            variable_is_valid,
             parse_connection_url,
             connection_import::scan_connections,
             kube_contexts,
@@ -5153,8 +6163,17 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             run_query_page,
             append_query_page,
             count_query_rows,
+            transpose_rows,
+            load_estimate,
+            load_query_rows,
+            cancel_load_rows,
+            table_rows_sql,
+            last_table_page,
             cancel,
             release_result,
+            release_results,
+            pin_result,
+            rename_result,
             current_database,
             list_databases,
             select_database,
@@ -5218,7 +6237,10 @@ pub fn export_bindings(path: &std::path::Path) -> Result<(), String> {
 /// only while handling a click or a key. The text stays untrusted input that the core checks
 /// (ADR-030, ADR-038). WebView2 and WKWebView keep their own behaviour: on Windows this switch
 /// would also grant every read without asking.
-fn open_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn open_main_window(
+    app: &tauri::App,
+    interface_size: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = app
         .config()
         .app
@@ -5237,6 +6259,11 @@ fn open_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> 
         window
     }
     .build()?;
+    // The saved interface size (SDB-389) applies before the page shows, so it never opens at
+    // the normal size first.
+    if interface_size != spelaion_core::DEFAULT_INTERFACE_SIZE {
+        window.set_zoom(interface_scale(interface_size))?;
+    }
     if offscreen {
         move_offscreen(&window)?;
         window.show()?;
@@ -5386,6 +6413,16 @@ pub fn run() {
     let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
     // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
     let engines = plugins::engines_for(&user_dir);
+    let results = Arc::new(ResultStore::new());
+    // The display settings as they were saved; what can no longer be used is its default.
+    let display = tauri::async_runtime::block_on(history.display_format())
+        .ok()
+        .and_then(|format| format.compile().ok())
+        .unwrap_or_default();
+    // The interface size the window opens at (SDB-389); one that cannot be read is the
+    // normal size.
+    let interface_size = tauri::async_runtime::block_on(history.interface_size())
+        .unwrap_or(spelaion_core::DEFAULT_INTERFACE_SIZE);
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
@@ -5394,7 +6431,9 @@ pub fn run() {
         engines: std::sync::RwLock::new(engines),
         plugins: plugins::PluginOps::default(),
         tunnels: Arc::new(TunnelPool::new()),
-        results: Arc::new(ResultStore::new()),
+        result_tabs: Arc::new(spelaion_core::ResultTabs::new(results.clone())),
+        display: std::sync::RwLock::new(Arc::new(display)),
+        results,
         plans: Arc::new(spelaion_core::plan::PlanStore::new()),
         startup_plan: std::sync::Mutex::new(startup_plan),
         sessions: Mutex::new(HashMap::new()),
@@ -5405,6 +6444,7 @@ pub fn run() {
         close_request: AtomicU8::new(CLOSE_IDLE),
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
+        loads: std::sync::Mutex::new(HashMap::new()),
         imports: std::sync::Mutex::new(HashMap::new()),
         backups: std::sync::Mutex::new(HashMap::new()),
         diagrams: std::sync::Mutex::new(HashMap::new()),
@@ -5434,7 +6474,7 @@ pub fn run() {
             // The window and its webview (WebView2 on Windows, WebKitGTK on Linux) open here:
             // when they cannot, there is no page to tell it in. An error returned from `setup`
             // would only be Tauri's panic.
-            if let Err(e) = open_main_window(app) {
+            if let Err(e) = open_main_window(app, interface_size) {
                 startup::ask(&StartupFailure::window(&e), &setup_log);
                 std::process::exit(1);
             }

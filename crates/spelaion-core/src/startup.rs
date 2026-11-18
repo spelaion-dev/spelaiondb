@@ -65,10 +65,13 @@ impl StartupFailure {
             HistoryError::Store(e) => e.newer_schema(),
             HistoryError::Closed
             | HistoryError::Start(_)
+            | HistoryError::Display(_)
+            | HistoryError::CopyOptions(_)
             | HistoryError::UnsupportedLanguage
             | HistoryError::UnsupportedTheme
             | HistoryError::InvalidSnippetName
-            | HistoryError::NamePattern(_) => None,
+            | HistoryError::NamePattern(_)
+            | HistoryError::EditorSnippet(_) => None,
         };
         let text = error.to_string();
         // "local store: …" would repeat what the dialog's first words say.

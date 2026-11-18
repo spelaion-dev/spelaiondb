@@ -101,39 +101,49 @@ pub async fn editable_query_table(
     if read_only {
         return Ok(None);
     }
+    match query_result_table(session, result, sql).await {
+        Ok((_, table)) => Ok(Some(table)),
+        Err(UpdateCopyError::Failed(message)) => Err(message),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Engines whose query results [`query_table_schema`] can match to the table the engine read.
+const QUERY_TABLE_ENGINES: [&str; 5] = ["postgres", "mysql", "sqlserver", "sqlite", "duckdb"];
+
+/// The table a query's `result` shows, with the target its statements are written through,
+/// or why its rows cannot be matched to that table's rows: the rule of
+/// [`editable_query_table`], with its reasons (SDB-388).
+async fn query_result_table(
+    session: &Session,
+    result: ResultId,
+    sql: &str,
+) -> Result<(EditTarget, TableInfo), UpdateCopyError> {
+    let engine = session.dialect().name();
+    if !QUERY_TABLE_ENGINES.contains(&engine) {
+        return Err(UpdateCopyError::QueryOnEngine);
+    }
     let Some((schema, name)) = editable_query_source(session.dialect().as_ref(), sql) else {
-        return Ok(None);
+        return Err(UpdateCopyError::NotOneTable);
     };
     // Rows read through another session or in another database are never editable here
     // (SDB-137): the table and its key would be this session's, the values the other's.
-    let target = session.edit_target().await.map_err(|e| e.to_string())?;
-    let columns: Vec<String> = {
-        let stored = session
-            .results()
-            .get(result)
-            .ok_or("the result was freed")?;
-        let stored = stored.read().map_err(|_| "result lock poisoned")?;
-        if target.check(&stored).is_err() {
-            return Ok(None);
-        }
-        stored
-            .schema()
-            .columns
-            .iter()
-            .map(|c| c.name.clone())
-            .collect()
-    };
-    let Some(schema) = query_table_schema(session, schema, &name).await? else {
-        return Ok(None);
+    let target = session.edit_target().await?;
+    let columns = result_columns(session, result, &target)?;
+    let Some(schema) = query_table_schema(session, schema, &name)
+        .await
+        .map_err(UpdateCopyError::Failed)?
+    else {
+        return Err(UpdateCopyError::TableNotCertain(name));
     };
     let conn = session.connection();
     let objects = conn
         .list_objects(&schema)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| UpdateCopyError::Failed(e.to_string()))?;
     let mut named = objects.iter().filter(|o| o.name == name);
     let (Some(object), None) = (named.next(), named.next()) else {
-        return Ok(None);
+        return Err(UpdateCopyError::TableNotCertain(name));
     };
     match object.kind {
         ObjectKind::Table | ObjectKind::PartitionedTable => {}
@@ -143,20 +153,192 @@ pub async fn editable_query_table(
         | ObjectKind::Collection
         | ObjectKind::NodeLabel
         | ObjectKind::RelationshipType => {
-            return Ok(None);
+            return Err(UpdateCopyError::NotATable(name));
         }
     }
     let table = conn
         .describe_table(&schema, &name)
         .await
-        .map_err(|e| e.to_string())?;
-    let distinct = columns.iter().collect::<HashSet<_>>().len() == columns.len();
-    let has_key =
-        !table.primary_key.is_empty() && table.primary_key.iter().all(|k| columns.contains(k));
-    let all_of_table = columns
+        .map_err(|e| UpdateCopyError::Failed(e.to_string()))?;
+    check_result_columns(&table, &columns, true)?;
+    Ok((target, table))
+}
+
+/// The names of `result`'s columns, refused unless its rows were read through `target`.
+fn result_columns(
+    session: &Session,
+    result: ResultId,
+    target: &EditTarget,
+) -> Result<Vec<String>, UpdateCopyError> {
+    let stored = session
+        .results()
+        .get(result)
+        .ok_or_else(|| UpdateCopyError::Failed("the result was freed".into()))?;
+    let stored = stored
+        .read()
+        .map_err(|_| UpdateCopyError::Failed("result lock poisoned".into()))?;
+    target.check(&stored)?;
+    Ok(stored
+        .schema()
+        .columns
         .iter()
-        .all(|c| table.columns.iter().any(|t| t.name == *c));
-    Ok((distinct && has_key && all_of_table).then_some(table))
+        .map(|c| c.name.clone())
+        .collect())
+}
+
+/// Whether a result with these column names identifies `table`'s rows: its primary key is in
+/// it, no column appears twice and, for a query (`every_column`), every column is the table's.
+fn check_result_columns(
+    table: &TableInfo,
+    columns: &[String],
+    every_column: bool,
+) -> Result<(), UpdateCopyError> {
+    if table.primary_key.is_empty() {
+        return Err(UpdateCopyError::NoPrimaryKey(table.object.name.clone()));
+    }
+    let mut seen = HashSet::new();
+    if let Some(twice) = columns.iter().find(|c| !seen.insert(c.as_str())) {
+        return Err(UpdateCopyError::ColumnTwice(twice.clone()));
+    }
+    if let Some(key) = table.primary_key.iter().find(|k| !columns.contains(k)) {
+        return Err(UpdateCopyError::KeyNotInResult(key.clone()));
+    }
+    if every_column
+        && let Some(other) = columns
+            .iter()
+            .find(|c| !table.columns.iter().any(|t| t.name == **c))
+    {
+        return Err(UpdateCopyError::NotATableColumn(other.clone()));
+    }
+    Ok(())
+}
+
+/// Where the rows copied as UPDATE statements come from (SDB-388).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateSource {
+    /// A table data tab's page of this table (the core wrote its SELECT, `table_data.rs`).
+    Table { schema: String, name: String },
+    /// A query's result, with the statement that produced it.
+    Query { sql: String },
+}
+
+/// The table rows are copied as UPDATE statements of, decided by the core
+/// ([`update_copy_table`]) as an edit's would be (ADR-014), and the session they were read
+/// through. Only the core makes one.
+pub struct UpdateTable {
+    pub(crate) target: EditTarget,
+    pub(crate) table: TableInfo,
+}
+
+impl UpdateTable {
+    /// The table the statements update.
+    pub fn table(&self) -> &TableInfo {
+        &self.table
+    }
+}
+
+/// Why rows cannot be copied as UPDATE statements: never guessed (SDB-388).
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum UpdateCopyError {
+    #[error(
+        "this engine's rows are not edited by the app, so they are not copied as UPDATE statements"
+    )]
+    NoEditing,
+    #[error(
+        "on this engine a query's rows are not matched to a table: open the table's data and copy them from there"
+    )]
+    QueryOnEngine,
+    #[error(
+        "the result is not a plain SELECT of one table (it has a join, an expression, a subquery or more than one statement): its rows cannot be matched to one table's rows"
+    )]
+    NotOneTable,
+    #[error(
+        "could not tell for certain which table {0} is (a temporary table or the search path may hide another): qualify its name and run the query again"
+    )]
+    TableNotCertain(String),
+    #[error("{0} is not a table: only a table's rows can be copied as UPDATE statements")]
+    NotATable(String),
+    #[error("{0} has no primary key: its rows cannot be told apart")]
+    NoPrimaryKey(String),
+    #[error("the result does not include the primary key column {0}")]
+    KeyNotInResult(String),
+    #[error("the result has the column {0} twice")]
+    ColumnTwice(String),
+    #[error("{0} is not a column of the table")]
+    NotATableColumn(String),
+    /// ADR-051: the result holds the mask, not the value.
+    #[error(
+        "{0} is masked: its values are not in the result, so it cannot be written into an UPDATE (leave it out of the selection)"
+    )]
+    Masked(String),
+    #[error(
+        "select at least one column that is not part of the primary key: those are what the UPDATE sets"
+    )]
+    OnlyKeyColumns,
+    #[error("a row has no value in its key column {0}, so no UPDATE can find it")]
+    NullKey(String),
+    #[error("there is no row {0} in the result")]
+    NoSuchRow(usize),
+    #[error("these rows were read from another connection or database: run the query again")]
+    OtherSource,
+    #[error("{0}")]
+    Failed(String),
+}
+
+impl From<EditError> for UpdateCopyError {
+    fn from(error: EditError) -> Self {
+        match error {
+            EditError::OtherSource => Self::OtherSource,
+            EditError::NoPrimaryKey(_)
+            | EditError::KeyNotInResult(_)
+            | EditError::NoSuchRow(_)
+            | EditError::NoSuchNewRow(_)
+            | EditError::TooMuchToPaste(_)
+            | EditError::NotATableColumn(_)
+            | EditError::BadValue { .. }
+            | EditError::Nothing
+            | EditError::ReadOnly
+            | EditError::NeedsConfirmation
+            | EditError::Failed { .. }
+            | EditError::TransactionOpen
+            | EditError::NotAtomic(_)
+            | EditError::NotOneRow { .. }
+            | EditError::Masked(_)
+            | EditError::Source(_) => Self::Failed(error.to_string()),
+        }
+    }
+}
+
+/// The table `result`'s rows are copied as UPDATE statements of (SDB-388), decided as an edit
+/// is (ADR-014): refused on an engine whose edits the app does not apply (no transactions), for
+/// rows read through another session or in another database (SDB-137), and for a table
+/// without a primary key or a result without all of it. A query must be a plain SELECT of one
+/// table, resolved as [`editable_query_table`] resolves it. The primary key always comes from
+/// the catalog. A read-only connection may copy: copying writes nothing.
+pub async fn update_copy_table(
+    session: &Session,
+    result: ResultId,
+    source: UpdateSource,
+) -> Result<UpdateTable, UpdateCopyError> {
+    // Edits are applied in a transaction (`apply_edits`): an engine without one has none.
+    if !session.connection().capabilities().transactions {
+        return Err(UpdateCopyError::NoEditing);
+    }
+    let (target, table) = match source {
+        UpdateSource::Query { sql } => query_result_table(session, result, &sql).await?,
+        UpdateSource::Table { schema, name } => {
+            let target = session.edit_target().await?;
+            let columns = result_columns(session, result, &target)?;
+            let table = session
+                .connection()
+                .describe_table(&schema, &name)
+                .await
+                .map_err(|e| UpdateCopyError::Failed(e.to_string()))?;
+            check_result_columns(&table, &columns, false)?;
+            (target, table)
+        }
+    };
+    Ok(UpdateTable { target, table })
 }
 
 /// The schema of the table a query names, exactly as the engine resolved it when it ran the
@@ -306,6 +488,12 @@ pub enum EditError {
         "a transaction is open on this tab: commit or roll it back before applying table edits"
     )]
     TransactionOpen,
+    /// Several changes at once on a server whose transactions do not hold (SDB-354): one that
+    /// failed would leave the ones before it applied.
+    #[error(
+        "{0}: apply one change at a time, so that a change that fails cannot leave the others applied"
+    )]
+    NotAtomic(String),
     #[error(
         "change {index} would affect {rows} rows instead of one (the row changed or vanished meanwhile?), nothing was applied"
     )]
@@ -496,6 +684,13 @@ pub fn edit_statements(
 pub async fn apply_edits(session: &Session, statements: &[String]) -> Result<usize, EditError> {
     if statements.is_empty() {
         return Err(EditError::Nothing);
+    }
+    // One transaction makes several changes all or nothing; where it does not hold, only one
+    // change at a time can be (SDB-354).
+    if statements.len() > 1
+        && let Some(reason) = session.atomic_writes_refusal()
+    {
+        return Err(EditError::NotAtomic(reason));
     }
     // Edits are a transaction of their own (ADR-031): never nested in, nor committing, one the
     // user left open on this session.

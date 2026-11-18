@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { descendants, requestClose } from "./processes.mjs";
@@ -62,13 +62,17 @@ const clipboard = {
 };
 
 const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
+copyFileSync(join(demo, "data/shop.db"), join(userDir, "json-viewer.db"));
 // Personal connections of this run: SQL Server from testing/docker, and the demo's PostgreSQL
 // behind testing/docker's two bastions with its password asked (the demo's own bastion
 // connection reads the keychain). Passwords are asked, never stored. (The DuckDB one is made in
 // the form.) The tunnel is the demo repository's `docker-bastions`: its relative key paths must
 // be read from the repository, not from this personal folder.
 mkdirSync(join(userDir, "connections"), { recursive: true });
+writeFileSync(join(userDir, "connection-types.toml"), 'schema_version = 1\n[types.careful]\nname = "Careful"\ntone = "amber"\nconfirm_execution = true\n');
 const personal = {
+  "json-viewer.toml": `schema_version = 1\nname = "JSON Viewer SQLite"\nengine = "sqlite"\ndatabase = ${JSON.stringify(join(userDir, "json-viewer.db"))}\n`,
+  "careful-sqlite.toml": `schema_version = 1\nname = "Careful SQLite"\nengine = "sqlite"\nenv = "careful"\ndatabase = ${JSON.stringify(join(demo, "data/shop.db"))}\n`,
   "sql-server-docker.toml": `schema_version = 1\nname = "SQL Server (Docker)"\nengine = "sqlserver"\nhost = "127.0.0.1"\nport = 11433\nuser = "sa"\npassword = { secret = "prompt" }\n`,
   "bastions.toml": `schema_version = 1\nname = "Postgres through the tunnel"\nengine = "postgres"\nhost = "postgres"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "verify-full"\nca = ${JSON.stringify(join(keys, "ca.crt"))}\n`,
   // ClickHouse, only a plugin (ADR-041), behind the same two bastions: its HTTP port has no TLS.
@@ -164,7 +168,7 @@ const dialog = (text) =>
   );
 const statusline = (text) => visibleText(`${P} .statusline`, text);
 
-async function newQuery(connection, sql) {
+async function newQuery(connection, sql, connect = async () => {}) {
   // Double-clicking a connection opens a new query on it.
   const label = await wd.element(
     (name) => [...document.querySelectorAll(".connection-row")].find((r) => r.querySelector(".label")?.textContent.trim() === name)?.querySelector(".label"),
@@ -172,6 +176,7 @@ async function newQuery(connection, sql) {
     { what: `the connection ${connection}` },
   );
   await wd.pointer(label, { count: 2 });
+  await connect();
   await wd.waitFor((p) => document.querySelector(`${p} .cm-content`) && !document.querySelector(`${p} .status-connecting`), [P], { what: "a new query tab" });
   await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
   await wd.insertText(sql);
@@ -241,6 +246,7 @@ try {
       "Shop (SQLite)",
       "select c.country, count(*) as orders, round(sum(o.total), 2) as total\nfrom orders o\njoin customer c on c.id = o.customer_id\ngroup by c.country\norder by total desc;",
     );
+    await wd.waitFor((p) => !!document.querySelector(`${p} .status-connected`), [P], { what: "the query tab to connect without opening the explorer" });
     await run();
     await statusline("6 rows");
     await shot("03-sqlite");
@@ -256,6 +262,8 @@ try {
       return { x: r.x, y: r.y };
     }, P);
     await wd.pointerAt(box.x + 30, box.y + 40);
+    await wd.press("x");
+    assert.equal(await wd.evaluate((p) => document.querySelectorAll(`${p} input.cell-editor`).length, P), 0, "typing does not edit a read-only result");
     await wd.press("Control+a");
     await wd.press("Control+Shift+c");
     let text = before;
@@ -267,6 +275,127 @@ try {
     assert.equal(lines[0], "country\torders\ttotal", `the clipboard holds: ${JSON.stringify(text.slice(0, 200))}`);
     assert.equal(lines.length, 7, `a header and six rows: ${JSON.stringify(text.slice(0, 300))}`);
     assert.ok(lines.slice(1).every((line) => line.split("\t").length === 3), text);
+  });
+
+  await step("a new query also connects when the explorer is already open", async () => {
+    const expander = await wd.element(() => [...document.querySelectorAll('.connection-row')].find((row) => row.querySelector('.label')?.textContent.trim() === 'Shop (SQLite)')?.querySelector('button.twisty'));
+    await wd.click(expander);
+    await wd.waitFor((el) => el.getAttribute('aria-expanded') === 'true', [expander], { what: "the explorer to open" });
+    await wd.waitFor((el) => [...el.closest('.node').querySelectorAll('.children .row .label')].some((label) => label.textContent.trim() === 'main'), [expander], { what: "the explorer session and SQLite schema" });
+    await newQuery("Shop (SQLite)", "select 1;");
+    await wd.waitFor((p) => !!document.querySelector(`${p} .status-connected`), [P], { what: "the second query tab to connect" });
+    await run();
+    await statusline("1 row");
+  });
+
+  await step("SQL completion offers columns for a referenced table", async () => {
+    await newQuery("Shop (SQLite)", "select * from customer c where c.");
+    await wd.waitFor((p) => !!document.querySelector(`${p} .status-connected`), [P], { what: "the completion query to connect" });
+    let found = false;
+    for (let i = 0; i < 60 && !found; i++) {
+      await wd.press("Control+Space");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      found = await wd.evaluate(() => [...document.querySelectorAll('.cm-tooltip-autocomplete li')].some((item) => item.textContent.includes('name')));
+      if (!found) await wd.press("Escape");
+    }
+    assert.ok(found, "completion offers the referenced customer's name column");
+    await wd.press("Escape");
+  });
+
+  await step("typing replaces an editable result cell and Escape cancels it", async () => {
+    await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 3;");
+    await run();
+    await statusline("3 rows");
+    await button("Add row", P);
+    const box = await wd.evaluate((p) => {
+      const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect();
+      return { x: r.x, y: r.y };
+    }, P);
+    await wd.pointerAt(box.x + 52 + 110 + 20, box.y + 34 + 12);
+    await wd.press("n");
+    const editor = await wd.element((p) => document.querySelector(`${p} input.cell-editor`), [P], { what: "the inline cell editor" });
+    await wd.insertText("ew");
+    assert.equal(await wd.evaluate((el) => el.value, editor), "new");
+    await wd.press("Escape");
+    await wd.waitDetached(editor, { what: "the cancelled editor to close" });
+    await visibleText(P, "No pending changes");
+    await wd.press("n");
+    await wd.element((p) => document.querySelector(`${p} input.cell-editor`), [P]);
+    await wd.insertText("ew");
+    await wd.press("Enter");
+    await visibleText(P, "Updated: 1");
+    await wd.click(await button("Refresh", `${P} .grid-footer`));
+    await visibleText(P, "Apply or discard the pending changes first");
+    await visibleText(P, "Updated: 1");
+    await wd.evaluate((p) => document.querySelector(`${p} .grid-scroller`).focus(), P);
+    await wd.press("Control+z");
+    await visibleText(P, "No pending changes");
+    const oldResult = await wd.evaluate((p) => document.querySelector(`${p} .result-tab-item.active`)?.dataset.result, P);
+    await wd.click(await button("Refresh", `${P} .grid-footer`));
+    await wd.waitFor((p, old) => {
+      const active = document.querySelector(`${p} .result-tab-item.active`);
+      return active && active.dataset.result !== old;
+    }, [P, oldResult], { what: "refresh to replace the result" });
+    await statusline("3 rows");
+    const filter = await wd.element((p) => document.querySelector(`${p} input.result-filter`), [P]);
+    await fill(filter, "Customer 1");
+    await statusline("1 of 3 rows");
+    const filteredResult = await wd.evaluate((p) => document.querySelector(`${p} .result-tab-item.active`)?.dataset.result, P);
+    await wd.click(await button("Refresh", `${P} .grid-footer`));
+    await wd.waitFor((p, old) => {
+      const active = document.querySelector(`${p} .result-tab-item.active`);
+      return active && active.dataset.result !== old && document.querySelector(`${p} input.result-filter`)?.value === "Customer 1";
+    }, [P, filteredResult], { what: "refresh to restore the filter" });
+    await statusline("1 of 3 rows");
+  });
+
+  await step("copy two non-adjacent result rows", async () => {
+    await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 3;");
+    await run();
+    await statusline("3 rows");
+    const box = await wd.evaluate((p) => {
+      const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect();
+      return { x: r.x, y: r.y };
+    }, P);
+    await wd.pointerAt(box.x + 15, box.y + 34 + 12);
+    await wd.controlClickAt(box.x + 15, box.y + 34 + 2 * 24 + 12);
+    clipboard.set("not copied");
+    await wd.press("Control+Shift+c");
+    let copied = "not copied";
+    for (let i = 0; i < 50 && copied === "not copied"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100)); copied = clipboard.get();
+    }
+    const lines = copied.trimEnd().split(/\r?\n/);
+    assert.equal(lines.length, 3, copied);
+    assert.match(lines[1], /Customer 1/);
+    assert.match(lines[2], /Customer 3/);
+    assert.ok(!copied.includes("Customer 2"));
+    await wd.press("Delete");
+    await visibleText(P, "Deleted: 2");
+    await wd.click(await button("Discard", `${P} .result-editing`));
+    await visibleText(P, "No pending changes");
+  });
+
+  await step("refresh asks again when the connection confirms every execution", async () => {
+    await newQuery("Careful SQLite", "select :wanted as value;");
+    await run();
+    const params = await dialog("Query parameters");
+    await fill(await wd.element((d) => d.querySelector("input"), [params]), "1");
+    await wd.click(await button("Run", '[role="dialog"], .modal'));
+    await wd.waitDetached(params, { what: "the parameter dialog to close" });
+    const first = await dialog("Run these statements?");
+    await wd.click(await button("Run", '[role="dialog"], .modal'));
+    await wd.waitDetached(first, { what: "the first execution confirmation to close" });
+    await statusline("1 row");
+    await wd.click(await button("Refresh", `${P} .grid-footer`));
+    const againParams = await dialog("Query parameters");
+    assert.equal(await wd.evaluate((d) => d.querySelector("input").value, againParams), "1", "refresh asks again and remembers the parameter");
+    await wd.click(await button("Run", '[role="dialog"], .modal'));
+    await wd.waitDetached(againParams, { what: "the refresh parameter dialog to close" });
+    const again = await dialog("Run these statements?");
+    await wd.click(await button("Cancel", '[role="dialog"], .modal'));
+    await wd.waitDetached(again, { what: "the refresh confirmation to close" });
+    await statusline("1 row");
   });
 
   await step("DuckDB: a new database file made in the add-connection form, a query on it", async () => {
@@ -289,6 +418,7 @@ try {
     await newQuery("analytics", "create table sales as select range as id, [range, range * 2] as pair, {'city': 'Madrid'} as place from range(3);\nselect * from sales order by id;");
     await run();
     await statusline("3 rows");
+    assert.equal(await wd.evaluate((p) => document.querySelectorAll(`${p} .grid-footer button[aria-label="Refresh"]`).length, P), 0, "a multi-statement run has no grid refresh");
     await shot("04-duckdb");
   });
 
@@ -324,7 +454,12 @@ try {
   });
 
   await step("PostgreSQL: password asked in a dialog, a query over TLS", async () => {
-    await newQuery("Postgres (Docker)", "select ssl from pg_stat_ssl where pid = pg_backend_pid() and ssl;");
+    await newQuery("Postgres (Docker)", "select ssl from pg_stat_ssl where pid = pg_backend_pid() and ssl;", async () => {
+      const d = await dialog("Password for Postgres (Docker)");
+      await wd.press("Escape");
+      await wd.waitDetached(d, { what: "the cancelled password dialog to close" });
+    });
+    await wd.waitFor((p) => !!document.querySelector(`${p} .status-disconnected`) && !document.querySelector(`${p} [role="alert"]`), [P], { what: "the cancelled tab to stay disconnected without an error" });
     await run();
     await password("Postgres (Docker)", "spelaion");
     await statusline("1 row");
@@ -337,39 +472,39 @@ try {
   ]) {
     await step(`${connection.replace(" (Docker)", "")}: password asked, a query over TLS`, async () => {
       // Only an encrypted session has a cipher: the row exists only if TLS is on.
-      await newQuery(connection, `select 42 as answer, 'text ñ €' as txt, variable_value as cipher\nfrom ${cipher}\nwhere variable_name = 'Ssl_cipher' and variable_value <> '';`);
+      await newQuery(connection, `select 42 as answer, 'text ñ €' as txt, variable_value as cipher\nfrom ${cipher}\nwhere variable_name = 'Ssl_cipher' and variable_value <> '';`, () => password(connection, "spelaion"));
       await run();
-      await password(connection, "spelaion");
       await statusline("1 row");
     });
   }
 
   await step("SQL Server: password asked, a batch with two result sets", async () => {
-    await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b");
+    await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b", () => password("SQL Server (Docker)", "Spelaion-test-1"));
     await run();
-    await password("SQL Server (Docker)", "Spelaion-test-1");
+
     await visibleText(`${P} .result-tabs button`, "Result 2");
     await shot("08-sqlserver");
   });
 
   await step("SSH tunnel: PostgreSQL behind two bastions, each host key shown, TLS verify-full", async () => {
-    await newQuery("Postgres through the tunnel", "select ssl, version from pg_stat_ssl where pid = pg_backend_pid() and ssl;");
+    await newQuery("Postgres through the tunnel", "select ssl, version from pg_stat_ssl where pid = pg_backend_pid() and ssl;", async () => {
+      await password("Postgres through the tunnel", "spelaion");
+      for (let hop = 1; hop <= 2; hop++) {
+        await dialog(`(hop ${hop})`);
+        if (hop === 1) await shot("09-ssh-fingerprint");
+        await wd.click(await button("Trust and remember", '[role="dialog"], .modal'));
+      }
+    });
     await run();
-    await password("Postgres through the tunnel", "spelaion");
-    for (let hop = 1; hop <= 2; hop++) {
-      await dialog(`(hop ${hop})`);
-      if (hop === 1) await shot("09-ssh-fingerprint");
-      await wd.click(await button("Trust and remember", '[role="dialog"], .modal'));
-    }
     await statusline("1 row");
     await shot("10-tunnel");
   });
 
   await step("ClickHouse (a plugin only) behind the same two bastions", async () => {
     // The hosts were trusted by the step before: no fingerprint is asked again.
-    await newQuery("ClickHouse through the tunnel", "select currentDatabase() as db, 'ñandú' as t, toDate('2024-02-29') as d;");
+    await newQuery("ClickHouse through the tunnel", "select currentDatabase() as db, 'ñandú' as t, toDate('2024-02-29') as d;", () => password("ClickHouse through the tunnel", "spelaion"));
     await run();
-    await password("ClickHouse through the tunnel", "spelaion");
+
     await statusline("1 row");
     await shot("10b-clickhouse-tunnel");
   });
@@ -383,9 +518,9 @@ try {
 
   await step("Oracle (a plugin only) behind the same two bastions", async () => {
     // The hosts were trusted by an earlier step: no fingerprint is asked again.
-    await newQuery("Oracle through the tunnel", "select user as who, 'ñandú' as t, date '2024-02-29' as d from dual;");
+    await newQuery("Oracle through the tunnel", "select user as who, 'ñandú' as t, date '2024-02-29' as d from dual;", () => password("Oracle through the tunnel", "spelaion"));
     await run();
-    await password("Oracle through the tunnel", "spelaion");
+
     await statusline("1 row");
     await shot("10d-oracle-tunnel");
   });
@@ -398,19 +533,57 @@ try {
   });
 
   await step("Neo4j (a plugin only, Cypher) behind the same two bastions", async () => {
-    await newQuery("Neo4j through the tunnel", "RETURN 'ñandú' AS t, 1.5 AS r, date('2024-02-29') AS d;");
+    await newQuery("Neo4j through the tunnel", "RETURN 'ñandú' AS t, 1.5 AS r, date('2024-02-29') AS d;", () => password("Neo4j through the tunnel", "spelaion-test"));
     await run();
-    await password("Neo4j through the tunnel", "spelaion-test");
+
     await statusline("1 row");
     await shot("10d-neo4j-tunnel");
   });
 
   await step("Databend (a plugin only) behind the same two bastions", async () => {
-    await newQuery("Databend through the tunnel", "select 'ñandú' as t, 1.5 as r, '2024-02-29'::date as d;");
+    await newQuery("Databend through the tunnel", "select 'ñandú' as t, 1.5 as r, '2024-02-29'::date as d;", () => password("Databend through the tunnel", "spelaion-test"));
     await run();
-    await password("Databend through the tunnel", "spelaion-test");
+
     await statusline("1 row");
     await shot("10d-databend-tunnel");
+  });
+
+  await step("JSON viewer switches presentation and formats an editable value without losing big numbers", async () => {
+    await newQuery("JSON Viewer SQLite", `update customer set name = '{"n":12345678901234567890}' where id = 1;`);
+    await run();
+    await visibleText(P, "Statement 1: 1 row");
+    await replaceQuery("select id, name from customer where id = 1;");
+    await run(); await statusline("1 row");
+    await button("Add row", P);
+    const box = await wd.evaluate((p) => { const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect(); return { x: r.x, y: r.y }; }, P);
+    await wd.pointerAt(box.x + 52 + 110 + 20, box.y + 34 + 12);
+    await wd.press("Enter");
+    const viewer = `${P} .cell-viewer`;
+    await wd.element((s) => document.querySelector(`${s} textarea.cell-viewer-editor`), [viewer], { what: "editable cell viewer" });
+    await wd.click(await button("Formatted", viewer));
+    await visibleText(viewer, "12345678901234567890");
+    await visibleText(P, "No pending changes");
+    await wd.click(await button("As stored", viewer));
+    await wd.click(await button("Wrap text", viewer));
+    assert.equal(await wd.evaluate((s) => document.querySelector(`${s} textarea`).getAttribute("wrap"), viewer), "off");
+    const editor = await wd.element((s) => document.querySelector(`${s} textarea`), [viewer]);
+    await fill(editor, '{"n":');
+    await wd.waitFor((s) => [...document.querySelectorAll(`${s} button`)].some((b) => b.textContent.trim() === "Format JSON" && b.disabled), [viewer], { what: "invalid JSON to disable formatting" });
+    await fill(editor, '{"n":12345678901234567890}');
+    await visibleText(P, "No pending changes");
+    await wd.click(await button("Format JSON", viewer));
+    await visibleText(P, "Updated: 1");
+    const formatted = await wd.evaluate((s) => document.querySelector(`${s} textarea`).value, viewer);
+    assert.ok(formatted.includes("12345678901234567890") && formatted.includes("\n"), formatted);
+    await wd.click(await button("Save changes", `${P} .result-editing`));
+    await visibleText(P, "No pending changes");
+    await replaceQuery("select name from customer where id = 1;"); await run(); await statusline("1 row");
+    const target = await wd.evaluate((p) => { const r = document.querySelector(`${p} .grid-canvas`).getBoundingClientRect(); return { x: r.x, y: r.y }; }, P);
+    clipboard.set("not copied");
+    await wd.pointerAt(target.x + 65, target.y + 46); await wd.press("Control+c");
+    let copied = "";
+    for (let i = 0; i < 50 && !copied.includes("12345678901234567890"); i++) { await new Promise((resolve) => setTimeout(resolve, 100)); copied = clipboard.get(); }
+    assert.ok(copied.includes("12345678901234567890"), copied);
   });
 
   await step("quitting with a transaction open asks first: Cancel keeps the app, Quit and roll back closes it", async () => {

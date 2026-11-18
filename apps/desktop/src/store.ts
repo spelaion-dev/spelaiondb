@@ -10,20 +10,51 @@ import type { DiagramScopeItem_Deserialize, RestoredTabItem } from "./bindings";
 export interface ResultMeta {
   id: number;
   statement: number;
+  /** The run of this tab that produced it: a tab keeps results of several runs (SDB-378). */
+  run?: number;
+  /** Its tab's name, as the core keeps it: the user's, else its statement's first comment. */
+  name?: string;
+  /** `name` is the one the user gave it, which Reset name takes off (SDB-407). */
+  renamed?: boolean;
+  /** Pinned in the core: no run replaces it until it is unpinned or closed. */
+  pinned?: boolean;
   columns: ColumnItem[];
   rows: number;
   complete: boolean;
-  /** Column the core sorted the rows by (`undefined`: the server's order). */
-  sort?: SortState;
+  /** The result came from a completed run of exactly one statement. */
+  refreshable?: boolean;
+  /** Original single statement, before variables and parameters were substituted. */
+  refreshSql?: string;
+  /** Row to restore after an explicit refresh of a paged query. */
+  refreshScrollRow?: number;
+  /** Columns the core sorted the loaded rows by, the most significant first (none: the
+   *  order they arrived in). */
+  sort?: SortState[];
   /** Text the core filtered the rows by; `rows` then counts what is left of `total`. */
   filter?: string;
-  /** Column conditions the core filtered the rows by (all must hold). */
+  /** Column conditions the core filtered the rows by. */
   columnFilters?: ColumnFilterItem[];
+  /** How the core reads them together: all of them unless `any`, ignoring case unless
+   *  `matchCase` (`undefined`: all, ignoring case). */
+  filterMode?: FilterMode;
   total?: number;
   /** The statement that produced it, as it ran: what an export runs again (ADR-034). */
   sql?: string;
   /** Pages fetched from one safe SELECT, appended to this result. */
-  paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number };
+  /** `sort`: the grid sort its pages were read from the server with (the header clicks of a
+   *  paged query), by result column. */
+  /** `progress`: the rows held while a load of many pages runs ("Load every row", or a page or
+   *  a row past the ones loaded; SDB-386). */
+  paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number; sort?: SortState[]; progress?: number };
+  /** "Go to row" (SDB-386): the row of the current view to select and show; `seq` changes for
+   *  every request, so asking for the same row again shows it again. */
+  goToRow?: { row: number; seq: number };
+}
+
+/** How a result's column conditions are read together (the core's `FilterMode`). */
+export interface FilterMode {
+  any: boolean;
+  matchCase: boolean;
 }
 
 export interface SortState {
@@ -81,6 +112,9 @@ export interface Tab {
   title?: string;
   /** Pinned tabs sort first and are left open by "close others / to the right / all". */
   pinned?: boolean;
+  /** A new script that started with the user's template (SDB-384): its editor opens with the
+   *  cursor after that text (UI only, never kept). */
+  fromTemplate?: boolean;
   /** The results panel fills the tab, hiding the SQL editor (UI only, never kept). */
   resultsMaximized?: boolean;
   connectionId: string | null;
@@ -96,6 +130,10 @@ export interface Tab {
   serverVersion: string | null;
   sql: string;
   run: RunState | null;
+  /** This tab's `${name}` variables (SDB-383): in memory only, never saved with the tab. */
+  variables?: Record<string, string>;
+  /** The last value given to each `:name` parameter in this tab, offered again; memory only. */
+  params?: Record<string, string>;
   /** Name it was saved under (or opened from), offered again by Ctrl+S. */
   snippetName?: string;
   /** A table data tab (pages of one table) instead of an SQL editor. */
@@ -146,13 +184,17 @@ export interface TableView {
   /** Typed after WHERE / ORDER BY. */
   filter: string;
   orderBy: string;
-  /** Set by a header click (shown in the grid); typing an ORDER BY clears it. */
-  sort?: SortState;
+  /** Set by header clicks (shown in the grid), the most significant first; typing an ORDER BY
+   *  clears it. */
+  sort?: SortState[];
   pageSize: number;
   /** From 0. */
   page: number;
   /** Rows the filter keeps, once counted ("Count"). */
   total?: number;
+  /** "Load every row" (SDB-386): the tab shows every row the filter keeps, in its pages'
+   *  order, instead of one page. */
+  all?: boolean;
 }
 
 /** Rows per page a table data tab starts with. */
@@ -208,6 +250,13 @@ function nextActive(tabs: Tab[], recent: string[], current: string | null): stri
 
 let tabCounter = 0;
 
+/** The text a new script starts with (SDB-384); empty for none. The core keeps and checks it;
+ *  `snippetStore.ts` puts here what the core answered. */
+let newScriptTemplate = "";
+export function setNewScriptTemplate(template: string) {
+  newScriptTemplate = template;
+}
+
 export type ConnectionDialog =
   | { kind: "add" }
   /** `notice`: shown above the form, such as "this is the copy just made". */
@@ -229,12 +278,17 @@ export interface ExplorerReveal {
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
-export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | EditorActionId;
+export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | ResultTabCommand | EditorActionId;
+/** What a result tab's menu asks about the tab's active result (SDB-378). */
+export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "resultResetName" | "resultClose";
 
 /** Window event asking the editor tab `detail.tab` to do `detail.command` (SDB-18). */
 export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";
 /** Undo or redo of a tab's pending table edits, from the command palette (`{ tab, command }`). */
 export const EDITS_COMMAND_EVENT = "spelaion:edits-command";
+/** A command for the grid of one result, from the palette (SDB-386: "Go to row"); its
+ *  detail is `{ result, command }`. */
+export const GRID_COMMAND_EVENT = "spelaion:grid-command";
 
 /** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
 export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;
@@ -285,6 +339,9 @@ interface AppStore {
   sidebarSection: SidebarSection;
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
+  /** Opens an editor tab. Without `sql` it is a new script: it starts with the user's
+   *  template, if there is one. A tab opened for some text (a file, a history entry, generated
+   *  SQL) or for a table passes that text, or an empty one, and never gets the template. */
   addTab(connectionId: string | null, sql?: string): string;
   /** Opens a table data tab on a table (its first page loads when it appears), filtered by
    *  `filter` when given (a followed foreign key's, written by the core). */
@@ -377,24 +434,26 @@ export const useApp = create<AppStore>((set) => ({
   bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
-  addTab: (connectionId, sql = "") => {
+  addTab: (connectionId, sql) => {
     tabCounter += 1;
     const id = `tab-${tabCounter}`;
+    const fromTemplate = sql === undefined && newScriptTemplate !== "";
     const tab: Tab = {
       id,
       number: tabCounter,
       connectionId,
       status: "disconnected",
       serverVersion: null,
-      sql,
+      sql: sql ?? newScriptTemplate,
       run: null,
+      ...(fromTemplate ? { fromTemplate: true } : {}),
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, recentTabs: [id, ...s.recentTabs] }));
     return id;
   },
   addTableTab: (connectionId, schema, name, filter = ""): string => {
     const app: AppStore = useApp.getState();
-    const id: string = app.addTab(connectionId);
+    const id: string = app.addTab(connectionId, "");
     app.updateTab(id, { table: { schema, name, filter, orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
     return id;
   },
@@ -402,7 +461,7 @@ export const useApp = create<AppStore>((set) => ({
     const app = useApp.getState();
     const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === schema && tab.tableDetails.name === name && tab.tableDetails.kind === kind);
     if (existing) { app.setActiveTab(existing.id); return existing.id; }
-    const id = app.addTab(connectionId);
+    const id = app.addTab(connectionId, "");
     app.updateTab(id, { tableDetails: { schema, name, kind } });
     return id;
   },
@@ -411,7 +470,7 @@ export const useApp = create<AppStore>((set) => ({
     const key = JSON.stringify(scope);
     const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.diagram && JSON.stringify(tab.diagram) === key);
     if (existing) { app.setActiveTab(existing.id); return [existing.id, false]; }
-    const id = app.addTab(connectionId);
+    const id = app.addTab(connectionId, "");
     app.updateTab(id, { diagram: scope });
     return [id, true];
   },

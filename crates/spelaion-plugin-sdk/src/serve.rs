@@ -44,6 +44,22 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
+    serve_within(plugin, reader, writer, SHUTDOWN).await
+}
+
+/// [`serve`], waiting at most `shutdown` for the drivers when the conversation ends. Only the
+/// tests give it another limit than [`SHUTDOWN`]: with a paused clock, a test cannot wait for the
+/// pipes' threads, which the runtime does not see (SDB-411).
+async fn serve_within<R, W>(
+    plugin: Plugin,
+    reader: R,
+    writer: W,
+    shutdown: Duration,
+) -> Result<(), FrameError>
+where
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+{
     let (out, frames) = mpsc::channel(64);
     let spawned = |e: std::io::Error| FrameError::Io(e);
     std::thread::Builder::new()
@@ -75,7 +91,7 @@ where
     // Without an answer the thread is gone: the conversation is over either way.
     let result = ending.await.unwrap_or(Ok(()));
     watcher.abort();
-    shared.end().await;
+    shared.end(shutdown).await;
     result
 }
 
@@ -224,10 +240,10 @@ impl Shared {
 
     /// The conversation is over: every request still being served stops, every session's
     /// connection is dropped, and then each driver closes what it keeps open past them (a
-    /// DuckDB file shared by several sessions writes what it holds), for at most
-    /// [`SHUTDOWN`]. Only then may the program end: ending it while a driver still writes a
-    /// file can leave that file corrupt.
-    async fn end(&self) {
+    /// DuckDB file shared by several sessions writes what it holds), for at most `shutdown`
+    /// ([`SHUTDOWN`] outside the tests). Only then may the program end: ending it while a
+    /// driver still writes a file can leave that file corrupt.
+    async fn end(&self, shutdown: Duration) {
         let mut tasks = std::mem::take(&mut *self.tasks.lock().expect("lock poisoned"));
         // Stopped, and waited for: a request that is dropped drops what it held of its session.
         tasks.shutdown().await;
@@ -242,7 +258,7 @@ impl Shared {
         self.streams.lock().expect("lock poisoned").clear();
         self.incoming.lock().expect("lock poisoned").clear();
         let drivers = self.plugin.drivers.clone();
-        let closed = tokio::time::timeout(SHUTDOWN, async move {
+        let closed = tokio::time::timeout(shutdown, async move {
             for driver in &drivers {
                 driver.shutdown().await;
             }
@@ -251,7 +267,7 @@ impl Shared {
         if closed.is_err() {
             eprintln!(
                 "the drivers had not closed everything after {} seconds: the plugin ends anyway",
-                SHUTDOWN.as_secs()
+                shutdown.as_secs_f32()
             );
         }
     }
@@ -924,16 +940,43 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    /// An input that takes a moment of real time to end, as a pipe under load does.
+    struct EndsLate;
+
+    impl std::io::Read for EndsLate {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(0)
+        }
+    }
+
+    /// With the clock in real time and a short limit: a paused clock would jump to the test's
+    /// own timeout while the input's thread, which the runtime does not see, is still reading
+    /// (SDB-411: with `EndsLate` that failed every time; with an empty input, now and then in CI).
+    #[tokio::test]
     async fn a_driver_that_never_closes_does_not_keep_the_plugin_for_ever() {
-        // The input is already closed: the conversation ends at once, and the plugin waits
-        // for its driver only as long as it may, even with nobody left to kill it.
-        let plugin = Plugin::new("hangs", "0", vec![Arc::new(Hangs)]);
-        let served = tokio::time::timeout(
-            SHUTDOWN + Duration::from_secs(5),
-            serve(plugin, std::io::empty(), std::io::sink()),
-        )
-        .await;
-        assert!(matches!(served, Ok(Ok(()))), "{served:?}");
+        let limit = Duration::from_millis(200);
+        for (name, input) in [
+            (
+                "an input already closed",
+                Box::new(std::io::empty()) as Box<dyn Read + Send>,
+            ),
+            ("an input that ends late", Box::new(EndsLate)),
+        ] {
+            // The conversation ends, and the plugin waits for its driver only as long as it
+            // may, even with nobody left to kill it.
+            let plugin = Plugin::new("hangs", "0", vec![Arc::new(Hangs)]);
+            let started = std::time::Instant::now();
+            let served = tokio::time::timeout(
+                Duration::from_secs(20),
+                serve_within(plugin, input, std::io::sink(), limit),
+            )
+            .await;
+            assert!(matches!(served, Ok(Ok(()))), "{name}: {served:?}");
+            assert!(
+                started.elapsed() >= limit,
+                "{name}: the driver was not waited for"
+            );
+        }
     }
 }

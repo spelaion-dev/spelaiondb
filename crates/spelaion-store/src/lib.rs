@@ -10,16 +10,20 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 mod aside;
 mod backup;
+mod editor_snippets;
 mod library;
 mod map;
+mod table_filters;
 mod tabs;
 pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
+pub use editor_snippets::{EditorSnippet, is_snippet_name};
 pub use library::{HistoryFilter, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder};
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,
     check_tile_server,
 };
+pub use table_filters::{FilteredTable, TABLE_FILTER_HISTORY, TABLE_FILTER_MAX_CHARS};
 pub use tabs::{
     FileEncoding, LineEnding, MAX_RECENT_FILES, RecentFile, SavedFile, SavedTab, SavedTabs,
 };
@@ -207,7 +211,38 @@ const MIGRATIONS: &[&str] = &["create table audit (
         when new.key = 'editor.reconnect_on_start' and new.value not in ('on', 'off')
         begin select raise(abort, 'unsupported editor setting'); end;",
     library::MIGRATION,
+    // A connection's `${name}` variables for the editor's scripts (SDB-383), per workspace and
+    // connection like its explorer filter. Local values the user typed: never sent anywhere,
+    // never read by `spelaiondb mcp`.
+    "create table connection_variables (
+        workspace   text not null,
+        connection  text not null,
+        name        text not null check (length(name) between 1 and 64),
+        value       text not null,
+        primary key (workspace, connection, name)
+    );",
+    table_filters::MIGRATION,
 ];
+
+/// The longest name of an editor variable (SDB-383), in bytes.
+pub const MAX_VARIABLE_NAME: usize = 64;
+/// The longest value of an editor variable, in bytes.
+pub const MAX_VARIABLE_VALUE: usize = 64 * 1024;
+
+/// Whether `name` can name an editor variable: a letter or `_`, then letters, digits and `_`.
+pub fn is_variable_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= MAX_VARIABLE_NAME
+        && bytes
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+        && bytes.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+/// Whether `value` can be an editor variable's value: bounded, and without the NUL character.
+pub fn is_variable_value(value: &str) -> bool {
+    value.len() <= MAX_VARIABLE_VALUE && !value.contains('\0')
+}
 
 /// Milliseconds since 1970 (UTC); 0 if the clock is before it.
 fn now_ms() -> i64 {
@@ -579,12 +614,26 @@ impl Default for ExplorerPreferences {
     }
 }
 
+/// The interface sizes the user may choose (SDB-389), in percent of the normal size: the
+/// whole window is drawn at that scale, every size the other settings give included.
+pub const INTERFACE_SIZES: [u16; 5] = [90, 100, 110, 125, 150];
+/// The interface size until the user chooses another.
+pub const DEFAULT_INTERFACE_SIZE: u16 = 100;
+/// The editor's zoom steps (SDB-389), in percent of the editor's own font size and line
+/// height: Ctrl+= and Ctrl+- move to the next step, Ctrl+0 goes back to 100.
+pub const EDITOR_ZOOMS: [u16; 11] = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+/// The editor's zoom until the user zooms.
+pub const DEFAULT_EDITOR_ZOOM: u16 = 100;
+
 /// Personal SQL editor and formatter preferences. Values are checked before storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorPreferences {
     pub font: String,
     pub font_size: u8,
     pub line_height: u8,
+    /// The editor's zoom, one of [`EDITOR_ZOOMS`]: it multiplies `font_size` and
+    /// `line_height`, so going back to 100 gives the sizes chosen in Settings again.
+    pub zoom: u16,
     pub tab_size: u8,
     pub line_numbers: bool,
     pub word_wrap: bool,
@@ -598,6 +647,7 @@ impl Default for EditorPreferences {
             font: "system".into(),
             font_size: 13,
             line_height: 18,
+            zoom: DEFAULT_EDITOR_ZOOM,
             tab_size: 2,
             line_numbers: true,
             word_wrap: false,
@@ -613,6 +663,7 @@ impl EditorPreferences {
             || !(10..=32).contains(&self.font_size)
             || !(14..=48).contains(&self.line_height)
             || self.line_height < self.font_size
+            || !EDITOR_ZOOMS.contains(&self.zoom)
             || !(1..=8).contains(&self.tab_size)
             || !(1..=8).contains(&self.indent)
             || !["preserve", "upper", "lower"].contains(&self.keyword_case.as_str())
@@ -624,23 +675,115 @@ impl EditorPreferences {
     }
 }
 
-/// How the result grid draws its cells, shared by every workspace in this user directory.
+/// The result tabs an editor tab keeps until the user chooses another number.
+pub const DEFAULT_RESULT_TABS: u32 = 20;
+/// The most result tabs an editor tab may be set to keep.
+pub const MAX_RESULT_TABS: u32 = 100;
+
+/// How the result grid draws its cells and how many result tabs an editor tab keeps, shared
+/// by every workspace in this user directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridPreferences {
+    /// Wrap long text in the cell viewer; on by default.
+    pub viewer_wrap: bool,
     /// Every other row tinted; on by default.
     pub zebra: bool,
     /// NULL cells read `NULL` (dimmed); on by default. Off, they are drawn empty.
     pub null_text: bool,
     /// Boolean columns drawn as checkboxes instead of `true` / `false`; off by default.
     pub bool_checkboxes: bool,
+    /// How many result tabs an editor tab keeps (SDB-378), from 1 to [`MAX_RESULT_TABS`]:
+    /// past it, the oldest result that is not pinned is closed.
+    pub result_tabs: u32,
+    /// Values colored by their type (numbers, text, dates, booleans, NULL); off by default.
+    pub colorize: bool,
+    /// The column header shows the column's type under its name; on by default.
+    pub header_type: bool,
+    /// The column header shows the column's comment, where it is known; off by default.
+    pub header_comment: bool,
+    /// The grid's own font size in pixels (SDB-385), from [`MIN_GRID_FONT`] to
+    /// [`MAX_GRID_FONT`]: not the editor's, nor the interface's.
+    pub font_size: u32,
+}
+
+/// The grid's font size until the user chooses another, and its bounds, in pixels.
+pub const DEFAULT_GRID_FONT: u32 = 12;
+pub const MIN_GRID_FONT: u32 = 10;
+pub const MAX_GRID_FONT: u32 = 20;
+
+/// How the grid shows values (SDB-385), as the user set it: `strftime` patterns for dates,
+/// times and timestamps, a number's marks, a display time zone and how binary reads. Kept as
+/// text; the core checks it before it is saved and reads it leniently (a value it does not
+/// know is the default). An empty text means "as the database prints it".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayPreferences {
+    /// Everything as the database prints it, whatever the other settings say; on by default.
+    pub as_stored: bool,
+    pub date: String,
+    pub time: String,
+    pub timestamp: String,
+    pub grouping: String,
+    pub decimal: String,
+    pub time_zone: String,
+    pub binary: String,
+}
+
+impl Default for DisplayPreferences {
+    fn default() -> Self {
+        Self {
+            as_stored: true,
+            date: String::new(),
+            time: String::new(),
+            timestamp: String::new(),
+            grouping: String::new(),
+            decimal: String::new(),
+            time_zone: String::new(),
+            binary: String::new(),
+        }
+    }
 }
 
 impl Default for GridPreferences {
     fn default() -> Self {
         Self {
+            viewer_wrap: true,
             zebra: true,
             null_text: true,
             bool_checkboxes: false,
+            result_tabs: DEFAULT_RESULT_TABS,
+            colorize: false,
+            header_type: true,
+            header_comment: false,
+            font_size: DEFAULT_GRID_FONT,
+        }
+    }
+}
+
+/// The copy defaults (SDB-388): what "Copy special…" chose last, for every workspace in this
+/// user directory. Kept as text; the core checks what they mean before they are saved and
+/// reads them leniently (`spelaion-core`'s `History::copy_defaults`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyPreferences {
+    /// One character.
+    pub delimiter: String,
+    /// One character, or empty: never quoted.
+    pub quote: String,
+    /// `lf` or `crlf`.
+    pub row_delimiter: String,
+    pub null_text: String,
+    pub header: bool,
+    pub row_numbers: bool,
+}
+
+impl Default for CopyPreferences {
+    fn default() -> Self {
+        Self {
+            delimiter: "\t".into(),
+            quote: "\"".into(),
+            row_delimiter: "lf".into(),
+            null_text: String::new(),
+            header: true,
+            row_numbers: false,
         }
     }
 }
@@ -1011,6 +1154,8 @@ impl Store {
             "explorer_filters",
             "explorer_bookmarks",
             "history_preferences",
+            "table_filter_history",
+            "table_filter_defaults",
         ] {
             transaction.execute(
                 &format!(
@@ -1096,6 +1241,62 @@ impl Store {
                 workspace, connection, lines[0], lines[1], lines[2], lines[3], lines[4], lines[5]
             ],
         )?;
+        Ok(())
+    }
+
+    /// A connection's editor variables (SDB-383), by name.
+    pub fn connection_variables(
+        &self,
+        workspace: &str,
+        connection: &str,
+    ) -> Result<Vec<(String, String)>, StoreError> {
+        let mut statement = self.conn.prepare(
+            "select name, value from connection_variables
+             where workspace = ?1 and connection = ?2 order by name",
+        )?;
+        let rows = statement.query_map(params![workspace, connection], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Sets one of a connection's editor variables, or removes it (`None`). A name or a value
+    /// that cannot be one is refused and nothing changes.
+    pub fn set_connection_variable(
+        &self,
+        workspace: &str,
+        connection: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), StoreError> {
+        if !is_variable_name(name) {
+            return Err(StoreError::new(
+                "a variable's name is a letter or _ followed by letters, digits and _, at most 64"
+                    .into(),
+            ));
+        }
+        match value {
+            None => {
+                self.conn.execute(
+                    "delete from connection_variables
+                     where workspace = ?1 and connection = ?2 and name = ?3",
+                    params![workspace, connection, name],
+                )?;
+            }
+            Some(value) => {
+                if !is_variable_value(value) {
+                    return Err(StoreError::new(
+                        "a variable's value is at most 64 KiB and has no NUL character".into(),
+                    ));
+                }
+                self.conn.execute(
+                    "insert into connection_variables (workspace, connection, name, value)
+                     values (?1, ?2, ?3, ?4)
+                     on conflict (workspace, connection, name) do update set value = excluded.value",
+                    params![workspace, connection, name, value],
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -1200,6 +1401,26 @@ impl Store {
         self.set_personal_setting("theme", theme)
     }
 
+    /// The interface size (SDB-389), one of [`INTERFACE_SIZES`], shared by every workspace in
+    /// this user directory. A value that is not one of them reads as the default.
+    pub fn get_interface_size(&self) -> Result<u16, StoreError> {
+        Ok(self
+            .personal_setting("interface_size")?
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|size| INTERFACE_SIZES.contains(size))
+            .unwrap_or(DEFAULT_INTERFACE_SIZE))
+    }
+
+    /// Saves the interface size; anything but one of [`INTERFACE_SIZES`] is refused.
+    pub fn set_interface_size(&self, size: u16) -> Result<(), StoreError> {
+        if !INTERFACE_SIZES.contains(&size) {
+            return Err(StoreError::new(format!(
+                "the interface size is one of {INTERFACE_SIZES:?} percent"
+            )));
+        }
+        self.set_personal_setting("interface_size", &size.to_string())
+    }
+
     /// Whether the app checks for updates when it starts (ADR-021). On unless turned off.
     pub fn get_update_check(&self) -> Result<bool, StoreError> {
         let value = self
@@ -1298,6 +1519,12 @@ impl Store {
                 .personal_setting("editor.line_height")?
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(defaults.line_height),
+            // Read on its own: a zoom that is not a step is 100, and never resets the rest.
+            zoom: self
+                .personal_setting("editor.zoom")?
+                .and_then(|s| s.parse().ok())
+                .filter(|zoom| EDITOR_ZOOMS.contains(zoom))
+                .unwrap_or(defaults.zoom),
             tab_size: self
                 .personal_setting("editor.tab_size")?
                 .and_then(|s| s.parse().ok())
@@ -1330,6 +1557,7 @@ impl Store {
         self.set_personal_setting("editor.font", &preferences.font)?;
         self.set_personal_setting("editor.font_size", &preferences.font_size.to_string())?;
         self.set_personal_setting("editor.line_height", &preferences.line_height.to_string())?;
+        self.set_personal_setting("editor.zoom", &preferences.zoom.to_string())?;
         self.set_personal_setting("editor.tab_size", &preferences.tab_size.to_string())?;
         self.set_flag("editor.line_numbers", preferences.line_numbers)?;
         self.set_flag("editor.word_wrap", preferences.word_wrap)?;
@@ -1344,21 +1572,143 @@ impl Store {
     pub fn get_grid_preferences(&self) -> Result<GridPreferences, StoreError> {
         let defaults = GridPreferences::default();
         Ok(GridPreferences {
+            viewer_wrap: self.get_flag("grid.viewer_wrap", defaults.viewer_wrap)?,
             zebra: self.get_flag("grid.zebra", defaults.zebra)?,
             null_text: self.get_flag("grid.null_text", defaults.null_text)?,
             bool_checkboxes: self.get_flag("grid.bool_checkboxes", defaults.bool_checkboxes)?,
+            // A value that is not a number in range reads as the default.
+            result_tabs: self
+                .personal_setting("results.kept_tabs")?
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|tabs| (1..=MAX_RESULT_TABS).contains(tabs))
+                .unwrap_or(defaults.result_tabs),
+            colorize: self.get_flag("grid.colorize", defaults.colorize)?,
+            header_type: self.get_flag("grid.header_type", defaults.header_type)?,
+            header_comment: self.get_flag("grid.header_comment", defaults.header_comment)?,
+            font_size: self
+                .personal_setting("grid.font_size")?
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|size| (MIN_GRID_FONT..=MAX_GRID_FONT).contains(size))
+                .unwrap_or(defaults.font_size),
         })
+    }
+
+    /// How the grid shows values, each setting at its default until it is changed.
+    pub fn get_display_preferences(&self) -> Result<DisplayPreferences, StoreError> {
+        let text = |key: &str| Ok::<_, StoreError>(self.personal_setting(key)?.unwrap_or_default());
+        Ok(DisplayPreferences {
+            as_stored: self.get_flag("display.as_stored", true)?,
+            date: text("display.date")?,
+            time: text("display.time")?,
+            timestamp: text("display.timestamp")?,
+            grouping: text("display.grouping")?,
+            decimal: text("display.decimal")?,
+            time_zone: text("display.time_zone")?,
+            binary: text("display.binary")?,
+        })
+    }
+
+    /// Saves how the grid shows values, all of it or nothing. Each text is one line of at
+    /// most 128 bytes (the core has checked what it means).
+    pub fn set_display_preferences(
+        &self,
+        preferences: &DisplayPreferences,
+    ) -> Result<(), StoreError> {
+        let texts = [
+            ("display.date", &preferences.date),
+            ("display.time", &preferences.time),
+            ("display.timestamp", &preferences.timestamp),
+            ("display.grouping", &preferences.grouping),
+            ("display.decimal", &preferences.decimal),
+            ("display.time_zone", &preferences.time_zone),
+            ("display.binary", &preferences.binary),
+        ];
+        if texts
+            .iter()
+            .any(|(_, text)| text.len() > 128 || text.chars().any(char::is_control))
+        {
+            return Err(StoreError::new("invalid display preferences".into()));
+        }
+        let transaction = self.conn.unchecked_transaction()?;
+        self.set_flag("display.as_stored", preferences.as_stored)?;
+        for (key, text) in texts {
+            self.set_personal_setting(key, text)?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn set_grid_preferences(&self, preferences: &GridPreferences) -> Result<(), StoreError> {
         let GridPreferences {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         } = *preferences;
+        if !(1..=MAX_RESULT_TABS).contains(&result_tabs) {
+            return Err(StoreError::new(format!(
+                "an editor tab keeps from 1 to {MAX_RESULT_TABS} result tabs"
+            )));
+        }
+        if !(MIN_GRID_FONT..=MAX_GRID_FONT).contains(&font_size) {
+            return Err(StoreError::new(format!(
+                "the grid's font size is from {MIN_GRID_FONT} to {MAX_GRID_FONT} pixels"
+            )));
+        }
+        self.set_flag("grid.viewer_wrap", viewer_wrap)?;
         self.set_flag("grid.zebra", zebra)?;
         self.set_flag("grid.null_text", null_text)?;
-        self.set_flag("grid.bool_checkboxes", bool_checkboxes)
+        self.set_flag("grid.bool_checkboxes", bool_checkboxes)?;
+        self.set_flag("grid.colorize", colorize)?;
+        self.set_flag("grid.header_type", header_type)?;
+        self.set_flag("grid.header_comment", header_comment)?;
+        self.set_personal_setting("grid.font_size", &font_size.to_string())?;
+        self.set_personal_setting("results.kept_tabs", &result_tabs.to_string())
+    }
+
+    /// The copy defaults (SDB-388), each at its default until it is changed.
+    pub fn get_copy_preferences(&self) -> Result<CopyPreferences, StoreError> {
+        let defaults = CopyPreferences::default();
+        let text = |key: &str, default: String| {
+            Ok::<_, StoreError>(self.personal_setting(key)?.unwrap_or(default))
+        };
+        Ok(CopyPreferences {
+            delimiter: text("copy.delimiter", defaults.delimiter)?,
+            quote: text("copy.quote", defaults.quote)?,
+            row_delimiter: text("copy.row_delimiter", defaults.row_delimiter)?,
+            null_text: text("copy.null_text", defaults.null_text)?,
+            header: self.get_flag("copy.header", defaults.header)?,
+            row_numbers: self.get_flag("copy.row_numbers", defaults.row_numbers)?,
+        })
+    }
+
+    /// Saves the copy defaults, all of them or nothing: a delimiter of one character, a quote
+    /// of at most one, a known row delimiter and a NULL text of one short line (the core has
+    /// checked what they mean together).
+    pub fn set_copy_preferences(&self, preferences: &CopyPreferences) -> Result<(), StoreError> {
+        let one_char = |text: &str| text.chars().count() == 1;
+        let valid = one_char(&preferences.delimiter)
+            && (preferences.quote.is_empty() || one_char(&preferences.quote))
+            && matches!(preferences.row_delimiter.as_str(), "lf" | "crlf")
+            && preferences.null_text.len() <= 128
+            && !preferences.null_text.chars().any(char::is_control);
+        if !valid {
+            return Err(StoreError::new("invalid copy preferences".into()));
+        }
+        let transaction = self.conn.unchecked_transaction()?;
+        self.set_personal_setting("copy.delimiter", &preferences.delimiter)?;
+        self.set_personal_setting("copy.quote", &preferences.quote)?;
+        self.set_personal_setting("copy.row_delimiter", &preferences.row_delimiter)?;
+        self.set_personal_setting("copy.null_text", &preferences.null_text)?;
+        self.set_flag("copy.header", preferences.header)?;
+        self.set_flag("copy.row_numbers", preferences.row_numbers)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// The user's read-only mode for every agent (ADR-033). Off until turned on; any value
@@ -2213,6 +2563,7 @@ mod tests {
             font: "Consolas".into(),
             font_size: 16,
             line_height: 24,
+            zoom: 125,
             keyword_case: "upper".into(),
             word_wrap: true,
             ..defaults.clone()
@@ -2236,14 +2587,250 @@ mod tests {
             },
             EditorPreferences {
                 comma_position: "unknown".into(),
+                ..defaults.clone()
+            },
+            // Only the zoom steps: never a size of its own, nor nothing.
+            EditorPreferences {
+                zoom: 0,
+                ..defaults.clone()
+            },
+            EditorPreferences {
+                zoom: 133,
+                ..defaults.clone()
+            },
+            EditorPreferences {
+                zoom: 1000,
                 ..defaults
             },
         ] {
             assert!(store.set_editor_preferences(&invalid).is_err());
             assert_eq!(store.get_editor_preferences().unwrap(), changed);
         }
+        // A damaged zoom reads as 100 and leaves the other preferences as they were.
+        store.set_personal_setting("editor.zoom", "9999").unwrap();
+        assert_eq!(
+            store.get_editor_preferences().unwrap(),
+            EditorPreferences {
+                zoom: DEFAULT_EDITOR_ZOOM,
+                ..changed
+            }
+        );
         drop(store);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn interface_size_is_one_of_its_steps_and_persists() {
+        let path = temp("interface-size");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_interface_size().unwrap(), DEFAULT_INTERFACE_SIZE);
+        store.set_interface_size(150).unwrap();
+        for refused in [0, 1, 99, 101, 151, 200, u16::MAX] {
+            assert!(store.set_interface_size(refused).is_err(), "{refused}");
+        }
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_interface_size().unwrap(), 150);
+        // What is not a step (a damaged file) reads as the default.
+        for damaged in ["abc", "", "-1", "1000", "99"] {
+            store
+                .set_personal_setting("interface_size", damaged)
+                .unwrap();
+            assert_eq!(
+                store.get_interface_size().unwrap(),
+                DEFAULT_INTERFACE_SIZE,
+                "{damaged}"
+            );
+        }
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn connection_variables_are_kept_per_workspace_and_connection() {
+        let path = temp("variables");
+        let store = Store::open(&path).unwrap();
+        assert!(store.connection_variables("w", "shop").unwrap().is_empty());
+        store
+            .set_connection_variable("w", "shop", "customer", Some("42"))
+            .unwrap();
+        store
+            .set_connection_variable("w", "shop", "_cols", Some("id, name\n-- with a comment"))
+            .unwrap();
+        store
+            .set_connection_variable("w", "shop", "customer", Some("43"))
+            .unwrap();
+        store
+            .set_connection_variable("w", "other", "customer", Some("1"))
+            .unwrap();
+        store
+            .set_connection_variable("elsewhere", "shop", "customer", Some("2"))
+            .unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.connection_variables("w", "shop").unwrap(),
+            [
+                (
+                    "_cols".to_string(),
+                    "id, name\n-- with a comment".to_string()
+                ),
+                ("customer".to_string(), "43".to_string()),
+            ]
+        );
+        assert_eq!(store.connection_variables("w", "other").unwrap().len(), 1);
+        // Removing one leaves the others, and removing it again changes nothing.
+        store
+            .set_connection_variable("w", "shop", "customer", None)
+            .unwrap();
+        store
+            .set_connection_variable("w", "shop", "customer", None)
+            .unwrap();
+        assert_eq!(store.connection_variables("w", "shop").unwrap().len(), 1);
+        assert_eq!(
+            store.connection_variables("elsewhere", "shop").unwrap(),
+            [("customer".to_string(), "2".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_variable_that_cannot_be_one_is_refused_and_nothing_is_saved() {
+        let store = Store::open(&temp("variables-refused")).unwrap();
+        for name in [
+            "",
+            "1x",
+            "a b",
+            "a-b",
+            "env:HOME",
+            "user.name",
+            &"a".repeat(65),
+        ] {
+            assert!(
+                store
+                    .set_connection_variable("w", "shop", name, Some("1"))
+                    .is_err(),
+                "{name}"
+            );
+            assert!(!is_variable_name(name), "{name}");
+        }
+        for value in ["a\0b".to_string(), "x".repeat(MAX_VARIABLE_VALUE + 1)] {
+            assert!(
+                store
+                    .set_connection_variable("w", "shop", "v", Some(&value))
+                    .is_err()
+            );
+        }
+        assert!(store.connection_variables("w", "shop").unwrap().is_empty());
+        // The longest name and value are accepted.
+        store
+            .set_connection_variable(
+                "w",
+                "shop",
+                &"a".repeat(MAX_VARIABLE_NAME),
+                Some(&"x".repeat(MAX_VARIABLE_VALUE)),
+            )
+            .unwrap();
+        assert_eq!(store.connection_variables("w", "shop").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn display_preferences_start_as_the_database_prints_and_persist() {
+        let path = temp("display");
+        let store = Store::open(&path).unwrap();
+        let defaults = DisplayPreferences::default();
+        assert!(defaults.as_stored);
+        assert_eq!(store.get_display_preferences().unwrap(), defaults);
+        let changed = DisplayPreferences {
+            as_stored: false,
+            date: "%d/%m/%Y".into(),
+            time: "%H:%M".into(),
+            timestamp: "%d/%m/%Y %H:%M:%S".into(),
+            grouping: "dot".into(),
+            decimal: "comma".into(),
+            time_zone: "Europe/Madrid".into(),
+            binary: "base64".into(),
+        };
+        store.set_display_preferences(&changed).unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.get_display_preferences().unwrap(), changed);
+        // A text that is not one short line is refused, and nothing changes.
+        for bad in ["%Y\n%m".to_string(), "x".repeat(129)] {
+            let refused = DisplayPreferences {
+                date: bad,
+                as_stored: true,
+                ..changed.clone()
+            };
+            assert!(reopened.set_display_preferences(&refused).is_err());
+        }
+        assert_eq!(reopened.get_display_preferences().unwrap(), changed);
+        // The grid's other preferences are kept apart.
+        assert_eq!(
+            reopened.get_grid_preferences().unwrap(),
+            GridPreferences::default()
+        );
+    }
+
+    #[test]
+    fn copy_preferences_start_at_their_defaults_and_persist() {
+        let path = temp("copy");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.get_copy_preferences().unwrap(),
+            CopyPreferences::default()
+        );
+        // Every field is saved on its own: each one changed from its default.
+        let changed = CopyPreferences {
+            delimiter: ";".into(),
+            quote: String::new(),
+            row_delimiter: "crlf".into(),
+            null_text: "NULL".into(),
+            header: false,
+            row_numbers: true,
+        };
+        store.set_copy_preferences(&changed).unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.get_copy_preferences().unwrap(), changed);
+        // What could not be read back is refused, and nothing of it is saved.
+        for refused in [
+            CopyPreferences {
+                delimiter: String::new(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                delimiter: ";;".into(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                quote: "''".into(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                row_delimiter: "cr".into(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                null_text: "a\nb".into(),
+                ..changed.clone()
+            },
+            CopyPreferences {
+                null_text: "x".repeat(129),
+                header: true,
+                ..changed.clone()
+            },
+        ] {
+            assert!(
+                reopened.set_copy_preferences(&refused).is_err(),
+                "{refused:?}"
+            );
+        }
+        assert_eq!(reopened.get_copy_preferences().unwrap(), changed);
+        // The grid's preferences are kept apart.
+        assert_eq!(
+            reopened.get_grid_preferences().unwrap(),
+            GridPreferences::default()
+        );
     }
 
     #[test]
@@ -2253,12 +2840,37 @@ mod tests {
         let defaults = GridPreferences::default();
         assert_eq!(store.get_grid_preferences().unwrap(), defaults);
         assert!(defaults.zebra && defaults.null_text && !defaults.bool_checkboxes);
-        // Every field is saved on its own: each one flipped from its default.
+        assert_eq!(defaults.result_tabs, 20);
+        // Every field is saved on its own: each one changed from its default.
         let changed = GridPreferences {
+            viewer_wrap: false,
             zebra: false,
             null_text: false,
             bool_checkboxes: true,
+            result_tabs: 5,
+            colorize: true,
+            header_type: false,
+            header_comment: true,
+            font_size: 15,
         };
+        for font_size in [MIN_GRID_FONT - 1, MAX_GRID_FONT + 1] {
+            let out_of_range = GridPreferences {
+                font_size,
+                ..changed
+            };
+            assert!(store.set_grid_preferences(&out_of_range).is_err());
+        }
+        assert!(!defaults.colorize && defaults.header_type && !defaults.header_comment);
+        assert_eq!(defaults.font_size, 12);
+        // A number of result tabs out of range is refused, and nothing is saved.
+        for result_tabs in [0, MAX_RESULT_TABS + 1] {
+            let out_of_range = GridPreferences {
+                result_tabs,
+                ..changed
+            };
+            assert!(store.set_grid_preferences(&out_of_range).is_err());
+        }
+        assert_eq!(store.get_grid_preferences().unwrap(), defaults);
         store.set_grid_preferences(&changed).unwrap();
         drop(store);
         let reopened = Store::open(&path).unwrap();

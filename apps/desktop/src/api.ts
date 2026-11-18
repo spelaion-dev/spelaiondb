@@ -8,6 +8,8 @@ import {
   events,
   type BookmarkItem,
   type CellRange,
+  type CopySpecialItem,
+  type UpdateSourceItem,
   type ColumnItem,
   type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
@@ -140,6 +142,7 @@ export type TableStatusItem = TableStatusItem_Deserialize;
 export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, SchemaColumnItem, SearchTableItem };
 export type { ImportReport, KubernetesDraftItem, SsmDraftItem };
 export type { BlockItem, BulkActionItem, CellInputItem };
+export type { CopySpecialItem, UpdateSourceItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
 export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };

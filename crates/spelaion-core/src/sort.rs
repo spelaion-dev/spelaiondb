@@ -1,8 +1,10 @@
-//! Sorting a stored result by one column (the grid's header click). The order is computed
-//! here from the typed values, never in the UI: numbers sort as numbers, decimals (which
-//! travel as text) by their numeric value, dates by date, text by Unicode code point and
+//! Sorting a stored result by one or several columns (the grid's header clicks). The order is
+//! computed here from the typed values, never in the UI: numbers sort as numbers, decimals
+//! (which travel as text) by their numeric value, dates by date, text by Unicode code point and
 //! bytes by byte. SQL Server's `datetimeoffset` travels as its text and sorts by the instant
-//! it is ([`sorted_instants`]). The sort is stable and NULLs always go last.
+//! it is ([`sorted_instants`]). The sort is stable and NULLs always go last, in every key and
+//! in both directions. Several keys are sorted from the last to the first, each pass stable
+//! over the order the pass before left, so rows equal in a key keep the order of the next.
 
 use std::cmp::Ordering;
 
@@ -12,7 +14,8 @@ use arrow::array::{
 };
 use spelaion_driver_api::LogicalType;
 
-/// Which column a result is sorted by, and in which direction.
+/// One key of a result's sort: a column and its direction. A result is sorted by a list of
+/// them, the first being the most significant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SortKey {
     pub column: usize,
@@ -36,48 +39,59 @@ pub enum ViewError {
     /// The column is masked (ADR-051): its values are not in the result to order by.
     #[error("column \"{0}\" is masked: it cannot be sorted by")]
     Masked(String),
+    #[error("a result is sorted by at most {MAX_SORT_KEYS} columns")]
+    TooManyKeys,
+    #[error("column {0} is in the sort twice")]
+    RepeatedKey(usize),
 }
 
-/// Row numbers of `values` in sorted order.
+/// Most keys a sort may have: more than anyone orders by, and a bound on the work.
+pub const MAX_SORT_KEYS: usize = 16;
+
+/// The row numbers in `rows` in the order of `values`; rows equal in it keep the order they
+/// have in `rows`.
 pub(crate) fn sorted_rows(
     values: &dyn Array,
     logical: LogicalType,
     key: SortKey,
+    rows: Vec<u32>,
 ) -> Result<Vec<u32>, ViewError> {
     let unexpected = || ViewError::UnexpectedArray(key.column);
     let d = key.descending;
     match logical {
         LogicalType::Bool => {
             let a = downcast::<BooleanArray>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| a.value(x).cmp(&a.value(y))))
+            Ok(order(a, rows, d, |x, y| a.value(x).cmp(&a.value(y))))
         }
         LogicalType::Int => {
             let a = downcast::<Int64Array>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| a.value(x).cmp(&a.value(y))))
+            Ok(order(a, rows, d, |x, y| a.value(x).cmp(&a.value(y))))
         }
         LogicalType::Float => {
             let a = downcast::<Float64Array>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| a.value(x).total_cmp(&a.value(y))))
+            Ok(order(a, rows, d, |x, y| a.value(x).total_cmp(&a.value(y))))
         }
         LogicalType::Bytes => {
             let a = downcast::<BinaryArray>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| a.value(x).cmp(a.value(y))))
+            Ok(order(a, rows, d, |x, y| a.value(x).cmp(a.value(y))))
         }
         LogicalType::Date => {
             let a = downcast::<Date32Array>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| a.value(x).cmp(&a.value(y))))
+            Ok(order(a, rows, d, |x, y| a.value(x).cmp(&a.value(y))))
         }
         LogicalType::Time => {
             let a = downcast::<Time64MicrosecondArray>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| a.value(x).cmp(&a.value(y))))
+            Ok(order(a, rows, d, |x, y| a.value(x).cmp(&a.value(y))))
         }
         LogicalType::Timestamp | LogicalType::TimestampTz => {
             let a = downcast::<TimestampMicrosecondArray>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| a.value(x).cmp(&a.value(y))))
+            Ok(order(a, rows, d, |x, y| a.value(x).cmp(&a.value(y))))
         }
         LogicalType::Decimal => {
             let a = downcast::<StringArray>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| cmp_decimal(a.value(x), a.value(y))))
+            Ok(order(a, rows, d, |x, y| {
+                cmp_decimal(a.value(x), a.value(y))
+            }))
         }
         LogicalType::Text
         | LogicalType::Uuid
@@ -86,7 +100,7 @@ pub(crate) fn sorted_rows(
         | LogicalType::Array
         | LogicalType::Native => {
             let a = downcast::<StringArray>(values).ok_or_else(unexpected)?;
-            Ok(order(a, d, |x, y| a.value(x).cmp(a.value(y))))
+            Ok(order(a, rows, d, |x, y| a.value(x).cmp(a.value(y))))
         }
     }
 }
@@ -94,12 +108,16 @@ pub(crate) fn sorted_rows(
 /// Row numbers of a text column of `datetimeoffset` values (SDB-265) in the order of their
 /// instants, as the server orders them: `10:00 +02:00` before `09:00 +00:00`. Equal instants
 /// go by their text; text that is no such value goes after every one, by text.
-pub(crate) fn sorted_instants(values: &dyn Array, key: SortKey) -> Result<Vec<u32>, ViewError> {
+pub(crate) fn sorted_instants(
+    values: &dyn Array,
+    key: SortKey,
+    rows: Vec<u32>,
+) -> Result<Vec<u32>, ViewError> {
     let a = downcast::<StringArray>(values).ok_or(ViewError::UnexpectedArray(key.column))?;
     let instants: Vec<Option<i128>> = (0..a.len())
         .map(|i| crate::temporal::instant_key(a.value(i)))
         .collect();
-    Ok(order(a, key.descending, |x, y| {
+    Ok(order(a, rows, key.descending, |x, y| {
         match (instants[x], instants[y]) {
             (Some(p), Some(q)) => p.cmp(&q),
             (Some(_), None) => Ordering::Less,
@@ -114,10 +132,16 @@ fn downcast<T: 'static>(values: &dyn Array) -> Option<&T> {
     values.as_any().downcast_ref::<T>()
 }
 
-/// Stable sort of the non-null rows by `cmp`, then the NULL rows in their original order.
-fn order(values: &dyn Array, descending: bool, cmp: impl Fn(usize, usize) -> Ordering) -> Vec<u32> {
+/// Stable sort of the non-null rows of `rows` by `cmp`, then its NULL rows in the order they
+/// had.
+fn order(
+    values: &dyn Array,
+    rows: Vec<u32>,
+    descending: bool,
+    cmp: impl Fn(usize, usize) -> Ordering,
+) -> Vec<u32> {
     let (mut rows, nulls): (Vec<u32>, Vec<u32>) =
-        (0..values.len() as u32).partition(|&i| values.is_valid(i as usize));
+        rows.into_iter().partition(|&i| values.is_valid(i as usize));
     if descending {
         rows.sort_by(|&x, &y| cmp(y as usize, x as usize));
     } else {
@@ -196,6 +220,33 @@ pub(crate) fn cmp_decimal(a: &str, b: &str) -> Ordering {
 mod tests {
     use super::*;
 
+    fn all(values: &dyn Array) -> Vec<u32> {
+        (0..values.len() as u32).collect()
+    }
+
+    #[test]
+    fn a_later_pass_keeps_the_order_of_the_one_before_among_equal_rows() {
+        // Sorted by the second key first (2, 0, 3, 1, 4), then by the first: rows equal in
+        // the first key, its NULLs included, stay in the second key's order.
+        let first = Int64Array::from(vec![Some(1), None, Some(1), None, Some(0)]);
+        let key = SortKey {
+            column: 0,
+            descending: false,
+        };
+        assert_eq!(
+            sorted_rows(&first, LogicalType::Int, key, vec![2, 0, 3, 1, 4]).unwrap(),
+            [4, 2, 0, 3, 1]
+        );
+        let down = SortKey {
+            descending: true,
+            ..key
+        };
+        assert_eq!(
+            sorted_rows(&first, LogicalType::Int, down, vec![2, 0, 3, 1, 4]).unwrap(),
+            [2, 0, 4, 3, 1]
+        );
+    }
+
     #[test]
     fn decimals_compare_by_value() {
         let mut values = vec![
@@ -250,11 +301,11 @@ mod tests {
             descending: true,
         };
         assert_eq!(
-            sorted_rows(&a, LogicalType::Int, up).unwrap(),
+            sorted_rows(&a, LogicalType::Int, up, all(&a)).unwrap(),
             [2, 5, 0, 3, 1, 4]
         );
         assert_eq!(
-            sorted_rows(&a, LogicalType::Int, down).unwrap(),
+            sorted_rows(&a, LogicalType::Int, down, all(&a)).unwrap(),
             [0, 3, 5, 2, 1, 4]
         );
     }
@@ -273,12 +324,18 @@ mod tests {
             Some("2026-01-31 09:00:00.0000001 +00:00"),
             Some("2026-01-31 04:00:00.0000000 -05:30"),
         ]);
-        assert_eq!(sorted_instants(&t, key).unwrap(), [2, 0, 4, 5, 3, 1]);
+        assert_eq!(
+            sorted_instants(&t, key, all(&t)).unwrap(),
+            [2, 0, 4, 5, 3, 1]
+        );
         let down = SortKey {
             descending: true,
             ..key
         };
-        assert_eq!(sorted_instants(&t, down).unwrap(), [3, 5, 4, 0, 2, 1]);
+        assert_eq!(
+            sorted_instants(&t, down, all(&t)).unwrap(),
+            [3, 5, 4, 0, 2, 1]
+        );
     }
 
     #[test]
@@ -289,16 +346,16 @@ mod tests {
         };
         let t = StringArray::from(vec!["b", "B", "á", "a"]);
         assert_eq!(
-            sorted_rows(&t, LogicalType::Text, key).unwrap(),
+            sorted_rows(&t, LogicalType::Text, key, all(&t)).unwrap(),
             [1, 3, 0, 2]
         );
         let f = Float64Array::from(vec![f64::NAN, 1.5, -0.5, f64::INFINITY]);
         assert_eq!(
-            sorted_rows(&f, LogicalType::Float, key).unwrap(),
+            sorted_rows(&f, LogicalType::Float, key, all(&f)).unwrap(),
             [2, 1, 3, 0]
         );
         assert_eq!(
-            sorted_rows(&t, LogicalType::Int, key),
+            sorted_rows(&t, LogicalType::Int, key, all(&t)),
             Err(ViewError::UnexpectedArray(4))
         );
     }

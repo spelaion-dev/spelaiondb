@@ -1,24 +1,30 @@
 // SQL editor with CodeMirror 6: engine dialect, table autocompletion, Ctrl/Cmd+Enter to run
-// the statement under the cursor (split by the core) or the selection, Ctrl/Cmd+Shift+Enter
-// to run everything, Shift+Alt+F to format, and underlining of the error at its position.
+// the statement under the cursor (split by the core) or the selection (several statements:
+// the picker asks which), Ctrl/Cmd+Shift+Enter to run everything, Ctrl/Cmd+Alt+Enter to run
+// from the cursor to the end, Shift+Alt+F to format, and underlining of the error at its
+// position. What Run will send is the core's answer, asked again as the cursor moves.
 
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Compartment, countColumn, EditorSelection, EditorState, findColumn, Prec, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, lineNumbers } from "@codemirror/view";
 import { sql } from "@codemirror/lang-sql";
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, foldCode, unfoldCode, indentUnit } from "@codemirror/language";
 import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess } from "@codemirror/commands";
 import { tags } from "@lezer/highlight";
 import { closeLintPanel, lintKeymap, openLintPanel, setDiagnostics } from "@codemirror/lint";
-import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, SearchCursor, searchKeymap, searchPanelOpen } from "@codemirror/search";
-import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, nextSnippetField, prevSnippetField, acceptCompletion } from "@codemirror/autocomplete";
-import { EDITOR_ACTIONS, EDITOR_SNIPPETS as snippets, quotedLines, type EditorActionId } from "../editorActions";
+import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen } from "@codemirror/search";
+import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, snippetCompletion, nextSnippetField, prevSnippetField, acceptCompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+import { occurrenceOrigin, selectAllOccurrences, selectNextOccurrence } from "../editorOccurrences";
+import { EDITOR_ACTIONS, SNIPPET_COMMANDS, quotedLines, type EditorActionId } from "../editorActions";
+import { allSnippets, lowerKeywords, snippetBefore, snippetsStarting, type EditorSnippet } from "../editorSnippets";
+import { useSnippets } from "../snippetStore";
 import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
-import { sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase } from "../sqlCompletion";
+import { resolveName, sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase, type ResolvedName } from "../sqlCompletion";
 import { formatHttp, httpLanguage, isHttpLanguage } from "../httpLanguage";
-import { usePreferences } from "../preferences";
-import type { EditorPreferencesItem } from "../bindings";
+import { usePreferences, zoomed } from "../preferences";
+import type { EditorPreferencesItem, RunKindItem } from "../bindings";
+import { useDialogs } from "../dialogStore";
 import { EditorMenu } from "./EditorMenu";
 import { call, commands } from "../api";
 import { byteToIndex, indexToByte, wordEnd } from "../text";
@@ -30,6 +36,16 @@ export interface RunRequest {
   from: number;
 }
 
+/** What Run will send, as the core answered for the cursor and selection. */
+export interface RunLabel {
+  kind: RunKindItem;
+  /** Statements in it: a selection with several opens the picker. */
+  statements: number;
+}
+
+/** How long the cursor rests before the core is asked what Run will send. */
+const RUN_LABEL_DELAY_MS = 120;
+
 /** What the toolbar can ask the editor to do. */
 export interface SqlEditorHandle {
   action(id: EditorActionId): void;
@@ -37,7 +53,17 @@ export interface SqlEditorHandle {
   runCurrent(): void;
   runScript(): void;
   currentRequest(): Promise<RunRequest | null>;
+  /** Gives the editor the focus, its cursor where it was. */
+  focus(): void;
+  /** Puts the cursor at `index` (JS) of the text, shows it and takes the focus. */
+  showAt(index: number): void;
 }
+
+/** What to do with the table a name stands for: open its details, or show it in the explorer. */
+export type NameAction = "open" | "reveal";
+
+/** Most columns a table's hover lists. */
+const HOVER_COLUMNS = 24;
 
 interface Props {
   handle?: React.Ref<SqlEditorHandle>;
@@ -51,9 +77,18 @@ interface Props {
   engine: string | null;
   /** Catalog metadata already read in the background, never fetched while typing. */
   catalog: CompletionCatalog;
-  onRun(request: RunRequest): void;
+  /** `newTab`: the results go next to the ones already there (SDB-378). */
+  onRun(request: RunRequest, newTab?: boolean): void;
+  /** What Run will send changed (the cursor, the selection, the text or the engine). */
+  onRunLabel(label: RunLabel): void;
+  /** Ctrl+click on a table's name, or "Go to table" / "Reveal in explorer" at the cursor. */
+  onName(name: ResolvedName, action: NameAction): void;
+  /** Shows or hides the outline of the script. */
+  onOutline(): void;
   /** Error to underline, with its JS index in the document. */
   error: { index: number; message: string; source: object } | null;
+  /** The editor opens with its cursor after the text instead of before it. */
+  cursorAtEnd?: boolean;
 }
 
 const theme = EditorView.theme({
@@ -71,6 +106,7 @@ const theme = EditorView.theme({
   ".cm-tooltip": { backgroundColor: "var(--panel)", color: "var(--fg)", border: "1px solid var(--line)" },
   ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--fg)" },
   ".cm-completionDetail": { color: "var(--muted)" },
+  ".cm-tooltip-hover": { boxShadow: "var(--shadow-popover)", borderRadius: "var(--radius-md)" },
   ".cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail": { color: "var(--fg)" },
 });
 
@@ -133,35 +169,11 @@ const editorSetup = [
   highlightActiveLineGutter(), highlightSpecialChars(), history(), foldGutter(),
   drawSelection(), dropCursor(), EditorState.allowMultipleSelections.of(true), indentOnInput(),
   syntaxHighlighting(defaultHighlightStyle, { fallback: true }), bracketMatching(), closeBrackets(),
-  rectangleGesture,
+  rectangleGesture, occurrenceOrigin,
   EditorView.clickAddsSelectionRange.of((event) => (event.altKey && !event.shiftKey) || event.ctrlKey || event.metaKey),
   highlightActiveLine(), highlightSelectionMatches({ highlightWordAroundCursor: true }),
   keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, ...lintKeymap]),
 ];
-
-/** Select the current word, or the selected text, everywhere in the document. */
-function selectAllOccurrences(view: EditorView) {
-  const { state } = view;
-  const selected = state.selection.main;
-  const word = selected.empty ? state.wordAt(selected.head) : null;
-  const match = word ?? (selected.empty ? null : selected);
-  if (!match) return false;
-  const text = state.sliceDoc(match.from, match.to);
-  const ranges = [];
-  let main = 0;
-  for (const cursor = new SearchCursor(state.doc, text); !cursor.next().done;) {
-    const { from, to } = cursor.value;
-    if (word) {
-      const found = state.wordAt(from);
-      if (!found || found.from !== from || found.to !== to) continue;
-    }
-    if (from === match.from && to === match.to) main = ranges.length;
-    ranges.push(EditorSelection.range(from, to));
-  }
-  if (!ranges.length) return false;
-  view.dispatch({ selection: EditorSelection.create(ranges, main), userEvent: "select.search.matches" });
-  return true;
-}
 
 // Keep CodeMirror's light colors and add stable classes for the dark theme. CSS switches
 // them when the theme changes, without rebuilding the editor or its selection.
@@ -231,20 +243,88 @@ async function formatIn(view: EditorView, engine: string | null, preferences: Ed
   return null;
 }
 
-function language(engine: string | null, catalog: CompletionCatalog, keywordCase: KeywordCase) {
+/** The hover of a name: a table with its columns and types, or a column with its type, whether
+ *  it may be NULL and its comment. Built as DOM: CodeMirror shows it outside React. */
+function nameTooltip(name: ResolvedName, t: (key: string, values?: Record<string, unknown>) => string): HTMLElement {
+  const el = (tag: string, className: string, text?: string) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const root = el("div", "sql-hover");
+  root.setAttribute("role", "tooltip");
+  const table = name.table;
+  const qualified = `${table.schema}.${table.name}`;
+  if (name.kind === "column") {
+    const column = table.details?.find((c) => c.name === name.column);
+    const head = el("div", "sql-hover-head");
+    head.append(el("span", "sql-hover-name", name.column), el("span", "sql-hover-type", column?.type ?? ""));
+    root.append(head);
+    if (column) root.append(el("div", "sql-hover-note", t(column.nullable ? "names.nullable" : "names.notNull")));
+    if (column?.comment) root.append(el("div", "sql-hover-comment", column.comment));
+    root.append(el("div", "sql-hover-note", t("names.columnOf", { table: qualified })));
+    return root;
+  }
+  const head = el("div", "sql-hover-head");
+  head.append(el("span", "sql-hover-name", qualified));
+  if (table.kind) head.append(el("span", "sql-hover-type", table.kind.replaceAll("_", " ")));
+  root.append(head);
+  if (!table.details) {
+    root.append(el("div", "sql-hover-note", t("names.columnsLoading")));
+    return root;
+  }
+  const list = el("div", "sql-hover-columns");
+  for (const column of table.details.slice(0, HOVER_COLUMNS)) {
+    list.append(el("span", "sql-hover-column", column.name), el("span", "sql-hover-type", column.type));
+  }
+  root.append(list);
+  const more = table.details.length - HOVER_COLUMNS;
+  if (more > 0) root.append(el("div", "sql-hover-note", t("names.moreColumns", { count: more })));
+  root.append(el("div", "sql-hover-note", t("names.openHint")));
+  return root;
+}
+
+/** A snippet's text as it is inserted: a built-in one follows the keyword case preference. */
+function snippetText(chosen: EditorSnippet): string {
+  return chosen.builtIn && usePreferences.getState().editor.keywordCase === "lower" ? lowerKeywords(chosen.body) : chosen.body;
+}
+
+/** Offers the snippets whose name starts with the word being typed, next to the SQL
+ *  completions: the built-in ones and the user's own. Read when asked, so a snippet saved in
+ *  Settings is offered at once. */
+function snippetCompletionSource(describe: (snippet: EditorSnippet) => string) {
+  return (context: CompletionContext): CompletionResult | null => {
+    const word = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*/);
+    if (!word || word.from === word.to) return null;
+    // Not after a dot (a column of an alias) or inside a longer word.
+    const before = context.state.sliceDoc(Math.max(0, word.from - 1), word.from);
+    if (/[A-Za-z0-9_.]/.test(before)) return null;
+    const offered = snippetsStarting(word.text, allSnippets(useSnippets.getState().snippets));
+    if (!offered.length) return null;
+    return {
+      from: word.from,
+      options: offered.map((chosen) => snippetCompletion(snippetText(chosen), { label: chosen.name, detail: describe(chosen), type: "text", boost: -1 })),
+      validFor: /^[A-Za-z0-9_]*$/,
+    };
+  };
+}
+
+function language(engine: string | null, catalog: CompletionCatalog, keywordCase: KeywordCase, describe: (snippet: EditorSnippet) => string) {
   if (engine && isHttpLanguage(engine)) return httpLanguage(engine, catalog);
-  return [sql({ dialect: sqlDialect(engine) }), autocompletion({ override: [sqlCompletionSource(catalog, engine, keywordCase)] })];
+  return [sql({ dialect: sqlDialect(engine) }), autocompletion({ override: [sqlCompletionSource(catalog, engine, keywordCase), snippetCompletionSource(describe)] })];
 }
 
 function editorPreferences(p: EditorPreferencesItem) {
   return [
     EditorState.tabSize.of(p.tabSize), indentUnit.of(" ".repeat(p.tabSize)),
     p.lineNumbers ? lineNumbers() : [], p.wordWrap ? EditorView.lineWrapping : [],
-    EditorView.theme({ "&": { "--sql-font-size": `${p.fontSize}px`, "--sql-line-height": `${p.lineHeight}px`, "--sql-font": p.font === "system" ? "var(--font-code)" : `"${p.font}", monospace` } }),
+    // The editor's zoom (SDB-389) multiplies both sizes; the interface size scales the result.
+    EditorView.theme({ "&": { "--sql-font-size": `${zoomed(p.fontSize, p.zoom)}px`, "--sql-line-height": `${zoomed(p.lineHeight, p.zoom)}px`, "--sql-font": p.font === "system" ? "var(--font-code)" : `"${p.font}", monospace` } }),
   ];
 }
 
-export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, error }: Props) {
+export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, onName, onOutline, error, cursorAtEnd }: Props) {
   const { t } = useTranslation("editor");
   const preferences = usePreferences((s) => s.editor);
   const settings = useRef(new Compartment());
@@ -253,8 +333,30 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const locale = useRef(new Compartment());
-  const callbacks = useRef({ onChange, onRun, engine, onFormatError, onActionError });
-  callbacks.current = { onChange, onRun, engine, onFormatError, onActionError };
+  const callbacks = useRef({ onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t });
+  callbacks.current = { onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t };
+  const failed = (e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e));
+  // What a snippet is for, next to its name in the completion list: a built-in one's is
+  // translated, the user's is their own text.
+  const translate = useRef(t);
+  translate.current = t;
+  const describeSnippet = useRef((chosen: EditorSnippet) => (chosen.builtIn ? translate.current(chosen.description) : chosen.description)).current;
+  // The Run button's label: the core says what Run will send. Asked once the cursor rests, so
+  // typing never waits for it, and an answer to an older question is dropped.
+  const label = useRef({ timer: undefined as number | undefined, asked: 0 });
+  const askRunLabel = (v: EditorView, delay = RUN_LABEL_DELAY_MS) => {
+    window.clearTimeout(label.current.timer);
+    const asked = ++label.current.asked;
+    label.current.timer = window.setTimeout(() => {
+      if (!v.dom.isConnected) return;
+      const doc = v.state.doc.toString(), sel = v.state.selection.main;
+      call(commands.runTarget(callbacks.current.engine, doc, indexToByte(doc, sel.head), sel.empty ? null : indexToByte(doc, sel.from), sel.empty ? null : indexToByte(doc, sel.to)))
+        .then((target) => {
+          if (asked === label.current.asked) callbacks.current.onRunLabel({ kind: target.kind, statements: target.statements.length });
+        })
+        .catch((e: unknown) => console.error("run_target", e));
+    }, delay);
+  };
   const format = (v: EditorView) => {
     void formatIn(v, callbacks.current.engine, usePreferences.getState().editor).then((failure) => {
       if (failure) callbacks.current.onFormatError(failure);
@@ -265,33 +367,83 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     callbacks.current.onRun({ text: v.state.doc.toString(), from: 0 });
     return true;
   };
-  // Use the same selection and dialect splitter for the toolbar and keyboard shortcut.
-  const run = (v: EditorView) => {
-    const sel = v.state.selection.main;
-    if (!sel.empty) {
-      callbacks.current.onRun({ text: v.state.sliceDoc(sel.from, sel.to), from: sel.from });
-      return true;
+  // A selection with several statements (the core splits it as the run will): the picker asks
+  // which to run, and the core writes the text of the ones chosen.
+  const runSelection = async (v: EditorView, engine: string, selected: RunRequest, newTab = false) => {
+    const doc = v.state.doc.toString(), selection = v.state.selection;
+    const stale = () => !v.dom.isConnected || v.state.doc.toString() !== doc || !v.state.selection.eq(selection);
+    const to = selected.from + selected.text.length;
+    const target = await call(commands.runTarget(engine, doc, indexToByte(doc, selection.main.head), indexToByte(doc, selected.from), indexToByte(doc, to)));
+    if (stale()) return;
+    if (target.statements.length < 2) {
+      callbacks.current.onRun(selected, newTab);
+      return;
     }
+    const statements = target.statements.map((span) => doc.slice(byteToIndex(doc, span.start), byteToIndex(doc, span.end)));
+    const answer = await useDialogs.getState().askStatements(statements);
+    if (answer === null || stale()) return;
+    if (answer === "all" || answer.length === statements.length) {
+      callbacks.current.onRun(selected, newTab);
+      return;
+    }
+    const picked = await call(commands.pickStatements(engine, selected.text, answer));
+    if (stale()) return;
+    const from = selected.from + byteToIndex(selected.text, picked.span.start);
+    flash(v, from, selected.from + byteToIndex(selected.text, picked.span.end));
+    callbacks.current.onRun({ text: picked.text, from }, newTab);
+  };
+  // From the statement under the cursor to the end of the script: the core says where that
+  // statement starts and writes the text. With no connection there is nothing to split with.
+  const runFromCursor = (v: EditorView) => {
     const engine = callbacks.current.engine;
     if (!engine) return runAll(v);
     const doc = v.state.doc.toString();
-    call(commands.statementAt(engine, doc, indexToByte(doc, sel.head)))
-      .then((span) => {
-        if (!span || v.state.doc.toString() !== doc) return;
-        const from = byteToIndex(doc, span.start);
-        const to = byteToIndex(doc, span.end);
-        flash(v, from, to);
-        callbacks.current.onRun({ text: doc.slice(from, to), from });
+    call(commands.statementsFromCursor(engine, doc, indexToByte(doc, v.state.selection.main.head)))
+      .then((picked) => {
+        if (!picked || !v.dom.isConnected || v.state.doc.toString() !== doc) return;
+        const from = byteToIndex(doc, picked.span.start);
+        flash(v, from, byteToIndex(doc, picked.span.end));
+        callbacks.current.onRun({ text: picked.text, from });
       })
-      .catch((e: unknown) => console.error("statement_at", e));
+      .catch(failed);
     return true;
   };
-  const insertSnippet = (v: EditorView, id: keyof typeof snippets, from = v.state.selection.main.from) => {
-    const to = v.state.selection.main.to;
-    const content = snippets[id];
-    const lower = usePreferences.getState().editor.keywordCase === "lower";
-    snippet(lower ? content.replace(/SELECT|FROM|INSERT INTO|VALUES|UPDATE|SET|WHERE/g, (word) => word.toLowerCase()) : content)(v, null, from, to);
+  // Use the same selection and dialect splitter for the toolbar and keyboard shortcut.
+  const run = (v: EditorView, newTab = false) => {
+    const sel = v.state.selection.main;
+    const engine = callbacks.current.engine;
+    if (!sel.empty) {
+      const selected = { text: v.state.sliceDoc(sel.from, sel.to), from: sel.from };
+      if (engine) void runSelection(v, engine, selected, newTab).catch(failed);
+      else callbacks.current.onRun(selected, newTab);
+      return true;
+    }
+    if (!engine) {
+      callbacks.current.onRun({ text: v.state.doc.toString(), from: 0 }, newTab);
+      return true;
+    }
+    // The core writes the text, as for the picker: a statement under another MySQL delimiter
+    // is sent with its DELIMITER lines, never cut at its body's `;`s.
+    const doc = v.state.doc.toString();
+    call(commands.statementToRun(engine, doc, indexToByte(doc, sel.head)))
+      .then((found) => {
+        if (!found || v.state.doc.toString() !== doc) return;
+        flash(v, byteToIndex(doc, found.statement.start), byteToIndex(doc, found.statement.end));
+        callbacks.current.onRun({ text: found.picked.text, from: byteToIndex(doc, found.picked.span.start) }, newTab);
+      })
+      .catch(failed);
     return true;
+  };
+  // Inserts a snippet's text over the selection (or from `from`), its first field selected.
+  // A snippet is only ever text put into the editor: nothing runs.
+  const insertSnippet = (v: EditorView, chosen: EditorSnippet, from = v.state.selection.main.from) => {
+    const to = v.state.selection.main.to;
+    snippet(snippetText(chosen))(v, null, from, to);
+    return true;
+  };
+  const insertNamed = (v: EditorView, name: string) => {
+    const chosen = allSnippets(useSnippets.getState().snippets).find((candidate) => candidate.name === name);
+    return chosen ? insertSnippet(v, chosen) : false;
   };
   const currentStatement = (v: EditorView, copy: boolean) => {
     const doc = v.state.doc.toString();
@@ -304,6 +456,32 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     }).catch((e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e)));
     return true;
   };
+  // What the name at `pos` is, in the catalog the editor already has (the one completion
+  // uses): nothing is asked of the database for a click or a hover.
+  const nameAt = (v: EditorView, pos: number): ResolvedName | null => {
+    const { engine, catalog } = callbacks.current;
+    if (engine && isHttpLanguage(engine)) return null;
+    return resolveName(v.state.doc.toString(), pos, catalog, engine);
+  };
+  // "Go to table" and "Reveal in explorer": the table the name at the cursor stands for (a
+  // column leads to its table).
+  const nameAtCursor = (v: EditorView, how: NameAction) => {
+    const name = nameAt(v, v.state.selection.main.head);
+    if (name) callbacks.current.onName(name, how);
+    else callbacks.current.onActionError(callbacks.current.t("names.unknown"));
+    return true;
+  };
+  // The statement after or before the cursor's, as the core's splitter reads the script.
+  const moveStatement = (v: EditorView, forward: boolean) => {
+    const doc = v.state.doc.toString();
+    call(commands.neighbourStatement(callbacks.current.engine ?? "postgres", doc, indexToByte(doc, v.state.selection.main.head), forward))
+      .then((span) => {
+        if (!span || !v.dom.isConnected || v.state.doc.toString() !== doc) return;
+        v.dispatch({ selection: { anchor: byteToIndex(doc, span.start) }, scrollIntoView: true, userEvent: "select" });
+      })
+      .catch(failed);
+    return true;
+  };
   const transform = (v: EditorView, change: (text: string) => string, wholeLine = false) => {
     v.dispatch(v.state.changeByRange((range) => {
       const target = range.empty ? (wholeLine ? v.state.doc.lineAt(range.head) : v.state.wordAt(range.head)) ?? range : range;
@@ -312,35 +490,49 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     }), { userEvent: "input.transform" });
     return true;
   };
+  // A preference the editor changed from a key: why it could not be saved shows in the editor.
+  const editorSaved = (saved: boolean) => {
+    const error = usePreferences.getState().error;
+    if (!saved && error?.setting === "editor") callbacks.current.onActionError(error.detail);
+  };
   const action = (v: EditorView, id: EditorActionId): boolean => {
     switch (id) {
+      case "runNewTab": return run(v, true);
       case "lineComment": return toggleLineComment(v);
       case "blockComment": return toggleBlockComment(v);
       case "wordWrap": {
         const { editor, setEditor } = usePreferences.getState();
-        void setEditor({ ...editor, wordWrap: !editor.wordWrap }).then((saved) => {
-          const error = usePreferences.getState().error;
-          if (!saved && error?.setting === "editor") callbacks.current.onActionError(error.detail);
-        }); return true;
+        void setEditor({ ...editor, wordWrap: !editor.wordWrap }).then(editorSaved); return true;
       }
+      case "zoomIn": void usePreferences.getState().zoomEditor(1).then(editorSaved); return true;
+      case "zoomOut": void usePreferences.getState().zoomEditor(-1).then(editorSaved); return true;
+      case "zoomReset": void usePreferences.getState().zoomEditor(0).then(editorSaved); return true;
       case "fold": return foldCode(v);
       case "unfold": return unfoldCode(v);
       case "matchingBracket": return cursorMatchingBracket(v);
       case "upperCase": return transform(v, (text) => text.toUpperCase());
       case "lowerCase": return transform(v, (text) => text.toLowerCase());
       case "quotedList": return transform(v, (text) => quotedLines(text, callbacks.current.engine), true);
+      case "runFromCursor": return runFromCursor(v);
       case "selectStatement": return currentStatement(v, false);
       case "copyStatement": return currentStatement(v, true);
       case "selectOccurrences": return selectAllOccurrences(v);
-      case "insertSelect": case "insertInsert": case "insertUpdate": return insertSnippet(v, id);
+      case "openObject": return nameAtCursor(v, "open");
+      case "revealInExplorer": return nameAtCursor(v, "reveal");
+      case "nextStatement": return moveStatement(v, true);
+      case "previousStatement": return moveStatement(v, false);
+      case "outline": callbacks.current.onOutline(); return true;
+      case "insertSelect": case "insertInsert": case "insertUpdate": return insertNamed(v, SNIPPET_COMMANDS[id]);
     }
   };
   const tab = (v: EditorView) => {
     if (nextSnippetField(v)) return true;
     const range = v.state.selection.main;
     if (range.empty) {
-      const prefix = /\b(sel|ins|upd)$/.exec(v.state.doc.lineAt(range.head).text.slice(0, range.head - v.state.doc.lineAt(range.head).from));
-      if (prefix) return insertSnippet(v, prefix[1] === "sel" ? "insertSelect" : prefix[1] === "ins" ? "insertInsert" : "insertUpdate", range.head - prefix[1]!.length);
+      // The name of a snippet just before the cursor (a built-in one or the user's) expands.
+      const line = v.state.doc.lineAt(range.head);
+      const named = snippetBefore(line.text.slice(0, range.head - line.from), allSnippets(useSnippets.getState().snippets));
+      if (named) return insertSnippet(v, named.snippet, range.head - named.start);
     }
     return acceptCompletion(v) || indentMore(v);
   };
@@ -365,6 +557,13 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       return { text: doc.slice(from, to), from };
     },
     runScript: () => { if (view.current) runAll(view.current); },
+    focus: () => view.current?.focus(),
+    showAt: (index) => {
+      const v = view.current;
+      if (!v) return;
+      v.dispatch({ selection: { anchor: Math.min(index, v.state.doc.length) }, scrollIntoView: true, userEvent: "select" });
+      v.focus();
+    },
   }));
 
   useEffect(() => {
@@ -373,13 +572,18 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       parent: host.current,
       state: EditorState.create({
         doc: value,
+        // A new script that starts with the user's template: typing goes on after it.
+        selection: cursorAtEnd ? { anchor: value.length } : undefined,
         extensions: [
           Prec.highest(
             keymap.of([
+              { key: "Mod-d", run: selectNextOccurrence },
               { key: "Mod-Shift-Enter", run: runAll },
-              { key: "Mod-Enter", run },
+              { key: "Mod-Enter", run: (v) => run(v) },
               { key: "Shift-Alt-f", run: format },
               ...EDITOR_ACTIONS.map(({ id, key }) => ({ key, run: (v: EditorView) => action(v, id) })),
+              // Zoom in also from the + key (its own on some layouts, the keypad's, Shift+=).
+              { key: "Mod-+", run: (v) => action(v, "zoomIn") },
               { key: "Enter", run: acceptCompletion },
               { key: "Tab", run: tab },
               { key: "Shift-Tab", run: (v) => prevSnippetField(v) || indentLess(v) },
@@ -390,7 +594,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
           editorSetup,
           syntaxHighlighting(defaultHighlightStyle),
           syntaxHighlighting(sqlColors),
-          lang.current.of(language(engine, catalog, preferences.keywordCase as KeywordCase)),
+          lang.current.of(language(engine, catalog, preferences.keywordCase as KeywordCase, describeSnippet)),
           locale.current.of([
             EditorState.phrases.of(t("codeMirror", { returnObjects: true }) as Record<string, string>),
             EditorView.contentAttributes.of({ "aria-label": t("sqlEditor") }),
@@ -398,6 +602,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
           theme,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) callbacks.current.onChange(u.state.doc.toString());
+            if (u.docChanged || u.selectionSet) askRunLabel(u.view);
             // Completions arrive asynchronously: one that lands after the editor lost focus
             // (a dialog opened meanwhile) would stay open on top of it.
             if (!u.view.hasFocus && completionStatus(u.state) !== null) {
@@ -406,7 +611,25 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
               });
             }
           }),
+          // Hover: a table's columns and types, or a column's type and comment, from the
+          // catalog already read. A name that is not there shows nothing.
+          hoverTooltip((v, pos) => {
+            const name = nameAt(v, pos);
+            if (!name) return null;
+            return { pos: name.from, end: name.to, above: true, create: () => ({ dom: nameTooltip(name, callbacks.current.t) }) };
+          }, { hoverTime: 350 }),
           EditorView.domEventHandlers({
+            // Ctrl / Cmd+click on a table's name (written, or through its alias) opens its
+            // details. Anywhere else the click adds a cursor, as before.
+            mousedown: (event, v) => {
+              if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return false;
+              const pos = v.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+              const name = nameAt(v, pos);
+              if (!name) return false;
+              event.preventDefault();
+              callbacks.current.onName(name, "open");
+              return true;
+            },
             contextmenu: (event) => {
               event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }); return true;
             },
@@ -421,14 +644,24 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     });
     view.current = editor;
     editor.focus();
-    return () => editor.destroy();
+    return () => {
+      window.clearTimeout(label.current.timer);
+      editor.destroy();
+    };
     // The editor is created once; dialect and schema are reconfigured below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, catalog, preferences.keywordCase as KeywordCase)) });
+    view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, catalog, preferences.keywordCase as KeywordCase, describeSnippet)) });
   }, [engine, catalog, preferences.keywordCase]);
+
+  // Asked at once when the editor opens and when its engine changes: another engine reads the
+  // same text otherwise, and with none only the whole script can be sent.
+  useEffect(() => {
+    if (view.current) askRunLabel(view.current, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: settings.current.reconfigure(editorPreferences(preferences)) });

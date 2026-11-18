@@ -115,14 +115,49 @@ export const commands = {
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
 	setTheme: (theme: string) => typedError<null, string>(__TAURI_INVOKE("set_theme", { theme })),
+	/**  The interface size in percent (SDB-389). */
+	getInterfaceSize: () => typedError<number, string>(__TAURI_INVOKE("get_interface_size")),
+	/**
+	 *  Saves the interface size, then draws the window at it: the webview's own zoom, so every
+	 *  size on the page and every canvas scales together. The core refuses a size that is not
+	 *  one of its steps, and then nothing changes.
+	 */
+	setInterfaceSize: (size: number) => typedError<null, string>(__TAURI_INVOKE("set_interface_size", { size })),
+	/**  The steps the interface size and the editor's zoom move through, as the core lists them. */
+	sizeSteps: () => __TAURI_INVOKE<SizeStepsItem>("size_steps"),
 	getUpdateCheck: () => typedError<boolean, string>(__TAURI_INVOKE("get_update_check")),
 	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
 	getExplorerPreferences: () => typedError<ExplorerPreferencesItem, string>(__TAURI_INVOKE("get_explorer_preferences")),
 	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
 	getEditorPreferences: () => typedError<EditorPreferencesItem, string>(__TAURI_INVOKE("get_editor_preferences")),
 	setEditorPreferences: (preferences: EditorPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_editor_preferences", { preferences })),
+	/**  The user's own editor snippets (SDB-384), by name. */
+	editorSnippets: () => typedError<EditorSnippetItem[], string>(__TAURI_INVOKE("editor_snippets")),
+	/**
+	 *  Saves an editor snippet, replacing the one of the same name. The core refuses one that is
+	 *  too long, holds hidden characters or has a name that is not an identifier.
+	 */
+	saveEditorSnippet: (snippet: EditorSnippetItem) => typedError<null, string>(__TAURI_INVOKE("save_editor_snippet", { snippet })),
+	/**  Deletes the editor snippet of that name; whether there was one. */
+	deleteEditorSnippet: (name: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_editor_snippet", { name })),
+	/**  The text a new script starts with; empty when there is none. */
+	newScriptTemplate: () => typedError<string, string>(__TAURI_INVOKE("new_script_template")),
+	/**  Saves the text a new script starts with (empty: none), checked by the core. */
+	setNewScriptTemplate: (template: string) => typedError<null, string>(__TAURI_INVOKE("set_new_script_template", { template })),
+	/**  The core's limits for editor snippets and the template, for the settings page. */
+	editorSnippetLimits: () => typedError<EditorSnippetLimits, string>(__TAURI_INVOKE("editor_snippet_limits")),
 	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
 	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
+	/**  How the grid shows values (SDB-385): the user's formats, zone and binary display. */
+	getDisplayFormat: () => typedError<DisplayFormatItem, string>(__TAURI_INVOKE("get_display_format")),
+	/**
+	 *  Saves how the grid shows values. The core checks it first (a pattern that cannot format
+	 *  its kind of value, a zone that does not exist) and nothing changes when it refuses. The
+	 *  windows served from now on use it.
+	 */
+	setDisplayFormat: (format: DisplayFormatItem) => typedError<null, string>(__TAURI_INVOKE("set_display_format", { format })),
+	/**  The time zones the display zone can be, by name. */
+	timeZones: () => typedError<string[], string>(__TAURI_INVOKE("time_zones")),
 	/**  The map view's background (ADR-045): tiles from the user's tile server, off by default. */
 	getMapPreferences: () => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("get_map_preferences")),
 	/**  Saves the map's preferences; the core checks the tile server first. */
@@ -315,7 +350,22 @@ export const commands = {
 	 *  the typed data, for the clipboard. One cell copied as plain text is its value alone,
 	 *  without a line break after it.
 	 */
-	copyRows: (result: number, session: string, range: CellRange, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
+	copyRows: (result: number, session: string, range: CellRange_Deserialize, format: TextFormat, header: boolean, displayed: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header, displayed })),
+	/**  The copy defaults (SDB-388): what "Copy special…" chose last. */
+	copyDefaults: () => typedError<CopySpecialItem, string>(__TAURI_INVOKE("copy_defaults")),
+	/**
+	 *  "Copy special…" (SDB-388): a selection as delimited text, written by the core with the
+	 *  options given, which become the copy defaults once checked. The values are the database's
+	 *  own text, never the grid's display formats (a masked column's is the mask, ADR-051).
+	 */
+	copySpecial: (result: number, range: CellRange_Deserialize, options: CopySpecialItem) => typedError<string, string>(__TAURI_INVOKE("copy_special", { result, range, options })),
+	/**
+	 *  The selected rows as UPDATE statements, one per row by the table's primary key (SDB-388).
+	 *  The core decides the table and its key from the catalog, as it does for edits, and refuses
+	 *  anything else with the reason: a join, rows without the whole key, a masked column, rows
+	 *  read through another session.
+	 */
+	copyUpdates: (result: number, session: string, range: CellRange_Deserialize, source: UpdateSourceItem) => typedError<string, string>(__TAURI_INVOKE("copy_updates", { result, session, range, source })),
 	/**
 	 *  Column names for the clipboard: plain, quoted for the engine, qualified with the table
 	 *  (a table data tab's) or one per line; written by the core.
@@ -349,9 +399,25 @@ export const commands = {
 	 *  core computes over the stored result. A newer calculation on the same result, or
 	 *  `cancel_selection_stats`, stops this one (`None`).
 	 */
-	selectionStats: (result: number, range: CellRange) => typedError<SelectionStatsItem_Serialize | null, string>(__TAURI_INVOKE("selection_stats", { result, range })),
+	selectionStats: (result: number, range: CellRange_Deserialize) => typedError<SelectionStatsItem_Serialize | null, string>(__TAURI_INVOKE("selection_stats", { result, range })),
 	/**  Stops the selection calculation running on a result (the calc panel's Cancel). */
 	cancelSelectionStats: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_selection_stats", { result })),
+	/**
+	 *  The groups of a result's current view by some of its columns, with each group's count
+	 *  (the grouping panel). Only the columns travel: the core counts over the stored result and
+	 *  returns the largest groups. A newer grouping on the same result, or `cancel_grouping`,
+	 *  stops this one (`None`).
+	 */
+	groupResult: (result: number, columns: number[], duplicatesOnly: boolean) => typedError<GroupingItem | null, string>(__TAURI_INVOKE("group_result", { result, columns, duplicatesOnly })),
+	/**  Stops the grouping running on a result (the grouping panel's Cancel, or its closing). */
+	cancelGrouping: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_grouping", { result })),
+	/**
+	 *  Filters a result to one group of a grouping: the core adds to the column filters in force
+	 *  one condition per grouped column, written from the group's first row (`first_row` of the
+	 *  view the grouping was made over, `generation`). The page sends no value; a grouping made
+	 *  over rows that changed since is refused.
+	 */
+	filterToGroup: (result: number, columns: number[], firstRow: number | null, generation: number | null) => typedError<GroupFilterOutcome, string>(__TAURI_INVOKE("filter_to_group", { result, columns, firstRow, generation })),
 	/**
 	 *  The points of a chart over a result (ADR-040): the UI names the X and Y columns, the core
 	 *  reads the current view of the stored result and sends at most `MAX_CHART_POINTS` points,
@@ -373,6 +439,26 @@ export const commands = {
 	 *  `stats_id` stops it.
 	 */
 	columnStats: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<ColumnStatsOutcome_Serialize, string>(__TAURI_INVOKE("column_stats", { source, statsId, table, result, column })),
+	/**
+	 *  A table data tab column's most frequent values, to pick a filter's value from: counted by
+	 *  the server like `column_stats` (a new session of the tab's connection, every statement a
+	 *  read), with the tab's filter. The core refuses a masked column before anything is read
+	 *  (ADR-051). `cancel_column_stats` with the same `stats_id` stops it.
+	 */
+	columnTopValues: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<TopValuesOutcome_Serialize, string>(__TAURI_INVOKE("column_top_values", { source, statsId, table, result, column })),
+	/**
+	 *  What a table data tab remembers of its table's filters (SDB-381): the history, newest
+	 *  first, and the default the tab opens with. Local data; the core checks each filter again
+	 *  as it reads it, and a default that no longer passes comes back as refused, never as a
+	 *  filter.
+	 */
+	tableFilters: (connection: string, schema: string, name: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("table_filters", { connection, schema, name })),
+	/**  Remembers a filter the tab just used, checked by the core first. */
+	recordTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("record_table_filter", { connection, schema, name, filter })),
+	/**  Takes one filter out of a table's history. */
+	forgetTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, schema, name, filter })),
+	/**  Saves the filter a table's tab opens with (checked by the core), or drops it (`None`). */
+	setTableDefaultFilter: (connection: string, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, schema, name, filter })),
 	/**  Stops a column's statistics while they are counted: the running statement and the rest. */
 	cancelColumnStats: (statsId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_column_stats", { statsId })),
 	/**
@@ -429,7 +515,7 @@ export const commands = {
 	 *  rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
 	 *  are the shown columns, in order.
 	 */
-	exportResult: (result: number, session: string, path: string, options: ExportFileOptions_Deserialize, range: CellRange | null) => typedError<ExportSummaryItem, string>(__TAURI_INVOKE("export_result", { result, session, path, options, range })),
+	exportResult: (result: number, session: string, path: string, options: ExportFileOptions_Deserialize, range: CellRange_Deserialize | null) => typedError<ExportSummaryItem, string>(__TAURI_INVOKE("export_result", { result, session, path, options, range })),
 	/**
 	 *  Before offering to run a query (or a table data tab) again for an export: whether it may
 	 *  be (only a single read), and whether the tab has an open transaction whose uncommitted
@@ -499,20 +585,21 @@ export const commands = {
 	 */
 	loadValueFile: (session: string, result: number, schema: string, name: string, row: number, column: number, path: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("load_value_file", { session, result, schema, name, row, column, path, confirmed })),
 	/**
-	 *  Sorts a result by one column in the core (`None` restores the server's order). The
-	 *  grid then asks for its windows again.
+	 *  Sorts a result by columns in the core, the first key being the most significant (no keys
+	 *  restore the server's order). The grid then asks for its windows again.
 	 */
-	sortResult: (result: number, column: number | null, descending: boolean) => typedError<null, string>(__TAURI_INVOKE("sort_result", { result, column, descending })),
+	sortResult: (result: number, keys: SortKeyItem[]) => typedError<null, string>(__TAURI_INVOKE("sort_result", { result, keys })),
 	/**
 	 *  Filters a result in the core: rows where some cell contains `text` (ignoring case);
 	 *  `None` shows every row again. The grid then asks for its windows again.
 	 */
 	filterResult: (result: number, text: string | null) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_result", { result, text })),
 	/**
-	 *  Filters a result by column conditions in the core (all must hold; an empty list removes
-	 *  them), on top of the text filter. The grid then asks for its windows again.
+	 *  Filters a result by column conditions in the core (an empty list removes them), on top
+	 *  of the text filter: all of them must hold, or any when `mode` says so, and text tells
+	 *  upper case from lower case only when it asks. The grid then asks for its windows again.
 	 */
-	filterColumns: (result: number, filters: ColumnFilterItem[]) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_columns", { result, filters })),
+	filterColumns: (result: number, filters: ColumnFilterItem[], mode: FilterModeItem | null) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_columns", { result, filters, mode })),
 	/**  Every cell of one row as text (`None` for NULL), for the viewer's row view. */
 	rowValues: (result: number, row: number) => typedError<(string | null)[], string>(__TAURI_INVOKE("row_values", { result, row })),
 	/**
@@ -529,8 +616,11 @@ export const commands = {
 	tablePageSql: (session: string, page: TablePageItem) => typedError<string, string>(__TAURI_INVOKE("table_page_sql", { session, page })),
 	/**  How many rows of a table the filter keeps (the table data tab's "Count"). */
 	countTableRows: (session: string, schema: string, name: string, filter: string) => typedError<number | null, string>(__TAURI_INVOKE("count_table_rows", { session, schema, name, filter })),
-	/**  An identifier quoted for the session's engine (for an ORDER BY the UI writes). */
-	quoteIdentifier: (session: string, identifier: string) => typedError<string, string>(__TAURI_INVOKE("quote_identifier", { session, identifier })),
+	/**
+	 *  The ORDER BY of a table data tab sorted by its headers, written by the core from the
+	 *  table's own columns (read from the catalog now): the UI names columns, never writes SQL.
+	 */
+	tableOrderBy: (session: string, schema: string, name: string, sort: ColumnSortItem[]) => typedError<string, string>(__TAURI_INVOKE("table_order_by", { session, schema, name, sort })),
 	/**
 	 *  Objects' names as the engine writes them (`schema.table`, quoted where it needs to be),
 	 *  for the explorer's "Copy qualified name".
@@ -672,6 +762,38 @@ export const commands = {
 	 */
 	statementAt: (engine: string, sql: string, offset: number) => typedError<TextSpan | null, string>(__TAURI_INVOKE("statement_at", { engine, sql, offset })),
 	/**
+	 *  What the editor's Run will send for this cursor and selection (UTF-8 bytes), for its
+	 *  label and for the statement picker: the core decides and splits, the page only asks.
+	 *  `engine` is `None` for a tab with no connection.
+	 */
+	runTarget: (engine: string | null, sql: string, cursor: number, selectionStart: number | null, selectionEnd: number | null) => typedError<RunTargetItem_Serialize, string>(__TAURI_INVOKE("run_target", { engine, sql, cursor, selectionStart, selectionEnd })),
+	/**
+	 *  The statements `picked` of a script (positions among its statements) as text to run,
+	 *  written by the core, which refuses when they would not run as they read in the script.
+	 */
+	pickStatements: (engine: string, sql: string, picked: number[]) => typedError<PickedTextItem, string>(__TAURI_INVOKE("pick_statements", { engine, sql, picked })),
+	/**
+	 *  From the statement under the cursor (`offset` in UTF-8 bytes) to the end of the script,
+	 *  as text to run; `None` when the script has no statement.
+	 */
+	statementsFromCursor: (engine: string, sql: string, offset: number) => typedError<PickedTextItem | null, string>(__TAURI_INVOKE("statements_from_cursor", { engine, sql, offset })),
+	/**
+	 *  The statement under the cursor (`offset` in UTF-8 bytes) as text to run, for Ctrl+Enter:
+	 *  written by the core so the run reads it as that one statement (a MySQL `DELIMITER` line
+	 *  before it still applies); `None` when there is no statement there.
+	 */
+	statementToRun: (engine: string, sql: string, offset: number) => typedError<StatementToRunItem | null, string>(__TAURI_INVOKE("statement_to_run", { engine, sql, offset })),
+	/**
+	 *  The statements of a script for the editor's outline panel: the core's splitter for the
+	 *  engine, the one that runs the script, with each statement's line and how it starts.
+	 */
+	scriptOutline: (engine: string, sql: string) => typedError<OutlineItem, string>(__TAURI_INVOKE("script_outline", { engine, sql })),
+	/**
+	 *  The statement after (`forward`) or before the one at the cursor (`offset` in UTF-8
+	 *  bytes), for the editor's "next / previous statement"; `None` at the last or first one.
+	 */
+	neighbourStatement: (engine: string, sql: string, offset: number, forward: boolean) => typedError<TextSpan | null, string>(__TAURI_INVOKE("neighbour_statement", { engine, sql, offset, forward })),
+	/**
 	 *  Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
 	 *  overwrites an existing file.
 	 */
@@ -688,6 +810,29 @@ export const commands = {
 	 *  with the engine's quoting.
 	 */
 	bindParams: (session: string, sql: string, values: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("bind_params", { session, sql, values })),
+	/**
+	 *  The `${name}` variables of a script's statements, in order, and which of them have no
+	 *  value yet (neither the tab's nor its connection's), so the UI can ask for those.
+	 */
+	scriptVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<ScriptVariablesItem, string>(__TAURI_INVOKE("script_variables", { session, sql, tab })),
+	/**
+	 *  The script with its variables' values written in, by the core, before anything else reads
+	 *  it: the guard, the read-only checks and the run are given this text. Refused when a value
+	 *  would change how the script is split or read.
+	 */
+	substituteVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("substitute_variables", { session, sql, tab })),
+	/**  A connection's variables, by name (SDB-383): local values, kept in the local store. */
+	connectionVariables: (connection: string) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
+	/**
+	 *  Sets one of a connection's variables, or removes it (`null`). The store refuses a name or
+	 *  a value that cannot be one.
+	 */
+	setConnectionVariable: (connection: string, name: string, value: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_variable", { connection, name, value })),
+	/**
+	 *  Whether a name and a value can be a variable's, as the core decides it (for a tab's own
+	 *  variables, which never leave the page's memory).
+	 */
+	variableIsValid: (name: string, value: string) => typedError<boolean, string>(__TAURI_INVOKE("variable_is_valid", { name, value })),
 	/**  Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form. */
 	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
 	/**
@@ -788,25 +933,71 @@ export const commands = {
 	 */
 	tableStats: (session: string, schema: string, table: string) => typedError<TableStatsItem_Serialize | null, string>(__TAURI_INVOKE("table_stats", { session, schema, table })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
-	runScript: (session: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, options, onEvent })),
+	runScript: (session: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, placement: ResultPlacementItem, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, options, placement, onEvent })),
 	/**
 	 *  Answers a run paused after an error (ADR-035). The core refuses a ticket that is not the
 	 *  pause it is waiting on.
 	 */
 	answerScriptError: (session: string, ticket: number, answer: ErrorAnswerItem) => typedError<null, string>(__TAURI_INVOKE("answer_script_error", { session, ticket, answer })),
-	/**  Whether a SELECT matches the conservative rules for fetching pages. */
-	queryPageSupported: (session: string, sql: string) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql })),
-	/**  Run the first page, keeping the original SQL in the user's query history. */
-	runQueryPage: (session: string, sql: string, limit: number, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, confirmed, options, onEvent })),
+	/**
+	 *  Whether a SELECT matches the conservative rules for fetching pages, ordered by the grid's
+	 *  `sort` first (result columns by position; none for the query's own order).
+	 */
+	queryPageSupported: (session: string, sql: string, sort: SortKeyItem[]) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql, sort })),
+	/**
+	 *  Run the first page, keeping the original SQL in the user's query history. `sort` is the
+	 *  grid's sort: the core writes the page's order from it.
+	 */
+	runQueryPage: (session: string, sql: string, limit: number, sort: SortKeyItem[], confirmed: boolean, options: RunOptionsItem_Deserialize, placement: ResultPlacementItem, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, sort, confirmed, options, placement, onEvent })),
 	/**
 	 *  The UI requests subsequent pages of the read it already confirmed. The core only permits
 	 *  eligible read queries to be paged, and appends each page at the expected offset.
 	 */
-	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset })),
+	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number, sort: SortKeyItem[]) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset, sort })),
 	countQueryRows: (session: string, sql: string) => typedError<number | null, string>(__TAURI_INVOKE("count_query_rows", { session, sql })),
+	/**
+	 *  The transposed view of `rows` of a result (SDB-386): positions of its current view, shown
+	 *  as columns, one row per column of the result, numbered from `first_number` as the grid
+	 *  numbers them. A result of its own in the core, freed with `release_result`; the labels head
+	 *  its first two columns in the user's language.
+	 */
+	transposeRows: (result: number, rows: number[], firstNumber: number, columnLabel: string, typeLabel: string) => typedError<TransposedItem, string>(__TAURI_INVOKE("transpose_rows", { result, rows, firstNumber, columnLabel, typeLabel })),
+	/**
+	 *  How many rows "Load every row" would load and roughly how much memory they take: the rows
+	 *  counted on the server, the memory from what a loaded row of `result` takes now.
+	 */
+	loadEstimate: (session: string, result: number, source: LoadSourceItem) => typedError<LoadEstimateItem_Serialize, string>(__TAURI_INVOKE("load_estimate", { session, result, source })),
+	/**
+	 *  Loads keyset pages of a paged query (ADR-054) into `result`, which holds `offset` rows,
+	 *  until it holds `until` rows (every row without it) or the query has no more. The rows held
+	 *  go to `on_progress` after each page; `cancel_load_rows` with the same `load_id` stops it,
+	 *  keeping the pages loaded before.
+	 */
+	loadQueryRows: (session: string, loadId: number, result: number, sql: string, offset: number, sort: SortKeyItem[], until: number | null, onProgress: Channel<number>) => typedError<LoadedRowsItem, string>(__TAURI_INVOKE("load_query_rows", { session, loadId, result, sql, offset, sort, until, onProgress })),
+	/**  Stops a load of query rows: the page being read and every page after it. */
+	cancelLoadRows: (session: string, loadId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_load_rows", { session, loadId })),
+	/**
+	 *  Every row of a table data tab's table that its filter keeps, in its pages' order: "Load
+	 *  every row" (SDB-386). Written and checked by the core like a page.
+	 */
+	tableRowsSql: (session: string, schema: string, name: string, filter: string, orderBy: string) => typedError<string, string>(__TAURI_INVOKE("table_rows_sql", { session, schema, name, filter, orderBy })),
+	/**  The last page of a table data tab: its rows counted now, and the page that holds the last. */
+	lastTablePage: (session: string, schema: string, name: string, filter: string, pageSize: number) => typedError<LastPageItem, string>(__TAURI_INVOKE("last_table_page", { session, schema, name, filter, pageSize })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
-	/**  Frees a result the UI no longer shows. */
+	/**  Frees a result the UI no longer shows: closing a result tab, pinned or not, frees it. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
+	/**
+	 *  Frees every result of an editor tab that was closed; a result that a run still going
+	 *  there starts later is freed by the core as it starts.
+	 */
+	releaseResults: (session: string) => typedError<null, string>(__TAURI_INVOKE("release_results", { session })),
+	/**  Pins a result tab, so no run replaces it, or unpins it (SDB-378). */
+	pinResult: (session: string, result: number, pinned: boolean) => typedError<ResultTabItem_Serialize, string>(__TAURI_INVOKE("pin_result", { session, result, pinned })),
+	/**
+	 *  Names a result tab; an empty name gives back the one its statement's comment gave it.
+	 *  The core cleans the name and answers what the tab is called now.
+	 */
+	renameResult: (session: string, result: number, name: string) => typedError<ResultTabItem_Serialize, string>(__TAURI_INVOKE("rename_result", { session, result, name })),
 	currentDatabase: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("current_database", { session })),
 	/**  The databases this tab's session can switch to (MySQL, MariaDB, SQL Server). */
 	listDatabases: (session: string) => typedError<string[], string>(__TAURI_INVOKE("list_databases", { session })),
@@ -1162,10 +1353,28 @@ export type CellInputItem = { kind: "text"; text: string } | { kind: "null" } | 
  *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
  *  out the columns it hides).
  */
-export type CellRange = {
+export type CellRange = CellRange_Serialize | CellRange_Deserialize;
+
+/**
+ *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
+ *  out the columns it hides).
+ */
+export type CellRange_Deserialize = {
 	firstRow: number,
 	rows: number,
 	columns: number[],
+	selectedRows?: number[] | null,
+};
+
+/**
+ *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
+ *  out the columns it hides).
+ */
+export type CellRange_Serialize = {
+	firstRow: number,
+	rows: number,
+	columns: number[],
+	selectedRows: number[] | null,
 };
 
 /**
@@ -1435,6 +1644,12 @@ export type ColumnMatchItem_Serialize = {
 	text: string | null,
 };
 
+/**  One key of a table data tab's sort: a column of the table by name, and its direction. */
+export type ColumnSortItem = {
+	column: string,
+	descending: boolean,
+};
+
 export type ColumnStatisticsItem = "auto" | "off" | "on";
 
 /**  A table column's statistics, counted by the server with read-only queries. */
@@ -1508,6 +1723,8 @@ setupSkipped: SkippedSetupItem[] } |
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
 { kind: "authFailed"; message: string; canRemember: boolean } | 
+/**  The user declined an SSH question or cancelled an authentication prompt. */
+{ kind: "cancelled" } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" } | 
 /**
@@ -1533,6 +1750,8 @@ setupSkipped: SkippedSetupItem[] } |
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
 { kind: "authFailed"; message: string; canRemember: boolean } | 
+/**  The user declined an SSH question or cancelled an authentication prompt. */
+{ kind: "cancelled" } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" } | 
 /**
@@ -1876,6 +2095,19 @@ export type ConstraintDetails_Serialize = {
 
 export type ConstraintKindItem = "primary_key" | "unique" | "check";
 
+/**
+ *  "Copy special…" options, which are also the copy defaults (SDB-388). The core checks
+ *  them: `delimiter` is one character, `quote` one or none (empty: never quoted).
+ */
+export type CopySpecialItem = {
+	delimiter: string,
+	quote: string,
+	rowDelimiter: RowDelimiterItem,
+	nullText: string,
+	header: boolean,
+	rowNumbers: boolean,
+};
+
 /**  What "Create" in the explorer can start (see `spelaion_core::CreateKind`). */
 export type CreateKindItem = "table" | "view" | "materializedView" | "sequence" | "schema";
 
@@ -2106,6 +2338,26 @@ export type DiagramTextFormatItem = "mermaid" | "dbml";
 /**  The coordinates a value had before Z and M were left out. */
 export type Dimensions = "xy" | "xyz" | "xym" | "xyzm";
 
+/**
+ *  How the grid shows values (SDB-385): `strftime` patterns (empty: as the database prints
+ *  it), a number's marks, the display time zone and how binary reads. The core checks it.
+ */
+export type DisplayFormatItem = {
+	/**  Everything as the database prints it, whatever the rest says. */
+	asStored: boolean,
+	date: string,
+	time: string,
+	timestamp: string,
+	/**  `none`, `comma`, `dot`, `space` or `apostrophe`. */
+	grouping: string,
+	/**  `dot` or `comma`. */
+	decimal: string,
+	/**  An IANA name, `local` for this computer's, or empty. */
+	timeZone: string,
+	/**  `hex`, `utf8`, `latin1` or `base64`. */
+	binary: string,
+};
+
 /**  A constraint a structure form drops, by its name in the catalog. */
 export type DroppedConstraintItem = { kind: "constraint"; name: string } | { kind: "foreignKey"; name: string };
 
@@ -2218,12 +2470,38 @@ export type EditorPreferencesItem = {
 	font: string,
 	fontSize: number,
 	lineHeight: number,
+	/**  The editor's zoom in percent (SDB-389): it multiplies the font size and line height. */
+	zoom: number,
 	tabSize: number,
 	lineNumbers: boolean,
 	wordWrap: boolean,
 	keywordCase: string,
 	indent: number,
 	commaPosition: string,
+};
+
+/**
+ *  One of the user's own editor snippets (SDB-384): text the editor inserts when its name is
+ *  typed before Tab. The core checks it before it is saved.
+ */
+export type EditorSnippetItem = {
+	/**  What is typed before Tab. */
+	name: string,
+	description: string,
+	/**  The text inserted, with its fields (`${1:name}`). */
+	body: string,
+};
+
+/**
+ *  The limits the core holds an editor snippet and the template of new scripts to, for the
+ *  settings page to show (the core is what enforces them).
+ */
+export type EditorSnippetLimits = {
+	name: number,
+	description: number,
+	body: number,
+	snippets: number,
+	template: number,
 };
 
 export type EmbeddedBackupItem = {
@@ -2563,6 +2841,15 @@ export type FilterActionItem = "hide" | "showOnly";
 
 export type FilterKindItem = "schemas" | "objects" | "columns";
 
+/**
+ *  How a result's column conditions are read together: all of them or any, telling upper
+ *  case from lower case in text or not.
+ */
+export type FilterModeItem = {
+	any: boolean,
+	matchCase: boolean,
+};
+
 /**  A column filter operator (see `spelaion_core::FilterOp`). */
 export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "contains" | "notContains" | "isNull" | "isNotNull";
 
@@ -2675,11 +2962,71 @@ export type GrantedPrivilegeItem = {
 	denied: boolean,
 };
 
-/**  How the result grid draws its cells; personal, like the theme. */
+/**
+ *  How the result grid draws its cells and how many result tabs an editor tab keeps;
+ *  personal, like the theme.
+ */
 export type GridPreferencesItem = {
+	viewerWrap: boolean,
 	zebra: boolean,
 	nullText: boolean,
 	boolCheckboxes: boolean,
+	resultTabs: number,
+	/**  Values colored by their type. */
+	colorize: boolean,
+	/**  The column header shows the column's type, and its comment where it is known. */
+	headerType: boolean,
+	headerComment: boolean,
+	/**  The grid's own font size, in pixels. */
+	fontSize: number,
+};
+
+/**
+ *  A result filtered to one group: the column filters now in force (the ones there were and
+ *  one condition per grouped column, written by the core) and the rows left.
+ */
+export type GroupFilterOutcome = {
+	filters: ColumnFilterItem[],
+	/**  How the filters are now read (a group's conditions all hold, and case is matched). */
+	mode: FilterModeItem,
+	rows: number,
+	total: number,
+	/**  Filters in force before were read ignoring case and now match it (SDB-410). */
+	caseSwitched: boolean,
+};
+
+/**  One group of a result's rows (the grouping panel): its values and how many rows have them. */
+export type GroupItem = {
+	/**
+	 *  The value of each grouped column, as the database's own text; `null` is NULL. A long
+	 *  value is cut (it ends in "…").
+	 */
+	key: (string | null)[],
+	/**  Rows in the group (f64 holds every count up to 2^53 exactly). */
+	count: number | null,
+	/**
+	 *  The position in the current view of the group's first row: what "filter to this
+	 *  group" names it by.
+	 */
+	firstRow: number | null,
+};
+
+/**  The groups of a result's current view, as the core counted them. */
+export type GroupingItem = {
+	/**  The largest groups first, at most `max_groups` of them. */
+	groups: GroupItem[],
+	/**  Rows of the view: what a group's percent is of. */
+	rows: number | null,
+	/**  Groups there are (with "duplicates only", those of more than one row). */
+	totalGroups: number | null,
+	/**  Different groups told apart, whatever "duplicates only" says. */
+	distinct: number | null,
+	/**  Rows left out of every group because too many groups were already being counted. */
+	uncountedRows: number | null,
+	/**  The view the groups belong to, sent back with "filter to this group". */
+	generation: number | null,
+	/**  The most groups the core returns. */
+	maxGroups: number,
 };
 
 export type HistoryFilterItem = HistoryFilterItem_Serialize | HistoryFilterItem_Deserialize;
@@ -3143,8 +3490,53 @@ export type KubernetesDraftItem = {
 	kubectl: string,
 };
 
+/**  The last page of a table data tab, from its rows counted now (SDB-386). */
+export type LastPageItem = {
+	total: number | null,
+	page: number,
+};
+
 /**  The line break a `.sql` file is written with. */
 export type LineEndingItem = "lf" | "crLf" | "cr";
+
+/**  What "Load every row" would hold (SDB-386). Counts as `f64`: TypeScript numbers. */
+export type LoadEstimateItem = LoadEstimateItem_Serialize | LoadEstimateItem_Deserialize;
+
+/**  What "Load every row" would hold (SDB-386). Counts as `f64`: TypeScript numbers. */
+export type LoadEstimateItem_Deserialize = {
+	loaded: number | null,
+	total: number | null,
+	/**  Roughly, in bytes; `None` with no row loaded to measure. */
+	bytes?: number | null,
+	tooMany: boolean,
+	/**  Most rows a result may hold. */
+	maxRows: number | null,
+};
+
+/**  What "Load every row" would hold (SDB-386). Counts as `f64`: TypeScript numbers. */
+export type LoadEstimateItem_Serialize = {
+	loaded: number | null,
+	total: number | null,
+	/**  Roughly, in bytes; `None` with no row loaded to measure. */
+	bytes: number | null,
+	tooMany: boolean,
+	/**  Most rows a result may hold. */
+	maxRows: number | null,
+};
+
+/**  Where a load of query rows ended. */
+export type LoadOutcomeItem = { kind: "complete" } | { kind: "reached" } | { kind: "cancelled" } | { kind: "failed"; message: string };
+
+/**
+ *  What "Load every row" or a jump past the loaded rows estimates from: a paged query, or a
+ *  table data tab's table and filter.
+ */
+export type LoadSourceItem = { kind: "query"; sql: string } | { kind: "table"; schema: string; name: string; filter: string };
+
+export type LoadedRowsItem = {
+	rows: number,
+	outcome: LoadOutcomeItem,
+};
 
 /**  One lock of the lock view (`spelaion_core::Lock`). */
 export type LockItem = LockItem_Serialize | LockItem_Deserialize;
@@ -3698,6 +4090,24 @@ export type OpenTabItem_Serialize = {
 	file: OpenTabFileItem_Serialize | null,
 };
 
+/**  One statement of a script in the editor's outline. */
+export type OutlineEntryItem = {
+	/**  The statement, in bytes of the script. */
+	span: TextSpan,
+	/**  The line it starts on, from 1. */
+	line: number,
+	/**  How it starts, on one line. */
+	summary: string,
+};
+
+/**  The statements of a script, as the core's splitter reads it. */
+export type OutlineItem = {
+	/**  The first statements, in order (the core bounds how many). */
+	entries: OutlineEntryItem[],
+	/**  How many statements the script has. */
+	total: number,
+};
+
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */
 "other" | 
@@ -3841,6 +4251,34 @@ export type PendingValueItem_Serialize = {
 };
 
 export type PgFormatItem = "plain" | "custom" | "directory" | "tar";
+
+/**  One of a column's most frequent values, offered as a filter's value. */
+export type PickableValueItem = PickableValueItem_Serialize | PickableValueItem_Deserialize;
+
+/**  One of a column's most frequent values, offered as a filter's value. */
+export type PickableValueItem_Deserialize = {
+	/**  `None` for NULL. */
+	value?: string | null,
+	count: number | null,
+};
+
+/**  One of a column's most frequent values, offered as a filter's value. */
+export type PickableValueItem_Serialize = {
+	/**  `None` for NULL. */
+	value: string | null,
+	count: number | null,
+};
+
+/**
+ *  Some statements of a script as text to run, written by the core: what is left out is
+ *  blank, so a position in `text` is one in the script.
+ */
+export type PickedTextItem = {
+	text: string,
+	/**  Where `text` starts and ends in the script, in UTF-8 bytes. */
+	span: TextSpan,
+	statements: number,
+};
 
 /**  A date and time as picked in the date and time picker. */
 export type PickedTimeItem = {
@@ -4480,6 +4918,12 @@ export type ReferencedRowsItem = {
 	pageRows: number,
 };
 
+/**  A stored default filter the core refused when the tab opened. */
+export type RefusedFilterItem = {
+	filter: string,
+	reason: string,
+};
+
 /**  A table or view chosen in the explorer. */
 export type RelationRefItem = {
 	schema: string,
@@ -4564,6 +5008,36 @@ export type RestoredTabsItem_Serialize = {
 	reconnect: boolean,
 };
 
+/**  Where a run's results go (SDB-378). */
+export type ResultPlacementItem = 
+/**  In place of every result that is not pinned. */
+{ kind: "replace" } | 
+/**  Next to the results already there. */
+{ kind: "newTab" } | 
+/**  In place of this result: a re-run of its query. */
+{ kind: "into"; result: number };
+
+/**  A result tab as the core keeps it (SDB-378). */
+export type ResultTabItem = ResultTabItem_Serialize | ResultTabItem_Deserialize;
+
+/**  A result tab as the core keeps it (SDB-378). */
+export type ResultTabItem_Deserialize = {
+	result: number,
+	name?: string | null,
+	/**  `name` is the one the user gave it (SDB-407). */
+	renamed: boolean,
+	pinned: boolean,
+};
+
+/**  A result tab as the core keeps it (SDB-378). */
+export type ResultTabItem_Serialize = {
+	result: number,
+	name: string | null,
+	/**  `name` is the one the user gave it (SDB-407). */
+	renamed: boolean,
+	pinned: boolean,
+};
+
 /**  A masked cell's value, revealed on the user's request (ADR-051). */
 export type RevealedCellItem = RevealedCellItem_Serialize | RevealedCellItem_Deserialize;
 
@@ -4604,6 +5078,9 @@ export type RiskyItem = {
 	risk: RiskKind,
 };
 
+/**  The line break between copied rows. */
+export type RowDelimiterItem = "lf" | "crLf";
+
 /**
  *  One key of a row in the references panel: where it leads and its first rows (as text,
  *  `None` for NULL); or the column that is NULL in this row (it references nothing through
@@ -4641,6 +5118,12 @@ export type RowReferenceItem_Serialize = {
 	error: string | null,
 };
 
+/**
+ *  What the editor's Run will send: the statement under the cursor, the selection, or the
+ *  whole script (a tab with no connection).
+ */
+export type RunKindItem = "statement" | "selection" | "script";
+
 /**  How one run goes: its error mode and, if set, its own statement timeout. */
 export type RunOptionsItem = RunOptionsItem_Serialize | RunOptionsItem_Deserialize;
 
@@ -4656,6 +5139,27 @@ export type RunOptionsItem_Serialize = {
 	onError: OnErrorItem,
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds: number | null,
+};
+
+/**  What Run will send and the statements in it, as the core reads them. */
+export type RunTargetItem = RunTargetItem_Serialize | RunTargetItem_Deserialize;
+
+/**  What Run will send and the statements in it, as the core reads them. */
+export type RunTargetItem_Deserialize = {
+	kind: RunKindItem,
+	/**  The text Run sends; `null` when there is nothing to run. */
+	span?: TextSpan | null,
+	/**  The statements of that text, in bytes of the script. */
+	statements: TextSpan[],
+};
+
+/**  What Run will send and the statements in it, as the core reads them. */
+export type RunTargetItem_Serialize = {
+	kind: RunKindItem,
+	/**  The text Run sends; `null` when there is nothing to run. */
+	span: TextSpan | null,
+	/**  The statements of that text, in bytes of the script. */
+	statements: TextSpan[],
 };
 
 /**  What a connection type asks for (ADR-029). */
@@ -4744,8 +5248,21 @@ export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "seq
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
 export type ScriptEvent_Deserialize = 
+/**
+ *  The run was accepted, before any of its statements: the result tabs it replaced,
+ *  already freed by the core (SDB-378).
+ */
+{ kind: "runStarted"; closed: number[] } | 
 /**  Byte range of the statement within the script. */
-{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
+{ kind: "statementStarted"; index: number; start: number; end: number } | 
+/**
+ *  A result started, and where the core put its tab (SDB-378): its name, whether it is
+ *  pinned, the result whose place it took (a re-run) and the ones closed to stay within
+ *  the limit, all freed already.
+ */
+{ kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name?: string | null; 
+/**  `name` is the one the user gave the tab it replaces (SDB-407). */
+renamed: boolean; pinned: boolean; replaces?: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */
@@ -4758,8 +5275,21 @@ timedOut: boolean } |
 { kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
 
 export type ScriptEvent_Serialize = 
+/**
+ *  The run was accepted, before any of its statements: the result tabs it replaced,
+ *  already freed by the core (SDB-378).
+ */
+{ kind: "runStarted"; closed: number[] } | 
 /**  Byte range of the statement within the script. */
-{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
+{ kind: "statementStarted"; index: number; start: number; end: number } | 
+/**
+ *  A result started, and where the core put its tab (SDB-378): its name, whether it is
+ *  pinned, the result whose place it took (a re-run) and the ones closed to stay within
+ *  the limit, all freed already.
+ */
+{ kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name: string | null; 
+/**  `name` is the one the user gave the tab it replaces (SDB-407). */
+renamed: boolean; pinned: boolean; replaces: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */
@@ -4814,6 +5344,12 @@ export type ScriptSummaryItem_Serialize = {
 	stop: ScriptStopItem | null,
 	executionMs: number | null,
 	fetchMs: number | null,
+};
+
+/**  The variables a script uses, in order, and the ones that have no value yet. */
+export type ScriptVariablesItem = {
+	names: string[],
+	missing: string[],
 };
 
 /**  A row that contains the value. */
@@ -4990,6 +5526,17 @@ export type SessionLost_Serialize = {
 	openTransaction: boolean,
 };
 
+/**
+ *  The steps the interface size and the editor's zoom move through (SDB-389), in percent:
+ *  the core's lists, so the page never offers one the core would refuse.
+ */
+export type SizeStepsItem = {
+	interfaceSizes: number[],
+	defaultInterfaceSize: number,
+	editorZooms: number[],
+	defaultEditorZoom: number,
+};
+
 /**  A session setup statement that failed and was skipped (ADR-037). */
 export type SkippedSetupItem = {
 	/**  1-based. */
@@ -5030,6 +5577,12 @@ export type SnippetItem_Serialize = {
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
 	folderId: number | null,
+};
+
+/**  One key of a result's sort: a result column by position, and its direction. */
+export type SortKeyItem = {
+	column: number,
+	descending: boolean,
 };
 
 export type SourceEncodingItem = "auto" | "utf8" | "utf16Le" | "utf16Be" | "windows1252";
@@ -5077,6 +5630,15 @@ export type StatStateItem = { kind: "done" } |
 /**  The engine refused it: its message. */
 { kind: "failed"; message: string };
 
+/**
+ *  What Ctrl+Enter runs: the text the core wrote for the statement under the cursor, and that
+ *  statement's own place in the script (flashed in the editor).
+ */
+export type StatementToRunItem = {
+	picked: PickedTextItem,
+	statement: TextSpan,
+};
+
 /**  What a structure form asks for on one table; the core writes the SQL. */
 export type TableAlterationItem = TableAlterationItem_Serialize | TableAlterationItem_Deserialize;
 
@@ -5120,6 +5682,34 @@ export type TableExportItem = {
 	name: string,
 	filter: string,
 	orderBy: string,
+};
+
+/**
+ *  What a table data tab remembers of its table's filters, every one checked by the core as
+ *  it was read: the history newest first, and the default the tab opens with.
+ */
+export type TableFiltersItem = TableFiltersItem_Serialize | TableFiltersItem_Deserialize;
+
+/**
+ *  What a table data tab remembers of its table's filters, every one checked by the core as
+ *  it was read: the history newest first, and the default the tab opens with.
+ */
+export type TableFiltersItem_Deserialize = {
+	history: string[],
+	default?: string | null,
+	/**  The stored default did not pass the check: the tab opens without it and says so. */
+	refusedDefault?: RefusedFilterItem | null,
+};
+
+/**
+ *  What a table data tab remembers of its table's filters, every one checked by the core as
+ *  it was read: the history newest first, and the default the tab opens with.
+ */
+export type TableFiltersItem_Serialize = {
+	history: string[],
+	default: string | null,
+	/**  The stored default did not pass the check: the tab opens without it and says so. */
+	refusedDefault: RefusedFilterItem | null,
 };
 
 /**
@@ -5363,6 +5953,28 @@ export type TopValueItem_Serialize = {
 };
 
 /**
+ *  A column's most frequent values to pick a filter's value from. A masked column's are
+ *  never read (ADR-051).
+ */
+export type TopValuesOutcome = TopValuesOutcome_Serialize | TopValuesOutcome_Deserialize;
+
+/**
+ *  A column's most frequent values to pick a filter's value from. A masked column's are
+ *  never read (ADR-051).
+ */
+export type TopValuesOutcome_Deserialize = { kind: "done"; values: PickableValueItem_Deserialize[]; 
+/**  Counted over the first `sample_rows` rows only. */
+sampled: boolean; sampleRows: number | null } | { kind: "cancelled" } | { kind: "masked" };
+
+/**
+ *  A column's most frequent values to pick a filter's value from. A masked column's are
+ *  never read (ADR-051).
+ */
+export type TopValuesOutcome_Serialize = { kind: "done"; values: PickableValueItem_Serialize[]; 
+/**  Counted over the first `sample_rows` rows only. */
+sampled: boolean; sampleRows: number | null } | { kind: "cancelled" } | { kind: "masked" };
+
+/**
  *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
  *  auto-commit toggle (ADR-031).
  */
@@ -5435,6 +6047,13 @@ export type TransactionStatusItem_Serialize = {
 	state: TransactionStateItem | null,
 	/**  Statements run in the open transaction. */
 	statements: number,
+};
+
+/**  The transposed view of rows of a result (SDB-386): a result of its own in the core. */
+export type TransposedItem = {
+	result: number,
+	columns: ColumnItem[],
+	rows: number,
 };
 
 export type TunnelDraftItem = TunnelDraftItem_Serialize | TunnelDraftItem_Deserialize;
@@ -5533,6 +6152,12 @@ export type UpdateMethod =
 /**  A Linux binary that is none of those: the new version is downloaded by hand. */
 "releasesPage";
 
+/**
+ *  Where rows copied as UPDATE statements come from (SDB-388): a table data tab's table, or
+ *  the statement a query's result came from. The core decides the table and its key.
+ */
+export type UpdateSourceItem = { kind: "table"; schema: string; name: string } | { kind: "query"; sql: string };
+
 export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
 
 export type UpdateStatus_Deserialize = 
@@ -5613,6 +6238,12 @@ export type ValuePickerItem_Serialize = {
 };
 
 export type ValuePickerKind = "temporal" | "choice" | "foreignKey";
+
+/**  One `${name}` variable of the editor's scripts and its value (SDB-383). */
+export type VariableItem = {
+	name: string,
+	value: string,
+};
 
 export type WorkspaceInfo = WorkspaceInfo_Serialize | WorkspaceInfo_Deserialize;
 

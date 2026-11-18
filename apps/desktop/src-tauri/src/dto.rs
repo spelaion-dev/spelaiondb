@@ -883,6 +883,50 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
     }
 }
 
+/// One of the user's own editor snippets (SDB-384): text the editor inserts when its name is
+/// typed before Tab. The core checks it before it is saved.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSnippetItem {
+    /// What is typed before Tab.
+    pub name: String,
+    pub description: String,
+    /// The text inserted, with its fields (`${1:name}`).
+    pub body: String,
+}
+
+impl From<spelaion_core::EditorSnippet> for EditorSnippetItem {
+    fn from(snippet: spelaion_core::EditorSnippet) -> Self {
+        Self {
+            name: snippet.name,
+            description: snippet.description,
+            body: snippet.body,
+        }
+    }
+}
+
+impl From<EditorSnippetItem> for spelaion_core::EditorSnippet {
+    fn from(snippet: EditorSnippetItem) -> Self {
+        Self {
+            name: snippet.name,
+            description: snippet.description,
+            body: snippet.body,
+        }
+    }
+}
+
+/// The limits the core holds an editor snippet and the template of new scripts to, for the
+/// settings page to show (the core is what enforces them).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSnippetLimits {
+    pub name: u32,
+    pub description: u32,
+    pub body: u32,
+    pub snippets: u32,
+    pub template: u32,
+}
+
 /// Personal editor preferences; all fields checked by the core store.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -890,6 +934,8 @@ pub struct EditorPreferencesItem {
     pub font: String,
     pub font_size: u8,
     pub line_height: u8,
+    /// The editor's zoom in percent (SDB-389): it multiplies the font size and line height.
+    pub zoom: u16,
     pub tab_size: u8,
     pub line_numbers: bool,
     pub word_wrap: bool,
@@ -903,6 +949,7 @@ impl From<spelaion_core::EditorPreferences> for EditorPreferencesItem {
             font,
             font_size,
             line_height,
+            zoom,
             tab_size,
             line_numbers,
             word_wrap,
@@ -914,6 +961,7 @@ impl From<spelaion_core::EditorPreferences> for EditorPreferencesItem {
             font,
             font_size,
             line_height,
+            zoom,
             tab_size,
             line_numbers,
             word_wrap,
@@ -929,6 +977,7 @@ impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
             font,
             font_size,
             line_height,
+            zoom,
             tab_size,
             line_numbers,
             word_wrap,
@@ -940,6 +989,7 @@ impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
             font,
             font_size,
             line_height,
+            zoom,
             tab_size,
             line_numbers,
             word_wrap,
@@ -948,6 +998,17 @@ impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
             comma_position,
         }
     }
+}
+
+/// The steps the interface size and the editor's zoom move through (SDB-389), in percent:
+/// the core's lists, so the page never offers one the core would refuse.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SizeStepsItem {
+    pub interface_sizes: Vec<u16>,
+    pub default_interface_size: u16,
+    pub editor_zooms: Vec<u16>,
+    pub default_editor_zoom: u16,
 }
 
 /// The map view's background (ADR-045): tiles from the user's server, off by default.
@@ -1073,26 +1134,103 @@ impl From<spelaion_core::ColumnMap> for ColumnMapItem {
     }
 }
 
-/// How the result grid draws its cells; personal, like the theme.
+/// How the result grid draws its cells and how many result tabs an editor tab keeps;
+/// personal, like the theme.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GridPreferencesItem {
+    pub viewer_wrap: bool,
     pub zebra: bool,
     pub null_text: bool,
     pub bool_checkboxes: bool,
+    pub result_tabs: u32,
+    /// Values colored by their type.
+    pub colorize: bool,
+    /// The column header shows the column's type, and its comment where it is known.
+    pub header_type: bool,
+    pub header_comment: bool,
+    /// The grid's own font size, in pixels.
+    pub font_size: u32,
+}
+
+/// How the grid shows values (SDB-385): `strftime` patterns (empty: as the database prints
+/// it), a number's marks, the display time zone and how binary reads. The core checks it.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayFormatItem {
+    /// Everything as the database prints it, whatever the rest says.
+    pub as_stored: bool,
+    pub date: String,
+    pub time: String,
+    pub timestamp: String,
+    /// `none`, `comma`, `dot`, `space` or `apostrophe`.
+    pub grouping: String,
+    /// `dot` or `comma`.
+    pub decimal: String,
+    /// An IANA name, `local` for this computer's, or empty.
+    pub time_zone: String,
+    /// `hex`, `utf8`, `latin1` or `base64`.
+    pub binary: String,
+}
+
+impl From<&spelaion_core::DisplayFormat> for DisplayFormatItem {
+    fn from(format: &spelaion_core::DisplayFormat) -> Self {
+        Self {
+            as_stored: format.as_stored,
+            date: format.date.clone(),
+            time: format.time.clone(),
+            timestamp: format.timestamp.clone(),
+            grouping: format.grouping.as_str().into(),
+            decimal: format.decimal.as_str().into(),
+            time_zone: format.time_zone.clone(),
+            binary: format.binary.as_str().into(),
+        }
+    }
+}
+
+impl DisplayFormatItem {
+    /// The settings as the core reads them; a mark or a binary form it does not know is
+    /// refused, not guessed.
+    pub fn into_format(self) -> Result<spelaion_core::DisplayFormat, String> {
+        Ok(spelaion_core::DisplayFormat {
+            as_stored: self.as_stored,
+            date: self.date,
+            time: self.time,
+            timestamp: self.timestamp,
+            grouping: spelaion_core::Grouping::parse(&self.grouping)
+                .ok_or("unknown digit grouping")?,
+            decimal: spelaion_core::DecimalMark::parse(&self.decimal)
+                .ok_or("unknown decimal mark")?,
+            time_zone: self.time_zone,
+            binary: spelaion_core::BinaryDisplay::parse(&self.binary)
+                .ok_or("unknown binary display")?,
+        })
+    }
 }
 
 impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
     fn from(p: spelaion_core::GridPreferences) -> Self {
         let spelaion_core::GridPreferences {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         } = p;
         Self {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         }
     }
 }
@@ -1100,14 +1238,26 @@ impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
 impl From<GridPreferencesItem> for spelaion_core::GridPreferences {
     fn from(p: GridPreferencesItem) -> Self {
         let GridPreferencesItem {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         } = p;
         Self {
+            viewer_wrap,
             zebra,
             null_text,
             bool_checkboxes,
+            result_tabs,
+            colorize,
+            header_type,
+            header_comment,
+            font_size,
         }
     }
 }
@@ -1485,6 +1635,22 @@ pub struct SnippetFolderItem {
     pub personal: bool,
 }
 
+/// One `${name}` variable of the editor's scripts and its value (SDB-383).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VariableItem {
+    pub name: String,
+    pub value: String,
+}
+
+/// The variables a script uses, in order, and the ones that have no value yet.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptVariablesItem {
+    pub names: Vec<String>,
+    pub missing: Vec<String>,
+}
+
 /// A saved query; `connection` is empty when it was saved without one.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1550,6 +1716,8 @@ pub enum ConnectOutcome {
     PasswordRequired { can_remember: bool },
     /// The server rejected the password (or the user): it must be asked for again.
     AuthFailed { message: String, can_remember: bool },
+    /// The user declined an SSH question or cancelled an authentication prompt.
+    Cancelled,
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
     /// A repository connection or tunnel is new or changed since the repository was trusted
@@ -1653,16 +1821,30 @@ pub struct ColumnItem {
     rename_all_fields = "camelCase"
 )]
 pub enum ScriptEvent {
+    /// The run was accepted, before any of its statements: the result tabs it replaced,
+    /// already freed by the core (SDB-378).
+    RunStarted {
+        closed: Vec<u32>,
+    },
     /// Byte range of the statement within the script.
     StatementStarted {
         index: u32,
         start: u32,
         end: u32,
     },
+    /// A result started, and where the core put its tab (SDB-378): its name, whether it is
+    /// pinned, the result whose place it took (a re-run) and the ones closed to stay within
+    /// the limit, all freed already.
     ResultStarted {
         index: u32,
         result: u32,
         columns: Vec<ColumnItem>,
+        name: Option<String>,
+        /// `name` is the one the user gave the tab it replaces (SDB-407).
+        renamed: bool,
+        pinned: bool,
+        replaces: Option<u32>,
+        closed: Vec<u32>,
     },
     Rows {
         index: u32,
@@ -1884,6 +2066,110 @@ impl From<ScriptPreferencesItem> for spelaion_core::ScriptPreferences {
     }
 }
 
+/// Where a run's results go (SDB-378).
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ResultPlacementItem {
+    /// In place of every result that is not pinned.
+    Replace,
+    /// Next to the results already there.
+    NewTab,
+    /// In place of this result: a re-run of its query.
+    Into { result: u32 },
+}
+
+impl From<ResultPlacementItem> for spelaion_core::Placement {
+    fn from(placement: ResultPlacementItem) -> Self {
+        match placement {
+            ResultPlacementItem::Replace => Self::Replace,
+            ResultPlacementItem::NewTab => Self::NewTab,
+            ResultPlacementItem::Into { result } => {
+                Self::Into(spelaion_core::ResultId(result.into()))
+            }
+        }
+    }
+}
+
+/// A result tab as the core keeps it (SDB-378).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultTabItem {
+    pub result: u32,
+    pub name: Option<String>,
+    /// `name` is the one the user gave it (SDB-407).
+    pub renamed: bool,
+    pub pinned: bool,
+}
+
+impl From<spelaion_core::ResultTab> for ResultTabItem {
+    fn from(tab: spelaion_core::ResultTab) -> Self {
+        Self {
+            result: result_number(tab.result),
+            name: tab.name,
+            renamed: tab.renamed,
+            pinned: tab.pinned,
+        }
+    }
+}
+
+fn result_number(result: spelaion_core::ResultId) -> u32 {
+    u32::try_from(result.0).unwrap_or(u32::MAX)
+}
+
+/// Follows a run's events for the UI: each one as the UI reads it, a result that starts with
+/// where the core put its tab. A result nobody shows any more (its editor tab was closed) is
+/// freed by the core and still announced, so the events stay in step.
+pub struct RunEvents {
+    results: spelaion_core::RunResults,
+}
+
+impl RunEvents {
+    pub fn new(results: spelaion_core::RunResults) -> Self {
+        Self { results }
+    }
+
+    /// The first event of the run: what it replaced.
+    pub fn started(&self) -> ScriptEvent {
+        ScriptEvent::RunStarted {
+            closed: self
+                .results
+                .closed()
+                .iter()
+                .copied()
+                .map(result_number)
+                .collect(),
+        }
+    }
+
+    pub fn event(&mut self, event: CoreEvent) -> ScriptEvent {
+        let placed = self.results.observe(&event);
+        let mut event = ScriptEvent::from(event);
+        if let (
+            ScriptEvent::ResultStarted {
+                name,
+                renamed,
+                pinned,
+                replaces,
+                closed,
+                ..
+            },
+            Some(placed),
+        ) = (&mut event, placed)
+        {
+            *name = placed.tab.name;
+            *renamed = placed.tab.renamed;
+            *pinned = placed.tab.pinned;
+            *replaces = placed.replaced.map(result_number);
+            *closed = placed.closed.into_iter().map(result_number).collect();
+        }
+        event
+    }
+}
+
 impl From<CoreEvent> for ScriptEvent {
     fn from(event: CoreEvent) -> Self {
         match event {
@@ -1910,6 +2196,11 @@ impl From<CoreEvent> for ScriptEvent {
                         masked: spelaion_core::masking::is_masked_field(schema.arrow.field(i)),
                     })
                     .collect(),
+                name: None,
+                renamed: false,
+                pinned: false,
+                replaces: None,
+                closed: Vec::new(),
             },
             CoreEvent::Rows {
                 index,
@@ -2388,6 +2679,95 @@ pub struct EditableTableItem {
     pub schema: String,
     pub name: String,
     pub primary_key: Vec<String>,
+}
+
+/// Where rows copied as UPDATE statements come from (SDB-388): a table data tab's table, or
+/// the statement a query's result came from. The core decides the table and its key.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum UpdateSourceItem {
+    Table { schema: String, name: String },
+    Query { sql: String },
+}
+
+impl From<UpdateSourceItem> for spelaion_core::UpdateSource {
+    fn from(item: UpdateSourceItem) -> Self {
+        match item {
+            UpdateSourceItem::Table { schema, name } => Self::Table { schema, name },
+            UpdateSourceItem::Query { sql } => Self::Query { sql },
+        }
+    }
+}
+
+/// The line break between copied rows.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum RowDelimiterItem {
+    Lf,
+    CrLf,
+}
+
+/// "Copy special…" options, which are also the copy defaults (SDB-388). The core checks
+/// them: `delimiter` is one character, `quote` one or none (empty: never quoted).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CopySpecialItem {
+    pub delimiter: String,
+    pub quote: String,
+    pub row_delimiter: RowDelimiterItem,
+    pub null_text: String,
+    pub header: bool,
+    pub row_numbers: bool,
+}
+
+impl From<spelaion_core::CopySpecial> for CopySpecialItem {
+    fn from(options: spelaion_core::CopySpecial) -> Self {
+        Self {
+            delimiter: options.delimiter.to_string(),
+            quote: options.quote.map(String::from).unwrap_or_default(),
+            row_delimiter: match options.row_delimiter {
+                spelaion_core::RowDelimiter::Lf => RowDelimiterItem::Lf,
+                spelaion_core::RowDelimiter::CrLf => RowDelimiterItem::CrLf,
+            },
+            null_text: options.null_text,
+            header: options.header,
+            row_numbers: options.row_numbers,
+        }
+    }
+}
+
+impl CopySpecialItem {
+    /// The options as the core reads them, checked (`CopySpecial::check`).
+    pub fn into_options(self) -> Result<spelaion_core::CopySpecial, String> {
+        let one = |text: &str, what: &str| {
+            let mut chars = text.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Ok(c),
+                _ => Err(format!("the {what} is one character")),
+            }
+        };
+        let options = spelaion_core::CopySpecial {
+            delimiter: one(&self.delimiter, "delimiter")?,
+            quote: if self.quote.is_empty() {
+                None
+            } else {
+                Some(one(&self.quote, "quote")?)
+            },
+            row_delimiter: match self.row_delimiter {
+                RowDelimiterItem::Lf => spelaion_core::RowDelimiter::Lf,
+                RowDelimiterItem::CrLf => spelaion_core::RowDelimiter::CrLf,
+            },
+            null_text: self.null_text,
+            header: self.header,
+            row_numbers: self.row_numbers,
+        };
+        options.check()?;
+        Ok(options)
+    }
 }
 
 impl From<TableInfo> for TableDetails {
@@ -3802,6 +4182,161 @@ impl From<ColumnFilterItem> for spelaion_core::ColumnFilter {
     }
 }
 
+impl From<spelaion_core::FilterOp> for FilterOpItem {
+    fn from(op: spelaion_core::FilterOp) -> Self {
+        use spelaion_core::FilterOp;
+        match op {
+            FilterOp::Eq => Self::Eq,
+            FilterOp::NotEq => Self::NotEq,
+            FilterOp::Gt => Self::Gt,
+            FilterOp::Lt => Self::Lt,
+            FilterOp::Ge => Self::Ge,
+            FilterOp::Le => Self::Le,
+            FilterOp::Like => Self::Like,
+            FilterOp::NotLike => Self::NotLike,
+            FilterOp::Contains => Self::Contains,
+            FilterOp::NotContains => Self::NotContains,
+            FilterOp::IsNull => Self::IsNull,
+            FilterOp::IsNotNull => Self::IsNotNull,
+        }
+    }
+}
+
+/// A condition the core wrote (filtering to a group), as the page keeps the filters in force.
+impl From<spelaion_core::ColumnFilter> for ColumnFilterItem {
+    fn from(filter: spelaion_core::ColumnFilter) -> Self {
+        Self {
+            column: u32::try_from(filter.column).unwrap_or(u32::MAX),
+            op: filter.op.into(),
+            value: filter.value,
+        }
+    }
+}
+
+/// One key of a result's sort: a result column by position, and its direction.
+#[derive(Debug, Clone, Deserialize, Type)]
+pub struct SortKeyItem {
+    pub column: u32,
+    pub descending: bool,
+}
+
+impl From<SortKeyItem> for spelaion_core::SortKey {
+    fn from(item: SortKeyItem) -> Self {
+        Self {
+            column: item.column as usize,
+            descending: item.descending,
+        }
+    }
+}
+
+/// The keys of a sort as the core takes them.
+pub fn sort_keys(items: Vec<SortKeyItem>) -> Vec<spelaion_core::SortKey> {
+    items.into_iter().map(Into::into).collect()
+}
+
+/// One key of a table data tab's sort: a column of the table by name, and its direction.
+#[derive(Debug, Clone, Deserialize, Type)]
+pub struct ColumnSortItem {
+    pub column: String,
+    pub descending: bool,
+}
+
+impl From<ColumnSortItem> for spelaion_core::ColumnSort {
+    fn from(item: ColumnSortItem) -> Self {
+        Self {
+            column: item.column,
+            descending: item.descending,
+        }
+    }
+}
+
+/// How a result's column conditions are read together: all of them or any, telling upper
+/// case from lower case in text or not.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterModeItem {
+    pub any: bool,
+    pub match_case: bool,
+}
+
+impl From<spelaion_core::FilterMode> for FilterModeItem {
+    fn from(mode: spelaion_core::FilterMode) -> Self {
+        Self {
+            any: mode.any,
+            match_case: mode.match_case,
+        }
+    }
+}
+
+impl From<FilterModeItem> for spelaion_core::FilterMode {
+    fn from(item: FilterModeItem) -> Self {
+        Self {
+            any: item.any,
+            match_case: item.match_case,
+        }
+    }
+}
+
+/// A stored default filter the core refused when the tab opened.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedFilterItem {
+    pub filter: String,
+    pub reason: String,
+}
+
+/// What a table data tab remembers of its table's filters, every one checked by the core as
+/// it was read: the history newest first, and the default the tab opens with.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableFiltersItem {
+    pub history: Vec<String>,
+    pub default: Option<String>,
+    /// The stored default did not pass the check: the tab opens without it and says so.
+    pub refused_default: Option<RefusedFilterItem>,
+}
+
+impl From<spelaion_core::TableFilters> for TableFiltersItem {
+    fn from(filters: spelaion_core::TableFilters) -> Self {
+        Self {
+            history: filters.history,
+            default: filters.default,
+            refused_default: filters.refused_default.map(|refused| RefusedFilterItem {
+                filter: refused.filter,
+                reason: refused.reason,
+            }),
+        }
+    }
+}
+
+/// One of a column's most frequent values, offered as a filter's value.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PickableValueItem {
+    /// `None` for NULL.
+    pub value: Option<String>,
+    pub count: f64,
+}
+
+/// A column's most frequent values to pick a filter's value from. A masked column's are
+/// never read (ADR-051).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TopValuesOutcome {
+    Done {
+        values: Vec<PickableValueItem>,
+        /// Counted over the first `sample_rows` rows only.
+        sampled: bool,
+        sample_rows: f64,
+    },
+    Cancelled,
+    Masked,
+}
+
 /// A page of a table for the table data tab (see `spelaion_core::TablePage`).
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -4215,6 +4750,76 @@ impl From<spelaion_core::CellView> for CellViewItem {
     }
 }
 
+/// One group of a result's rows (the grouping panel): its values and how many rows have them.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupItem {
+    /// The value of each grouped column, as the database's own text; `null` is NULL. A long
+    /// value is cut (it ends in "…").
+    pub key: Vec<Option<String>>,
+    /// Rows in the group (f64 holds every count up to 2^53 exactly).
+    pub count: f64,
+    /// The position in the current view of the group's first row: what "filter to this
+    /// group" names it by.
+    pub first_row: f64,
+}
+
+/// The groups of a result's current view, as the core counted them.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupingItem {
+    /// The largest groups first, at most `max_groups` of them.
+    pub groups: Vec<GroupItem>,
+    /// Rows of the view: what a group's percent is of.
+    pub rows: f64,
+    /// Groups there are (with "duplicates only", those of more than one row).
+    pub total_groups: f64,
+    /// Different groups told apart, whatever "duplicates only" says.
+    pub distinct: f64,
+    /// Rows left out of every group because too many groups were already being counted.
+    pub uncounted_rows: f64,
+    /// The view the groups belong to, sent back with "filter to this group".
+    pub generation: f64,
+    /// The most groups the core returns.
+    pub max_groups: u32,
+}
+
+impl From<spelaion_core::GroupCounts> for GroupingItem {
+    fn from(grouping: spelaion_core::GroupCounts) -> Self {
+        Self {
+            groups: grouping
+                .groups
+                .into_iter()
+                .map(|group| GroupItem {
+                    key: group.key,
+                    count: group.count as f64,
+                    first_row: group.first_row as f64,
+                })
+                .collect(),
+            rows: grouping.rows as f64,
+            total_groups: grouping.total_groups as f64,
+            distinct: grouping.distinct as f64,
+            uncounted_rows: grouping.uncounted_rows as f64,
+            generation: grouping.generation as f64,
+            max_groups: u32::try_from(spelaion_core::MAX_GROUPS_RETURNED).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// A result filtered to one group: the column filters now in force (the ones there were and
+/// one condition per grouped column, written by the core) and the rows left.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupFilterOutcome {
+    pub filters: Vec<ColumnFilterItem>,
+    /// How the filters are now read (a group's conditions all hold, and case is matched).
+    pub mode: FilterModeItem,
+    pub rows: u32,
+    pub total: u32,
+    /// Filters in force before were read ignoring case and now match it (SDB-410).
+    pub case_switched: bool,
+}
+
 /// Rows left after filtering a result, out of all it has.
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct FilterOutcome {
@@ -4229,6 +4834,126 @@ pub struct TextSpan {
     pub end: u32,
 }
 
+pub(crate) fn text_span(span: spelaion_driver_api::StatementSpan) -> TextSpan {
+    TextSpan {
+        start: u32::try_from(span.start).unwrap_or(u32::MAX),
+        end: u32::try_from(span.end).unwrap_or(u32::MAX),
+    }
+}
+
+/// One statement of a script in the editor's outline.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlineEntryItem {
+    /// The statement, in bytes of the script.
+    pub span: TextSpan,
+    /// The line it starts on, from 1.
+    pub line: u32,
+    /// How it starts, on one line.
+    pub summary: String,
+}
+
+/// The statements of a script, as the core's splitter reads it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlineItem {
+    /// The first statements, in order (the core bounds how many).
+    pub entries: Vec<OutlineEntryItem>,
+    /// How many statements the script has.
+    pub total: u32,
+}
+
+impl From<spelaion_core::Outline> for OutlineItem {
+    fn from(outline: spelaion_core::Outline) -> Self {
+        Self {
+            entries: outline
+                .entries
+                .into_iter()
+                .map(|entry| OutlineEntryItem {
+                    span: text_span(entry.span),
+                    line: u32::try_from(entry.line).unwrap_or(u32::MAX),
+                    summary: entry.summary,
+                })
+                .collect(),
+            total: u32::try_from(outline.total).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+impl From<spelaion_driver_api::StatementSpan> for TextSpan {
+    fn from(span: spelaion_driver_api::StatementSpan) -> Self {
+        text_span(span)
+    }
+}
+
+/// What the editor's Run will send: the statement under the cursor, the selection, or the
+/// whole script (a tab with no connection).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum RunKindItem {
+    Statement,
+    Selection,
+    Script,
+}
+
+/// What Run will send and the statements in it, as the core reads them.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RunTargetItem {
+    pub kind: RunKindItem,
+    /// The text Run sends; `null` when there is nothing to run.
+    pub span: Option<TextSpan>,
+    /// The statements of that text, in bytes of the script.
+    pub statements: Vec<TextSpan>,
+}
+
+impl From<spelaion_core::RunTarget> for RunTargetItem {
+    fn from(target: spelaion_core::RunTarget) -> Self {
+        Self {
+            kind: match target.kind {
+                spelaion_core::RunKind::Statement => RunKindItem::Statement,
+                spelaion_core::RunKind::Selection => RunKindItem::Selection,
+                spelaion_core::RunKind::Script => RunKindItem::Script,
+            },
+            span: target.span.map(text_span),
+            statements: target.statements.into_iter().map(text_span).collect(),
+        }
+    }
+}
+
+/// Some statements of a script as text to run, written by the core: what is left out is
+/// blank, so a position in `text` is one in the script.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedTextItem {
+    pub text: String,
+    /// Where `text` starts and ends in the script, in UTF-8 bytes.
+    pub span: TextSpan,
+    pub statements: u32,
+}
+
+/// What Ctrl+Enter runs: the text the core wrote for the statement under the cursor, and that
+/// statement's own place in the script (flashed in the editor).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementToRunItem {
+    pub picked: PickedTextItem,
+    pub statement: TextSpan,
+}
+
+impl From<spelaion_core::PickedText> for PickedTextItem {
+    fn from(picked: spelaion_core::PickedText) -> Self {
+        Self {
+            span: text_span(spelaion_driver_api::StatementSpan {
+                start: picked.start,
+                end: picked.end,
+            }),
+            statements: u32::try_from(picked.statements).unwrap_or(u32::MAX),
+            text: picked.text,
+        }
+    }
+}
+
 /// Rows of a result by position, and the columns taken from each, in order (the grid leaves
 /// out the columns it hides).
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -4237,6 +4962,8 @@ pub struct CellRange {
     pub first_row: u32,
     pub rows: u32,
     pub columns: Vec<u32>,
+    #[serde(default)]
+    pub selected_rows: Option<Vec<u32>>,
 }
 
 /// What testing a connection from its form gives (ADR-032). The steps arrive as they change
@@ -6414,5 +7141,129 @@ impl GrantedPrivilegeItem {
             grantable: granted.grantable,
             denied: granted.denied,
         })
+    }
+}
+
+/// The transposed view of rows of a result (SDB-386): a result of its own in the core.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TransposedItem {
+    pub result: u32,
+    pub columns: Vec<ColumnItem>,
+    pub rows: u32,
+}
+
+impl From<spelaion_core::Transposed> for TransposedItem {
+    fn from(t: spelaion_core::Transposed) -> Self {
+        Self {
+            result: u32::try_from(t.result.0).unwrap_or(u32::MAX),
+            columns: t
+                .columns
+                .into_iter()
+                .map(|c| ColumnItem {
+                    name: c.name,
+                    logical: c.logical.as_str().into(),
+                    native_type: c.native_type,
+                    masked: false,
+                })
+                .collect(),
+            rows: u32::try_from(t.rows).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// What "Load every row" would hold (SDB-386). Counts as `f64`: TypeScript numbers.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadEstimateItem {
+    pub loaded: f64,
+    pub total: f64,
+    /// Roughly, in bytes; `None` with no row loaded to measure.
+    pub bytes: Option<f64>,
+    pub too_many: bool,
+    /// Most rows a result may hold.
+    pub max_rows: f64,
+}
+
+impl From<spelaion_core::LoadEstimate> for LoadEstimateItem {
+    fn from(e: spelaion_core::LoadEstimate) -> Self {
+        Self {
+            loaded: e.loaded as f64,
+            total: e.total as f64,
+            bytes: e.bytes.map(|b| b as f64),
+            too_many: e.too_many,
+            max_rows: spelaion_core::MAX_LOADED_ROWS as f64,
+        }
+    }
+}
+
+/// What "Load every row" or a jump past the loaded rows estimates from: a paged query, or a
+/// table data tab's table and filter.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum LoadSourceItem {
+    Query {
+        sql: String,
+    },
+    Table {
+        schema: String,
+        name: String,
+        filter: String,
+    },
+}
+
+/// Where a load of query rows ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum LoadOutcomeItem {
+    Complete,
+    Reached,
+    Cancelled,
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadedRowsItem {
+    pub rows: u32,
+    pub outcome: LoadOutcomeItem,
+}
+
+impl From<spelaion_core::LoadedRows> for LoadedRowsItem {
+    fn from(loaded: spelaion_core::LoadedRows) -> Self {
+        Self {
+            rows: u32::try_from(loaded.rows).unwrap_or(u32::MAX),
+            outcome: match loaded.outcome {
+                spelaion_core::LoadOutcome::Complete => LoadOutcomeItem::Complete,
+                spelaion_core::LoadOutcome::Reached => LoadOutcomeItem::Reached,
+                spelaion_core::LoadOutcome::Cancelled => LoadOutcomeItem::Cancelled,
+                spelaion_core::LoadOutcome::Failed(message) => LoadOutcomeItem::Failed { message },
+            },
+        }
+    }
+}
+
+/// The last page of a table data tab, from its rows counted now (SDB-386).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LastPageItem {
+    pub total: f64,
+    pub page: u32,
+}
+
+impl From<spelaion_core::LastPage> for LastPageItem {
+    fn from(last: spelaion_core::LastPage) -> Self {
+        Self {
+            total: last.total as f64,
+            page: u32::try_from(last.page).unwrap_or(u32::MAX),
+        }
     }
 }

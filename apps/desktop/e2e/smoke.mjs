@@ -260,7 +260,27 @@ async function appPage() {
   const page = browser.contexts()[0].pages()[0];
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+  watchContentSecurityPolicy(page);
   return page;
+}
+
+// The window's Content Security Policy (SDB-127, tauri.conf.json): anything it refuses is a
+// failure, reported at the next step. WebView2 logs each refusal to the console; pages loaded
+// from now on also report every `securitypolicyviolation` event there.
+const cspViolations = [];
+function watchContentSecurityPolicy(page) {
+  page.on("console", (message) => {
+    const text = message.text();
+    if (/Content Security Policy|securitypolicyviolation/i.test(text)) cspViolations.push(text);
+  });
+  void page.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (event) => {
+      console.error(`securitypolicyviolation: ${event.violatedDirective} refused ${event.blockedURI || "inline"} (${event.sourceFile}:${event.lineNumber})`);
+    });
+  }).catch(() => {});
+}
+function checkContentSecurityPolicy() {
+  if (cspViolations.length) throw new Error(`the Content Security Policy refused something:\n${cspViolations.join("\n")}`);
 }
 
 async function connect() {
@@ -286,6 +306,7 @@ try {
   // after that one begins, to repeat one step without the whole run.
   let untilReached = false;
   const step = (text) => {
+    checkContentSecurityPolicy();
     if (untilReached) throw untilComplete;
     if (process.env.SPELAION_E2E_UNTIL && text.startsWith(process.env.SPELAION_E2E_UNTIL)) untilReached = true;
     console.log(`· ${text}`);
@@ -295,6 +316,15 @@ try {
     // Double-clicking a connection opens a new query on it (its row has no buttons, SDB-102).
     await page.locator(`.connection-row:has-text("${connection}") > .label`).dblclick();
     const panel = page.locator(".tab-panel:not([hidden])");
+    // Preserve the run-time password checks below: cancel the new tab's initial prompt,
+    // then Run will ask again. Connections that need no prompt finish normally.
+    await page.waitForFunction(() => {
+      const panel = document.querySelector(".tab-panel:not([hidden])");
+      return panel?.querySelector(".status-connected, .status-disconnected") || document.querySelector('[role="dialog"] input[type="password"]');
+    });
+    if (await page.locator('[role="dialog"] input[type="password"]').count()) {
+      await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+    }
     await panel.locator(".status-connecting").waitFor({ state: "detached" });
     await panel.locator(".cm-content").click();
     // insertText does not trigger autocompletion (Enter would accept a suggestion).
@@ -370,7 +400,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, map: 13 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -409,6 +439,23 @@ try {
 
   step("startup and untrusted repository");
   await page.locator(".activity-bar .settings-button").waitFor();
+  {
+    // The policy is in force (SDB-127): an inline script added to the page does not run. Its
+    // refusal is the probe's, not a failure.
+    const before = cspViolations.length;
+    const ran = await page.evaluate(async () => {
+      const script = document.createElement("script");
+      script.textContent = "window.__cspProbe = true;";
+      document.head.append(script);
+      script.remove();
+      await new Promise((done) => setTimeout(done, 200));
+      return window.__cspProbe === true;
+    });
+    assert.equal(ran, false, "an inline script is refused by the Content Security Policy");
+    for (let i = 0; i < 20 && cspViolations.length === before; i++) await page.waitForTimeout(100);
+    assert.ok(cspViolations.length > before, "the refusal is reported, so the smoke would see a real one");
+    cspViolations.splice(before);
+  }
   // The broken local store was moved aside, never deleted, and the app opened with a new one.
   const movedStores = readdirSync(join(userDir, "db")).filter((name) => /^state\.db\.broken-\d{4}-\d{2}-\d{2}$/.test(name));
   assert.equal(movedStores.length, 1, `the broken store is kept beside the new one: ${readdirSync(join(userDir, "db"))}`);
@@ -916,6 +963,66 @@ try {
   const tuples = json.map((row) => `('${row.country.replaceAll("'", "''")}')`).join(",\n  ");
   assert.equal(await copied(6), `INSERT INTO table_name (country) VALUES ${tuples};\n`);
 
+  step("copy special: a custom delimiter, quote, row delimiter and row numbers, kept as the copy defaults (SDB-388)");
+  {
+    const openCopySpecial = async () => {
+      await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12);
+      await page.keyboard.press("Shift+ArrowDown");
+      await page.keyboard.press("Shift+ArrowRight");
+      await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12, { button: "right" });
+      await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
+      await panel.getByRole("menuitem", { name: "Copy special…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Copy special" });
+      await dialog.waitFor();
+      // The options arrive from the core's copy defaults.
+      await dialog.getByRole("combobox", { name: "Delimiter", exact: true }).waitFor();
+      return dialog;
+    };
+    let dialog = await openCopySpecial();
+    await dialog.getByRole("combobox", { name: "Delimiter", exact: true }).selectOption("other");
+    await dialog.getByRole("textbox", { name: "Character", exact: true }).fill("~");
+    await dialog.getByRole("combobox", { name: "Quote character", exact: true }).selectOption("'");
+    await dialog.getByRole("combobox", { name: "Row delimiter", exact: true }).selectOption("crLf");
+    await dialog.getByRole("textbox", { name: "NULL as", exact: true }).fill("NULL");
+    await dialog.getByRole("checkbox", { name: "Row numbers", exact: true }).check();
+    await shot("03b2-copy-special-light");
+    // The settings dialog cannot open over this one: the screenshot switches the theme directly.
+    const themeBefore = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
+    await shot("03b2-copy-special-dark");
+    await page.evaluate((value) => {
+      if (value === null) document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.dataset.theme = value;
+      window.dispatchEvent(new Event("spelaion-themechange"));
+    }, themeBefore);
+    await dialog.getByRole("button", { name: "Copy", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    const lines = (await copied(7)).split("\r\n");
+    assert.deepEqual(lines[0].split("~"), ["#", "country", "orders"]);
+    assert.equal(lines.length, 4, lines.join("|"));
+    assert.equal(lines[1].split("~")[0], "1");
+    assert.equal(lines[2].split("~")[0], "2");
+    assert.equal(lines[3], "");
+    await panel.getByRole("status").filter({ hasText: "Copied 2 rows × 2 columns" }).waitFor();
+    // The choices are the copy defaults: the dialog opens with them. Options that could not be
+    // read back (the delimiter is the quote) are refused by the core, inside the dialog.
+    dialog = await openCopySpecial();
+    assert.equal(await dialog.getByRole("textbox", { name: "Character", exact: true }).inputValue(), "~");
+    assert.equal(await dialog.getByRole("combobox", { name: "Row delimiter", exact: true }).inputValue(), "crLf");
+    assert.ok(await dialog.getByRole("checkbox", { name: "Row numbers", exact: true }).isChecked());
+    await dialog.getByRole("textbox", { name: "Character", exact: true }).fill("'");
+    await dialog.getByRole("button", { name: "Copy", exact: true }).click();
+    await dialog.getByRole("alert").filter({ hasText: "the delimiter and the quote must be different characters" }).waitFor();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await dialog.waitFor({ state: "detached" });
+    // Copy as SQL UPDATE: a join is refused with its reason, nothing is copied.
+    await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12, { button: "right" });
+    await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
+    await panel.getByRole("menuitem", { name: "Copy as SQL UPDATE" }).click();
+    await panel.getByRole("status").filter({ hasText: "Could not copy as UPDATE: the result is not a plain SELECT of one table" }).waitFor();
+    assert.equal(await page.evaluate(() => window.__copied.length), 7);
+  }
+
   step("export: the loaded result, every row run again with CSV options, and a selection");
   // The native save dialog cannot be driven: src/dialogs.ts takes this path instead.
   const exportPath = (name) => join(userDir, name);
@@ -1164,6 +1271,106 @@ try {
   await page.waitForFunction((el) => !el.disabled, await queryPages.getByRole("button", { name: "Previous page" }).elementHandle());
   await queryPages.getByRole("button", { name: "Previous page" }).click();
   await queryPages.getByText("rows 1–100").waitFor();
+
+  step("query pages: a page and a row past the ones loaded are read by keyset pages (SDB-386)");
+  {
+    // Page 9 holds rows 801–900: the pages before it are loaded first, in order.
+    const queryPageNumber = queryPages.getByRole("textbox", { name: "Page number" });
+    await queryPageNumber.fill("9");
+    await queryPageNumber.press("Enter");
+    await panel.locator(".statusline", { hasText: "900 rows" }).waitFor();
+    await queryPages.getByText("rows 801–900").waitFor();
+    // Row 1,050 (Ctrl+G): loaded up to it, then selected.
+    await panel.locator(".grid-scroller").focus();
+    await page.keyboard.press("Control+g");
+    await panel.getByRole("dialog", { name: "Go to row" }).getByRole("textbox", { name: "Go to row" }).fill("1050");
+    await page.keyboard.press("Enter");
+    await panel.locator(".statusline", { hasText: "1,050 rows" }).waitFor();
+    await panel.getByRole("grid").getByRole("gridcell", { name: /^Row 1,050, id \(INTEGER\): 1050$/ }).waitFor();
+    await queryPages.getByRole("button", { name: "First page" }).click();
+    await queryPages.getByText("rows 1–100").waitFor();
+  }
+
+  step("query pages: a header sort reads the query again in that order, by two columns");
+  {
+    const pagedGrid = () => panel.locator(".grid-scroller");
+    const pagedBox = async () => {
+      // A sort read from the server mounts a new grid: wait until it is laid out.
+      for (let i = 0; i < 60; i++) {
+        const box = await pagedGrid().boundingBox().catch(() => null);
+        if (box) return box;
+        await page.waitForTimeout(100);
+      }
+      throw new Error("the sorted result's grid never appeared");
+    };
+    const pagedWidths = async () => (await pagedGrid().getAttribute("data-column-widths")).split(",").map(Number);
+    // Row numbers take 52 px while the result has under 10,000 rows.
+    const headerX = async (column) => 52 + (await pagedWidths()).slice(0, column).reduce((sum, width) => sum + width, 0) + 20;
+    const clickPaged = async (column, shift) => {
+      const box = await pagedBox();
+      const x = await headerX(column);
+      if (shift) await page.keyboard.down("Shift");
+      await page.mouse.click(box.x + x, box.y + 18);
+      if (shift) await page.keyboard.up("Shift");
+    };
+    const firstRows = async (rows) => {
+      const box = await pagedBox();
+      const before = await page.evaluate(() => window.__copied.length);
+      await pagedGrid().evaluate((el) => {
+        el.scrollTop = 0;
+        el.scrollLeft = 0;
+      });
+      await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+      await page.keyboard.press("Shift+ArrowRight");
+      for (let i = 1; i < rows; i++) await page.keyboard.press("Shift+ArrowDown");
+      await page.keyboard.press("Control+c");
+      return (await copied(before + 1)).trimEnd().split("\n").map((line) => line.split("\t").map(Number));
+    };
+    const inOrder = (rows) => {
+      for (let i = 1; i < rows.length; i++) {
+        const [[idA, customerA], [idB, customerB]] = [rows[i - 1], rows[i]];
+        assert.ok(customerA < customerB || (customerA === customerB && idA > idB), `${customerA}/${idA} then ${customerB}/${idB}`);
+      }
+    };
+    // customer_id repeats: the server orders every row by it, then by the key.
+    await clickPaged(1, false);
+    await panel.locator('.grid-scroller[aria-label$="sorted by customer_id, ascending"]').waitFor();
+    await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+    // Shift+click id twice: the second key, descending.
+    await clickPaged(0, true);
+    await panel.locator('.grid-scroller[aria-label$="sorted by customer_id, ascending, then by id, ascending"]').waitFor();
+    await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+    await clickPaged(0, true);
+    await panel.locator('.grid-scroller[aria-label$="sorted by customer_id, ascending, then by id, descending"]').waitFor();
+    await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+    assert.equal(await pagedGrid().getAttribute("data-sort"), "1:asc,0:desc");
+    const firstPage = await firstRows(100);
+    assert.equal(firstPage.length, 100);
+    inOrder(firstPage);
+    // The sort ran on the server, over all 50,000 rows: the first customer's newest order is
+    // first, which was not among the 200 rows (ids 1 to 200) loaded before.
+    assert.ok(firstPage[0][0] > 200, `the first row is order ${firstPage[0][0]}`);
+    // The sort is the pages' own order: scrolling still fetches the next page, in order.
+    await pagedGrid().evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await panel.locator(".statusline", { hasText: "200 rows" }).waitFor();
+    const twoPages = await firstRows(200);
+    assert.equal(twoPages.length, 200);
+    inOrder(twoPages);
+    assert.deepEqual(twoPages.slice(0, 100), firstPage);
+    await shot("04a1-query-pages-sorted");
+    // total is a REAL: its values do not round-trip as literals, so the query cannot be read
+    // again in that order. The loaded rows are sorted, and the grid says so.
+    await clickPaged(3, false);
+    await panel.locator('.grid-scroller[aria-label$="sorted by total, ascending"]').waitFor();
+    // Selecting down to row 200 fetched one more page: the note counts the rows loaded.
+    await panel.getByText(/^Sorted the \d+ rows loaded only: this query cannot be read again in that order\.$/).waitFor();
+    // Back to the query's own order: read again from the server, its first page.
+    await clickPaged(3, false);
+    await clickPaged(3, false);
+    await panel.locator('.grid-scroller[data-sort=""]').waitFor();
+    await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+    assert.deepEqual((await firstRows(2)).map((row) => row[0]), [1, 2]);
+  }
   await page.keyboard.press("Control+w");
   await setHistorySaving("Shop (SQLite)", true);
 
@@ -1218,6 +1425,160 @@ try {
   await clickHeader(TOTAL_X);
   await sortedAs("");
   assert.deepEqual(await copyFirstRows(0, 2), ["1", "2"]);
+
+  step("sort: Shift+click adds a second column to the sort, a plain click starts over");
+  {
+    const customerX = ROW_GUTTER_50K + initialWidths[0] + 20;
+    const shiftClickHeader = async (x) => {
+      await page.keyboard.down("Shift");
+      await clickHeader(x);
+      await page.keyboard.up("Shift");
+    };
+    await clickHeader(customerX);
+    await sortedAs(", sorted by customer_id, ascending");
+    await shiftClickHeader(TOTAL_X);
+    await sortedAs(", sorted by customer_id, ascending, then by total, ascending");
+    await shiftClickHeader(TOTAL_X);
+    await sortedAs(", sorted by customer_id, ascending, then by total, descending");
+    assert.equal(await sortGrid.getAttribute("data-sort"), "1:asc,3:desc");
+    // The first rows, customer_id to total: customers in order, and each one's totals from
+    // the largest down.
+    const before = await page.evaluate(() => window.__copied.length);
+    await sortGrid.evaluate((el) => {
+      el.scrollTop = 0;
+      el.scrollLeft = 0;
+    });
+    await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12);
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Shift+ArrowRight");
+    await page.keyboard.press("Shift+ArrowRight");
+    for (let i = 1; i < 200; i++) await page.keyboard.press("Shift+ArrowDown");
+    await page.keyboard.press("Control+c");
+    const sortedRows = (await copied(before + 1)).trimEnd().split("\n").map((line) => {
+      const cells = line.split("\t");
+      return { customer: Number(cells[0]), total: Number(cells[cells.length - 1]) };
+    });
+    assert.equal(sortedRows.length, 200);
+    let ties = 0;
+    for (let i = 1; i < sortedRows.length; i++) {
+      const [a, b] = [sortedRows[i - 1], sortedRows[i]];
+      assert.ok(a.customer <= b.customer, `customers in order: ${a.customer} then ${b.customer}`);
+      if (a.customer === b.customer) {
+        ties += 1;
+        assert.ok(a.total >= b.total, `customer ${a.customer}: ${a.total} then ${b.total}`);
+      }
+    }
+    assert.ok(ties > 0, "some customer has several orders among the first rows");
+    // Both looks, put on the page for the screenshots alone (as the theme setting does) and
+    // put back: the headers' arrows and key numbers are drawn from the theme's colors.
+    {
+      const themeNow = await page.locator("html").getAttribute("data-theme");
+      const lookOf = (theme) =>
+        page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+          window.dispatchEvent(new Event("spelaion-themechange"));
+        }, theme);
+      for (const theme of ["light", "dark"]) {
+        await lookOf(theme);
+        await page.waitForTimeout(200);
+        await shot(`04b1-grid-sorted-two-columns-${theme}`);
+      }
+      await lookOf(themeNow);
+    }
+    // A third Shift+click takes the column out; a plain click on another starts over.
+    await shiftClickHeader(TOTAL_X);
+    await sortedAs(", sorted by customer_id, ascending");
+    await shiftClickHeader(TOTAL_X);
+    await sortedAs(", sorted by customer_id, ascending, then by total, ascending");
+    await clickHeader(ID_X);
+    await sortedAs(", sorted by id, ascending");
+    await clickHeader(ID_X);
+    await clickHeader(ID_X);
+    await sortedAs("");
+    assert.equal(await sortGrid.getAttribute("data-sort"), "");
+    assert.deepEqual(await copyFirstRows(0, 2), ["1", "2"]);
+  }
+
+  step("grouping panel: rows counted by a column, duplicates only, a header dragged in, and a click filters the grid to a group");
+  {
+    await panel.getByRole("button", { name: "Group rows", exact: true }).click();
+    const groups = panel.getByRole("complementary", { name: "Group rows" });
+    await groups.waitFor();
+    const addColumn = (name) => groups.getByRole("combobox", { name: "Add a column…" }).selectOption({ label: name });
+    const summary = groups.locator(".group-summary");
+    const groupRows = () => groups.locator(".group-table tbody tr").evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.textContent)));
+    const number = (text) => Number(text.replace(/[^0-9]/g, ""));
+    // The 50,000 orders by customer: the core counts them, the largest group first.
+    await addColumn("customer_id");
+    await summary.filter({ hasText: /^\d+ groups in 50,000 rows$/ }).waitFor();
+    const byCustomer = await groupRows();
+    assert.ok(byCustomer.length > 1, "several customers");
+    const counts = byCustomer.map((row) => number(row[1]));
+    assert.equal(counts.reduce((sum, n) => sum + n, 0), 50_000, "every row is in a group");
+    for (let i = 1; i < counts.length; i++) assert.ok(counts[i - 1] >= counts[i], "the largest groups first");
+    assert.match(byCustomer[0][2], /^\d+(\.\d)?%$/);
+    {
+      const themeNow = await page.locator("html").getAttribute("data-theme");
+      const lookOf = (theme) =>
+        page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+          window.dispatchEvent(new Event("spelaion-themechange"));
+        }, theme);
+      for (const theme of ["light", "dark"]) {
+        await lookOf(theme);
+        await page.waitForTimeout(200);
+        await shot(`04c-grouping-panel-${theme}`);
+      }
+      await lookOf(themeNow);
+    }
+    // A second column that never repeats: every row its own group, of which the panel shows
+    // the first thousand and says so; none is a duplicate.
+    await addColumn("id");
+    await summary.filter({ hasText: /^50,000 groups in 50,000 rows$/ }).waitFor();
+    await groups.getByText("Only the 1,000 largest groups are shown.", { exact: false }).waitFor();
+    await groups.getByRole("checkbox", { name: "Duplicates only" }).check();
+    await summary.filter({ hasText: /^0 groups with more than one row, in 50,000 rows$/ }).waitFor();
+    assert.equal(await groups.locator(".group-table tbody tr").count(), 0);
+    await groups.getByRole("checkbox", { name: "Duplicates only" }).uncheck();
+    await groups.getByRole("button", { name: "Remove id from the grouping" }).click();
+    await summary.filter({ hasText: /^\d+ groups in 50,000 rows$/ }).waitFor();
+    // A header dragged to the panel joins the grouping; a click on a header still sorts.
+    {
+      const target = await groups.boundingBox();
+      await page.mouse.move(sortBox.x + TOTAL_X, sortBox.y + 18);
+      await page.mouse.down();
+      await page.mouse.move(sortBox.x + TOTAL_X + 40, sortBox.y + 60, { steps: 4 });
+      await page.locator(".group-ghost", { hasText: "total" }).waitFor();
+      await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 8 });
+      await page.mouse.up();
+      await groups.locator(".group-chip", { hasText: "total" }).waitFor();
+      await page.locator(".group-ghost").waitFor({ state: "detached" });
+      await sortedAs("");
+      await groups.getByRole("button", { name: "Remove total from the grouping" }).click();
+      await groups.locator(".group-chip", { hasText: "total" }).waitFor({ state: "detached" });
+      await clickHeader(ID_X);
+      await sortedAs(", sorted by id, ascending");
+      await clickHeader(ID_X);
+      await sortedAs(", sorted by id, descending");
+      await clickHeader(ID_X);
+      await sortedAs("");
+    }
+    // A click on a group filters the grid to its rows, through the column filters.
+    await summary.filter({ hasText: /^\d+ groups in 50,000 rows$/ }).waitFor();
+    const [customer, customerRows] = (await groupRows())[0];
+    await groups.locator(".group-table tbody tr").first().getByRole("button").click();
+    await panel.locator(".filter-chip", { hasText: `customer_id = ${customer}` }).waitFor();
+    await panel.locator(`.grid-scroller[aria-label^="Result with ${customerRows} rows"]`).waitFor();
+    // The panel now groups what the grid shows: that one customer.
+    await summary.filter({ hasText: new RegExp(`^1 group in ${customerRows} rows$`) }).waitFor();
+    await shot("04c-grouping-filtered");
+    await panel.getByRole("button", { name: "Reset filters" }).click();
+    await panel.locator(".filter-chip").first().waitFor({ state: "detached" });
+    await sortedAs("");
+    await summary.filter({ hasText: /^\d+ groups in 50,000 rows$/ }).waitFor();
+    await groups.getByRole("button", { name: "Close the groups (Esc)" }).click();
+    await groups.waitFor({ state: "detached" });
+  }
 
   step("columns: drag a header edge to resize, double-click it to fit the content");
   const widthsNow = async () => (await sortGrid.getAttribute("data-column-widths")).split(",").map(Number);
@@ -1382,6 +1743,175 @@ try {
   assert.equal(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "no tint without zebra rows");
   await setGridLook({ zebra: true });
 
+  step("interface size: the largest draws every screen bigger with no text cut off, and the editor zooms in and back");
+  {
+    // Text in `selector` that a box which does not scroll cuts off (SDB-389): a text node's
+    // box partly outside an ancestor that hides its overflow. Cut short with an ellipsis is
+    // meant (long names, ui-guidelines); hidden whole (a collapsed panel) is not cut off.
+    const cutOff = (selector) => page.evaluate((selector) => {
+      const found = [];
+      for (const root of document.querySelectorAll(selector)) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const owner = node.parentElement;
+          if (!node.textContent.trim() || !owner?.checkVisibility({ visibilityProperty: true, opacityProperty: true })) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const text = range.getBoundingClientRect();
+          if (text.width < 1 || text.height < 1) continue;
+          let ellipsis = false;
+          for (let box = owner; box && box !== document.body; box = box.parentElement) {
+            const style = getComputedStyle(box);
+            const rect = box.getBoundingClientRect();
+            // Read only by screen readers.
+            if (rect.width <= 1 || rect.height <= 1) break;
+            if (style.textOverflow === "ellipsis") ellipsis = true;
+            const clips = (overflow) => overflow === "hidden" || overflow === "clip";
+            const outside = (a0, a1, b0, b1) => a0 < b0 - 1 || a1 > b1 + 1;
+            const disjoint = text.bottom <= rect.top || text.top >= rect.bottom || text.right <= rect.left || text.left >= rect.right;
+            if (disjoint) break;
+            const cutY = clips(style.overflowY) && outside(text.top, text.bottom, rect.top, rect.bottom);
+            const cutX = clips(style.overflowX) && !ellipsis && outside(text.left, text.right, rect.left, rect.right);
+            if (cutY || cutX) {
+              found.push(`${cutY ? "height" : "width"}: "${node.textContent.trim().slice(0, 40)}" in ${box.tagName.toLowerCase()}.${[...box.classList].join(".")}`);
+              break;
+            }
+            // A box that scrolls shows the rest when scrolled.
+            if (["auto", "scroll"].includes(style.overflowY) || ["auto", "scroll"].includes(style.overflowX)) break;
+          }
+        }
+      }
+      return found;
+    }, selector);
+    const ratio = () => page.evaluate(() => window.devicePixelRatio);
+    const normalRatio = await ratio();
+    // Playwright's screenshot of a zoomed page keeps only its top-left corner (CSS pixels taken
+    // as device pixels): the whole window, as it is on screen, comes from CDP itself.
+    const cdp = await page.context().newCDPSession(page);
+    const windowShot = async (name) => {
+      const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(join(shots, `${name}.png`), Buffer.from(data, "base64"));
+    };
+    // A box wholly inside the window (nothing of it beyond an edge, where no scroll reaches).
+    const inWindow = (selector) => page.locator(selector).evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth + 0.5 && box.bottom <= window.innerHeight + 0.5;
+    });
+    const sizeSelect = (dialog) => dialog.locator('select[name="interfaceSize"]');
+    const openSettings = async () => {
+      // Ctrl+, : the keyboard, so nothing depends on where a click lands at another scale.
+      await page.keyboard.press("Control+,");
+      const dialog = page.locator(".settings-dialog");
+      await dialog.waitFor();
+      await dialog.locator(".settings-nav button:nth-child(1)").evaluate((button) => button.click());
+      await sizeSelect(dialog).waitFor();
+      return dialog;
+    };
+    const closeSettings = async (dialog) => {
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
+    };
+    const chooseSize = async (dialog, size) => {
+      await sizeSelect(dialog).selectOption(String(size));
+      await page.waitForFunction(([normal, size]) => Math.abs(window.devicePixelRatio - (normal * size) / 100) < 0.01 && !document.querySelector('select[name="interfaceSize"]')?.matches(":disabled"), [normalRatio, size]);
+      // Two frames: the layout and the grid's repaint at the new ratio.
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    };
+    await sortGrid.evaluate((el) => (el.scrollTop = 0));
+    let dialog = await openSettings();
+    const steps = await sizeSelect(dialog).locator("option").evaluateAll((options) => options.map((option) => Number(option.value)));
+    assert.deepEqual(steps, [90, 100, 110, 125, 150], "the core's interface sizes");
+    assert.equal(await sizeSelect(dialog).inputValue(), "100");
+    await chooseSize(dialog, 150);
+    assert.equal(await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_interface_size")), 150, "saved");
+    // A dialog: Settings itself, every category's text whole.
+    assert.deepEqual(await cutOff(".settings-dialog"), [], "the settings dialog at 150 %");
+    assert.ok(await inWindow(".settings-dialog"), "the settings dialog fits in the window at 150 %");
+    await windowShot("sdb-389-settings-largest-light");
+    await closeSettings(dialog);
+    // The explorer, the tab strip, the editor's bars, the results' toolbar and status line.
+    assert.deepEqual(await cutOff("#connections-sidebar"), [], "the explorer at 150 %");
+    assert.deepEqual(await cutOff(".tabbar"), [], "the tab strip at 150 %");
+    assert.deepEqual(await cutOff(".tab-panel:not([hidden])"), [], "the editor and its results at 150 %");
+    // The grid is a canvas: drawn at the new ratio (sharp), its rows as tall as at 100 % in CSS
+    // pixels (so 1.5 times on screen), its spacer under the engines' cap in zoomed pixels.
+    const canvasNow = await sortGrid.evaluate((scroller) => {
+      const canvas = scroller.closest(".tab-panel").querySelector(".grid-canvas");
+      return { width: canvas.width, expected: Math.round(scroller.clientWidth * window.devicePixelRatio), spacer: scroller.firstElementChild.getBoundingClientRect().height, spacerStyle: parseFloat(scroller.firstElementChild.style.height) };
+    });
+    assert.equal(canvasNow.width, canvasNow.expected, "the grid's canvas follows the ratio");
+    assert.ok(canvasNow.spacer >= canvasNow.spacerStyle - 1, `the spacer is not cut short: ${JSON.stringify(canvasNow)}`);
+    assert.notEqual(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "the rows are where the grid draws them, at 150 % too");
+    // How tall an element the engine lays out at this ratio: the grid's spacer stays under it.
+    const tallest = await page.evaluate(() => {
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;left:0;top:0;width:1px;height:30000000px;visibility:hidden";
+      document.body.append(probe);
+      const height = probe.getBoundingClientRect().height;
+      probe.remove();
+      return height;
+    });
+    // WebView2 lays out about 33,554,430 zoomed pixels at most (22,369,620 CSS px at 1.5x): the
+    // grid's tallest spacer at this ratio (`maxSpacerH`) must fit.
+    const largest = await ratio();
+    console.log(`  a 30,000,000 px element at ${largest}x is laid out ${tallest} px tall`);
+    assert.ok(tallest >= Math.floor(30_000_000 / Math.max(1, largest)), "the grid's tallest spacer fits at this ratio");
+    await windowShot("sdb-389-largest-light");
+    // The same in the dark theme (screenshots for review), then back as it was.
+    dialog = await openSettings();
+    const themeBefore = await dialog.locator('input[name="theme"]:checked').getAttribute("value");
+    await dialog.locator('input[name="theme"][value="dark"]').evaluate((input) => input.click());
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    await windowShot("sdb-389-settings-largest-dark");
+    await closeSettings(dialog);
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    assert.deepEqual(await cutOff("#connections-sidebar, .tabbar, .tab-panel:not([hidden])"), [], "the dark theme at 150 %");
+    await windowShot("sdb-389-largest-dark");
+    dialog = await openSettings();
+    await dialog.locator(`input[name="theme"][value="${themeBefore}"]`).evaluate((input) => input.click());
+    await page.waitForFunction((theme) => document.querySelector(`input[name="theme"][value="${theme}"]`)?.checked && !document.querySelector('input[name="theme"]')?.matches(":disabled"), themeBefore);
+    await chooseSize(dialog, 100);
+    await closeSettings(dialog);
+    assert.equal(await ratio(), normalRatio, "back to the normal size");
+    assert.equal(await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_interface_size")), 100);
+
+    // The editor's zoom: Ctrl+= and Ctrl+- step it, Ctrl+0 goes back; each step is saved, and
+    // the webview's own zoom never moves.
+    const editorPreferences = () => page.evaluate(async () => (await window.__TAURI_INTERNALS__.invoke("get_editor_preferences")));
+    const base = await editorPreferences();
+    assert.equal(base.zoom, 100);
+    const editorFont = () => panel.locator(".cm-editor").evaluate((editor) => parseFloat(getComputedStyle(editor).fontSize));
+    const zoomedTo = async (zoom) => {
+      const size = Math.round((base.fontSize * zoom) / 100);
+      await page.waitForFunction(([size]) => parseFloat(getComputedStyle(document.querySelector(".tab-panel:not([hidden]) .cm-editor")).fontSize) === size, [size]);
+      for (let i = 0; i < 50 && (await editorPreferences()).zoom !== zoom; i++) await page.waitForTimeout(100);
+      assert.equal((await editorPreferences()).zoom, zoom, `zoom ${zoom} saved`);
+    };
+    assert.equal(await editorFont(), base.fontSize);
+    await panel.locator(".cm-content").click();
+    await page.keyboard.press("Control+Equal");
+    await zoomedTo(110);
+    await page.keyboard.press("Control+Equal");
+    await zoomedTo(125);
+    // The + key (Shift+= here) zooms in too.
+    await page.keyboard.press("Control+Shift+Equal");
+    await zoomedTo(150);
+    await page.keyboard.press("Control+Minus");
+    await zoomedTo(125);
+    assert.equal(await ratio(), normalRatio, "the webview's own zoom did not move");
+    await windowShot("sdb-389-editor-zoomed");
+    // Outside the editor the keys do nothing.
+    await sortGrid.focus();
+    await page.keyboard.press("Control+Equal");
+    await page.waitForTimeout(300);
+    assert.equal((await editorPreferences()).zoom, 125, "the grid does not zoom the editor");
+    assert.equal(await ratio(), normalRatio, "nor the webview");
+    await panel.locator(".cm-content").click();
+    await page.keyboard.press("Control+0");
+    await zoomedTo(100);
+    assert.equal(await editorFont(), base.fontSize, "back to the size chosen in Settings");
+  }
+
   step("find: Ctrl+F searches the 50,000 rows in the core, Enter and F3 step through the matches");
   await sortGrid.evaluate((el) => {
     el.scrollTop = 0;
@@ -1536,11 +2066,11 @@ try {
   await replaceQuery(panel, "select 'private_history_marker' as secret;");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await replaceQuery(panel, "select private_error_marker from no_history_private_table;");
   await run(panel);
   await panel.locator(".messages", { hasText: "no_history_private_table" }).waitFor();
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await waitForHistoryCount(4);
   await history.getByRole("textbox", { name: "Search query history" }).fill("private");
@@ -1550,8 +2080,21 @@ try {
 
   step("Ctrl+Enter runs the statement under the cursor, Ctrl+Shift+Enter all of them");
   await replaceQuery(panel, "select 'first' as which;\nselect 'second;' as which;\n\n-- the third\nselect 'third' as which");
+  // The active result's id, as its result tab carries it (`null` with none).
+  const activeResult = () =>
+    page.evaluate(() => document.querySelector(".tab-panel:not([hidden]) .result-tab-item.active")?.getAttribute("data-result") ?? null);
+  // A run replaces the result and its grid: a click and a Ctrl+C sent while the old grid goes
+  // away reach no grid, and the copy never comes (SDB-417). So wait until the run is over and
+  // its own result, with another id than `before`, is the one shown with all of its row.
+  const newResultShown = async (before) => {
+    await page.waitForFunction((old) => {
+      const tab = document.querySelector(".tab-panel:not([hidden])");
+      const active = tab?.querySelector(".result-tab-item.active")?.getAttribute("data-result") ?? null;
+      const status = tab?.querySelector(".statusline")?.textContent ?? "";
+      return active !== null && active !== old && /^1 row(?! \(loading\))/.test(status) && tab?.querySelector(".editor-action-cancel") === null;
+    }, before);
+  };
   const firstCell = async () => {
-    // Between two runs the grid is replaced: wait until the new one is there.
     const grid = panel.locator(".grid-scroller");
     await grid.waitFor();
     let box = await grid.boundingBox();
@@ -1569,35 +2112,37 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("End");
+  const beforeSecond = await activeResult();
   await page.keyboard.press("Control+Enter");
   await panel.locator(".cm-ran", { hasText: "select 'second;' as which" }).waitFor();
   await shot("05c-statement-under-cursor");
-  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await newResultShown(beforeSecond);
   assert.equal(await panel.locator(".result-tabs button", { hasText: /^Result/ }).count(), 1);
   assert.equal(await firstCell(), "second;");
   await sqlEditor.click();
   await page.keyboard.press("Control+End");
+  // The status line already says "1 row" from the previous run: the new result's id tells.
+  const beforeThird = await activeResult();
   await page.keyboard.press("Control+Enter");
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.waitForFunction(() => document.querySelector(".cm-ran")?.textContent?.includes("-- the third"));
-  // The status line already says "1 row" from the previous run: wait for the new value.
-  let third = "";
-  for (let i = 0; i < 20 && third !== "third"; i++) {
-    third = await firstCell();
-    if (third !== "third") await page.waitForTimeout(250);
-  }
-  assert.equal(third, "third");
+  await newResultShown(beforeThird);
+  assert.equal(await firstCell(), "third");
 
   step("editor toolbar: run the current statement or selection, and run the whole script");
   const actions = panel.getByRole("toolbar", { name: "Query actions" });
-  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Explain query", "Editor actions", "Format", "Save", "Save as file"]);
+  // The Run button is named by what it will send (SDB-379): here, the statement under the cursor.
+  await actions.getByRole("button", { name: "Run statement", exact: true }).waitFor();
+  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run statement", "Run script", "Run options", "Explain query", "Editor actions", "Format", "Save", "Save as file"]);
   for (const button of await actions.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   await sqlEditor.click();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("End");
-  let previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
-  await actions.getByRole("button", { name: "Run", exact: true }).click();
+  // The last run's statement started with the comment "-- the third": the core named its
+  // result tab from it (SDB-378).
+  let previousResult = await panel.getByRole("button", { name: "the third", exact: true }).elementHandle();
+  await actions.locator(".editor-action-run[data-run-target]").click();
   await page.waitForFunction((button) => !button.isConnected, previousResult);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   let selected = "";
@@ -1611,7 +2156,7 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Shift+End");
   previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
-  await actions.getByRole("button", { name: "Run", exact: true }).click();
+  await actions.locator(".editor-action-run[data-run-target]").click();
   await page.waitForFunction((button) => !button.isConnected, previousResult);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   selected = "";
@@ -1624,10 +2169,373 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Shift+End");
   await actions.getByRole("button", { name: "Run script", exact: true }).click();
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await panel.locator(".result-tabs button", { hasText: "the third" }).waitFor();
   await sqlEditor.click();
+  // The results of the run before stay until the core says this run replaced them (its
+  // first event): wait for that tab to go, then for the new one.
+  const thirdBefore = await panel.locator(".result-tabs button", { hasText: "the third" }).elementHandle();
   await page.keyboard.press("Control+Shift+Enter");
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await page.waitForFunction((tab) => !tab.isConnected, thirdBefore);
+  await panel.locator(".result-tabs button", { hasText: "the third" }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
+
+  step("kept results: run into a new result tab, pin one, run again, rename and re-run (SDB-378)");
+  {
+    const threeStatements = await sqlEditor.innerText();
+    const tabNames = () => panel.locator(".result-tab-name").allInnerTexts();
+    const resultTab = (name) => panel.locator(".result-tab-item").filter({ has: page.locator(".result-tab-name", { hasText: new RegExp(`^${name}$`) }) });
+    // The grid of the result shown, once it shows this value in its first cell.
+    const cellIs = async (expected) => {
+      let cell = "";
+      for (let i = 0; i < 20 && cell !== expected; i++) {
+        cell = await firstCell();
+        if (cell !== expected) await page.waitForTimeout(250);
+      }
+      assert.equal(cell, expected);
+    };
+    const tabMenu = (name) => page.getByRole("menu", { name: `Actions of ${name}`, exact: true });
+    // The run has ended (Run is back in place of Cancel). Wait for the run's result tab first:
+    // the button is also there before the run starts.
+    const ran = () => panel.locator(".editor-action-run[data-run-target]").waitFor();
+    // A statement that starts with a comment line names its result tab (the core reads it).
+    await replaceQuery(panel, "create temp table kept_probe (n integer);\ninsert into kept_probe values (1);\n-- Before\nselect n from kept_probe");
+    await run(panel);
+    await resultTab("Before").waitFor();
+    await ran();
+    assert.deepEqual(await tabNames(), ["Before"]);
+    await cellIs("1");
+    // Alt+Enter runs the statement into a new result tab, next to the one already there.
+    await replaceQuery(panel, "select n * 100 as n from kept_probe");
+    await page.keyboard.press("Alt+Enter");
+    await resultTab("Result 2").waitFor();
+    await ran();
+    assert.deepEqual(await tabNames(), ["Before", "Result 2"]);
+    await cellIs("100");
+    // Pin the first one from its menu: every item is a command of the registry.
+    await resultTab("Before").locator(".result-tab").click({ button: "right" });
+    assert.deepEqual(
+      await tabMenu("Before").getByRole("menuitem").evaluateAll((items) => items.map((item) => item.firstElementChild.textContent)),
+      ["Run this result's query again", "Pin result", "Rename result…", "Close result"],
+    );
+    await tabMenu("Before").getByRole("menuitem", { name: "Pin result" }).click();
+    await panel.locator('.result-tab-item[data-pinned="true"]', { hasText: "Before" }).waitFor();
+    assert.match(await resultTab("Before").locator(".result-tab").getAttribute("title"), /pinned/);
+    await shot("05d-kept-results-light");
+    await setTheme("dark", "dark");
+    await shot("05d-kept-results-dark");
+    await setTheme("light", "light");
+    // The data changes and a run replaces the results: the pinned one stays, unchanged.
+    await replaceQuery(panel, "update kept_probe set n = 2 where n = 1;\nselect n from kept_probe");
+    const replaced = await resultTab("Result 2").elementHandle();
+    await run(panel);
+    await page.waitForFunction((tab) => !tab.isConnected, replaced);
+    await resultTab("Result 2").waitFor();
+    await ran();
+    await cellIs("2");
+    assert.deepEqual(await tabNames(), ["Before", "Result 2"]);
+    await resultTab("Before").locator(".result-tab").click();
+    await cellIs("1");
+    assert.equal(await panel.locator('.result-tab-item[data-pinned="true"]').count(), 1);
+    // F2 renames the focused result tab; the core keeps the name.
+    await resultTab("Result 2").locator(".result-tab").focus();
+    await page.keyboard.press("F2");
+    const renameResult = page.getByRole("dialog", { name: "Rename result", exact: true });
+    await renameResult.getByLabel("Name").fill("  After the update ");
+    await renameResult.getByRole("button", { name: "Rename", exact: true }).click();
+    await renameResult.waitFor({ state: "detached" });
+    await resultTab("After the update").waitFor();
+    assert.deepEqual(await tabNames(), ["Before", "After the update"]);
+    // The name the user gave can be taken off (SDB-407): Reset name, only on such a name (the
+    // menu of "Before", named by its comment, has none), gives "Result 2" back.
+    await resultTab("After the update").locator(".result-tab").click({ button: "right" });
+    assert.deepEqual(
+      await tabMenu("After the update").getByRole("menuitem").evaluateAll((items) => items.map((item) => item.firstElementChild.textContent)),
+      ["Run this result's query again", "Pin result", "Rename result…", "Reset name", "Close result"],
+    );
+    await tabMenu("After the update").getByRole("menuitem", { name: "Reset name" }).click();
+    await resultTab("Result 2").waitFor();
+    assert.deepEqual(await tabNames(), ["Before", "Result 2"]);
+    await resultTab("Result 2").locator(".result-tab").click({ button: "right" });
+    assert.equal(await tabMenu("Result 2").getByRole("menuitem", { name: "Reset name" }).count(), 0);
+    await page.keyboard.press("Escape");
+    await tabMenu("Result 2").waitFor({ state: "detached" });
+    await resultTab("Result 2").locator(".result-tab").focus();
+    await page.keyboard.press("F2");
+    await renameResult.getByLabel("Name").fill("After the update");
+    await renameResult.getByRole("button", { name: "Rename", exact: true }).click();
+    await renameResult.waitFor({ state: "detached" });
+    await resultTab("After the update").waitFor();
+    // The pinned result's query again, from its menu (Shift+F10), into that same tab: it reads
+    // the new value and keeps its place, its name and its pin.
+    await resultTab("Before").locator(".result-tab").focus();
+    await page.keyboard.press("Shift+F10");
+    await tabMenu("Before").getByRole("menuitem", { name: "Unpin result" }).waitFor();
+    const beforeRerun = await resultTab("Before").getAttribute("data-result");
+    await tabMenu("Before").getByRole("menuitem", { name: "Run this result's query again" }).click();
+    // The old rows stay until the new result starts: wait for the tab to hold the new one.
+    await page.waitForFunction((old) => {
+      const tab = [...document.querySelectorAll(".tab-panel:not([hidden]) .result-tab-item")].find((item) => item.querySelector(".result-tab-name")?.textContent === "Before");
+      return tab && tab.getAttribute("data-result") !== old;
+    }, beforeRerun);
+    await panel.locator(".editor-action-run[data-run-target]").waitFor();
+    await cellIs("2");
+    assert.deepEqual(await tabNames(), ["Before", "After the update"]);
+    assert.equal(await panel.locator('.result-tab-item[data-pinned="true"]', { hasText: "Before" }).count(), 1);
+    assert.equal(await panel.locator(".result-tab-item.active .result-tab-name").innerText(), "Before");
+    // Closing a pinned result frees it; the next run then replaces what is left.
+    await panel.getByRole("button", { name: "Close Before", exact: true }).click();
+    await resultTab("Before").waitFor({ state: "detached" });
+    assert.deepEqual(await tabNames(), ["After the update"]);
+    // The number of result tabs an editor tab keeps is a setting: past it, the oldest one
+    // that is not pinned is closed.
+    const keepResultTabs = async (count) => {
+      await withSettings("appearance", async (settings) => {
+        const kept = settings.locator('input[name="resultTabs"]');
+        await kept.fill(String(count));
+        await kept.press("Enter");
+        await page.waitForFunction((value) => {
+          const input = document.querySelector('input[name="resultTabs"]');
+          return input?.value === value && !input.matches(":disabled");
+        }, String(count));
+      });
+    };
+    await keepResultTabs(2);
+    await replaceQuery(panel, "select 'one' as kept");
+    await page.keyboard.press("Alt+Enter");
+    await resultTab("Result 2").waitFor();
+    await ran();
+    await cellIs("one");
+    assert.deepEqual(await tabNames(), ["After the update", "Result 2"]);
+    await replaceQuery(panel, "select 'two' as kept");
+    await page.keyboard.press("Alt+Enter");
+    await resultTab("After the update").waitFor({ state: "detached" });
+    await ran();
+    await cellIs("two");
+    assert.deepEqual(await tabNames(), ["Result 1", "Result 2"]);
+    await keepResultTabs(20);
+    await replaceQuery(panel, threeStatements);
+    await run(panel);
+    await panel.locator(".result-tabs button", { hasText: "the third" }).waitFor();
+    assert.deepEqual(await tabNames(), ["Result 1", "Result 2", "the third"]);
+  }
+
+  step("variables: ${name} of the tab and of the connection, asked when unset, and a remembered :name parameter (SDB-383)");
+  {
+    const scriptBefore = await sqlEditor.innerText();
+    const ended = () => panel.locator(".editor-action-run[data-run-target]").waitFor();
+    const cellIs = async (expected) => {
+      let cell = "";
+      for (let i = 0; i < 20 && cell !== expected; i++) {
+        cell = await firstCell();
+        if (cell !== expected) await page.waitForTimeout(250);
+      }
+      assert.equal(cell, expected);
+    };
+    const variables = page.getByRole("dialog", { name: "Variables", exact: true });
+    const openVariables = async () => {
+      await actions.getByRole("button", { name: "Editor actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Variables…", exact: true }).click();
+      await variables.waitFor();
+    };
+    const addVariable = async (name, value, scope) => {
+      await variables.locator('input[name="variableName"]').fill(name);
+      await variables.locator('input[name="variableValue"]').fill(value);
+      await variables.locator('select[name="variableScope"]').selectOption(scope);
+      await variables.getByRole("button", { name: "Add variable", exact: true }).click();
+    };
+    const valueOf = (scope, name) => variables.locator(`.variables-list[data-scope="${scope}"] li`, { hasText: `\${${name}}` }).locator("input");
+    // One variable for this tab, one saved for the connection; a name that is not one is
+    // refused by the core (the connection files' ${env:…} means nothing here).
+    await openVariables();
+    await addVariable("smoke_a", "40", "tab");
+    await valueOf("tab", "smoke_a").waitFor();
+    await addVariable("smoke_b", "2", "connection");
+    await valueOf("connection", "smoke_b").waitFor();
+    assert.equal(await valueOf("connection", "smoke_b").inputValue(), "2");
+    await addVariable("env:HOME", "x", "tab");
+    await variables.getByRole("alert").filter({ hasText: "A name is a letter or _" }).waitFor();
+    assert.equal(await variables.locator('.variables-list[data-scope="tab"] li').count(), 1);
+    await shot("05f-variables-light");
+    await variables.getByRole("button", { name: "Close", exact: true }).click();
+    await variables.waitFor({ state: "detached" });
+    await setTheme("dark", "dark");
+    await openVariables();
+    await shot("05f-variables-dark");
+    await variables.getByRole("button", { name: "Close", exact: true }).click();
+    await variables.waitFor({ state: "detached" });
+    await setTheme("light", "light");
+    // A variable without a value is asked for, then the :name parameter; in a string the
+    // ${name} is left as written.
+    await replaceQuery(panel, "select ${smoke_a} + ${smoke_b} + ${smoke_c} as total, :smoke_p as p, '${smoke_a}' as untouched");
+    const asksVariables = page.getByRole("dialog", { name: "Values for the variables", exact: true });
+    const asksParams = page.getByRole("dialog", { name: "Query parameters", exact: true });
+    await run(panel);
+    await asksVariables.waitFor();
+    assert.deepEqual(await asksVariables.locator(".params-list .field span").allInnerTexts(), ["${smoke_c}"]);
+    await asksVariables.locator(".params-list input").fill("100");
+    await asksVariables.getByRole("button", { name: "Run", exact: true }).click();
+    await asksParams.waitFor();
+    assert.deepEqual(await asksParams.locator(".params-list .field span").allInnerTexts(), [":smoke_p"]);
+    await asksParams.locator(".params-list input").fill("remembered");
+    await asksParams.getByRole("button", { name: "Run", exact: true }).click();
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await ended();
+    await cellIs("142");
+    // Run it again: the variable asked before is kept for the tab, and the parameter's last
+    // value is offered.
+    await run(panel);
+    await asksParams.waitFor();
+    assert.equal(await asksVariables.count(), 0);
+    assert.equal(await asksParams.locator(".params-list input").inputValue(), "remembered");
+    await asksParams.getByRole("button", { name: "Run", exact: true }).click();
+    await asksParams.waitFor({ state: "detached" });
+    await ended();
+    await cellIs("142");
+    // The dialog lists what the tab remembers; the saved value changes what the next run reads.
+    await openVariables();
+    await valueOf("tab", "smoke_c").waitFor();
+    assert.equal(await variables.locator('.variables-list[data-scope="params"] li').innerText().then((text) => text.replace(/\s+/g, " ").trim()), ":smoke_p remembered");
+    await valueOf("connection", "smoke_b").fill("3");
+    await valueOf("connection", "smoke_b").press("Enter");
+    await page.waitForFunction(() => document.querySelector('.variables-list[data-scope="connection"] input')?.defaultValue === "3");
+    // A value that would end the statement and start another is refused by the core.
+    await valueOf("tab", "smoke_c").fill("100; drop table kept_probe");
+    await valueOf("tab", "smoke_c").press("Enter");
+    await variables.getByRole("button", { name: "Close", exact: true }).click();
+    await run(panel);
+    await panel.locator(".messages", { hasText: "would end its statement or start another one" }).waitFor();
+    assert.equal(await asksParams.count(), 0, "nothing is asked, checked or run after a refused value");
+    // The guard reads the statement with its values: an empty filter makes a DELETE without WHERE.
+    await replaceQuery(panel, "delete from kept_probe ${smoke_filter}");
+    await run(panel);
+    await asksVariables.waitFor();
+    await asksVariables.getByRole("button", { name: "Run", exact: true }).click();
+    const variableRisk = page.getByRole("dialog", { name: "Run these statements?" });
+    await variableRisk.getByText("DELETE without WHERE: deletes every row").waitFor();
+    assert.equal(await variableRisk.locator(".risk-list pre").innerText(), "delete from kept_probe");
+    await page.keyboard.press("Enter");
+    await variableRisk.waitFor({ state: "detached" });
+    // The script of the steps that follow, and its three results.
+    await replaceQuery(panel, scriptBefore);
+    await run(panel);
+    await panel.locator(".result-tabs .result-tab").nth(2).waitFor();
+    await ended();
+  }
+
+  step("run says what it will run: a statement, the selection or the script (SDB-379)");
+  // The name and the tooltip come from the core's answer for the cursor and the selection.
+  const runButton = actions.locator(".editor-action-run[data-run-target]");
+  const runIsNamed = async (name, target, title) => {
+    await actions.locator(`.editor-action-run[data-run-target="${target}"][aria-label="${name}"]`).waitFor();
+    assert.equal(await runButton.getAttribute("title"), title);
+  };
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("ArrowDown");
+  await runIsNamed("Run statement", "statement", "Run statement (Ctrl+Enter)");
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+End");
+  await runIsNamed("Run selection", "selection", "Run selection (Ctrl+Enter)");
+  await page.keyboard.press("Control+A");
+  await runIsNamed("Run selection…", "selection", "Run selection: choose among its 3 statements (Ctrl+Enter)");
+
+  step("statement picker: one of three selected statements by its number, some of them, all, or none");
+  // Result tabs by position: the third statement starts with the comment "-- the third",
+  // which names its tab (SDB-378), so a tab is not always called "Result N".
+  const resultTabs = panel.locator(".result-tabs .result-tab");
+  const firstCellIs = async (value) => {
+    let cell = "";
+    for (let i = 0; i < 20 && cell !== value; i++) {
+      cell = await firstCell();
+      if (cell !== value) await page.waitForTimeout(250);
+    }
+    assert.equal(cell, value);
+  };
+  const picker = page.getByRole("dialog", { name: "Run which statements?" });
+  await runButton.click();
+  await picker.waitFor();
+  assert.equal(await picker.locator(".pick-list li").count(), 3);
+  assert.match(await picker.locator(".pick-list li").nth(1).innerText(), /^2\s*select 'second;' as which$/);
+  // "Run all" has the focus: Enter runs what Run ran before the picker existed.
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Run all 3");
+  assert.ok(await picker.getByRole("button", { name: "Run 0 statements", exact: true }).isDisabled());
+  await shot("sdb-379-statement-picker-light");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await shot("sdb-379-statement-picker-dark");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  // 2 runs the second statement alone.
+  await page.keyboard.press("2");
+  await picker.waitFor({ state: "detached" });
+  await resultTabs.nth(1).waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await firstCellIs("second;");
+  assert.equal(await resultTabs.count(), 1);
+  // The first and the third, ticked: the second one, between them, does not run.
+  await sqlEditor.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Control+Enter");
+  await picker.waitFor();
+  await picker.getByRole("checkbox").nth(0).check();
+  await picker.getByRole("checkbox").nth(2).check();
+  await picker.getByRole("button", { name: "Run 2 statements", exact: true }).click();
+  await picker.waitFor({ state: "detached" });
+  await resultTabs.nth(1).waitFor();
+  await panel.locator(".statusline", { hasText: "2 OK, 0 failed, 0 not run" }).waitFor();
+  assert.equal(await resultTabs.count(), 2);
+  await firstCellIs("first");
+  await resultTabs.nth(1).click();
+  await firstCellIs("third");
+  // Escape runs nothing; Enter runs the three.
+  await sqlEditor.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Control+Enter");
+  await picker.waitFor();
+  await page.keyboard.press("Escape");
+  await picker.waitFor({ state: "detached" });
+  assert.equal(await resultTabs.count(), 2);
+  await sqlEditor.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Control+Enter");
+  await picker.waitFor();
+  await page.keyboard.press("Enter");
+  await picker.waitFor({ state: "detached" });
+  await resultTabs.nth(2).waitFor();
+  assert.equal(await resultTabs.nth(2).innerText(), "the third");
+
+  step("run from the cursor to the end: the second and third statements, by its shortcut and from the menu");
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Control+Alt+Enter");
+  await resultTabs.nth(2).waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "2 OK, 0 failed, 0 not run" }).waitFor();
+  assert.equal(await resultTabs.count(), 2);
+  await firstCellIs("second;");
+  await sqlEditor.click();
+  await page.keyboard.press("Control+End");
+  await actions.getByRole("button", { name: "Editor actions", exact: true }).click();
+  const fromCursor = page.getByRole("menuitem", { name: "Run from the cursor to the end", exact: true });
+  assert.equal(await fromCursor.locator(".menu-shortcut").innerText(), "Ctrl+Alt+Enter");
+  await fromCursor.click();
+  await resultTabs.nth(1).waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await firstCellIs("third");
+
+  step("run with no connection: only the whole script can be sent, and the button says so");
+  const tabsWithEditor = await page.getByRole("tab").count();
+  await page.keyboard.press("Control+t");
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count + 1, tabsWithEditor);
+  const unconnected = page.locator(".tab-panel:not([hidden])");
+  await unconnected.getByRole("combobox", { name: "Connection", exact: true }).selectOption("");
+  await unconnected.locator('.editor-action-run[data-run-target="script"][aria-label="Run script"]').waitFor();
+  assert.equal(await unconnected.locator(".editor-action-run[data-run-target]").getAttribute("title"), "Run script (Ctrl+Enter)");
+  await page.keyboard.press("Control+w");
+  await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count, tabsWithEditor);
+  assert.match(await panel.locator(".cm-content").innerText(), /select 'second;' as which/);
+  // The whole script again: the next step starts from its three results.
+  await run(panel);
+  await resultTabs.nth(2).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
 
   step("risky statements: the core asks before a DELETE without WHERE runs");
   await replaceQuery(panel, "create temp table scratch (x);\ninsert into scratch values (1), (2);\ndelete from scratch;");
@@ -1639,7 +2547,7 @@ try {
   // Cancel has the focus, so a reflex Enter does not run it.
   await page.keyboard.press("Enter");
   await risk.waitFor({ state: "detached" });
-  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await panel.locator(".result-tabs button", { hasText: "the third" }).waitFor();
   // A personal pause before "Run anyway" (Settings → Scripts): the button counts down first.
   await withSettings("scripts", async (settings) => {
     const delay = settings.locator('input[name="scriptConfirmDelay"]');
@@ -2013,7 +2921,8 @@ try {
     await page.keyboard.press("Shift+F10");
     await menu.waitFor();
     await page.keyboard.press("End");
-    assert.equal(await page.evaluate(() => document.activeElement.textContent.includes("Insert UPDATE")), true);
+    // The last item is the editor's zoom (SDB-389), after the snippets.
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.includes("Reset the editor's zoom")), true);
     await page.keyboard.press("Escape");
     assert.equal(await sqlEditor.evaluate((el) => el === document.activeElement), true);
     await withSettings("editor", async (settings) => {
@@ -2065,6 +2974,255 @@ try {
       await editorText("SELECT TOTAL FROM ORDERS");
     }
     await setTheme("light", "light");
+    await replaceQuery(panel, "select 'unterminated");
+  }
+
+  step("from SQL to the object: hover a column and a table, Ctrl+click a table name, the outline and next statement");
+  {
+    // A tab of its own, closed at the end: the tab the steps around use is shown again.
+    const tabBefore = await page.locator(".tabbar .tab").evaluateAll((tabs) => tabs.findIndex((tab) => tab.classList.contains("active")));
+    assert.ok(tabBefore >= 0);
+    // The tab connects when it first runs, and its catalog is read after that. (History
+    // saving is off for this connection here, so the run is not recorded.)
+    assert.equal(await historySaving("Shop (SQLite)"), false);
+    const namesPanel = await newQuery("Shop (SQLite)", "select o.id, o.total\nfrom orders o\njoin customer c on c.id = o.customer_id;\n\nselect name from customer;");
+    await run(namesPanel);
+    await namesPanel.locator(".result-tabs button", { hasText: "Result 2" }).waitFor();
+    await namesPanel.getByText(/^Connected/).first().waitFor();
+    const namesTab = await page.locator(".tabbar .tab.active").innerText();
+    const at = async (lineIndex, offset) => namesPanel.locator(".cm-line").nth(lineIndex).evaluate((line, index) => {
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      let remaining = index;
+      while (node && remaining > node.textContent.length) {
+        remaining -= node.textContent.length;
+        node = walker.nextNode();
+      }
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.setEnd(node, Math.min(node.textContent.length, remaining + 1));
+      const box = range.getBoundingClientRect();
+      return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+    }, offset);
+    const hover = page.locator(".sql-hover");
+    // The catalog is read in the background: until a table's columns are there, a hover over
+    // one of them shows nothing. Move away and back until it does.
+    const hoverUntil = async (lineIndex, offset, text) => {
+      for (let i = 0; i < 60; i++) {
+        const point = await at(lineIndex, offset);
+        await page.mouse.move(point.x + 120, point.y + 160);
+        await page.mouse.move(point.x, point.y, { steps: 3 });
+        const shown = await hover.filter({ hasText: text }).waitFor({ timeout: 1500 }).then(() => true, () => false);
+        if (shown) return;
+      }
+      throw new Error(`no hover with "${text}"`);
+    };
+    // `total` in `o.total`: its type and its table, through the alias.
+    await hoverUntil(0, 16, "Column of main.orders");
+    assert.match(await hover.innerText(), /total\s*REAL/i);
+    assert.match(await hover.innerText(), /NOT NULL/);
+    await shot("05f-editor-hover-column");
+    // `orders` in the FROM: the table's columns and types.
+    await hoverUntil(1, 7, "main.orders");
+    {
+      const text = await hover.innerText();
+      assert.match(text, /customer_id\s*INTEGER/i);
+      assert.match(text, /created\s*TEXT/i);
+      assert.match(text, /Ctrl\+click or F12 opens its details/);
+    }
+    // A bare column of one visible table: `name` is customer's.
+    await hoverUntil(4, 8, "Column of main.customer");
+    // A keyword shows nothing.
+    {
+      const point = await at(0, 2);
+      await page.mouse.move(point.x, point.y, { steps: 3 });
+      await page.waitForTimeout(700);
+      assert.equal(await hover.count(), 0);
+    }
+    const ctrlClick = async (lineIndex, offset) => {
+      const point = await at(lineIndex, offset);
+      await page.keyboard.down("Control");
+      await page.mouse.click(point.x, point.y);
+      await page.keyboard.up("Control");
+    };
+    const details = page.locator(".tab-panel:not([hidden]) .table-details-view");
+    const backToQuery = async () => {
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab", { hasText: namesTab }).click();
+      await namesPanel.locator(".cm-content").waitFor();
+    };
+    // Ctrl+click on the table's name opens its details in a tab of its own.
+    await ctrlClick(1, 7);
+    await details.waitFor();
+    await details.locator(".table-details-path", { hasText: "main / orders" }).waitFor();
+    await details.getByText("customer_id").first().waitFor();
+    await shot("05f-editor-ctrl-click-details");
+    await backToQuery();
+    // Through the alias too: `o` in `o.total`.
+    await ctrlClick(0, 13);
+    await details.locator(".table-details-path", { hasText: "main / orders" }).waitFor();
+    await backToQuery();
+    // On something that is not a table, Ctrl+click still adds a cursor.
+    await namesPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+Home");
+    await ctrlClick(2, 2);
+    await page.waitForFunction(() => document.querySelectorAll(".tab-panel:not([hidden]) .cm-cursor").length === 2);
+    await page.keyboard.press("Escape");
+    // The outline: one row per statement as the core splits the script; a row moves the cursor.
+    await namesPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+Shift+o");
+    const outline = namesPanel.getByRole("complementary", { name: "Outline" });
+    await outline.waitFor();
+    await outline.getByRole("button", { name: "Line 1: select o.id, o.total from orders o join customer c on c.id = o.customer_id" }).waitFor();
+    assert.equal(await outline.locator(".script-outline-entry").count(), 2);
+    const activeLine = (number) => page.waitForFunction((n) => document.querySelector(".tab-panel:not([hidden]) .cm-activeLineGutter")?.textContent === String(n), number);
+    await outline.getByRole("button", { name: "Line 5: select name from customer" }).click();
+    await activeLine(5);
+    // The panel keeps its width whatever the statements' length.
+    assert.ok((await outline.boundingBox()).width <= 260, "the outline is a narrow panel");
+    // Both looks, put on the page for the screenshots alone and put back.
+    {
+      const themeNow = await page.locator("html").getAttribute("data-theme");
+      const lookOf = (theme) =>
+        page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+          window.dispatchEvent(new Event("spelaion-themechange"));
+        }, theme);
+      for (const theme of ["light", "dark"]) {
+        await lookOf(theme);
+        await hoverUntil(1, 7, "main.orders");
+        await shot(`05f-editor-outline-and-hover-${theme}`);
+      }
+      await lookOf(themeNow);
+      const away = await at(4, 2);
+      await page.mouse.move(away.x, away.y + 200);
+    }
+    // Next and previous statement, from the keyboard.
+    await page.keyboard.press("Alt+PageUp");
+    await activeLine(1);
+    await page.keyboard.press("Alt+PageDown");
+    await activeLine(5);
+    // F12 on a keyword says there is no table there; on the table's name it opens it.
+    await page.keyboard.press("F12");
+    await namesPanel.getByText("The name at the cursor is not a table or a column the explorer has read").waitFor();
+    for (let i = 0; i < 18; i++) await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("F12");
+    await details.locator(".table-details-path", { hasText: "main / customer" }).waitFor();
+    await backToQuery();
+    // Reveal in explorer: the table's row in the tree. The cursor is still on `customer`
+    // (the focus goes back to the editor without a click, which would move it).
+    await namesPanel.locator(".cm-content").focus();
+    await page.keyboard.press("Shift+Alt+e");
+    await page.locator(".sidebar .revealed", { hasText: "customer" }).waitFor();
+    // The explorer as the next steps expect it: the schema and the connection folded again.
+    {
+      const mainNode = page.getByRole("button", { name: "Expand or collapse schema main" });
+      await mainNode.click();
+      await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
+      await mainNode.waitFor({ state: "detached" });
+    }
+    // The outline closes from its button, and the tab from the keyboard.
+    await outline.getByRole("button", { name: "Close the outline" }).click();
+    await outline.waitFor({ state: "detached" });
+    await namesPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab").nth(tabBefore).click();
+    await page.waitForFunction((index) => document.querySelectorAll(".tabbar .tab")[index]?.classList.contains("active"), tabBefore);
+  }
+
+  step("your own snippets: made in Settings, expanded with Tab through its fields, over a built-in one, and a template for new scripts");
+  {
+    const lines = () => page.evaluate(() => [...document.querySelectorAll(".tab-panel:not([hidden]) .cm-content .cm-line")].map((line) => line.textContent).join("\n"));
+    const editorShows = (text) => page.waitForFunction((expected) => [...document.querySelectorAll(".tab-panel:not([hidden]) .cm-content .cm-line")].map((line) => line.textContent).join("\n") === expected, text);
+    const selected = (text) => page.waitForFunction((expected) => getSelection().toString() === expected, text);
+    await withSettings("snippets", async (settings) => {
+      await settings.getByText("You have no snippets yet.").waitFor();
+      const fill = async (name, description, text) => {
+        await settings.locator('input[name="snippetName"]').fill(name);
+        await settings.locator('input[name="snippetDescription"]').fill(description);
+        await settings.locator('textarea[name="snippetBody"]').fill(text);
+        await settings.getByRole("button", { name: "Save snippet" }).click();
+      };
+      await settings.getByRole("button", { name: "New snippet" }).click();
+      // The core decides what a snippet may hold: a name that is not an identifier and a text
+      // with a hidden character (a zero-width space) are refused, and nothing is saved.
+      await fill("top rows", "", "select 1;");
+      await settings.getByRole("alert").filter({ hasText: "a snippet's name is 1 to 32 letters, digits or underscores" }).waitFor();
+      await fill("top", "", "select 1;\u200b");
+      await settings.getByRole("alert").filter({ hasText: "a snippet's text can only hold text, line breaks and tabs" }).waitFor();
+      await fill("top", "The first rows of a table", "SELECT ${1:*} FROM ${2:table} LIMIT ${3:10};${0}");
+      await settings.locator('textarea[name="snippetBody"]').waitFor({ state: "detached" });
+      await settings.locator(".snippet-list li", { hasText: "The first rows of a table" }).waitFor();
+      // A snippet named like a built-in one replaces it.
+      await settings.getByRole("button", { name: "New snippet" }).click();
+      await fill("upd", "My update", "UPDATE ${1:t} SET ${2:c} = ${3:v};");
+      await settings.locator('textarea[name="snippetBody"]').waitFor({ state: "detached" });
+      await settings.getByText("replaces the built-in one").waitFor();
+      await settings.getByText("replaced by yours").waitFor();
+      // The template of new scripts.
+      await settings.locator('textarea[name="scriptTemplate"]').fill("-- smoke template\n");
+      // Like the other settings it is saved as it changes: when the box is left.
+      await settings.locator('textarea[name="scriptTemplate"]').blur();
+      await settings.getByRole("button", { name: "Remove template" }).waitFor();
+      await shot("05g-snippets-settings-light");
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
+      await shot("05g-snippets-settings-dark");
+      await page.evaluate(() => { document.documentElement.dataset.theme = "light"; window.dispatchEvent(new Event("spelaion-themechange")); });
+    });
+    // The name and Tab expand the snippet; Tab then visits its fields in order.
+    await replaceQuery(panel, "top");
+    await page.keyboard.press("Tab");
+    await editorShows("SELECT * FROM table LIMIT 10;");
+    await selected("*");
+    await page.keyboard.insertText("id");
+    await page.keyboard.press("Tab");
+    await selected("table");
+    await page.keyboard.insertText("orders");
+    await page.keyboard.press("Tab");
+    await selected("10");
+    await page.keyboard.insertText("5");
+    await editorShows("SELECT id FROM orders LIMIT 5;");
+    await page.keyboard.press("Shift+Tab");
+    await selected("orders");
+    // The user's `upd` is what expands now, not the built-in one.
+    await replaceQuery(panel, "upd");
+    await page.keyboard.press("Tab");
+    await editorShows("UPDATE t SET c = v;");
+    await selected("t");
+    // While typing, the snippet is offered next to the SQL completions, with its description.
+    await replaceQuery(panel, "");
+    await page.keyboard.type("to");
+    await page.locator(".cm-tooltip-autocomplete li", { hasText: "The first rows of a table" }).waitFor();
+    await shot("05g-snippet-completion");
+    await page.keyboard.press("Escape");
+    // A new script starts with the template, the cursor after it.
+    const tabsWithSnippets = await page.getByRole("tab").count();
+    await page.keyboard.press("Control+t");
+    await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count + 1, tabsWithSnippets);
+    await editorShows("-- smoke template\n");
+    await page.keyboard.insertText("select 1;");
+    await editorShows("-- smoke template\nselect 1;");
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count, tabsWithSnippets);
+    // Deleted again: the built-in snippet is back, and a new script is empty.
+    await withSettings("snippets", async (settings) => {
+      await settings.getByRole("button", { name: "Delete snippet top" }).click();
+      await settings.getByRole("button", { name: "Delete snippet upd" }).click();
+      await settings.getByText("You have no snippets yet.").waitFor();
+      await settings.getByRole("button", { name: "Remove template" }).click();
+      await settings.getByRole("button", { name: "Remove template" }).waitFor({ state: "detached" });
+    });
+    await replaceQuery(panel, "upd");
+    await page.keyboard.press("Tab");
+    await editorShows("UPDATE table SET column = value WHERE condition;");
+    await replaceQuery(panel, "top");
+    await page.keyboard.press("Tab");
+    assert.notEqual(await lines(), "SELECT * FROM table LIMIT 10;");
+    await page.keyboard.press("Control+t");
+    await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count + 1, tabsWithSnippets);
+    await editorShows("");
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count, tabsWithSnippets);
     await replaceQuery(panel, "select 'unterminated");
   }
 
@@ -3028,6 +4186,10 @@ try {
   const range = panel.locator(".table-range");
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   await panel.getByText("This page only", { exact: true }).waitFor();
+  const beforeRefresh = await panel.locator(".result-tab-item.active").getAttribute("data-result");
+  await panel.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.waitForFunction(([old]) => document.querySelector('.tab-panel:not([hidden]) .result-tab-item.active')?.getAttribute("data-result") !== old, [beforeRefresh]);
+  await range.filter({ hasText: "rows 1–500" }).waitFor();
   // Export takes every row the WHERE keeps, in the ORDER BY, not only the page on screen.
   await panel.getByRole("textbox", { name: "WHERE" }).fill("id > 49000");
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id desc");
@@ -3097,6 +4259,54 @@ try {
   await panel.getByRole("textbox", { name: "WHERE" }).fill("");
   await panel.getByRole("button", { name: "Apply", exact: true }).click();
   await range.filter({ hasText: "rows 1–500" }).waitFor();
+
+  step("table data: a page by its number, the last page, a row number and a row transposed (SDB-386)");
+  {
+    const pages = panel.locator(".table-bar").getByRole("group", { name: "Pages" });
+    const pageNumber = pages.getByRole("textbox", { name: "Page number" });
+    await pageNumber.fill("7");
+    await pageNumber.press("Enter");
+    await range.filter({ hasText: "rows 3,001–3,500" }).waitFor();
+    await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
+    // The last page is counted first, then read: exact for the rows as they were counted.
+    await pages.getByRole("button", { name: "Last page" }).click();
+    await range.filter({ hasText: "rows 49,501–50,000 of 50,000" }).waitFor();
+    await pages.getByText("of 100", { exact: true }).waitFor();
+    assert.equal(await pageNumber.inputValue(), "100");
+    await pages.getByRole("button", { name: "First page" }).click();
+    await range.filter({ hasText: "rows 1–500 of 50,000" }).waitFor();
+    // Go to row 1,234 (Ctrl+G): the page that holds it is read and the row is selected; the
+    // grid numbers the table's rows, not the page's.
+    await panel.locator(".grid-scroller").waitFor();
+    await panel.locator(".grid-scroller").focus();
+    await page.keyboard.press("Control+g");
+    const rowJump = panel.getByRole("dialog", { name: "Go to row" });
+    await rowJump.getByRole("textbox", { name: "Go to row" }).fill("1234");
+    await page.keyboard.press("Enter");
+    await range.filter({ hasText: "rows 1,001–1,500" }).waitFor();
+    await panel.getByRole("grid").getByRole("gridcell", { name: /^Row 1,234, id \(INTEGER\): 1234$/ }).waitFor();
+    // Transpose rows: the selected row as a column, one row per column of the table.
+    await panel.getByRole("button", { name: "Transpose rows" }).click();
+    const transposed = panel.locator(".transposed-view");
+    await transposed.getByText("Row 1,234 as a column", { exact: true }).waitFor();
+    const transposedGrid = transposed.locator(".grid-scroller");
+    await transposedGrid.waitFor();
+    let tbox = null;
+    for (let i = 0; i < 40 && !tbox; i++) {
+      tbox = await transposedGrid.boundingBox();
+      if (!tbox) await page.waitForTimeout(100);
+    }
+    await page.mouse.click(tbox.x + 52 + 10, tbox.y + 34 + 10);
+    await transposed.getByRole("gridcell", { name: /^Row 1, Column \(text\): id$/ }).waitFor();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowRight");
+    await transposed.getByRole("gridcell", { name: /^Row 1, 1234 \(text\): 1234$/ }).waitFor();
+    await shot("05j-transposed-row");
+    await panel.getByRole("button", { name: "Show rows" }).click();
+    await transposed.waitFor({ state: "detached" });
+    await pages.getByRole("button", { name: "First page" }).click();
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+  }
   // A header click sorts in the server: ORDER BY written with the engine's quoting.
   {
     // The new page mounts a new grid: wait until it is laid out.
@@ -3110,6 +4320,39 @@ try {
     await panel.locator('.grid-scroller[aria-label$="sorted by id, descending"]').waitFor();
     assert.equal(await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue(), "id DESC");
     await range.filter({ hasText: "rows 1–500" }).waitFor();
+    // Shift+click adds a second column: the core writes both into the ORDER BY, and two more
+    // Shift+clicks turn it descending and take it out again.
+    {
+      const orderBy = async (text) => {
+        for (let i = 0; i < 40; i++) {
+          if ((await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue()) === text) return;
+          await page.waitForTimeout(100);
+        }
+        assert.equal(await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue(), text);
+      };
+      const shiftClick = async () => {
+        // The sort shows at once, but the page the last click asked for is read after it and
+        // mounts a new grid: a click before it is there would be lost. "Count" is disabled
+        // while the page loads.
+        await page.waitForFunction((button) => !button.disabled, await panel.getByRole("button", { name: "Count", exact: true }).elementHandle());
+        await range.filter({ hasText: "rows 1–500" }).waitFor();
+        await panel.locator(".grid-scroller").waitFor();
+        await page.keyboard.down("Shift");
+        const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+        await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 18);
+        await page.keyboard.up("Shift");
+      };
+      await shiftClick();
+      await panel.locator('.grid-scroller[aria-label$="sorted by id, descending, then by customer_id, ascending"]').waitFor();
+      await orderBy("id DESC, customer_id");
+      assert.equal(await panel.locator(".grid-scroller").getAttribute("data-sort"), "0:desc,1:asc");
+      await shiftClick();
+      await panel.locator('.grid-scroller[aria-label$="sorted by id, descending, then by customer_id, descending"]').waitFor();
+      await orderBy("id DESC, customer_id DESC");
+      await shiftClick();
+      await panel.locator('.grid-scroller[aria-label$="sorted by id, descending"]').waitFor();
+      await orderBy("id DESC");
+    }
     // The sort shows at once; the page it asked for may still be on its way.
     let firstId = "";
     for (let i = 0; i < 20 && firstId !== "50000"; i++) {
@@ -3158,12 +4401,240 @@ try {
     await panel.getByRole("menuitem", { name: "Qualified with the table" }).click();
     assert.equal(await copied(before + 1), "orders.id");
   }
+  // Two header clicks before the core answers the first (SDB-409): each asks the core for its
+  // ORDER BY, and here the second click's answer is let through before the first one's. The
+  // table must end as the second click asked. From "id DESC" the first click takes the column
+  // out of the sort and the second sorts it ascending; the older answer, arriving last, used
+  // to put "no order" back.
+  {
+    await page.evaluate(() => {
+      const original = window.fetch;
+      const pending = [];
+      window.__sdb409 = { original, pending };
+      window.fetch = (url, ...args) => {
+        const result = original(url, ...args);
+        if (!String(url).endsWith("/table_order_by")) return result;
+        return new Promise((resolve, reject) => pending.push(() => result.then(resolve, reject)));
+      };
+    });
+    const orderBy = panel.getByRole("textbox", { name: "ORDER BY" });
+    assert.equal(await orderBy.inputValue(), "id DESC");
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.click(box.x + 52 + 20, box.y + 18);
+    await page.waitForFunction(() => window.__sdb409.pending.length === 1);
+    await page.mouse.click(box.x + 52 + 20, box.y + 18);
+    await page.waitForFunction(() => window.__sdb409.pending.length === 2);
+    // The second click's answer first: the table sorts ascending.
+    await page.evaluate(() => window.__sdb409.pending[1]());
+    await panel.locator('.grid-scroller[aria-label$="sorted by id, ascending"]').waitFor();
+    await page.waitForFunction(() => document.querySelector('.tab-panel:not([hidden]) input[aria-label="ORDER BY"]')?.value === "id");
+    // Then the first click's, late: it changes nothing.
+    await page.evaluate(() => window.__sdb409.pending[0]());
+    await page.waitForTimeout(500);
+    assert.equal(await orderBy.inputValue(), "id", "an older click's answer does not replace the newer sort");
+    await panel.locator('.grid-scroller[aria-label$="sorted by id, ascending"]').waitFor();
+    await page.evaluate(() => {
+      window.fetch = window.__sdb409.original;
+      delete window.__sdb409;
+    });
+  }
   // What is typed cannot turn the page into another statement.
   await panel.getByRole("textbox", { name: "WHERE" }).fill("1=1); drop table orders; select (1");
   await page.keyboard.press("Enter");
   await panel.locator(".error-box", { hasText: "must not change the query" }).waitFor();
   await page.keyboard.press("Control+w");
   await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor({ state: "detached" });
+
+  step("table data: the filter box remembers the filters used and completes column names (SDB-381)");
+  {
+    const openOrders = async () => {
+      await ordersNode.locator(".label").dblclick();
+      await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
+    };
+    const closeOrders = async () => {
+      // Only once the page has finished: closing a tab whose query still runs asks first.
+      await panel.locator(".statusline", { hasText: /rows · \d+ ms/ }).waitFor();
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor({ state: "detached" });
+    };
+    const where = panel.getByRole("textbox", { name: "WHERE" });
+    const suggestions = panel.getByRole("listbox", { name: "Filters used on this table and its columns" });
+    const offered = () => suggestions.getByRole("option").locator("code").allInnerTexts();
+    await openOrders();
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+    assert.equal(await where.inputValue(), "", "no default filter yet");
+    // This connection's query history is switched off (since the history steps), so the
+    // filters the previous step used were not remembered: a filter holds values, as a query does.
+    await where.click();
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(300);
+    assert.equal(await suggestions.count(), 0, "nothing remembered while the history is off");
+    await setHistorySaving("Shop (SQLite)", true);
+    // While a page loads, Apply is disabled and Enter in the box does nothing: each filter is
+    // typed once the page before it is in, and each has its own number of rows to wait for.
+    const pageIsIn = () => page.waitForFunction(() => !document.querySelector('.tab-panel:not([hidden]) .table-bar button[type="submit"]')?.disabled);
+    for (const [filter, rows] of [["id > 49900", "rows 1–100"], ["total > 1990", "rows 1–264"]]) {
+      await pageIsIn();
+      await where.fill(filter);
+      await page.keyboard.press("Enter");
+      await range.filter({ hasText: rows }).waitFor();
+      await panel.locator(".statusline", { hasText: /rows · \d+ ms/ }).waitFor();
+    }
+    await pageIsIn();
+    // One the core refuses never loads a page, so it is never remembered.
+    await where.fill("1=1); drop table orders; select (1");
+    await page.keyboard.press("Enter");
+    await panel.locator(".error-box", { hasText: "must not change the query" }).waitFor();
+    // The down arrow on an empty box lists the filters that loaded a page, newest first.
+    await where.fill("");
+    await page.keyboard.press("ArrowDown");
+    await suggestions.waitFor();
+    assert.deepEqual(await offered(), ["total > 1990", "id > 49900"]);
+    // Typing narrows the list and offers the table's columns; Enter takes the one chosen.
+    await where.fill("tot");
+    await page.waitForFunction(() => document.querySelectorAll(".tab-panel:not([hidden]) .table-filter-suggestions li").length === 2);
+    assert.deepEqual(await offered(), ["total", "total > 1990"]);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    assert.equal(await where.inputValue(), "total");
+    await page.keyboard.type(" > 1990");
+    await page.keyboard.press("Enter");
+    await suggestions.waitFor({ state: "detached" });
+    await range.filter({ hasText: "rows 1–264" }).waitFor();
+
+    step("table data: a filter saved as the table's default opens with the table, and a value is picked from the column's most frequent ones");
+    await panel.getByRole("button", { name: "Save this filter as the table's default: the tab opens with it" }).click();
+    await panel.locator(".table-default-badge", { hasText: "Default" }).waitFor();
+    const dropDefault = panel.getByRole("button", { name: "Drop the table's default filter (total > 1990)" });
+    assert.equal(await dropDefault.getAttribute("aria-pressed"), "true");
+    await shot("sdb-381-default-filter-light");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("sdb-381-default-filter-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    // Closed and opened again: the tab opens with the default, checked again by the core, and
+    // says it is the default.
+    await closeOrders();
+    await openOrders();
+    await range.filter({ hasText: "rows 1–264" }).waitFor();
+    assert.equal(await where.inputValue(), "total > 1990");
+    await panel.locator(".table-default-badge", { hasText: "Default" }).waitFor();
+    // The custom filter's value, picked from the values the server counted with the tab's filter.
+    {
+      let box = null;
+      for (let i = 0; i < 40 && !box; i++) {
+        box = await panel.locator(".grid-scroller").boundingBox();
+        if (!box) await page.waitForTimeout(100);
+      }
+      await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12, { button: "right" });
+      await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await panel.getByRole("menuitem", { name: "Custom filter…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Custom filter" });
+      await dialog.getByLabel("Column").selectOption({ label: "customer_id" });
+      await dialog.getByRole("button", { name: "Show the most frequent values" }).click();
+      const top = dialog.getByRole("list", { name: "Most frequent values" });
+      await top.waitFor();
+      const first = top.getByRole("button").first();
+      const picked = await first.locator("code").innerText();
+      assert.match(picked, /^\d+$/);
+      await first.click();
+      assert.equal(await dialog.getByRole("textbox", { name: "Value" }).inputValue(), picked);
+      await shot("sdb-381-top-values-light");
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+      await shot("sdb-381-top-values-dark");
+      await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+      await dialog.getByRole("button", { name: "Filter", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
+      await page.waitForFunction(
+        (wanted) => document.querySelector('.tab-panel:not([hidden]) input[aria-label="WHERE"]')?.value === wanted,
+        `total > 1990 AND customer_id = ${picked}`,
+      );
+      // The page of the picked value, not the one before it (which read "rows 1–264"): the
+      // most frequent customer has a handful of these orders. Until it has loaded, Apply is
+      // disabled and Enter in the box does nothing.
+      await page.waitForFunction(() => {
+        const shown = document.querySelector(".tab-panel:not([hidden]) .table-range")?.textContent?.trim() ?? "";
+        return /^rows 1–\d+$/.test(shown) && shown !== "rows 1–264";
+      });
+      await panel.locator(".statusline", { hasText: /rows? · \d+ ms/ }).waitFor();
+      await page.waitForFunction(() => !document.querySelector('.tab-panel:not([hidden]) .table-bar button[type="submit"]')?.disabled);
+      // No longer the default filter: the badge is gone until it is applied again.
+      await panel.locator(".table-default-badge").waitFor({ state: "detached" });
+    }
+    // Back on the default, the star drops it; the table then opens with every row again.
+    await where.fill("total > 1990");
+    await page.keyboard.press("Enter");
+    await range.filter({ hasText: "rows 1–264" }).waitFor();
+    await dropDefault.click();
+    await panel.locator(".table-default-badge").waitFor({ state: "detached" });
+    await panel.getByRole("button", { name: "Save this filter as the table's default: the tab opens with it" }).waitFor();
+    await closeOrders();
+    await openOrders();
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+    assert.equal(await where.inputValue(), "");
+    await closeOrders();
+    // As the steps after this one expect it.
+    await setHistorySaving("Shop (SQLite)", false);
+  }
+
+  step("column filters: match case, and match all of them or any (SDB-381)");
+  {
+    const names = await newQuery("Shop (SQLite)", "select 'Ada' as name union all select 'ada' union all select 'Bob';");
+    await run(names);
+    await names.locator(".statusline", { hasText: "3 rows" }).waitFor();
+    const addFilter = async (value) => {
+      const box = await settledBox(names.locator(".grid-scroller"));
+      await page.mouse.click(box.x + 80, box.y + 34 + 12, { button: "right" });
+      await names.getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await names.getByRole("menuitem", { name: "Custom filter…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Custom filter" });
+      // Only a table data tab offers the server's most frequent values.
+      assert.equal(await dialog.getByRole("button", { name: "Show the most frequent values" }).count(), 0);
+      await dialog.getByLabel("Value").fill(value);
+      await dialog.getByRole("button", { name: "Filter", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
+    };
+    const bar = names.getByRole("toolbar", { name: "Column filters" });
+    const matchMode = bar.getByRole("group", { name: "How the conditions combine" });
+    await addFilter("ada");
+    await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
+    // One condition: nothing to combine yet, but its text can tell upper case from lower.
+    assert.equal(await matchMode.count(), 0);
+    // The box is ticked once the core has filtered: a click, then the rows.
+    await bar.getByLabel("Match case").click();
+    await names.locator(".statusline", { hasText: "1 of 3 rows" }).waitFor();
+    assert.ok(await bar.getByLabel("Match case").isChecked());
+    await addFilter("Bob");
+    await names.locator(".statusline", { hasText: "0 of 3 rows" }).waitFor();
+    assert.equal(await matchMode.getByRole("button", { name: "Match all", exact: true }).getAttribute("aria-pressed"), "true");
+    await matchMode.getByRole("button", { name: "Match any", exact: true }).click();
+    await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
+    assert.equal(await matchMode.getByRole("button", { name: "Match any", exact: true }).getAttribute("aria-pressed"), "true");
+    await shot("sdb-381-match-any");
+    // Refresh reads the query again and filters the new rows as they were filtered: with
+    // Match all the two conditions keep no row, and without Match case "ada" keeps both Adas,
+    // so only "2 of 3 rows" says both were kept.
+    {
+      const refresh = names.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true });
+      const shown = await names.locator(".result-tab-item.active").getAttribute("data-result");
+      await refresh.click();
+      await page.waitForFunction(([old]) => {
+        const active = document.querySelector(".tab-panel:not([hidden]) .result-tab-item.active");
+        return active !== null && active.getAttribute("data-result") !== old;
+      }, [shown]);
+      await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
+      await page.waitForFunction(() => {
+        const button = document.querySelector('.tab-panel:not([hidden]) .grid-footer button[aria-label="Refresh"]');
+        return button !== null && !button.disabled;
+      });
+      assert.equal(await matchMode.getByRole("button", { name: "Match any", exact: true }).getAttribute("aria-pressed"), "true");
+      assert.ok(await bar.getByLabel("Match case").isChecked());
+      await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
+    }
+    await bar.getByRole("button", { name: "Reset filters" }).click();
+    await bar.waitFor({ state: "detached" });
+    await names.locator(".statusline", { hasText: "3 rows" }).waitFor();
+    await page.keyboard.press("Control+w");
+  }
 
   step("foreign keys: open the referenced row, and the rows that point back to it");
   {
@@ -3354,6 +4825,14 @@ try {
     await chart.getByRole("checkbox", { name: "orders" }).uncheck();
     await page.keyboard.press("Escape");
     await svg.locator(".chart-title", { hasText: "revenue by country" }).waitFor();
+    // The title follows the settings at once, the points come from the core afterwards, and
+    // new points clear the tooltip (ResultChart's `setHover(null)` on `points`): a key pressed
+    // in between showed it and lost it (SDB-342). Wait for the one-series points: six bars and
+    // no legend swatches, where the two-series chart had 6 × 2 + 2.
+    for (let tries = 0; (await svg.locator("rect").count()) !== 6; tries++) {
+      assert.ok(tries < 100, "the chart never drew the revenue series alone");
+      await page.waitForTimeout(100);
+    }
     // The keyboard reaches every point: its tooltip names the country and its value.
     await svg.focus();
     await page.keyboard.press("Home");
@@ -5027,9 +6506,25 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await page.getByRole("dialog").count(), 0);
   await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
   await panel.getByRole("button", { name: "Add row" }).waitFor();
+  // What loads a table's page again (Apply, saving the edits) replaces its grid: the one
+  // shown goes away and another is mounted when the new page arrives. A click or a key sent
+  // in between reaches no grid, so wait for the new one, ready to be edited (Add row is
+  // enabled again), before acting on it.
+  const pageReloadedBy = async (action) => {
+    const shownGrid = await panel.locator(".grid-scroller").elementHandle();
+    await action();
+    await page.waitForFunction((grid) => !grid.isConnected, shownGrid);
+    await panel.locator(".grid-scroller").waitFor();
+    await page.waitForFunction(() => {
+      const add = document.querySelector('.tab-panel:not([hidden]) button[aria-label="Add row"]');
+      return add !== null && !add.disabled;
+    });
+  };
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id");
-  await panel.getByRole("button", { name: "Apply", exact: true }).click();
+  await pageReloadedBy(() => panel.getByRole("button", { name: "Apply", exact: true }).click());
   await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
+  await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+  await panel.getByRole("button", { name: "Add row" }).waitFor();
   {
     let box = null;
     for (let i = 0; i < 40 && !box; i++) {
@@ -5042,11 +6537,19 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       const now = await panel.locator(".grid-scroller").boundingBox();
       return [now.x + 52 + x + 20, now.y + 34 + 12 + row * 24];
     };
-    // name of row 1 → "edited" (inline editor).
-    await page.mouse.dblclick(...(await cellAt(0, 110)));
+    // Typing replaces the selected value, and Escape discards the edit.
+    await page.mouse.click(...(await cellAt(0, 110)));
+    await page.keyboard.type("replacement", { delay: 10 });
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
-    await editor.fill("edited");
+    assert.equal(await editor.inputValue(), "replacement");
+    await editor.press("Escape");
+    await panel.getByText("No pending changes").waitFor();
+    await page.keyboard.type("edited", { delay: 10 });
+    assert.equal(await editor.inputValue(), "edited");
     await editor.press("Enter");
+    await panel.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true }).click();
+    await panel.getByText("Apply or discard the pending changes first").waitFor();
+    await panel.locator(".grid-scroller").focus();
     // The full value panel edits the same pending cell, and can be undone by row.
     await page.keyboard.press("Enter");
     const viewer = panel.locator(".cell-viewer");
@@ -5081,8 +6584,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.getByText("Inserted: 2 · Deleted: 1 · Updated: 2").waitFor();
     assert.ok(await panel.getByRole("button", { name: "Next page" }).isDisabled());
     await shot("07d-editing-pending");
-    await panel.getByRole("button", { name: "Save changes" }).click();
-    await panel.getByRole("status").filter({ hasText: "Applied 5 changes" }).waitFor();
+    // The note that says what was applied is shown for a moment: wait for it from the start.
+    const appliedFive = panel.getByRole("status").filter({ hasText: "Applied 5 changes" }).waitFor();
+    await pageReloadedBy(() => panel.getByRole("button", { name: "Save changes" }).click());
+    await appliedFive;
     await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     for (let i = 0; i < 40 && !(box = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
     const before = await page.evaluate(() => window.__copied.length);
@@ -5097,8 +6602,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("saved by shortcut");
-    await editor.press("Control+s");
-    await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
+    const appliedOne = panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
+    await pageReloadedBy(() => editor.press("Control+s"));
+    await appliedOne;
     await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     assert.equal(await page.getByRole("dialog", { name: "Save query" }).count(), 0);
     let after = null;
@@ -5487,7 +6993,31 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.ok(!(await card.isDisabled()), `${name} has a verified official plugin pin`);
   }
   assert.equal(await wizard.locator(".engine-card", { hasText: "Open Distro" }).count(), 0);
+  // Every card shows a mark that loaded, or the icon set's database or folder (SDB-363): never
+  // a text character, and the engines with a licensed mark show theirs.
+  const marks = await wizard.locator(".engine-card").evaluateAll((cards) => cards.map((card) => {
+    const img = card.querySelector("img.engine-icon");
+    return { name: card.textContent.trim(), img: Boolean(img), loaded: img ? img.complete && img.naturalWidth > 0 : false, icon: Boolean(card.querySelector(".engine-icon-fallback svg")) };
+  }));
+  assert.ok(marks.length > 40, `${marks.length} cards`);
+  for (const mark of marks) assert.ok(mark.img ? mark.loaded : mark.icon, `${mark.name}: ${JSON.stringify(mark)}`);
+  for (const name of ["Trino", "Neo4j", "libSQL / Turso", "YugabyteDB", "Valkey", "Arrow Flight SQL", "Meilisearch"]) {
+    assert.ok(marks.find((mark) => mark.name.startsWith(name))?.img, `${name} shows a mark`);
+  }
+  for (const name of ["Databend", "TDengine", "CSV / Parquet folder"]) {
+    assert.ok(marks.find((mark) => mark.name.startsWith(name))?.icon, `${name} shows the neutral icon`);
+  }
   await shot("12a-add-connection-catalog");
+  {
+    // The analytical engines, where most new marks are, in both themes.
+    const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
+    await wizard.getByRole("heading", { name: "Analytical" }).evaluate((heading) => heading.scrollIntoView({ block: "start" }));
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("sdb-363-engine-marks-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    await shot("sdb-363-engine-marks-light");
+    await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, themeBefore);
+  }
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");
   await wizard.getByRole("button", { name: "Use URL" }).click();
@@ -5662,6 +7192,110 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.equal(await nullInk(), 0, "NULL drawn empty");
     await shot("12a4-grid-checkboxes");
     await setGridLook({ boolCheckboxes: false, nullText: true });
+    await page.keyboard.press("Control+w");
+  }
+
+  step("value display: a date and number format and a time zone from Settings; copies keep the database's text unless asked (SDB-385)");
+  {
+    const shownPanel = await newQuery("analytics", "select timestamptz '2026-11-16 20:07:16+00' as at, date '2026-11-16' as day, 1234567.89::decimal(12,2) as amount;");
+    await run(shownPanel);
+    await shownPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    const shownGrid = shownPanel.locator(".grid-scroller");
+    const ROW_NUM = 52;
+    const middle = 34 + 12;
+    const cellPoint = async (col) => {
+      const widths = (await shownGrid.getAttribute("data-column-widths")).split(",").map(Number);
+      const box = await shownGrid.boundingBox();
+      return { x: box.x + ROW_NUM + widths.slice(0, col).reduce((a, b) => a + b, 0) + 12, y: box.y + middle };
+    };
+    // Ctrl+C: the database's own text, whatever the grid shows.
+    const copyStored = async (col) => {
+      const at = await cellPoint(col);
+      const before = await page.evaluate(() => window.__copied.length);
+      await page.mouse.click(at.x, at.y);
+      await page.keyboard.press("Control+c");
+      return (await copied(before + 1)).trimEnd();
+    };
+    const cellMenu = shownPanel.locator(".result-grid-menu");
+    const copyMenu = shownPanel.getByRole("menu", { name: "Copy", exact: true });
+    const openCopyMenu = async (col) => {
+      const at = await cellPoint(col);
+      await page.mouse.click(at.x, at.y);
+      await page.mouse.click(at.x, at.y, { button: "right" });
+      await cellMenu.getByRole("menuitem", { name: "Copy ▸" }).hover();
+      await copyMenu.waitFor();
+    };
+    // "Copy as displayed": what the grid shows, only when the user picks it.
+    const copyShown = async (col) => {
+      const before = await page.evaluate(() => window.__copied.length);
+      await openCopyMenu(col);
+      await copyMenu.getByRole("menuitem", { name: "Copy as displayed", exact: true }).click();
+      return (await copied(before + 1)).trimEnd();
+    };
+    const stored = ["2026-11-16 20:07:16+00", "2026-11-16", "1234567.89"];
+    for (const [col, text] of stored.entries()) assert.equal(await copyStored(col), text);
+    // By default every value is as the database prints it: there is nothing else to copy.
+    await openCopyMenu(0);
+    assert.equal(await copyMenu.getByRole("menuitem", { name: "Copy as displayed", exact: true }).count(), 0);
+    await page.keyboard.press("Escape");
+    await cellMenu.waitFor({ state: "detached" });
+    // A date format, a number format and a time zone, in Settings.
+    await withSettings("appearance", async (settings) => {
+      const saved = (name, value) => page.waitForFunction(([n, v]) => {
+        const input = document.querySelector(`[name="${n}"]`);
+        return input && !input.matches(":disabled") && (input.type === "checkbox" ? String(input.checked) : input.value) === v;
+      }, [name, value]);
+      await settings.locator('input[name="displayAsStored"]').click();
+      await saved("displayAsStored", "false");
+      await settings.locator('select[name="display-date"]').selectOption("%d/%m/%Y");
+      await saved("display-date", "%d/%m/%Y");
+      await settings.locator('select[name="display-numbers"]').selectOption("dot-comma");
+      await saved("display-numbers", "dot-comma");
+      // A pattern a date cannot be printed with is refused by the core, and nothing changes.
+      await settings.locator('select[name="display-date"]').selectOption("custom");
+      const pattern = settings.locator('input[name="display-date-pattern"]');
+      await pattern.fill("%H:%M");
+      await pattern.press("Enter");
+      await settings.getByRole("alert").filter({ hasText: "Could not save the format" }).waitFor();
+      await page.waitForFunction(() => document.querySelector('input[name="display-date-pattern"]')?.value === "%d/%m/%Y");
+      // A zone that does not exist is refused too; Madrid's is saved.
+      const zone = settings.locator('input[name="display-time-zone"]');
+      await zone.fill("Mars/Olympus");
+      await zone.press("Enter");
+      await settings.getByRole("alert").filter({ hasText: "Mars/Olympus" }).waitFor();
+      await zone.fill("Europe/Madrid");
+      await zone.press("Enter");
+      await settings.getByRole("alert").waitFor({ state: "detached" });
+      await shot("12a5-value-display-settings");
+    });
+    // The grid shows the values in the new format …
+    const shown = ["2026-11-16 21:07:16 +01:00", "16/11/2026", "1.234.567,89"];
+    let first = "";
+    for (let i = 0; i < 20 && first !== shown[0]; i++) {
+      first = await copyShown(0);
+      if (first !== shown[0]) await page.waitForTimeout(250);
+    }
+    for (const [col, text] of shown.entries()) assert.equal(await copyShown(col), text);
+    // … and a plain copy is still the database's text: 20:07 UTC, shown as 21:07 in Madrid.
+    for (const [col, text] of stored.entries()) assert.equal(await copyStored(col), text);
+    await shot("12a5-value-display-light");
+    await setTheme("dark", "dark");
+    await shot("12a5-value-display-dark");
+    await setTheme("light", "light");
+    // Colors by type and a bigger font are the grid's own settings.
+    await setGridLook({ colorize: true });
+    await shot("12a5-value-display-colors");
+    await setGridLook({ colorize: false });
+    // Back to how the database prints it: the format stays saved, and is not applied.
+    await withSettings("appearance", async (settings) => {
+      await settings.locator('input[name="displayAsStored"]').click();
+      await page.waitForFunction(() => document.querySelector('input[name="displayAsStored"]')?.checked === true && document.querySelector('select[name="display-date"]')?.disabled === true);
+    });
+    await openCopyMenu(1);
+    assert.equal(await copyMenu.getByRole("menuitem", { name: "Copy as displayed", exact: true }).count(), 0);
+    await page.keyboard.press("Escape");
+    await cellMenu.waitFor({ state: "detached" });
+    assert.equal(await copyStored(1), "2026-11-16");
     await page.keyboard.press("Control+w");
   }
 
@@ -5884,6 +7518,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     await page.waitForTimeout(300);
     assert.equal(await panel.locator("input.cell-editor").count(), 0, "a cell read in tempdb cannot be edited in spelaion");
+    await page.keyboard.type("x");
+    assert.equal(await panel.locator("input.cell-editor").count(), 0, "typing cannot edit a read-only result");
   }
   await shot("12a4-database-changed-read-only-light");
   await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
@@ -6304,6 +7940,15 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
   }, connectionText);
   wizard = page.locator(".modal.wizard");
+  // The pasted connection's row is outlined to show where it went, for a moment only: the
+  // outline used to stay for the rest of the session (SDB-204).
+  {
+    const outlined = page.locator(".connection-row.revealed", { hasText: "MariaDB (copy)" });
+    await outlined.waitFor();
+    const seen = Date.now();
+    await outlined.waitFor({ state: "detached", timeout: 2_000 });
+    assert.ok(Date.now() - seen <= 2_000, "the revealed row's outline goes away");
+  }
   await wizard.getByRole("heading", { name: "Edit MariaDB (copy)" }).waitFor();
   await wizard.getByRole("status").filter({ hasText: "was pasted as a personal connection" }).waitFor();
   await shot("13f-pasted-connection");
@@ -6368,6 +8013,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
   const maskedBox = await panel.locator(".grid-scroller").boundingBox();
   const maskedCell = { x: maskedBox.x + 80, y: maskedBox.y + 34 + 12 };
+  await page.mouse.click(maskedCell.x, maskedCell.y);
+  await page.keyboard.type("x");
+  assert.equal(await panel.locator("input.cell-editor").count(), 0, "typing cannot edit a masked cell");
   // Copies come from the core's stored result, which holds the mask: no e-mail leaves.
   const copiesBefore = await page.evaluate(() => window.__copied.length);
   await page.mouse.click(maskedCell.x, maskedCell.y);
@@ -7548,15 +9196,24 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await page.locator(".connection-row", { hasText: "Shop copy" }).count(), 0);
   assert.equal(await historySaving("Shop (SQLite)"), false);
   step("a repository connection changed since it was trusted is shown before it is used");
-  // History saving is still off for this connection: this first run is not recorded.
-  panel = await newQuery("Shop (SQLite)", "select 'history_resumed_marker' as resumed;");
-  await run(panel);
+  // A new query on a connection connects as it opens: the change is shown then, before
+  // anything of the connection is used. Until it is accepted the tab is not connected and
+  // nothing has run in it.
+  await page.locator('.connection-row:has-text("Shop (SQLite)") > .label').dblclick();
+  panel = page.locator(".tab-panel:not([hidden])");
   const change = page.getByRole("dialog", { name: "This changed since you trusted the repository" });
   await change.locator("tr", { hasText: "mcp.max_rows" }).filter({ hasText: "100" }).filter({ hasText: "50" }).waitFor();
   await change.getByText("the connection shop", { exact: false }).waitFor();
+  assert.equal(await panel.locator(".status-connected").count(), 0, "the connection is not used before its change is accepted");
+  assert.equal(await panel.locator(".grid-host").count(), 0);
   await shot("10a-repository-change");
   await change.getByRole("button", { name: "Accept the change" }).click();
   await change.waitFor({ state: "detached" });
+  await panel.locator(".status-connected").waitFor();
+  // History saving is still off for this connection: this first run is not recorded.
+  await panel.locator(".cm-content").click();
+  await page.keyboard.insertText("select 'history_resumed_marker' as resumed;");
+  await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   history = page.getByRole("complementary", { name: "Query history", exact: true });
@@ -7583,7 +9240,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Rows keep streaming in while Cancel is clicked: redrawing on every batch used to keep the
   // window too busy to take the click (the core now thins the row counts to a few a second).
   await panel.getByRole("button", { name: "Cancel", exact: true }).click();
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await history.getByRole("textbox", { name: "Search query history" }).fill("cancel_history_marker");
   await waitForHistoryCount(1);
@@ -7600,7 +9257,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Run's old button remains visible while async preflight runs. Wait for this script's
   // completion summary before taking the history snapshot: new entries reset its anchor.
   await panel.locator(".statusline", { hasText: "105 OK, 0 failed, 0 not run" }).waitFor();
-  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await panel.locator(".editor-action-run[data-run-target]").waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await history.getByRole("textbox", { name: "Search query history" }).fill("history_page_marker");
   // Newest first: page 1 is statements 104 to 55, page 2 is 54 to 5 and page 3 is 4 to 0.
@@ -7621,14 +9278,21 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 
   step("personal variables a connection needs are asked once and saved in user.toml");
   await page.getByRole("button", { name: "Close query history" }).click();
-  const varsPanel = await newQuery("Personal vars", "select count(*) as n from product;");
-  await run(varsPanel);
+  // A new query on a connection connects as it opens: its personal values are asked then,
+  // before it can connect.
+  await page.locator('.connection-row:has-text("Personal vars") > .label').dblclick();
+  const varsPanel = page.locator(".tab-panel:not([hidden])");
   const variables = page.getByRole("dialog", { name: "This connection needs some personal values" });
   await variables.getByText("${user.demo_db}", { exact: true }).waitFor();
+  assert.equal(await varsPanel.locator(".status-connected").count(), 0, "not connected before its values are given");
   await shot("11a-personal-variables");
   await variables.getByLabel("demo_db", { exact: true }).fill(join(demo, "data", "shop.db").replaceAll("\\", "/"));
   await variables.getByRole("button", { name: "Save and connect" }).click();
   await variables.waitFor({ state: "detached" });
+  await varsPanel.locator(".status-connected").waitFor();
+  await varsPanel.locator(".cm-content").click();
+  await page.keyboard.insertText("select count(*) as n from product;");
+  await run(varsPanel);
   await varsPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
   assert.match(readFileSync(join(userDir, "user.toml"), "utf8"), /demo_db = ".*shop\.db"/);
 
@@ -8075,6 +9739,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await quitWithin(exitedFrozen, 15_000, "a second close request did not quit a frozen UI");
   }
 
+  checkContentSecurityPolicy();
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {
   if (e === editSmokeComplete) console.log("\nOK. Editing smoke test passed.");

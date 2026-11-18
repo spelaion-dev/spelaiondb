@@ -6,27 +6,41 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
+import { call, commands, type CopySpecialItem, type UpdateSourceItem, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
 import { readClipboardText } from "../clipboardText";
 import { openTableData } from "../connect";
-import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
+import { THEME_CHANGE_EVENT, onPixelRatioChange, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
-import { RowCache } from "../grid/rowCache";
+import { RowCache, type ValueKind } from "../grid/rowCache";
+import { printableGridKey } from "../gridTyping";
+import { formatsValues, useDisplayFormat } from "../displayFormat";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
-import { useDialogs, type ResultMeta, type SortState } from "../store";
+import { GRID_COMMAND_EVENT, useDialogs, type FilterMode, type ResultMeta, type SortState } from "../store";
 import { commandSpec, matchesShortcut } from "../commandRegistry";
 import { useExport } from "./ExportDialog";
 import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
 import { Icon, PATHS } from "./Icons";
 import { ReferencesPanel } from "./ReferencesPanel";
 import { CalcPanel } from "./CalcPanel";
+import { GroupPanel } from "./GroupPanel";
 import { ColumnStatsPopover } from "./ColumnStatsPopover";
+import { CopySpecialDialog } from "./CopySpecialDialog";
 import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
-import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
+import { InsertRowDialog, PAGE_SIZES, PageControls } from "./TableDataBar";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 
-const ROW_H = 24;
+/** No sort: one list, so an unsorted result keeps the same value between renders. */
+const NO_SORT: SortState[] = [];
+
+/** Whether two sorts have the same keys in the same order. */
+function sameSort(a: SortState[], b: SortState[]): boolean {
+  return a.length === b.length && a.every((key, i) => key.column === b[i]?.column && key.descending === b[i]?.descending);
+}
+
+// The grid's own font size is a personal setting (SDB-385): every grid shares it, so the row
+// height and the fonts that follow it are set once per render by `setGridFont`.
+let ROW_H = 24;
 const HEADER_H = 34;
 const PAD = 6;
 const MIN_COL = 72;
@@ -37,8 +51,31 @@ const MAX_RESIZE = 2000;
 /** Pixels on each side of a header edge that grab it. */
 const EDGE = 4;
 // Regular UI text is easier to scan across dense rows; the header remains distinct.
-const DATA_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
-const ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
+let DATA_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
+let ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
+/** Sets the size of the grid's values, in pixels; a row is that plus the usual room. */
+function setGridFont(size: number) {
+  const px = Math.min(20, Math.max(10, Math.round(size) || 12));
+  ROW_H = px + 12;
+  DATA_FONT = `400 ${px}px "Segoe UI", system-ui, sans-serif`;
+  ROW_NUMBER_FONT = `400 ${Math.min(px, 13)}px "Segoe UI", system-ui, sans-serif`;
+}
+/** The token that colors each kind of value (SDB-385), when the user asks for it. */
+const KIND_TOKEN: Partial<Record<ValueKind, "vNumber" | "vDate" | "vBool" | "vText">> = {
+  number: "vNumber",
+  date: "vDate",
+  time: "vDate",
+  timestamp: "vDate",
+  timestamptz: "vDate",
+  bool: "vBool",
+  text: "vText",
+};
+/** A column's kind before its first rows arrive, from its type. */
+function kindOf(logical: string): ValueKind {
+  if (NUMERIC.has(logical)) return "number";
+  if (logical === "date" || logical === "time" || logical === "timestamp" || logical === "timestamptz" || logical === "bool" || logical === "text") return logical;
+  return "other";
+}
 const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
 const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
 const NUMERIC = new Set(["int", "float", "decimal"]);
@@ -74,6 +111,8 @@ interface Cell {
 
 /** A rectangle from the cell where the selection started (`anchor`) to the active one. */
 interface Selection {
+  /** Individual whole rows in display order, when the selection is discontinuous. */
+  rows?: number[];
   anchor: Cell;
   focus: Cell;
 }
@@ -97,6 +136,9 @@ function bounds(selection: Selection): Bounds {
 const inside = (b: Bounds, row: number, col: number) => row >= b.r0 && row <= b.r1 && col >= b.c0 && col <= b.c1;
 
 /** Copy menu entries: format and whether the column names go first. */
+/** The copy defaults "Copy special…" opens with (SDB-388), as the core keeps them. */
+const loadCopyDefaults = (): Promise<CopySpecialItem> => call(commands.copyDefaults());
+
 const COPY_ITEMS: { key: string; format: TextFormat; header: boolean }[] = [
   { key: "copy", format: "tsv", header: false },
   { key: "copyWithHeaders", format: "tsv", header: true },
@@ -172,6 +214,8 @@ const FILL_DOWN_SHORTCUT = "Ctrl+D";
 const PASTE_SHORTCUT = "Ctrl+V";
 const SET_NULL_SHORTCUT = "Ctrl+Alt+N";
 const REVERT_SHORTCUT = "Ctrl+Alt+Z";
+/** "Go to row" (SDB-386): an app command the grid handles, as undo and redo. */
+const GO_TO_ROW_SHORTCUT = commandSpec("results.goToRow").shortcut ?? "";
 
 const EDITED_BG = "rgba(250, 204, 21, 0.30)";
 /** Cells the search found, and the one it is on. */
@@ -233,6 +277,7 @@ export function ResultGrid({
   onSorted,
   onColumnFiltered,
   serverSort,
+  onQuerySort,
   editing,
   viewerOpen: viewer,
   onViewerOpen: setViewer,
@@ -242,16 +287,29 @@ export function ResultGrid({
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
-  tableData,
+  tableData, columnComments,
   onHiddenColumns,
   onChart,
+  refresh,
+  restoringView,
+  rowOffset = 0,
+  onGoToRow,
+  onLoadRows,
+  onCancelLoad,
+  onSelectedRows,
+  onTranspose,
 }: {
   result: ResultMeta;
   session: string;
-  onSorted(sort: SortState | undefined): void;
-  onColumnFiltered(filters: ColumnFilterItem[], rows: number, total: number): void;
+  /** The core sorted the loaded rows by these keys (none: the order they arrived in). */
+  onSorted(sort: SortState[]): void;
+  onColumnFiltered(filters: ColumnFilterItem[], rows: number, total: number, mode?: FilterMode): void;
   /** In a table data tab, header clicks sort in the server (ORDER BY) instead. */
-  serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
+  serverSort?: { sort: SortState[]; onSort(sort: SortState[]): void };
+  /** A paged query (ADR-054): reads it again from the server ordered by these keys. Resolves
+   *  to `false` when the core cannot page it in that order; the grid then sorts the rows it
+   *  has loaded and says so. */
+  onQuerySort?(sort: SortState[]): Promise<boolean>;
   /** Editable table data tab: pending changes and how to change them. */
   editing?: GridEditing;
   viewerOpen: boolean;
@@ -266,12 +324,36 @@ export function ResultGrid({
   onHiddenColumns?(hidden: number[]): void;
   /** "Chart selected columns": the first is the X axis, the numeric ones after it the values. */
   onChart?(columns: number[]): void;
+  refresh?: { disabled: boolean; run(row: number): void };
+  restoringView?: boolean;
   /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
    *  can be followed to new table data tabs of `connectionId`. */
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+  /** The comments of the columns, by name, where they are known (a table's data): shown in
+   *  the header when the user asks for it. */
+  columnComments?: Record<string, string>;
+  /** Rows before the first one shown (a table data tab's page): row numbers start after it. */
+  rowOffset?: number;
+  /** "Go to row" (Ctrl+G, SDB-386) for a row this grid does not hold: another page of a table
+   *  data tab, or a paged query's rows past the ones loaded. `row` counts from 1, as the grid
+   *  numbers rows. */
+  onGoToRow?(row: number): void;
+  /** Loads a paged query's rows until it holds `until` (every row when `null`, after asking how
+   *  many and how much memory); resolves to the rows held, or `null` if nothing was loaded. */
+  onLoadRows?(until: number | null): Promise<number | null>;
+  /** Stops a load of a paged query's rows. */
+  onCancelLoad?(): void;
+  /** The rows selected (positions in the view; the current row without a selection), for the
+   *  results' Transpose button. */
+  onSelectedRows?(rows: number[]): void;
+  /** "Transpose selected rows": these rows of the view shown as columns. */
+  onTranspose?(rows: number[]): void;
 }) {
-  const sortShown = serverSort ? serverSort.sort : result.sort;
+  // The sort the headers show: the table data tab's, else the core's sort of the loaded rows,
+  // else the one a paged query's pages were read with.
+  const localSort = result.sort ?? NO_SORT;
+  const sortShown = serverSort ? serverSort.sort : localSort.length > 0 ? localSort : result.paging?.sort ?? NO_SORT;
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -289,6 +371,8 @@ export function ResultGrid({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frame = useRef<number | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // The device pixel ratio the spacer was sized for: its height depends on it (`maxSpacerH`).
+  const [, setPixelRatio] = useState(() => window.devicePixelRatio || 1);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [queryPage, setQueryPage] = useState(0);
   const requestedPageScroll = useRef<number | null>(null);
@@ -306,6 +390,12 @@ export function ResultGrid({
   /** A masked cell revealed on request (ADR-051): its value lives only in the popover. */
   const [reveal, setReveal] = useState<{ x: number; y: number; row: number; col: number } | null>(null);
   const gridLook = usePreferences((s) => s.grid);
+  setGridFont(gridLook.fontSize);
+  // How values are shown (SDB-385): the core formats each window; when the format changes
+  // the rows are asked for again.
+  const displayRevision = useDisplayFormat((s) => s.revision);
+  const displayFormats = useDisplayFormat((s) => formatsValues(s.format));
+  useEffect(() => { void useDisplayFormat.getState().load(); }, []);
   /** The find bar (Ctrl+F): what is searched, and what the core found. */
   const [find, setFind] = useState<{ text: string; matchCase: boolean } | null>(null);
   const [found, setFound] = useState<{ count: number; truncated: boolean; busy: boolean; error?: string } | null>(null);
@@ -319,7 +409,10 @@ export function ResultGrid({
   const menuRef = useRef<HTMLDivElement>(null);
   /** The custom filter dialog, starting from a column and a value. */
   const [customFilter, setCustomFilter] = useState<ColumnFilterItem | null>(null);
-  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  /** The selection "Copy special…" copies, while its dialog is open (SDB-388). */
+  const [copySpecial, setCopySpecial] = useState<CellRange | null>(null);
+  /** `slow`: a sentence to read, kept on screen as long as an error. */
+  const [notice, setNotice] = useState<{ text: string; error: boolean; slow?: boolean } | null>(null);
   const dragging = useRef(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
   /** A table data tab's foreign keys: its own and those of other tables that point to it. */
@@ -357,20 +450,32 @@ export function ResultGrid({
     }
     return byColumn;
   }, [keys, result.columns]);
-  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references", "calc"] : ["cell", "row", "calc"];
+  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references", "calc", "group"] : ["cell", "row", "calc", "group"];
   const shownMode: ViewerMode = viewerModes.includes(viewerMode) ? viewerMode : "cell";
   const referencesShown = viewer && shownMode === "references";
   const calcShown = viewer && shownMode === "calc";
+  const groupShown = viewer && shownMode === "group";
+  /** Counts the changes of the view (a sort, a filter, more rows). The groups belong to the
+   *  view they were counted over: a sort and its undo leave the same rows in the same order,
+   *  but the core's view is a newer one, so the groups are counted again. */
+  const viewChanges = useRef({ key: "", count: 0 });
+  /** The columns of the grouping panel, by position in the result (kept while the result is). */
+  const [grouped, setGrouped] = useState<number[]>([]);
+  /** A header pressed while the grouping panel is open: dragged to the panel it joins the
+   *  grouping, released where it was it sorts as a click does. */
+  const headerDrag = useRef<{ col: number; x: number; y: number; moved: boolean } | null>(null);
+  const [headerGhost, setHeaderGhost] = useState<{ col: number; x: number; y: number } | null>(null);
   const [sorting, setSorting] = useState(false);
   const sortsPending = useRef(0);
   const [inserting, setInserting] = useState<{ values: CellEditItem[]; index?: number } | null>(null);
   /** The cell being typed into (table data tabs). */
-  const [cellEditor, setCellEditor] = useState<{ row: number; col: number; value: string; original: string | null; dirty: boolean } | null>(null);
+  const [cellEditor, setCellEditor] = useState<{ row: number; col: number; value: string; original: string | null; dirty: boolean; typed: boolean } | null>(null);
   const skipEditorBlur = useRef(false);
   const editRequest = useRef(0);
+  const typedWhileLoading = useRef<{ request: number; text: string } | null>(null);
 
   /** Opens the inline editor on a cell, with its pending value or the one loaded. */
-  async function startEdit(cell: Cell) {
+  async function startEdit(cell: Cell, initial?: string) {
     if (!editing || editing.deleted.includes(cell.row) || editing.busy || sorting) return;
     const meta = result.columns[cell.col];
     if (meta?.masked) {
@@ -378,18 +483,32 @@ export function ResultGrid({
       return;
     }
     const request = ++editRequest.current;
+    typedWhileLoading.current = initial === undefined ? null : { request, text: initial };
     const key = `${cell.row}:${cell.col}`;
     setSelection({ anchor: cell, focus: cell });
     scrollIntoView(cell);
     let original = cache.get(cell.row, cell.col);
     if (original === undefined) {
       try { original = await call(commands.cellValue(result.id, cell.row, cell.col)); }
-      catch (e) { setNotice({ text: e instanceof Error ? e.message : String(e), error: true }); return; }
+      catch (e) {
+        if (request === editRequest.current) {
+          typedWhileLoading.current = null;
+          setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+        }
+        return;
+      }
     }
     if (request !== editRequest.current) return;
-    const current = key in editing.cells ? editing.cells[key] : original;
+    const latest = live.current;
+    if (latest.result.id !== result.id || !latest.editing || latest.editing.busy || latest.sorting || latest.editing.deleted.includes(cell.row) || latest.result.columns[cell.col]?.masked) {
+      typedWhileLoading.current = null;
+      return;
+    }
+    const current = key in latest.editing.cells ? latest.editing.cells[key] : original;
+    const typed = typedWhileLoading.current?.request === request ? typedWhileLoading.current.text : undefined;
+    typedWhileLoading.current = null;
     skipEditorBlur.current = false;
-    setCellEditor({ row: cell.row, col: cell.col, value: current ?? "", original, dirty: false });
+    setCellEditor({ row: cell.row, col: cell.col, value: typed ?? current ?? "", original, dirty: typed !== undefined, typed: typed !== undefined });
   }
 
   function commitEdit(value: string) {
@@ -404,12 +523,14 @@ export function ResultGrid({
   /** Rows of the selection (the active row without one). */
   const selectedRows = (): number[] => {
     if (!selection) return [];
+    if (selection.rows) return selection.rows;
     const b = bounds(selection);
     return Array.from({ length: b.r1 - b.r0 + 1 }, (_, i) => b.r0 + i);
   };
 
   async function duplicateRow() {
     if (!editing || !selection || editing.deleted.includes(selection.focus.row)) return;
+    if (selection.rows) { setNotice({ text: t("results.disjointUnsupported"), error: true }); return; }
     try {
       const row = selection.focus.row;
       const values = await call(commands.rowValues(result.id, row));
@@ -428,6 +549,7 @@ export function ResultGrid({
   /** One cell switches between NULL and its value; a larger selection is set to NULL. */
   function setSelectedNull() {
     if (!editing || !selection) return;
+    if (selection.rows) { setNotice({ text: t("results.disjointUnsupported"), error: true }); return; }
     const block = selectedBlock();
     if (block && (block.firstRow !== block.lastRow || block.columns.length > 1)) {
       editing.onBulk(block, { kind: "set", value: { kind: "null" } });
@@ -443,6 +565,7 @@ export function ResultGrid({
   /** The selection's rows and shown columns. */
   function selectedBlock(): BlockItem | null {
     if (!selection) return null;
+    if (selection.rows) { setNotice({ text: t("results.disjointUnsupported"), error: true }); return null; }
     const b = bounds(selection);
     const columns = visibleCols.filter((c) => c >= b.c0 && c <= b.c1);
     return columns.length ? { firstRow: b.r0, lastRow: b.r1, columns } : null;
@@ -491,6 +614,39 @@ export function ResultGrid({
 
   /** Ctrl+Shift+J: the column picker's search text (`null` when closed). */
   const [jump, setJump] = useState<string | null>(null);
+  /** Ctrl+G: "Go to row" is open (SDB-386). */
+  const [rowJump, setRowJump] = useState(false);
+
+  /** Selects a whole row of the view, shows it and gives the grid the focus. */
+  function selectRow(row: number) {
+    const cell = { row, col: firstVisible };
+    // The focus first: the grid's focus handler selects the first cell when it has no
+    // selection, and it would replace the row set here.
+    scrollerRef.current?.focus();
+    // The whole row, the active cell on its first column.
+    setSelection({ anchor: { row, col: lastVisible }, focus: { row, col: firstVisible } });
+    scrollIntoView(cell);
+  }
+
+  /** "Go to row" (SDB-386): `row` counts from 1 as the grid numbers rows. A row this grid
+   *  holds is selected here; another page of a table data tab, or a paged query's rows past the
+   *  ones loaded, are the tab's to bring (`onGoToRow`), never guessed. */
+  function goToRow(row: number) {
+    setRowJump(false);
+    const index = row - 1 - rowOffset;
+    const reachable = !!onGoToRow && (!!tableData || (!!result.paging?.hasMore && !pageViewChanged));
+    if (index >= 0 && index < result.rows) {
+      selectRow(index);
+      return;
+    }
+    if (reachable && onGoToRow) {
+      onGoToRow(row);
+      return;
+    }
+    if (result.rows === 0) return;
+    setNotice({ text: t("goToRow.past", { rows: numbers.format(rowOffset + result.rows), row: numbers.format(row) }), error: false });
+    selectRow(index < 0 ? 0 : result.rows - 1);
+  }
 
   const redraw = useCallback(() => {
     if (frame.current !== null) return;
@@ -504,8 +660,10 @@ export function ResultGrid({
   // A sort or filter changes which row is at each position: a new cache asks the core again
   // (blocks still on their way to the old one are dropped with it).
   const filtersKey = JSON.stringify(result.columnFilters ?? []);
-  const view = `${result.sort ? `${result.sort.column}:${result.sort.descending}` : ""}|${result.filter ?? ""}|${filtersKey}`;
-  const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw]);
+  const view = `${localSort.map((key) => `${key.column}:${key.descending}`).join(",")}|${result.filter ?? ""}|${filtersKey}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw, displayRevision]);
+  if (viewChanges.current.key !== `${view}|${result.rows}`) viewChanges.current = { key: `${view}|${result.rows}`, count: viewChanges.current.count + 1 };
   cache.grewTo(result.rows);
 
   // Widths: header and type, bounded. (Fitting to content: next iteration.)
@@ -536,7 +694,7 @@ export function ResultGrid({
     for (const w of widths) out.push((out[out.length - 1] ?? 0) + w);
     return out;
   }, [widths]);
-  const rowNumW = Math.max(52, numbers.format(result.rows).length * 8 + PAD * 2);
+  const rowNumW = Math.max(52, numbers.format(rowOffset + result.rows).length * 8 + PAD * 2);
   const totalW = rowNumW + (offsets[offsets.length - 1] ?? 0);
   const totalH = HEADER_H + result.rows * ROW_H;
   contentH.current = totalH;
@@ -556,33 +714,37 @@ export function ResultGrid({
     const describe = (value: string | null) => {
       if (!current) return;
       const text = value === null ? "NULL" : value.length > 500 ? t("results.accessibleTruncated", { value: value.slice(0, 500) }) : value;
-      target.textContent = t("results.accessibleCell", { row: numbers.format(activeRow + 1), column: column.name, type: column.nativeType, value: text }) +
+      target.textContent = t("results.accessibleCell", { row: numbers.format(rowOffset + activeRow + 1), column: column.name, type: column.nativeType, value: text }) +
         (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: FOLLOW_SHORTCUT })}` : "");
     };
-    target.textContent = t("results.accessibleCellLoading", { row: numbers.format(activeRow + 1), column: column.name });
+    target.textContent = t("results.accessibleCellLoading", { row: numbers.format(rowOffset + activeRow + 1), column: column.name });
     const key = `${activeRow}:${activeColumn}`;
     if (activeEdits && key in activeEdits) describe(activeEdits[key] ?? null);
     else void call(commands.cellValue(result.id, activeRow, activeColumn)).then(describe, () => {
-      if (current) target.textContent = t("results.accessibleCellError", { row: numbers.format(activeRow + 1), column: column.name });
+      if (current) target.textContent = t("results.accessibleCellError", { row: numbers.format(rowOffset + activeRow + 1), column: column.name });
     });
     return () => { current = false; };
-  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers, keyColumns]);
+  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers, keyColumns, rowOffset]);
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns });
-  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns, rowOffset });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns, rowOffset };
 
   function draw() {
     const canvas = canvasRef.current;
     const scroller = scrollerRef.current;
     if (!canvas || !scroller) return;
-    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns } = live.current;
+    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns, rowOffset } = live.current;
     const deletedRows = new Set(editing?.deleted ?? []);
     const range = selection ? bounds(selection) : null;
+    const sparseRows = selection?.rows ? new Set(selection.rows) : null;
     const dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== size.w * dpr || canvas.height !== size.h * dpr) {
-      canvas.width = size.w * dpr;
-      canvas.height = size.h * dpr;
+    // Whole device pixels: at a fractional ratio (an interface size of 110 %, SDB-389) the
+    // canvas would otherwise be resized on every frame.
+    const deviceW = Math.round(size.w * dpr), deviceH = Math.round(size.h * dpr);
+    if (canvas.width !== deviceW || canvas.height !== deviceH) {
+      canvas.width = deviceW;
+      canvas.height = deviceH;
     }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -596,6 +758,11 @@ export function ResultGrid({
       muted: cssVar(style, "--muted"),
       select: cssVar(style, "--accent-soft"),
       accent: cssVar(style, "--accent"),
+      vNumber: cssVar(style, "--value-number"),
+      vDate: cssVar(style, "--value-date"),
+      vBool: cssVar(style, "--value-bool"),
+      vText: cssVar(style, "--value-text"),
+      vNull: cssVar(style, "--value-null"),
     };
     const left = scroller.scrollLeft;
     const top = contentTop(scroller);
@@ -615,7 +782,7 @@ export function ResultGrid({
     findCache?.load(first, last);
 
     const drawCell = (row: number, col: number, x: number, y: number, w: number) => {
-      if (range && inside(range, row, col)) {
+      if (range && (sparseRows ? sparseRows.has(row) : inside(range, row, col))) {
         ctx.fillStyle = c.select;
         ctx.fillRect(x, y, w, ROW_H);
       }
@@ -667,12 +834,16 @@ export function ResultGrid({
         ctx.fillStyle = c.muted;
         text = "…";
       } else if (value === null) {
-        ctx.fillStyle = c.muted;
+        ctx.fillStyle = gridLook.colorize ? c.vNull : c.muted;
         text = gridLook.nullText ? "NULL" : "";
       } else {
+        const masked = result.columns[col]?.masked && !edited;
+        // Colors by type (SDB-385), from the theme's tokens: the kind is the core's.
+        const token = gridLook.colorize && !masked ? KIND_TOKEN[cache.column(col)?.kind ?? kindOf(logical)] : undefined;
         // A masked value (ADR-051) holds the mask, not data: drawn like NULL.
-        ctx.fillStyle = result.columns[col]?.masked && !edited ? c.muted : c.text;
-        text = value.replace(/[\r\n\t]+/g, " ");
+        ctx.fillStyle = masked ? c.muted : token ? c[token] : c.text;
+        // The user's display format (SDB-385), for drawing only: an edit shows what was typed.
+        text = (edited ? value : (cache.shown(row, col) ?? value)).replace(/[\r\n\t]+/g, " ");
       }
       // A foreign key value: a link at the right, which opens the referenced row.
       const linked = value !== null && value !== undefined && keyColumns.has(col) && !edited;
@@ -755,19 +926,19 @@ export function ResultGrid({
     ctx.textAlign = "right";
     for (let row = first; row < last; row++) {
       const y = HEADER_H + row * ROW_H - top;
-      if (range && row >= range.r0 && row <= range.r1) {
+      if (range && (sparseRows ? sparseRows.has(row) : row >= range.r0 && row <= range.r1)) {
         ctx.fillStyle = c.select;
         ctx.fillRect(0, y, rowNumW, ROW_H);
       }
       ctx.fillStyle = c.muted;
-      ctx.fillText(numbers.format(row + 1), rowNumW - PAD, y + ROW_H / 2);
+      ctx.fillText(numbers.format(rowOffset + row + 1), rowNumW - PAD, y + ROW_H / 2);
     }
     ctx.textAlign = "left";
     ctx.fillStyle = c.line;
     ctx.fillRect(rowNumW - 1, 0, 1, size.h);
 
     // Header (fixed at the top): name and native type; tinted where whole columns are selected.
-    const wholeColumns = range !== null && result.rows > 0 && range.r0 === 0 && range.r1 === result.rows - 1;
+    const wholeColumns = !selection?.rows && range !== null && result.rows > 0 && range.r0 === 0 && range.r1 === result.rows - 1;
     const drawHeader = (col: number, x: number, w: number) => {
       const meta = result.columns[col];
       if (!meta) return;
@@ -777,18 +948,32 @@ export function ResultGrid({
       }
       ctx.font = HEADER_FONT;
       ctx.fillStyle = c.text;
-      const sorted = sortShown?.column === col;
-      ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - (sorted ? 14 : 0)), x + PAD, 13);
-      if (sorted) {
+      // The column's place in the sort: its direction and, with several keys, its position.
+      const place = sortShown.findIndex((key) => key.column === col);
+      const mark = place < 0 ? "" : `${sortShown[place]?.descending ? "▼" : "▲"}${sortShown.length > 1 ? place + 1 : ""}`;
+      const markW = mark ? Math.ceil(ctx.measureText(mark).width) + 4 : 0;
+      // Under the name (SDB-385): the type, that it is masked, the zone its values are shown
+      // in and the column's comment, each when it is asked for and known.
+      const zone = cache.column(col)?.zone;
+      const comment = gridLook.headerComment ? columnComments?.[meta.name] : undefined;
+      // The zone goes first: it changes what the cells say, and a long type would cut it off.
+      const typeLine = [
+        zone ? t("results.shownInZone", { zone }) : "",
+        gridLook.headerType ? meta.nativeType : "",
+        meta.masked ? t("masking.header") : "",
+        comment ?? "",
+      ].filter((part) => part !== "").join(" · ");
+      const nameY = typeLine ? 13 : HEADER_H / 2;
+      ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - markW), x + PAD, nameY);
+      if (mark) {
         ctx.fillStyle = c.accent;
         ctx.textAlign = "right";
-        ctx.fillText(sortShown?.descending ? "▼" : "▲", x + w - PAD, 13);
+        ctx.fillText(mark, x + w - PAD, nameY);
         ctx.textAlign = "left";
       }
       ctx.font = TYPE_FONT;
       ctx.fillStyle = c.muted;
-      const typeLine = meta.masked ? `${meta.nativeType} · ${t("masking.header")}` : meta.nativeType;
-      ctx.fillText(fit(ctx, typeLine, w - PAD * 2), x + PAD, 26);
+      if (typeLine) ctx.fillText(fit(ctx, typeLine, w - PAD * 2), x + PAD, 26);
       ctx.fillStyle = c.line;
       ctx.fillRect(Math.round(x + w) - 1, 0, 1, HEADER_H);
     };
@@ -821,9 +1006,16 @@ export function ResultGrid({
     const observer = new ResizeObserver(() => setSize({ w: scroller.clientWidth, h: scroller.clientHeight }));
     observer.observe(scroller);
     window.addEventListener(THEME_CHANGE_EVENT, redraw);
+    // The interface size (the webview's zoom) or another monitor: the spacer is sized again
+    // (the engines' height cap counts zoomed pixels) and the canvas drawn at the new ratio.
+    const stopWatching = onPixelRatioChange(() => {
+      setPixelRatio(window.devicePixelRatio || 1);
+      redraw();
+    });
     return () => {
       observer.disconnect();
       window.removeEventListener(THEME_CHANGE_EVENT, redraw);
+      stopWatching();
     };
   }, [redraw]);
 
@@ -844,6 +1036,11 @@ export function ResultGrid({
     setSelection(null);
     setQueryPage(0);
   }, [result.filter, filtersKey]);
+
+  useEffect(() => {
+    // A disjoint selection names view positions; any changed ordering invalidates it.
+    setSelection((current) => current?.rows ? null : current);
+  }, [view]);
 
   // Hidden and frozen columns belong to the tab: running the query again (the same columns)
   // keeps them; another set of columns starts with every column shown.
@@ -883,6 +1080,33 @@ export function ResultGrid({
       scrollToContent(row * ROW_H);
     }
   }, [result.rows]);
+
+  useEffect(() => {
+    if (result.refreshScrollRow !== undefined && result.rows > 0) scrollToContent(result.refreshScrollRow * ROW_H);
+  }, [result.refreshScrollRow, result.id]);
+
+  // "Go to row" that needed another page or more rows (SDB-386): the row, once it is here.
+  useEffect(() => {
+    const target = result.goToRow;
+    if (target && target.row < result.rows) selectRow(target.row);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result.goToRow?.seq, result.id]);
+
+  // "Go to row" from the command palette, for this result's grid.
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const detail = (e as CustomEvent<{ result: number; command: "goToRow" }>).detail;
+      if (detail.result === result.id && detail.command === "goToRow" && result.rows > 0) setRowJump(true);
+    };
+    window.addEventListener(GRID_COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(GRID_COMMAND_EVENT, onCommand);
+  }, [result.id, result.rows]);
+
+  // The rows the results' Transpose button shows: the selected ones, or the current one.
+  useEffect(() => {
+    onSelectedRows?.(selection ? selectedRows() : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection]);
 
   /** The cell under the pointer; `"row"` as column for the row-number gutter. With `clamp`,
    *  positions outside the data snap to the nearest cell (while dragging). */
@@ -972,7 +1196,15 @@ export function ResultGrid({
   }
 
   function openCellViewer() {
-    if (viewerMode === "references" || viewerMode === "calc") setViewerMode("cell");
+    if (viewerMode === "references" || viewerMode === "calc" || viewerMode === "group") setViewerMode("cell");
+    setViewer(true);
+  }
+
+  /** Shows the grouping panel, with `column` added to its columns when given. */
+  function openGroup(column?: number) {
+    setMenu(null);
+    if (column !== undefined) setGrouped((current) => (current.includes(column) ? current : [...current, column]));
+    setViewerMode("group");
     setViewer(true);
   }
 
@@ -1010,10 +1242,11 @@ export function ResultGrid({
             firstRow: Math.min(calcBounds.r0, result.rows - 1),
             rows: Math.max(0, Math.min(calcBounds.r1, result.rows - 1) - Math.min(calcBounds.r0, result.rows - 1) + 1),
             columns: calcColumns ? calcColumns.split(",").map(Number) : [],
+            selectedRows: selection?.rows ?? null,
           }
         : null,
     // Rebuilt only when the bounds change, not on every render.
-    [calcBounds?.r0, calcBounds?.r1, calcColumns, result.rows],
+    [calcBounds?.r0, calcBounds?.r1, calcColumns, result.rows, selection?.rows],
   );
 
   function hideColumn(col: number) {
@@ -1207,11 +1440,12 @@ export function ResultGrid({
     return [col];
   }
 
-  /** Applies the column conditions in the core (an empty list removes them). */
-  async function applyColumnFilters(filters: ColumnFilterItem[]) {
+  /** Applies the column conditions in the core (an empty list removes them), read as `mode`
+   *  says: all of them or any, telling upper case from lower case or not. */
+  async function applyColumnFilters(filters: ColumnFilterItem[], mode: FilterMode | undefined = result.filterMode) {
     setMenu(null);
     setCustomFilter(null);
-    if (result.paging?.loading) return;
+    if (restoringView || result.paging?.loading) return;
     if (!result.complete) {
       setNotice({ text: t("results.filterWhenComplete"), error: true });
       return;
@@ -1223,8 +1457,9 @@ export function ResultGrid({
       return;
     }
     try {
-      const outcome = await call(commands.filterColumns(result.id, filters));
-      onColumnFiltered(filters, outcome.rows, outcome.total);
+      const outcome = await call(commands.filterColumns(result.id, filters, mode ?? null));
+      // Without conditions there is nothing to read one way or the other.
+      onColumnFiltered(filters, outcome.rows, outcome.total, filters.length > 0 ? mode : undefined);
     } catch (e) {
       setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
     }
@@ -1272,7 +1507,7 @@ export function ResultGrid({
     const first = scroller ? Math.floor(contentTop(scroller) / ROW_H) : 0;
     const last = Math.min(result.rows, first + Math.ceil((size.h || 600) / ROW_H) + 1);
     for (let row = first; row < last; row++) {
-      const value = cache.get(row, col);
+      const value = cache.shown(row, col);
       const text = value === null ? "NULL" : value === undefined ? "" : value.replace(/[\r\n\t]+/g, " ").slice(0, 300);
       widest = Math.max(widest, ctx.measureText(text).width);
     }
@@ -1294,20 +1529,21 @@ export function ResultGrid({
   /** Sorts in the core and asks for the rows again; `undefined` restores the server order. */
   // Clicks can come faster than the core answers: the next click cycles from the last sort
   // asked for, and the requests reach the core one after another, in order.
-  const requestedSort = useRef(result.sort);
+  const requestedSort = useRef(sortShown);
   const sortQueue = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
-    requestedSort.current = serverSort ? serverSort.sort : result.sort;
+    requestedSort.current = sortShown;
     // Only when another result is shown; within one result the ref leads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.id]);
 
-  function sortBy(sort: SortState | undefined) {
+  /** Sorts by `sort`, the most significant key first; none restores the original order. */
+  function sortBy(sort: SortState[]) {
     setMenu(null);
-    if (result.paging?.loading) return;
-    const sortColumn = sort ? result.columns[sort.column] : undefined;
-    if (sortColumn?.masked) {
-      setNotice({ text: t("masking.noSort", { column: sortColumn.name }), error: true });
+    if (restoringView || result.paging?.loading) return;
+    const maskedColumn = sort.map((key) => result.columns[key.column]).find((column) => column?.masked);
+    if (maskedColumn) {
+      setNotice({ text: t("masking.noSort", { column: maskedColumn.name }), error: true });
       return;
     }
     if (editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) {
@@ -1315,6 +1551,7 @@ export function ResultGrid({
       return;
     }
     if (serverSort) {
+      if (selection?.rows) setSelection(null);
       requestedSort.current = sort;
       serverSort.onSort(sort);
       return;
@@ -1324,13 +1561,27 @@ export function ResultGrid({
       return;
     }
     const previous = requestedSort.current;
+    if (selection?.rows) setSelection(null);
     requestedSort.current = sort;
     sortsPending.current += 1;
     setSorting(true);
+    const paging = result.paging;
+    const pagesSort = paging?.sort ?? NO_SORT;
     sortQueue.current = sortQueue.current.then(async () => {
       try {
-        await call(commands.sortResult(result.id, sort?.column ?? null, sort?.descending ?? false));
-        onSorted(sort);
+        // A paged query whose rows are not all here, or were read in a sort's order, is
+        // read again from the server in the new order (ADR-054) when the core can page it
+        // that way.
+        if (paging && onQuerySort && !sameSort(sort, pagesSort) && (sort.length > 0 ? paging.hasMore || pagesSort.length > 0 : true)) {
+          if (await onQuerySort(sort)) return;
+        }
+        // Otherwise the core sorts the rows it holds; the pages' own order needs no sort.
+        const local = paging && sameSort(sort, pagesSort) ? NO_SORT : sort;
+        await call(commands.sortResult(result.id, local));
+        onSorted(local);
+        if (local.length > 0 && paging?.hasMore) {
+          setNotice({ text: t("results.sortLoadedOnly", { count: result.rows, formattedCount: numbers.format(result.rows) }), error: false, slow: true });
+        }
       } catch (e) {
         requestedSort.current = previous;
         setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
@@ -1341,12 +1592,20 @@ export function ResultGrid({
     });
   }
 
-  /** Header clicks cycle: ascending, descending, server order. */
-  function cycleSort(col: number) {
+  /** A header click cycles that column: ascending, descending, out of the sort. A plain click
+   *  starts over with that column alone; with Shift (`add`) the column is the next key of the
+   *  sort in force, or changes in place when it is already one. */
+  function cycleSort(col: number, add: boolean) {
     const current = requestedSort.current;
-    if (current?.column !== col) sortBy({ column: col, descending: false });
-    else if (!current.descending) sortBy({ column: col, descending: true });
-    else sortBy(undefined);
+    const place = current.findIndex((key) => key.column === col);
+    const key = current[place];
+    if (!add) {
+      if (!key || current.length > 1) sortBy([{ column: col, descending: false }]);
+      else if (!key.descending) sortBy([{ column: col, descending: true }]);
+      else sortBy([]);
+    } else if (!key) sortBy([...current, { column: col, descending: false }]);
+    else if (!key.descending) sortBy(current.map((k, i) => (i === place ? { column: col, descending: true } : k)));
+    else sortBy(current.filter((_, i) => i !== place));
   }
 
   /** Moves the active cell to `col` in the same row (the first row if none) and shows it. */
@@ -1432,10 +1691,22 @@ export function ResultGrid({
 
   function selectAt(e: React.MouseEvent | MouseEvent, extend: boolean) {
     editRequest.current += 1;
+    typedWhileLoading.current = null;
     // The next F3 starts from the cell clicked.
     findAt.current = null;
     const cell = cellAt(e.clientX, e.clientY, extend);
     if (!cell) return;
+    if (cell.gutter && (e.ctrlKey || e.metaKey) && !extend) {
+      if (selection && !selection.rows && bounds(selection).r1 - bounds(selection).r0 + 1 > 100_000) {
+        setNotice({ text: t("results.disjointTooLarge"), error: true }); return;
+      }
+      const existing = selection?.rows ?? (selection && bounds(selection).c0 === firstVisible && bounds(selection).c1 === lastVisible ? selectedRows() : []);
+      if (existing.length >= 100_000 && !existing.includes(cell.row)) { setNotice({ text: t("results.disjointTooLarge"), error: true }); return; }
+      const rows = existing.includes(cell.row) ? existing.filter((row) => row !== cell.row) : [...existing, cell.row].sort((a, b) => a - b);
+      if (!rows.length) { setSelection(null); return; }
+      setSelection({ anchor: { row: rows[0]!, col: firstVisible }, focus: { row: rows[rows.length - 1]!, col: lastVisible }, rows });
+      return;
+    }
     setSelection((current) => {
       if (cell.gutter) {
         // The row-number gutter selects whole rows.
@@ -1446,32 +1717,63 @@ export function ResultGrid({
     });
   }
 
-  async function copy(format: TextFormat, header: boolean) {
-    setMenu(null);
-    if (!selection) return;
+  /** The selected rows (the ones chosen one by one, or the block) and shown columns. */
+  function selectedRange(): CellRange | null {
+    if (!selection) return null;
     const b = bounds(selection);
-    const range: CellRange = { firstRow: b.r0, rows: b.r1 - b.r0 + 1, columns: shownIn(b) };
+    return { firstRow: b.r0, rows: selection.rows?.length ?? b.r1 - b.r0 + 1, columns: shownIn(b), selectedRows: selection.rows ?? null };
+  }
+
+  function copiedNotice(range: CellRange) {
+    setNotice({
+      text: t(range.columns.length === 1 ? "results.copiedOneColumn" : "results.copied", {
+        count: range.rows,
+        formattedCount: numbers.format(range.rows),
+        columns: numbers.format(range.columns.length),
+      }),
+      error: false,
+    });
+  }
+
+  /** `displayed`: the cells as the grid shows them (SDB-385), only when the user picks it;
+   *  every other copy is the database's own text. */
+  async function copy(format: TextFormat, header: boolean, displayed = false) {
+    setMenu(null);
+    const range = selectedRange();
+    if (!range) return;
     try {
-      const text = await call(commands.copyRows(result.id, session, range, format, header));
+      const text = await call(commands.copyRows(result.id, session, range, format, header, displayed));
       // HTML goes to the clipboard as HTML (documents and spreadsheets paste a table) and as
       // its source for plain text.
       await writeClipboard(text, format === "html" ? text : undefined);
-      setNotice({
-        text: t(range.columns.length === 1 ? "results.copiedOneColumn" : "results.copied", {
-          count: range.rows,
-          formattedCount: numbers.format(range.rows),
-          columns: numbers.format(range.columns.length),
-        }),
-        error: false,
-      });
+      copiedNotice(range);
     } catch (e) {
       setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
     }
   }
 
+  /** Where the core reads the table of an UPDATE copy from (SDB-388): the table data tab's
+   *  table, or the statement the result came from. The core decides; it may refuse. */
+  const updateSource: UpdateSourceItem | null = tableData
+    ? { kind: "table", schema: tableData.schema, name: tableData.name }
+    : result.sql ? { kind: "query", sql: result.sql } : null;
+
+  async function copyUpdates() {
+    setMenu(null);
+    const range = selectedRange();
+    if (!range || !updateSource) return;
+    try {
+      const text = await call(commands.copyUpdates(result.id, session, range, updateSource));
+      await writeClipboard(text);
+      setNotice({ text: t("results.copiedUpdates", { count: range.rows, formattedCount: numbers.format(range.rows) }), error: false });
+    } catch (e) {
+      setNotice({ text: t("results.copyUpdatesRefused", { reason: e instanceof Error ? e.message : String(e) }), error: true });
+    }
+  }
+
   useEffect(() => {
     if (!notice) return;
-    const timer = setTimeout(() => setNotice(null), notice.error ? 6000 : 2000);
+    const timer = setTimeout(() => setNotice(null), notice.error || notice.slow ? 6000 : 2000);
     return () => clearTimeout(timer);
   }, [notice]);
 
@@ -1507,6 +1809,15 @@ export function ResultGrid({
 
   function onKeyDown(e: React.KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
+    const printable = printableGridKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing });
+    if (typedWhileLoading.current) {
+      if (printable) { e.preventDefault(); typedWhileLoading.current.text += e.key; return; }
+      if (e.key === "Escape") { e.preventDefault(); editRequest.current += 1; typedWhileLoading.current = null; return; }
+      if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) {
+        editRequest.current += 1;
+        typedWhileLoading.current = null;
+      }
+    }
     if (e.key === "Escape" && viewer) {
       e.preventDefault();
       setViewer(false);
@@ -1547,6 +1858,11 @@ export function ResultGrid({
       setJump("");
       return;
     }
+    if (matchesShortcut(e, GO_TO_ROW_SHORTCUT) && result.rows > 0) {
+      e.preventDefault();
+      setRowJump(true);
+      return;
+    }
     if (mod && e.key.toLowerCase() === "a" && result.rows > 0) {
       e.preventDefault();
       setSelection({ anchor: { row: 0, col: firstVisible }, focus: { row: result.rows - 1, col: lastVisible } });
@@ -1567,6 +1883,11 @@ export function ResultGrid({
       } else {
         setSelection({ anchor: { row: result.rows - 1, col: selection.anchor.col }, focus: { row: 0, col: selection.focus.col } });
       }
+      return;
+    }
+    if (editing && printable) {
+      e.preventDefault();
+      void startEdit(selection.focus, e.key);
       return;
     }
     // Arrows move one cell; with Ctrl, to the first or last row or column (a result has no
@@ -1602,11 +1923,26 @@ export function ResultGrid({
         setResized((r) => (r[resize.col] === width ? r : { ...r, [resize.col]: width }));
         return;
       }
+      const drag = headerDrag.current;
+      if (drag && e.buttons === 1) {
+        if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 5) drag.moved = true;
+        if (drag.moved) setHeaderGhost({ col: drag.col, x: e.clientX, y: e.clientY });
+        return;
+      }
       if (dragging.current && e.buttons === 1) selectAt(e, true);
     };
-    const up = () => {
+    const up = (e: MouseEvent) => {
       dragging.current = false;
       resizing.current = null;
+      const drag = headerDrag.current;
+      if (drag) {
+        headerDrag.current = null;
+        setHeaderGhost(null);
+        // Dropped on the grouping panel: the column joins the grouping. Released where it was
+        // pressed: a click, which sorts. Dropped anywhere else: nothing.
+        if (!drag.moved) cycleSort(drag.col, false);
+        else if (document.elementFromPoint(e.clientX, e.clientY)?.closest(".group-panel")) openGroup(drag.col);
+      }
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -1620,7 +1956,7 @@ export function ResultGrid({
   function selectionSummary(): string {
     if (!selection || result.rows === 0) return "";
     const b = bounds(selection);
-    const rows = b.r1 - b.r0 + 1;
+    const rows = selection.rows?.length ?? b.r1 - b.r0 + 1;
     const columns = shownIn(b).length;
     const allRows = rows === result.rows;
     const allColumns = columns === visibleCols.length;
@@ -1648,7 +1984,7 @@ export function ResultGrid({
   const resizeViewer = (width: number) => onViewerWidth(Math.round(Math.max(viewerMin, Math.min(width, viewerMax))));
   const viewerId = `cell-viewer-${session}`;
   const paging = result.paging;
-  const pageViewChanged = !!(result.sort || result.filter || result.columnFilters?.length);
+  const pageViewChanged = !!(localSort.length || result.filter || result.columnFilters?.length);
   const pageBusy = pagingLocked || !!paging?.loading || !!cellEditor || sorting;
   const pageCanLoad = !!paging?.hasMore && (paging.total === undefined || result.rows < paging.total);
   const pageStart = paging ? queryPage * paging.pageSize : 0;
@@ -1678,6 +2014,42 @@ export function ResultGrid({
       return;
     }
     scrollToContent(next * ROW_H);
+  }
+
+  /** Page `page` (from 0) of a paged query: the rows loaded are scrolled to; a page past them
+   *  loads every page before it by keyset (ADR-054), never an offset (SDB-386). */
+  async function queryPageAt(page: number) {
+    if (!paging || pageBusy) return;
+    const start = page * paging.pageSize;
+    if (start < result.rows) {
+      scrollToContent(start * ROW_H);
+      return;
+    }
+    if (pageViewChanged || !pageCanLoad || !onLoadRows) return;
+    requestedPageScroll.current = start;
+    const rows = await onLoadRows(start + paging.pageSize);
+    if (rows === null || rows <= start) {
+      requestedPageScroll.current = null;
+      // Fewer rows than that: the last page there is.
+      if (rows !== null && rows > 0) scrollToContent(Math.floor((rows - 1) / paging.pageSize) * paging.pageSize * ROW_H);
+    }
+  }
+
+  /** The last page of a paged query: it is only known once every row is loaded, so it asks to
+   *  load them (how many and how much memory first), then shows the last page. */
+  async function lastQueryPage() {
+    if (!paging || pageBusy) return;
+    let rows: number | null = result.rows;
+    if (pageCanLoad) {
+      if (pageViewChanged || !onLoadRows) return;
+      rows = await onLoadRows(null);
+    }
+    if (rows === null || rows === 0) return;
+    requestedPageScroll.current = Math.floor((rows - 1) / paging.pageSize) * paging.pageSize;
+    if (rows <= result.rows) {
+      scrollToContent(requestedPageScroll.current * ROW_H);
+      requestedPageScroll.current = null;
+    }
   }
   function onResultShortcut(e: React.KeyboardEvent<HTMLDivElement>) {
     const target = e.target instanceof HTMLElement ? e.target : null;
@@ -1774,6 +2146,32 @@ export function ResultGrid({
             </button>
           </span>
         ))}
+        {/* How the core reads the conditions together (SDB-381). */}
+        {(result.columnFilters?.length ?? 0) > 1 && (
+          <span className="filter-match" role="group" aria-label={t("results.matchMode")}>
+            {([false, true] as const).map((any) => (
+              <button
+                key={String(any)}
+                className="ghost small"
+                aria-pressed={(result.filterMode?.any ?? false) === any}
+                title={hasPendingEdits ? t("edit.applyFirst") : t(any ? "results.matchAnyHint" : "results.matchAllHint")}
+                disabled={hasPendingEdits}
+                onClick={() => void applyColumnFilters(result.columnFilters ?? [], { any, matchCase: result.filterMode?.matchCase ?? false })}
+              >
+                {t(any ? "results.matchAny" : "results.matchAll")}
+              </button>
+            ))}
+          </span>
+        )}
+        <label className="check small" title={hasPendingEdits ? t("edit.applyFirst") : t("results.matchCaseHint")}>
+          <input
+            type="checkbox"
+            checked={result.filterMode?.matchCase ?? false}
+            disabled={hasPendingEdits}
+            onChange={(e) => void applyColumnFilters(result.columnFilters ?? [], { any: result.filterMode?.any ?? false, matchCase: e.target.checked })}
+          />
+          {t("results.matchCase")}
+        </label>
         <button
           className="ghost small"
           title={hasPendingEdits ? t("edit.applyFirst") : undefined}
@@ -1812,12 +2210,23 @@ export function ResultGrid({
           const header = headerAt(e.clientX, e.clientY);
           if (header !== null) {
             e.preventDefault();
-            // Ctrl+click selects the column (Ctrl+Shift+click up to it); a plain click sorts.
+            // Ctrl+click selects the column (Ctrl+Shift+click up to it); a plain click sorts by
+            // it alone, Shift+click adds it to the sort.
             if (e.ctrlKey || e.metaKey) selectColumn(header, e.shiftKey);
-            else cycleSort(header);
+            // With the grouping panel open a header can be dragged to it: the click's sort
+            // waits for the button to come up, to tell a click from a drag.
+            else if (groupShown && !e.shiftKey) headerDrag.current = { col: header, x: e.clientX, y: e.clientY, moved: false };
+            else cycleSort(header, e.shiftKey);
             return;
           }
           // The link of a foreign key cell, or Ctrl+click anywhere on one, follows the key.
+          const hit = cellAt(e.clientX, e.clientY);
+          if (hit?.gutter && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+            e.preventDefault();
+            dragging.current = false;
+            selectAt(e, false);
+            return;
+          }
           const link = keyCellAt(e.clientX, e.clientY, (e.ctrlKey || e.metaKey) && !e.shiftKey);
           if (link) {
             e.preventDefault();
@@ -1838,7 +2247,7 @@ export function ResultGrid({
           const cell = cellAt(e.clientX, e.clientY);
           if (!cell) return;
           // Right-click outside the selection selects that cell first.
-          if (!selection || (!cell.gutter && !inside(bounds(selection), cell.row, cell.col))) selectAt(e, false);
+          if (!selection || (selection.rows ? !selection.rows.includes(cell.row) : (!cell.gutter && !inside(bounds(selection), cell.row, cell.col)))) selectAt(e, false);
           setMenu({ x: e.clientX, y: e.clientY, cell: cell.gutter ? null : cell });
         }}
         onMouseMove={(e) => {
@@ -1868,14 +2277,15 @@ export function ResultGrid({
         }}
         onKeyDown={onKeyDown}
         data-column-widths={widths.join(",")}
+        data-sort={sortShown.map((key) => `${key.column}:${key.descending ? "desc" : "asc"}`).join(",")}
         aria-label={
           t("results.gridLabel", { count: result.rows, formattedCount: numbers.format(result.rows) }) +
-          (sortShown
-            ? `, ${t("results.gridSorted", {
-                column: result.columns[sortShown.column]?.name ?? "",
-                direction: t(sortShown.descending ? "results.descending" : "results.ascending"),
-              })}`
-            : "")
+          sortShown
+            .map((key, i) => `, ${t(i === 0 ? "results.gridSorted" : "results.gridSortedThen", {
+              column: result.columns[key.column]?.name ?? "",
+              direction: t(key.descending ? "results.descending" : "results.ascending"),
+            })}`)
+            .join("")
         }
       >
         <div aria-hidden="true" style={{ width: totalW, height: scrollMap(totalH, 0).spacerH }} />
@@ -1891,7 +2301,7 @@ export function ResultGrid({
             hiddenCount={hidden.size}
             canHide={visibleCols.length > 1}
             frozen={frozen}
-            sorted={!!sortShown}
+            sort={sortShown}
             onSelect={() => selectColumn(menu.header ?? 0, false)}
             onFit={() => {
               const col = menu.header ?? 0;
@@ -1914,6 +2324,9 @@ export function ResultGrid({
             onSort={(sort) => sortBy(sort)}
             masked={result.columns[menu.header ?? 0]?.masked ?? false}
           >
+            <button role="menuitem" onClick={() => openGroup(menu.header ?? 0)}>
+              {t("group.byColumn")}
+            </button>
             <GridSubmenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
                 <button key={n.style} role="menuitem" onClick={() => void copyNames(headerColumns(menu.header ?? 0), n.style)}>
@@ -2082,7 +2495,18 @@ export function ResultGrid({
               {t("calc.open")}
             </button>
           )}
-          {selection && onChart && (
+          {selection && onTranspose && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                onTranspose(selectedRows());
+              }}
+            >
+              {t("transpose.fromSelection")}
+            </button>
+          )}
+          {selection && !selection.rows && onChart && (
             <button
               role="menuitem"
               onClick={() => {
@@ -2118,8 +2542,21 @@ export function ResultGrid({
                 {t(`results.${item.key}`)}
               </button>
             ))}
+            {displayFormats && (
+              <button role="menuitem" onClick={() => void copy("tsv", false, true)}>
+                {t("results.copyDisplayed")}
+              </button>
+            )}
+            {updateSource && (
+              <button role="menuitem" onClick={() => void copyUpdates()}>
+                {t("results.copyUpdate")}
+              </button>
+            )}
+            <button role="menuitem" onClick={() => { setMenu(null); setCopySpecial(selectedRange()); }}>
+              {t("results.copySpecial")}
+            </button>
           </GridSubmenu>
-          {selection && result.complete && (
+          {selection && !selection.rows && result.complete && (
             <button
               role="menuitem"
               onClick={() => {
@@ -2166,14 +2603,14 @@ export function ResultGrid({
           {selection && (
             <>
               <hr />
-              <button role="menuitem" onClick={() => sortBy({ column: selection.focus.col, descending: false })}>
+              <button role="menuitem" onClick={() => sortBy([{ column: selection.focus.col, descending: false }])}>
                 {t("results.sortAsc")}
               </button>
-              <button role="menuitem" onClick={() => sortBy({ column: selection.focus.col, descending: true })}>
+              <button role="menuitem" onClick={() => sortBy([{ column: selection.focus.col, descending: true }])}>
                 {t("results.sortDesc")}
               </button>
-              {sortShown && (
-                <button role="menuitem" onClick={() => sortBy(undefined)}>
+              {sortShown.length > 0 && (
+                <button role="menuitem" onClick={() => sortBy([])}>
                   {t("results.sortClear")}
                 </button>
               )}
@@ -2195,7 +2632,7 @@ export function ResultGrid({
           }}
           value={cellEditor.value}
           onChange={(e) => setCellEditor({ ...cellEditor, value: e.target.value, dirty: true })}
-          onFocus={(e) => e.currentTarget.select()}
+          onFocus={(e) => { if (cellEditor.typed) e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length); else e.currentTarget.select(); }}
           onBlur={(e) => { if (!skipEditorBlur.current) commitEdit(e.currentTarget.value); skipEditorBlur.current = false; }}
           onKeyDown={(e) => {
             if (e.key === "Enter") { skipEditorBlur.current = true; commitEdit(e.currentTarget.value); }
@@ -2206,6 +2643,18 @@ export function ResultGrid({
             } else return;
             e.preventDefault();
             e.stopPropagation();
+          }}
+        />
+      )}
+      {rowJump && (
+        <RowJump
+          rows={rowOffset + result.rows}
+          more={!!tableData || (!!result.paging?.hasMore && !pageViewChanged)}
+          current={selection ? rowOffset + selection.focus.row + 1 : null}
+          onGo={goToRow}
+          onClose={() => {
+            setRowJump(false);
+            scrollerRef.current?.focus();
           }}
         />
       )}
@@ -2280,10 +2729,27 @@ export function ResultGrid({
           {notice.text}
         </div>
       )}
+      {copySpecial && (
+        <CopySpecialDialog
+          load={loadCopyDefaults}
+          copy={async (options) => {
+            const text = await call(commands.copySpecial(result.id, copySpecial, options));
+            await writeClipboard(text);
+            copiedNotice(copySpecial);
+            setCopySpecial(null);
+            scrollerRef.current?.focus();
+          }}
+          onClose={() => {
+            setCopySpecial(null);
+            scrollerRef.current?.focus();
+          }}
+        />
+      )}
       {customFilter && (
         <CustomFilterDialog
           start={customFilter}
           columns={result.columns}
+          topValues={tableData ? { session, resultId: result.id, table: { schema: tableData.schema, name: tableData.name, filter: tableData.filter } } : undefined}
           onApply={(filter) => (tableData ? void addServerFilter(filter, null) : addColumnFilter(filter))}
           onCancel={() => {
             setCustomFilter(null);
@@ -2293,6 +2759,7 @@ export function ResultGrid({
       )}
     </div>
     <div className="grid-footer">
+      {refresh && <button type="button" className="ghost small" aria-label={t("table.refresh")} title={t(tableData ? "table.refreshHint" : "resultTabs.rerun")} disabled={refresh.disabled || sorting} onClick={() => refresh.run(pageStart)}><Icon name="refresh" /> {t("table.refresh")}</button>}
       {hidden.size > 0 && (
         <button
           type="button"
@@ -2342,16 +2809,37 @@ export function ResultGrid({
               <select aria-label={t("table.pageSize")} value={paging.pageSize} disabled={pageBusy} onChange={(e) => onQueryPageSize(Number(e.target.value))}>
                 {PAGE_SIZES.map((size) => <option key={size} value={size}>{t("table.perPage", { count: size, formattedCount: numbers.format(size) })}</option>)}
               </select>
-              <button type="button" className="ghost" aria-label={t("table.previous")} disabled={pageBusy || queryPage === 0} onClick={() => scrollToContent(Math.max(0, queryPage - 1) * paging.pageSize * ROW_H)}>◀</button>
-              <span className="small table-range" role="status">
-                {result.rows === 0 ? t("table.noRows") : t("table.range", { from: numbers.format(pageStart + 1), to: numbers.format(Math.min(result.rows, pageStart + paging.pageSize)) })}
-                {paging.total !== undefined && !pageViewChanged ? ` ${t("table.ofTotal", { total: numbers.format(paging.total) })}` : ""}
-              </span>
-              <button type="button" className="ghost" aria-label={t("table.next")} disabled={pageBusy || (pageStart + paging.pageSize >= result.rows && (!pageCanLoad || pageViewChanged))} onClick={() => void nextQueryPage()}>▶</button>
+              {paging.progress !== undefined ? (
+                <span className="load-rows small" role="status">
+                  {t("pages.loadingRows", { rows: numbers.format(paging.progress) })}
+                  <button type="button" onClick={() => onCancelLoad?.()}>{t("pages.cancelLoad")}</button>
+                </span>
+              ) : (
+                <PageControls
+                  page={queryPage}
+                  pages={paging.total !== undefined && !pageViewChanged ? Math.max(1, Math.ceil(paging.total / paging.pageSize)) : !pageCanLoad ? Math.max(1, Math.ceil(result.rows / paging.pageSize)) : undefined}
+                  locked={pageBusy}
+                  canNext={!(pageStart + paging.pageSize >= result.rows && (!pageCanLoad || pageViewChanged))}
+                  canLast={!(pageCanLoad && pageViewChanged)}
+                  hint={pageViewChanged ? t("queryPaging.clearView") : t("pages.queryHint")}
+                  lastHint={pageCanLoad ? t("pages.lastQueryHint") : undefined}
+                  onPage={(page) => {
+                    if (page === queryPage + 1) void nextQueryPage();
+                    else void queryPageAt(page);
+                  }}
+                  onLast={() => void lastQueryPage()}
+                  range={`${result.rows === 0 ? t("table.noRows") : t("table.range", { from: numbers.format(pageStart + 1), to: numbers.format(Math.min(result.rows, pageStart + paging.pageSize)) })}${paging.total !== undefined && !pageViewChanged ? ` ${t("table.ofTotal", { total: numbers.format(paging.total) })}` : ""}`}
+                />
+              )}
               <button type="button" className="ghost query-count" disabled={pageBusy || pageViewChanged} aria-label={t("table.count")} aria-busy={paging.loading} title={t(paging.loading ? "queryPaging.loading" : "queryPaging.countHint")} onClick={onCountQuery}>
                 <span className={paging.loading ? "query-count-label busy" : "query-count-label"}>{t("table.count")}</span>
-                {paging.loading && <span className="query-count-spinner" aria-hidden="true" />}
+                {paging.loading && paging.progress === undefined && <span className="query-count-spinner" aria-hidden="true" />}
               </button>
+              {pageCanLoad && onLoadRows && (
+                <button type="button" className="ghost query-load-all" disabled={pageBusy || pageViewChanged} title={pageViewChanged ? t("queryPaging.clearView") : t("pages.loadAllHint")} onClick={() => void onLoadRows(null)}>
+                  {t("pages.loadAll")}
+                </button>
+              )}
             </div>
           </>}
         </div>
@@ -2393,7 +2881,25 @@ export function ResultGrid({
       }}
     />
     <div className="viewer-panel" id={viewerId} style={{ width: shownViewerWidth }}>
-    {calcShown ? (
+    {groupShown ? (
+      <GroupPanel
+        resultId={result.id}
+        columns={result.columns}
+        grouped={grouped.filter((column) => column < result.columns.length)}
+        onGrouped={setGrouped}
+        view={String(viewChanges.current.count)}
+        waiting={!result.complete}
+        scope={serverSort ? "page" : result.paging?.hasMore ? "loaded" : undefined}
+        dropping={headerGhost !== null}
+        locked={!!result.paging?.loading || hasPendingEdits}
+        onFiltered={(filters, rows, total, mode) => onColumnFiltered(filters, rows, total, mode)}
+        modes={<ViewerModes modes={viewerModes} mode={shownMode} onMode={(mode) => { setViewerMode(mode); scrollerRef.current?.focus(); }} />}
+        onClose={() => {
+          setViewer(false);
+          scrollerRef.current?.focus();
+        }}
+      />
+    ) : calcShown ? (
       <CalcPanel
         resultId={result.id}
         range={calcRange}
@@ -2475,13 +2981,13 @@ export function ResultGrid({
     <div className="result-side-actions" role="toolbar" aria-label={t("viewer.toolbar")}>
       <button
         type="button"
-        className={`result-side-action ${viewer && !referencesShown && !calcShown ? "active" : ""}`}
+        className={`result-side-action ${viewer && !referencesShown && !calcShown && !groupShown ? "active" : ""}`}
         aria-label={t("viewer.toggle")}
-        aria-pressed={viewer && !referencesShown && !calcShown}
+        aria-pressed={viewer && !referencesShown && !calcShown && !groupShown}
         aria-controls={viewer ? viewerId : undefined}
-        title={t(viewer && !referencesShown && !calcShown ? "viewer.hide" : "viewer.show")}
+        title={t(viewer && !referencesShown && !calcShown && !groupShown ? "viewer.hide" : "viewer.show")}
         onClick={() => {
-          if (referencesShown || calcShown) setViewerMode("cell");
+          if (referencesShown || calcShown || groupShown) setViewerMode("cell");
           else setViewer(!viewer);
         }}
       >
@@ -2522,7 +3028,58 @@ export function ResultGrid({
       >
         <Icon name="sigma" size={18} />
       </button>
+      <button
+        type="button"
+        className={`result-side-action ${groupShown ? "active" : ""}`}
+        aria-label={t("group.toggle")}
+        aria-pressed={groupShown}
+        aria-controls={groupShown ? viewerId : undefined}
+        title={t(groupShown ? "group.hide" : "group.show")}
+        onClick={() => {
+          if (groupShown) setViewer(false);
+          else openGroup();
+        }}
+      >
+        <Icon name="group" size={18} />
+      </button>
     </div>
+    {headerGhost && (
+      <div className="group-ghost" style={{ left: headerGhost.x + 12, top: headerGhost.y + 12 }} aria-hidden="true">
+        {result.columns[headerGhost.col]?.name}
+      </div>
+    )}
+    </div>
+  );
+}
+
+/** "Go to row" (Ctrl+G, SDB-386): a row number, from 1 as the grid numbers rows; Enter goes.
+ *  `rows` is what the grid numbers now, and `more` says rows past it can still be brought. */
+function RowJump(props: { rows: number; more: boolean; current: number | null; onGo(row: number): void; onClose(): void }) {
+  const { t, i18n } = useTranslation("editor");
+  const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
+  const [text, setText] = useState(props.current === null ? "" : String(props.current));
+  return (
+    <div className="row-jump" role="dialog" aria-label={t("goToRow.title")}>
+      <input
+        autoFocus
+        inputMode="numeric"
+        value={text}
+        placeholder={t("goToRow.placeholder")}
+        aria-label={t("goToRow.title")}
+        onFocus={(e) => e.currentTarget.select()}
+        onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ""))}
+        onBlur={props.onClose}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") props.onClose();
+          else if (e.key === "Enter") {
+            const row = Number.parseInt(text, 10);
+            if (Number.isFinite(row) && row >= 1) props.onGo(row);
+          } else return;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      />
+      <span className="small muted">{props.more ? "" : t("goToRow.of", { total: numbers.format(props.rows) })}</span>
     </div>
   );
 }
@@ -2593,14 +3150,15 @@ function HeaderMenuItems(props: {
   hiddenCount: number;
   canHide: boolean;
   frozen: boolean;
-  sorted: boolean;
+  /** The sort in force, the most significant key first. */
+  sort: SortState[];
   onSelect(): void;
   onFit(): void;
   onHide(): void;
   onChooser(): void;
   onShowAll(): void;
   onFreeze(): void;
-  onSort(sort: SortState | undefined): void;
+  onSort(sort: SortState[]): void;
   /** The column is masked (ADR-051): it cannot be sorted by. */
   masked?: boolean;
   /** Column-wide copies, after the hide and freeze entries. */
@@ -2608,6 +3166,16 @@ function HeaderMenuItems(props: {
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = new Intl.NumberFormat(i18n.language);
+  const noSortHint = props.masked ? t("masking.noSortHint") : undefined;
+  // "Then sort": this column as the next key of the sort in force (what Shift+click does), or
+  // its direction changed in place when it is already a key.
+  const others = props.sort.filter((key) => key.column !== props.column);
+  const then = (descending: boolean) => {
+    const key = { column: props.column, descending };
+    return props.sort.some((k) => k.column === props.column)
+      ? props.sort.map((k) => (k.column === props.column ? key : k))
+      : [...props.sort, key];
+  };
   return (
     <>
       <button role="menuitem" onClick={props.onSelect}>{t("results.selectColumn")}</button>
@@ -2629,9 +3197,15 @@ function HeaderMenuItems(props: {
       {props.children && <hr />}
       {props.children}
       <hr />
-      <button role="menuitem" disabled={props.masked} title={props.masked ? t("masking.noSortHint") : undefined} onClick={() => props.onSort({ column: props.column, descending: false })}>{t("results.sortAsc")}</button>
-      <button role="menuitem" disabled={props.masked} title={props.masked ? t("masking.noSortHint") : undefined} onClick={() => props.onSort({ column: props.column, descending: true })}>{t("results.sortDesc")}</button>
-      {props.sorted && <button role="menuitem" onClick={() => props.onSort(undefined)}>{t("results.sortClear")}</button>}
+      <button role="menuitem" disabled={props.masked} title={noSortHint} onClick={() => props.onSort([{ column: props.column, descending: false }])}>{t("results.sortAsc")}</button>
+      <button role="menuitem" disabled={props.masked} title={noSortHint} onClick={() => props.onSort([{ column: props.column, descending: true }])}>{t("results.sortDesc")}</button>
+      {others.length > 0 && (
+        <>
+          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint")} onClick={() => props.onSort(then(false))}>{t("results.sortThenAsc")}</button>
+          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint")} onClick={() => props.onSort(then(true))}>{t("results.sortThenDesc")}</button>
+        </>
+      )}
+      {props.sort.length > 0 && <button role="menuitem" onClick={() => props.onSort([])}>{t("results.sortClear")}</button>}
     </>
   );
 }
@@ -2834,17 +3408,64 @@ function FilterSubmenu(props: {
   );
 }
 
+/** Ids of the "most frequent values" requests, apart from the column statistics' own. */
+let nextTopValuesId = 1_500_000_000;
+
+/** A column's most frequent values, as far as the dialog has asked for them. */
+type TopValuesState =
+  | { column: number; kind: "loading"; id: number }
+  | { column: number; kind: "done"; values: { value: string | null; count: number | null }[]; sampled: boolean; sampleRows: number | null }
+  | { column: number; kind: "masked" }
+  | { column: number; kind: "failed"; message: string };
+
 /** One condition chosen by hand: column, operator and value. */
 function CustomFilterDialog(props: {
   start: ColumnFilterItem;
   columns: ResultMeta["columns"];
+  /** A table data tab: the server counts the column's most frequent values on request, to
+   *  pick the value from (SDB-381). The core never offers a masked column's (ADR-051). */
+  topValues?: { session: string; resultId: number; table: { schema: string; name: string; filter: string } };
   onApply(filter: ColumnFilterItem): void;
   onCancel(): void;
 }) {
-  const { t } = useTranslation("editor");
+  const { t, i18n } = useTranslation("editor");
+  const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const [filter, setFilter] = useState(props.start);
+  const [top, setTop] = useState<TopValuesState | null>(null);
   const needsValue = takesValue(filter.op);
   const apply = () => props.onApply(needsValue ? filter : { ...filter, value: "" });
+  // Only the answer for the column on screen counts; leaving the dialog or the column stops
+  // the count.
+  const running = useRef<number | null>(null);
+  const stop = () => {
+    if (running.current !== null) void call(commands.cancelColumnStats(running.current)).catch(() => undefined);
+    running.current = null;
+  };
+  useEffect(() => stop, []);
+  const masked = props.columns[filter.column]?.masked ?? false;
+  const shownTop = top?.column === filter.column ? top : null;
+  function loadTop() {
+    const source = props.topValues;
+    if (!source) return;
+    stop();
+    const column = filter.column;
+    const id = ++nextTopValuesId;
+    running.current = id;
+    setTop({ column, kind: "loading", id });
+    call(commands.columnTopValues(source.session, id, source.table, source.resultId, column))
+      .then((outcome) => {
+        if (running.current !== id) return;
+        running.current = null;
+        if (outcome.kind === "done") setTop({ column, kind: "done", values: outcome.values, sampled: outcome.sampled, sampleRows: outcome.sampleRows });
+        else if (outcome.kind === "masked") setTop({ column, kind: "masked" });
+        else setTop(null);
+      })
+      .catch((e: unknown) => {
+        if (running.current !== id) return;
+        running.current = null;
+        setTop({ column, kind: "failed", message: e instanceof Error ? e.message : String(e) });
+      });
+  }
   return (
     <div className="modal-backdrop">
       <div className="modal custom-filter" role="dialog" aria-modal="true" aria-label={t("results.customFilterTitle")} onKeyDown={(e) => {
@@ -2860,7 +3481,7 @@ function CustomFilterDialog(props: {
           <select
             aria-label={t("results.filterColumn")}
             value={filter.column}
-            onChange={(e) => setFilter({ ...filter, column: Number(e.target.value) })}
+            onChange={(e) => { stop(); setTop(null); setFilter({ ...filter, column: Number(e.target.value) }); }}
           >
             {props.columns.map((c, i) => (
               <option key={i} value={i}>
@@ -2889,6 +3510,46 @@ function CustomFilterDialog(props: {
           />
         </div>
         <p className="muted small">{t("results.customFilterHint")}</p>
+        {props.topValues && (
+          <div className="filter-top-values">
+            {masked || shownTop?.kind === "masked" ? (
+              <p className="muted small">{t("results.topValuesMasked")}</p>
+            ) : shownTop === null ? (
+              <button type="button" className="small" onClick={loadTop}>{t("results.topValuesShow")}</button>
+            ) : shownTop.kind === "loading" ? (
+              <p className="muted small" role="status">
+                {t("results.topValuesLoading")}{" "}
+                <button type="button" className="ghost small" onClick={() => { stop(); setTop(null); }}>{t("results.cancel")}</button>
+              </p>
+            ) : shownTop.kind === "failed" ? (
+              <p className="small" role="alert">{t("results.topValuesFailed", { reason: shownTop.message })}</p>
+            ) : (
+              <>
+                <p className="muted small">
+                  {shownTop.values.length === 0 ? t("results.topValuesNone") : t("results.topValuesPick")}
+                  {shownTop.sampled ? ` ${t("results.topValuesSampled", { rows: numbers.format(shownTop.sampleRows ?? 0) })}` : ""}
+                </p>
+                <ul className="filter-top-list" aria-label={t("results.topValues")}>
+                  {shownTop.values.map((item, index) => (
+                    <li key={index}>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() =>
+                          setFilter(item.value === null
+                            ? { ...filter, op: "isNull", value: "" }
+                            : { ...filter, op: takesValue(filter.op) ? filter.op : "eq", value: item.value })}
+                      >
+                        <code>{item.value === null ? "NULL" : item.value}</code>
+                        <span className="muted small">{numbers.format(item.count ?? 0)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
         <div className="modal-actions">
           <button onClick={props.onCancel}>{t("results.cancel")}</button>
           <button className="primary" onClick={apply}>

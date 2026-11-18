@@ -16,13 +16,13 @@ use futures_util::StreamExt;
 use spelaion_config::MaskingRules;
 use spelaion_core::masking::is_masked_field;
 use spelaion_core::{
-    Block, BulkAction, CellBlock, CellContent, CellEdit, CellInput, ColumnFilter,
+    Block, BulkAction, CellBlock, CellContent, CellEdit, CellInput, ColumnFilter, ColumnStatsError,
     ColumnStatsRequest, CoreEvent, CsvOptions, DataSearchOptions, DataSearchRequest, EditError,
     ExportCancel, ExportFormat, ExportOptions, FilterOp, FindQuery, FollowError, KeyDirection,
     MASK, MaskPolicy, PendingEdit, ReadLimits, ResultId, ResultStore, RevealError, RowChange,
     SearchTable, Session, SortKey, StoredResult, StreamExport, TableKey, TableStatus, TextEncoding,
-    ViewError, cell_filter_value, column_in_list, column_stats, data_search, edit_statements,
-    export_query, follow, view_cell, write_result,
+    ViewError, cell_filter_value, column_in_list, column_stats, column_top_values, data_search,
+    edit_statements, export_query, follow, view_cell, write_result,
 };
 use spelaion_driver_api::{ConnectParams, Driver, LogicalType, Secret, TlsMode, Value};
 
@@ -360,14 +360,14 @@ async fn sorting_filtering_searching_and_the_calc_panel_never_see_the_value() {
             for descending in [false, true] {
                 assert!(
                     matches!(
-                        result.sort(Some(SortKey { column, descending })),
+                        result.sort(&[SortKey { column, descending }]),
                         Err(ViewError::Masked(_))
                     ),
                     "{label}"
                 );
             }
         }
-        assert_eq!(result.sort_key(), None);
+        assert!(result.sort_keys().is_empty());
         // The text filter matches the mask, never the value.
         assert_eq!(result.filter(Some("ada@example")).unwrap(), 0, "{label}");
         assert_eq!(result.filter(Some("7000")).unwrap(), 0, "{label}");
@@ -673,7 +673,60 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
                     );
                 }
             }
+
+            // Its most frequent values are never offered to pick a filter's value from
+            // (SDB-381): refused before anything is read, whatever the tab's filter.
+            for filter in ["", "id > 0"] {
+                let request = ColumnStatsRequest {
+                    schema: schema.into(),
+                    table: "mask_customers".into(),
+                    column: name.into(),
+                    logical,
+                    filter: filter.into(),
+                    sample_rows: 100_000,
+                    top: 10,
+                };
+                assert_eq!(
+                    column_top_values(&session, &request, &ExportCancel::new()).await,
+                    Err(ColumnStatsError::Masked),
+                    "{label}: {name} where {filter:?}"
+                );
+                // The same column under another spelling of its name: whatever the engine
+                // makes of it, no value comes out.
+                for spelling in [name.to_uppercase(), format!(" {name}")] {
+                    let offered = column_top_values(
+                        &session,
+                        &ColumnStatsRequest {
+                            column: spelling.clone(),
+                            ..request.clone()
+                        },
+                        &ExportCancel::new(),
+                    )
+                    .await;
+                    assert_no_secret(label, "the values to pick", &format!("{offered:?}"));
+                }
+            }
         }
+
+        // A column no rule names is offered, with its counts.
+        let offered = column_top_values(
+            &session,
+            &ColumnStatsRequest {
+                schema: schema.into(),
+                table: "mask_customers".into(),
+                column: "id".into(),
+                logical: LogicalType::Int,
+                filter: String::new(),
+                sample_rows: 100_000,
+                top: 10,
+            },
+            &ExportCancel::new(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(offered.values.len(), 3, "{label}: {offered:?}");
+        assert!(offered.values.iter().all(|v| v.count == 1), "{label}");
+        assert!(!offered.sampled, "{label}");
 
         // The data search finds rows by a masked column's value (the user typed it) but shows
         // the mask, and writes no filter from a masked key.
@@ -842,4 +895,183 @@ async fn an_alias_does_not_unmask_a_column_where_the_engine_reports_its_origin()
         assert_no_secret(label, "an agent's read", &format!("{:?}", read.rows));
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The grouping panel (SDB-387) groups a masked column by its mask: it reads the result as it
+/// is served, never the originals kept for "reveal". No group's key holds a masked value, the
+/// masked cells are one group whatever they hold, and filtering to that group goes by the
+/// mask too.
+#[tokio::test]
+async fn the_grouping_panel_groups_a_masked_column_by_its_mask() {
+    use spelaion_core::GroupRequest;
+    let _serial = SERIAL.lock().await;
+    for (label, session, _, _) in engines().await {
+        setup(label, &session).await;
+        let id = run(
+            label,
+            &session,
+            "SELECT id, name, email, salary, card_number FROM mask_customers ORDER BY id",
+            false,
+        )
+        .await
+        .unwrap();
+        let result = stored(&session, id);
+        let mut result = result.write().unwrap();
+        let email = column(&result, "email");
+        let salary = column(&result, "salary");
+        let card = column(&result, "card_number");
+        let name = column(&result, "name");
+        for masked in [email, salary, card] {
+            let grouping = result
+                .grouping(
+                    &GroupRequest {
+                        columns: vec![masked],
+                        duplicates_only: false,
+                    },
+                    &result.group_ticket(),
+                )
+                .unwrap()
+                .unwrap();
+            let text = format!("{:?}", grouping.groups);
+            assert_no_secret(label, "a group's key", &text);
+            // Different values are one group: the mask does not tell them apart.
+            let keys: Vec<Option<&str>> = grouping
+                .groups
+                .iter()
+                .map(|group| group.key[0].as_deref())
+                .collect();
+            assert!(
+                keys.iter().all(|key| matches!(key, None | Some(MASK))),
+                "{label}: {keys:?}"
+            );
+            assert!(grouping.groups.len() <= 2, "{label}: {keys:?}");
+            assert_eq!(
+                grouping.groups.iter().map(|group| group.count).sum::<u64>(),
+                3,
+                "{label}"
+            );
+        }
+        // With a column that is not masked, its values still show and the masked one does not.
+        let grouping = result
+            .grouping(
+                &GroupRequest {
+                    columns: vec![name, salary],
+                    duplicates_only: false,
+                },
+                &result.group_ticket(),
+            )
+            .unwrap()
+            .unwrap();
+        let text = format!("{:?}", grouping.groups);
+        assert_no_secret(label, "a two-column group's key", &text);
+        assert!(
+            text.contains("Ada") && text.contains(MASK),
+            "{label}: {text}"
+        );
+        assert_eq!(grouping.groups.len(), 3, "{label}");
+        // Filtering to a masked group: the condition is the mask, and every masked row passes.
+        let grouping = result
+            .grouping(
+                &GroupRequest {
+                    columns: vec![salary],
+                    duplicates_only: false,
+                },
+                &result.group_ticket(),
+            )
+            .unwrap()
+            .unwrap();
+        let first = grouping.groups[0].first_row as usize;
+        let filtered = result
+            .filter_to_group(&[salary], first, grouping.generation)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_no_secret(
+            label,
+            "a group's filter",
+            &format!("{:?}", filtered.filters),
+        );
+        assert_eq!(filtered.rows, 3, "{label}");
+        result.filter_columns(Vec::new()).unwrap();
+    }
+}
+
+/// A sort read from the server (SDB-380) is refused for a masked column as the stored
+/// result's is: the order of the rows would tell the masked values apart. Neither a paged
+/// query's pages nor a table data tab's ORDER BY are written for one, by any name.
+#[tokio::test]
+async fn a_sort_read_from_the_server_is_never_by_a_masked_column() {
+    use spelaion_core::{ColumnSort, first_query_page_sql, query_pages_exactly, table_order_by};
+    let _serial = SERIAL.lock().await;
+    for (label, session, schema, _) in engines().await {
+        setup(label, &session).await;
+        let key = |column| {
+            [SortKey {
+                column,
+                descending: false,
+            }]
+        };
+        let sql = "SELECT id, name, email, salary, card_number FROM mask_customers";
+        // Where the query is paged (not on SQLite: an `INT PRIMARY KEY` may hold NULLs there),
+        // it is also paged sorted by a column that is not masked.
+        let paged = query_pages_exactly(&session, sql, &[]).await;
+        assert_eq!(paged, label != "sqlite", "{label}: paged");
+        assert_eq!(
+            query_pages_exactly(&session, sql, &key(1)).await,
+            paged,
+            "{label}: by name"
+        );
+        for masked in [2, 3, 4] {
+            assert!(
+                !query_pages_exactly(&session, sql, &key(masked)).await,
+                "{label}: column {masked}"
+            );
+            assert!(
+                first_query_page_sql(&session, sql, 100, &key(masked))
+                    .await
+                    .is_none(),
+                "{label}: column {masked}"
+            );
+            // Not as a later key either.
+            let two = [key(1)[0], key(masked)[0]];
+            assert!(
+                !query_pages_exactly(&session, sql, &two).await,
+                "{label}: name, then column {masked}"
+            );
+        }
+        // Another name in the result does not unmask the table's column.
+        let aliased = "SELECT id, email AS e, salary AS s FROM mask_customers";
+        for masked in [1, 2] {
+            assert!(
+                !query_pages_exactly(&session, aliased, &key(masked)).await,
+                "{label}: aliased column {masked}"
+            );
+        }
+        // The table data tab's ORDER BY.
+        let by = |column: &str| {
+            [ColumnSort {
+                column: column.into(),
+                descending: true,
+            }]
+        };
+        for shown in ["name", "email_verified"] {
+            assert!(
+                table_order_by(&session, schema, "mask_customers", &by(shown))
+                    .await
+                    .is_ok(),
+                "{label}: {shown}"
+            );
+        }
+        for masked in ["email", "salary", "card_number"] {
+            let refused = table_order_by(&session, schema, "mask_customers", &by(masked))
+                .await
+                .expect_err(masked);
+            assert!(refused.contains("masked"), "{label}: {refused}");
+            let two = [by("name")[0].clone(), by(masked)[0].clone()];
+            assert!(
+                table_order_by(&session, schema, "mask_customers", &two)
+                    .await
+                    .is_err(),
+                "{label}: name, then {masked}"
+            );
+        }
+    }
 }

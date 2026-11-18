@@ -109,7 +109,7 @@ async fn paged_queries_keep_the_original_sql_in_history() {
         .collect()
         .await;
     let original = "select * from t order by id;";
-    let page = spelaion_core::first_query_page_sql(&session, original, 2)
+    let page = spelaion_core::first_query_page_sql(&session, original, 2, &[])
         .await
         .unwrap();
     let _: Vec<_> = history
@@ -345,4 +345,81 @@ async fn cancellation_saves_partial_row_count_and_error() {
     tokio::time::timeout(Duration::from_secs(10), task)
         .await
         .unwrap();
+}
+
+/// A script with `${name}` variables (SDB-383) is recorded as it ran: with the values the
+/// connection's saved variables and the tab's gave it, the tab's winning.
+#[tokio::test]
+async fn a_statement_with_variables_is_recorded_as_it_ran() {
+    let (history, _path) = history("variables");
+    let session = session().await;
+    history
+        .set_connection_variable(
+            "/repo".into(),
+            "shop".into(),
+            "low".into(),
+            Some("1".into()),
+        )
+        .await
+        .unwrap();
+    history
+        .set_connection_variable(
+            "/repo".into(),
+            "shop".into(),
+            "high".into(),
+            Some("5".into()),
+        )
+        .await
+        .unwrap();
+    // A name that cannot be a variable never gets into the store.
+    assert!(
+        history
+            .set_connection_variable(
+                "/repo".into(),
+                "shop".into(),
+                "env:HOME".into(),
+                Some("x".into())
+            )
+            .await
+            .is_err()
+    );
+    let mut values: std::collections::HashMap<String, String> = history
+        .connection_variables("/repo".into(), "shop".into())
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert_eq!(values.len(), 2);
+    // The tab's own value wins over the connection's.
+    values.insert("high".into(), "3".into());
+    let script = "select ${low} + ${high} as total, '${low}' as text";
+    let ran =
+        spelaion_core::substitute_variables(session.dialect().as_ref(), script, &values).unwrap();
+    assert_eq!(ran, "select 1 + 3 as total, '${low}' as text");
+    let events: Vec<_> = history
+        .run_script(&session, &ran, "/repo".into(), "shop".into())
+        .collect()
+        .await;
+    assert!(matches!(
+        events.last(),
+        Some(CoreEvent::ScriptFinished { failed: false, .. })
+    ));
+    let saved = entries(&history).await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].statement, ran);
+    // Another connection, or another workspace, has none of these variables.
+    assert!(
+        history
+            .connection_variables("/repo".into(), "other".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        history
+            .connection_variables("/elsewhere".into(), "shop".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

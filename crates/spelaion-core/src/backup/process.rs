@@ -32,8 +32,9 @@ pub(crate) fn no_window(command: &mut Command) {
 pub struct BackupCancel {
     cancelled: AtomicBool,
     notify: Notify,
-    /// The session whose statement a cancel also stops (SQLite, DuckDB and file runs).
-    session: std::sync::Mutex<Option<std::sync::Arc<dyn spelaion_driver_api::CancelHandle>>>,
+    /// The session whose run a cancel also stops (SQLite, DuckDB and file runs): its running
+    /// statement and every statement after it, through the session's own cancel (SDB-365).
+    session: std::sync::Mutex<Option<crate::session::SessionCancel>>,
 }
 
 impl BackupCancel {
@@ -44,15 +45,17 @@ impl BackupCancel {
     pub async fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
         self.notify.notify_waiters();
-        let handle = self.session.lock().expect("lock poisoned").clone();
-        if let Some(handle) = handle {
-            let _ = handle.cancel().await;
+        let session = self.session.lock().expect("lock poisoned").clone();
+        if let Some(session) = session {
+            let _ = session.cancel().await;
         }
     }
 
-    /// The session whose statement a cancel also stops.
+    /// The session whose run a cancel also stops. Called once the run is requested and before
+    /// it is polled, and followed by a look at [`BackupCancel::is_cancelled`]: a cancel that
+    /// came before finds no session here, and one that comes after stops the run.
     pub(crate) fn attach(&self, session: &crate::Session) {
-        *self.session.lock().expect("lock poisoned") = Some(session.connection().cancel_handle());
+        *self.session.lock().expect("lock poisoned") = Some(session.canceller());
     }
 
     pub fn is_cancelled(&self) -> bool {

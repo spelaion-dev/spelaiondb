@@ -13,12 +13,13 @@
 // (`PaletteObjectAction` in `commands.ts`).
 
 /** Where else a command appears, besides the palette. */
-export type CommandMenu = "tab" | "file" | "activity" | "welcome" | "editor";
+export type CommandMenu = "tab" | "file" | "activity" | "welcome" | "editor" | "result";
 
 /**
  * Who handles the shortcut: `global` ones `App.tsx`'s handler (they do nothing while a modal is
  * open); `editor` ones the SQL editor, where the focus must be (the palette and the menus only
- * show them); `grid` ones the result grid of an editable result (pending table edits).
+ * show them); `grid` ones the result grid, where the focus must be (pending table edits, and
+ * "Go to row").
  */
 export type ShortcutScope = "global" | "editor" | "grid";
 
@@ -56,6 +57,7 @@ export const COMMANDS = [
   { id: "tab.moveLeft", category: "tab", label: "app:commands.moveTabLeft", shortcut: "Ctrl+Shift+PageUp", scope: "global" },
   { id: "edits.undo", category: "data", label: "app:commands.undoEdit", shortcut: "Ctrl+Z", scope: "grid" },
   { id: "edits.redo", category: "data", label: "app:commands.redoEdit", shortcut: "Ctrl+Y", scope: "grid" },
+  { id: "results.goToRow", category: "data", label: "editor:goToRow.command", shortcut: "Ctrl+G", scope: "grid" },
   { id: "results.maximize", category: "view", label: "app:commands.maximizeResults", shortcut: "Ctrl+Alt+M", scope: "global" },
   { id: "file.open", category: "file", label: "app:files.open", shortcut: "Ctrl+O", scope: "global", menus: ["file", "welcome"] },
   { id: "file.openPlan", category: "file", label: "editor:plan.open", menus: ["file"] },
@@ -65,7 +67,16 @@ export const COMMANDS = [
   { id: "editor.run", category: "editor", label: "editor:run", shortcut: "Ctrl+Enter", scope: "editor" },
   { id: "editor.explain", category: "editor", label: "editor:plan.explain", menus: ["editor"] },
   { id: "editor.runScript", category: "editor", label: "editor:runScript", shortcut: "Ctrl+Shift+Enter", scope: "editor" },
+  { id: "editor.runFromCursor", category: "editor", label: "editor:actions.runFromCursor", shortcut: "Ctrl+Alt+Enter", scope: "editor", menus: ["editor"] },
+  { id: "editor.runNewTab", category: "editor", label: "editor:actions.runNewTab", shortcut: "Alt+Enter", scope: "editor", menus: ["editor"] },
+  // A result tab's menu (SDB-378): they act on the tab's active result.
+  { id: "results.rerun", category: "data", label: "editor:resultTabs.rerun", menus: ["result"] },
+  { id: "results.pin", category: "data", label: "editor:resultTabs.pin", menus: ["result"] },
+  { id: "results.rename", category: "data", label: "editor:resultTabs.rename", menus: ["result"] },
+  { id: "results.resetName", category: "data", label: "editor:resultTabs.resetName", menus: ["result"] },
+  { id: "results.close", category: "data", label: "editor:resultTabs.close", menus: ["result"] },
   { id: "editor.cancel", category: "editor", label: "app:commands.cancelQuery" },
+  { id: "editor.variables", category: "editor", label: "editor:variables.command", menus: ["editor"] },
   { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor" },
   { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", menus: ["editor"] },
   { id: "editor.blockComment", category: "editor", label: "editor:actions.blockComment", shortcut: "Shift+Alt+A", scope: "editor", menus: ["editor"] },
@@ -79,9 +90,19 @@ export const COMMANDS = [
   { id: "editor.selectStatement", category: "editor", label: "editor:actions.selectStatement", shortcut: "Ctrl+Alt+S", scope: "editor", menus: ["editor"] },
   { id: "editor.copyStatement", category: "editor", label: "editor:actions.copyStatement", shortcut: "Ctrl+Alt+C", scope: "editor", menus: ["editor"] },
   { id: "editor.selectOccurrences", category: "editor", label: "editor:actions.selectOccurrences", shortcut: "Ctrl+Shift+L", scope: "editor", menus: ["editor"] },
+  { id: "editor.openObject", category: "editor", label: "editor:actions.openObject", shortcut: "F12", scope: "editor", menus: ["editor"] },
+  { id: "editor.revealInExplorer", category: "editor", label: "editor:actions.revealInExplorer", shortcut: "Shift+Alt+E", scope: "editor", menus: ["editor"] },
+  { id: "editor.nextStatement", category: "editor", label: "editor:actions.nextStatement", shortcut: "Alt+PageDown", scope: "editor", menus: ["editor"] },
+  { id: "editor.previousStatement", category: "editor", label: "editor:actions.previousStatement", shortcut: "Alt+PageUp", scope: "editor", menus: ["editor"] },
+  { id: "editor.outline", category: "editor", label: "editor:actions.outline", shortcut: "Ctrl+Shift+O", scope: "editor", menus: ["editor"] },
   { id: "editor.insertSelect", category: "editor", label: "editor:actions.insertSelect", shortcut: "Ctrl+Alt+1", scope: "editor", menus: ["editor"] },
   { id: "editor.insertInsert", category: "editor", label: "editor:actions.insertInsert", shortcut: "Ctrl+Alt+2", scope: "editor", menus: ["editor"] },
   { id: "editor.insertUpdate", category: "editor", label: "editor:actions.insertUpdate", shortcut: "Ctrl+Alt+3", scope: "editor", menus: ["editor"] },
+  // The editor's zoom (SDB-389), a personal preference: the editor also takes Ctrl++ for zoom in
+  // (the + key, the keypad's, or Shift with =), and the webview's own zoom keys are off.
+  { id: "editor.zoomIn", category: "editor", label: "editor:actions.zoomIn", shortcut: "Ctrl+=", scope: "editor", menus: ["editor"] },
+  { id: "editor.zoomOut", category: "editor", label: "editor:actions.zoomOut", shortcut: "Ctrl+-", scope: "editor", menus: ["editor"] },
+  { id: "editor.zoomReset", category: "editor", label: "editor:actions.zoomReset", shortcut: "Ctrl+0", scope: "editor", menus: ["editor"] },
   { id: "view.explorer", category: "view", label: "shell:connections", menus: ["activity"] },
   { id: "view.explorerFilter", category: "view", label: "app:commands.explorerFilter", shortcut: "Ctrl+Shift+F", scope: "global" },
   { id: "view.erDiagram", category: "view", label: "app:commands.erDiagram" },

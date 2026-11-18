@@ -32,7 +32,7 @@ export function CalcPanel(props: {
   const { resultId, range, view } = props;
   const { t, i18n } = useTranslation("editor");
   const numbers = new Intl.NumberFormat(i18n.language);
-  const key = range ? `${resultId}|${view}|${range.firstRow}|${range.rows}|${range.columns.join(",")}` : "";
+  const key = range ? `${resultId}|${view}|${range.firstRow}|${range.rows}|${range.columns.join(",")}|${range.selectedRows?.join(",") ?? ""}` : "";
   const [state, setState] = useState<State | null>(null);
   const [busy, setBusy] = useState(false);
   // Bumped to calculate the same selection again after a cancel.

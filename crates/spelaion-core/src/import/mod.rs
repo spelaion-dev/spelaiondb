@@ -689,6 +689,13 @@ pub async fn run_import(
     if resolved.plan.needs_confirmation() && !confirmed {
         return Err(ImportError::NeedsConfirmation);
     }
+    // An import loads its rows in transactions and rolls back the one that fails: where they do
+    // not hold, a failure would leave rows half loaded and the summary would be wrong (SDB-354).
+    if let Some(reason) = session.atomic_writes_refusal() {
+        return Err(ImportError::Invalid(format!(
+            "{reason}: an import that failed part of the way would leave the rows before the failure loaded"
+        )));
+    }
     // The import is a transaction of its own (ADR-031).
     if let Ok(TransactionState::Open | TransactionState::Failed) =
         session.connection().transaction_state().await

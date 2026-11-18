@@ -53,11 +53,21 @@ export interface ChoiceRequest {
   resolve(choice: string | null): void;
 }
 
+/** The statements of a selection Run was asked to send (the core split it): which to run. */
+export interface StatementsRequest {
+  statements: string[];
+  /** Positions of the statements to run, "all" for the selection as it is, `null`: none. */
+  resolve(picked: number[] | "all" | null): void;
+}
+
 /** Values for the `:name` placeholders of a script. */
 export interface ParamsRequest {
   names: string[];
   /** Values used last time in this tab, to start from. */
   previous: Record<string, string>;
+  /** `${name}` variables without a value (SDB-383) instead of `:name` parameters: their
+   *  values are written in as they are. */
+  variables?: boolean;
   resolve(values: Record<string, string> | null): void;
 }
 
@@ -107,6 +117,7 @@ interface Requests {
   scriptError: ScriptErrorRequest;
   openTransactions: OpenTransactionsRequest;
   params: ParamsRequest;
+  statements: StatementsRequest;
   text: TextRequest;
   choice: ChoiceRequest;
 }
@@ -122,7 +133,8 @@ interface DialogStore extends Shown {
   askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"], running?: string[], unsaved?: string[]): Promise<boolean>;
   askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
   askChoice(request: Omit<ChoiceRequest, "resolve">): Promise<string | null>;
-  askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
+  askParams(names: string[], previous: Record<string, string>, variables?: boolean): Promise<Record<string, string> | null>;
+  askStatements(statements: string[]): Promise<number[] | "all" | null>;
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
   askScriptError(request: Omit<ScriptErrorRequest, "resolve">): Promise<ErrorAnswerItem>;
   askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
@@ -147,6 +159,7 @@ const empty = (): DialogStore["queued"] => ({
   scriptError: [],
   openTransactions: [],
   params: [],
+  statements: [],
   text: [],
   choice: [],
 });
@@ -185,13 +198,15 @@ export const useDialogs = create<DialogStore>((set, get) => {
     scriptError: null,
     openTransactions: null,
     params: null,
+    statements: null,
     text: null,
     choice: null,
     queued: empty(),
     interactions: [],
     askText: (request) => ask("text", request),
     askChoice: (request) => ask("choice", request),
-    askParams: (names, previous) => ask("params", { names, previous }),
+    askParams: (names, previous, variables) => ask("params", { names, previous, variables }),
+    askStatements: (statements) => ask("statements", { statements }),
     askScriptError: (request) => ask("scriptError", request),
     askRisks: (connection, statements) => ask("risk", { connection, statements }),
     askPassword: (connectionName, canRemember, error) => ask("password", { connectionName, canRemember, error }),

@@ -1,9 +1,9 @@
 //! Column filters of a stored result, like SQLyog's: `column = 'value'`, `<>`, `>`, `<`,
 //! `>=`, `<=`, `LIKE`, `NOT LIKE`, contains, does not contain, `IS NULL`, `IS NOT NULL`, all
-//! of them combined with AND.
+//! of them combined with AND, or with OR when the user asks to match any ([`FilterMode`]).
 //! They follow SQL: a NULL cell only matches `IS NULL` (`NULL <> 'Sleep'` is not true).
 //! Numbers compare by value; everything else by the text the grid shows, ignoring case like
-//! MySQL's default collations. They run in the core on the loaded rows, so they also work
+//! MySQL's default collations unless the user asks to match case. They run in the core on the loaded rows, so they also work
 //! for statements that cannot take a WHERE (`SHOW FULL PROCESSLIST`).
 
 use std::cmp::Ordering;
@@ -58,6 +58,15 @@ pub struct ColumnFilter {
     pub value: String,
 }
 
+/// How a result's column filters are read together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FilterMode {
+    /// A row passes when any filter does ("Match any"); otherwise it must pass all of them.
+    pub any: bool,
+    /// Text conditions tell upper case from lower case. Numbers compare by value either way.
+    pub match_case: bool,
+}
+
 /// Checks a filter against the column it applies to, before any row is read.
 pub(crate) fn validate(filter: &ColumnFilter, logical: LogicalType) -> Result<(), ViewError> {
     if filter.op.takes_value()
@@ -76,30 +85,49 @@ pub(crate) fn validate(filter: &ColumnFilter, logical: LogicalType) -> Result<()
     Ok(())
 }
 
-/// Whether a cell passes the filter.
+/// Whether a cell passes the filter, ignoring case.
+#[cfg(test)]
 pub(crate) fn matches(cell: &Value, logical: LogicalType, filter: &ColumnFilter) -> bool {
+    matches_as(cell, logical, filter, false)
+}
+
+/// Whether a cell passes the filter; `match_case` for its text comparisons.
+pub(crate) fn matches_as(
+    cell: &Value,
+    logical: LogicalType,
+    filter: &ColumnFilter,
+    match_case: bool,
+) -> bool {
     if matches!(cell, Value::Null) {
         return filter.op == FilterOp::IsNull;
     }
     let text = cell.to_string();
+    let order = || compare(cell, &text, logical, &filter.value, match_case);
     match filter.op {
         FilterOp::IsNull => false,
         FilterOp::IsNotNull => true,
-        FilterOp::Like => like(&text, &filter.value),
-        FilterOp::NotLike => !like(&text, &filter.value),
-        FilterOp::Contains => contains(&text, &filter.value),
-        FilterOp::NotContains => !contains(&text, &filter.value),
-        FilterOp::Eq => compare(cell, &text, logical, &filter.value) == Ordering::Equal,
-        FilterOp::NotEq => compare(cell, &text, logical, &filter.value) != Ordering::Equal,
-        FilterOp::Gt => compare(cell, &text, logical, &filter.value) == Ordering::Greater,
-        FilterOp::Lt => compare(cell, &text, logical, &filter.value) == Ordering::Less,
-        FilterOp::Ge => compare(cell, &text, logical, &filter.value) != Ordering::Less,
-        FilterOp::Le => compare(cell, &text, logical, &filter.value) != Ordering::Greater,
+        FilterOp::Like => like(&text, &filter.value, match_case),
+        FilterOp::NotLike => !like(&text, &filter.value, match_case),
+        FilterOp::Contains => contains(&text, &filter.value, match_case),
+        FilterOp::NotContains => !contains(&text, &filter.value, match_case),
+        FilterOp::Eq => order() == Ordering::Equal,
+        FilterOp::NotEq => order() != Ordering::Equal,
+        FilterOp::Gt => order() == Ordering::Greater,
+        FilterOp::Lt => order() == Ordering::Less,
+        FilterOp::Ge => order() != Ordering::Less,
+        FilterOp::Le => order() != Ordering::Greater,
     }
 }
 
-/// The cell against the filter value: numbers by value, the rest as text ignoring case.
-fn compare(cell: &Value, text: &str, logical: LogicalType, value: &str) -> Ordering {
+/// The cell against the filter value: numbers by value, the rest as text, ignoring case
+/// unless `match_case`.
+fn compare(
+    cell: &Value,
+    text: &str,
+    logical: LogicalType,
+    value: &str,
+    match_case: bool,
+) -> Ordering {
     let value = value.trim();
     if is_numeric(logical) {
         match cell {
@@ -120,7 +148,11 @@ fn compare(cell: &Value, text: &str, logical: LogicalType, value: &str) -> Order
             _ => {}
         }
     }
-    text.to_lowercase().cmp(&value.to_lowercase())
+    if match_case {
+        text.cmp(value)
+    } else {
+        text.to_lowercase().cmp(&value.to_lowercase())
+    }
 }
 
 fn is_numeric(logical: LogicalType) -> bool {
@@ -141,13 +173,24 @@ fn is_numeric(logical: LogicalType) -> bool {
     }
 }
 
-/// The text holds `value`, ignoring case.
-fn contains(text: &str, value: &str) -> bool {
-    text.to_lowercase().contains(&value.to_lowercase())
+/// The text holds `value`, ignoring case unless `match_case`.
+fn contains(text: &str, value: &str, match_case: bool) -> bool {
+    if match_case {
+        text.contains(value)
+    } else {
+        text.to_lowercase().contains(&value.to_lowercase())
+    }
 }
 
-/// SQL `LIKE`, ignoring case.
-fn like(text: &str, pattern: &str) -> bool {
+/// SQL `LIKE`, ignoring case unless `match_case`.
+fn like(text: &str, pattern: &str, match_case: bool) -> bool {
+    let folded = |c: char| -> Vec<char> {
+        if match_case {
+            vec![c]
+        } else {
+            c.to_lowercase().collect()
+        }
+    };
     #[derive(Clone, Copy)]
     enum Token {
         Any,
@@ -155,7 +198,7 @@ fn like(text: &str, pattern: &str) -> bool {
         Char(char),
     }
     let mut tokens = Vec::new();
-    let mut chars = pattern.chars().flat_map(char::to_lowercase).peekable();
+    let mut chars = pattern.chars().flat_map(folded).peekable();
     while let Some(c) = chars.next() {
         tokens.push(match c {
             '%' => Token::Any,
@@ -164,7 +207,7 @@ fn like(text: &str, pattern: &str) -> bool {
             c => Token::Char(c),
         });
     }
-    let text: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
+    let text: Vec<char> = text.chars().flat_map(folded).collect();
     // Classic wildcard matching with backtracking to the last `%`.
     let (mut t, mut p) = (0, 0);
     let mut star: Option<(usize, usize)> = None;
@@ -209,6 +252,7 @@ mod tests {
 
     #[test]
     fn like_follows_sql_wildcards_ignoring_case() {
+        let like = |text: &str, pattern: &str| super::like(text, pattern, false);
         assert!(like("Sleep", "%sle%"));
         assert!(like("Sleep", "s_eep"));
         assert!(like("Sleep", "%"));
@@ -335,6 +379,52 @@ mod tests {
             LogicalType::Text,
             &f(FilterOp::NotContains, "x")
         ));
+    }
+
+    #[test]
+    fn matching_case_tells_upper_from_lower_in_text_only() {
+        let text = |s: &str| Value::Text(s.into());
+        let passes = |cell: &Value, logical, op, value: &str| {
+            (
+                matches_as(cell, logical, &f(op, value), false),
+                matches_as(cell, logical, &f(op, value), true),
+            )
+        };
+        let sleep = text("Sleep");
+        // (ignoring case, matching case)
+        for (op, value, expected) in [
+            (FilterOp::Eq, "sleep", (true, false)),
+            (FilterOp::Eq, "Sleep", (true, true)),
+            (FilterOp::NotEq, "SLEEP", (false, true)),
+            (FilterOp::Contains, "LEE", (true, false)),
+            (FilterOp::Contains, "lee", (true, true)),
+            (FilterOp::NotContains, "LEE", (false, true)),
+            (FilterOp::Like, "s%", (true, false)),
+            (FilterOp::Like, "S_ee%", (true, true)),
+            (FilterOp::NotLike, "s%", (false, true)),
+            // Upper case sorts before lower case when case counts.
+            (FilterOp::Lt, "apple", (false, true)),
+            (FilterOp::Gt, "apple", (true, false)),
+        ] {
+            assert_eq!(
+                passes(&sleep, LogicalType::Text, op, value),
+                expected,
+                "{op:?} {value}"
+            );
+        }
+        // Numbers compare by value either way, and NULL still only matches IS NULL.
+        assert_eq!(
+            passes(&Value::Int(10), LogicalType::Int, FilterOp::Gt, "9"),
+            (true, true)
+        );
+        assert_eq!(
+            passes(&Value::Null, LogicalType::Text, FilterOp::NotEq, "x"),
+            (false, false)
+        );
+        assert_eq!(
+            passes(&text("ÁRBOL"), LogicalType::Text, FilterOp::Like, "árbol"),
+            (true, false)
+        );
     }
 
     #[test]

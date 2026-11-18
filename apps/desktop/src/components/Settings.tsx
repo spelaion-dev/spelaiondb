@@ -2,6 +2,7 @@
 // behind shows a new theme at once). Per-connection options (such as saving query history)
 // live with each connection in the sidebar, not here.
 
+import { DisplaySettings } from "./DisplaySettings";
 import { useEffect, useReducer, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
@@ -13,10 +14,11 @@ import { call, commands, type NamePatternPreview, type NetworkProfileItem } from
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
+import { SnippetSettings } from "./SnippetSettings";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "map";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "map"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -75,6 +77,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "plugins" && <PluginsSettings />}
         {category === "scripts" && <ScriptSettings />}
         {category === "editor" && <EditorSettings />}
+        {category === "snippets" && <SnippetSettings />}
         {category === "map" && <MapSettings />}
       </section>
     </div>
@@ -125,6 +128,9 @@ function AppearanceSettings() {
   // Only while loading: a change made while another saves waits for it (SDB-83).
   const busy = usePreferences((s) => s.loading);
   const setTheme = usePreferences((s) => s.setTheme);
+  const interfaceSize = usePreferences((s) => s.interfaceSize);
+  const steps = usePreferences((s) => s.steps);
+  const setInterfaceSize = usePreferences((s) => s.setInterfaceSize);
   return (
     <>
       <Choice<ThemePreference>
@@ -141,7 +147,17 @@ function AppearanceSettings() {
       />
       <p className="muted small">{t("appearance.hint")}</p>
       <SaveError setting="theme" />
+      {/* SDB-389: the whole window at this scale (the webview's zoom, applied by the core). */}
+      <label className="field">
+        <span>{t("appearance.interfaceSize")}</span>
+        <select name="interfaceSize" value={interfaceSize} disabled={busy} onChange={(e) => void setInterfaceSize(Number(e.target.value))}>
+          {steps.interfaceSizes.map((size) => <option key={size} value={size}>{t(size === steps.defaultInterfaceSize ? "appearance.normalSize" : "appearance.percent", { value: size })}</option>)}
+        </select>
+      </label>
+      <p className="muted small">{t("appearance.interfaceSizeHint")}</p>
+      <SaveError setting="interfaceSize" />
       <GridSettings />
+      <DisplaySettings />
     </>
   );
 }
@@ -155,6 +171,7 @@ function EditorSettings() {
   const reconnect = usePreferences((s) => s.reconnectOnStart);
   const busy = usePreferences((s) => s.loading);
   const setReconnect = usePreferences((s) => s.setReconnectOnStart);
+  const zooms = usePreferences((s) => s.steps.editorZooms);
   return (
     <>
       <fieldset disabled={busy} className="settings-choice">
@@ -174,6 +191,12 @@ function EditorSettings() {
             </select>
           </label>)}
         </div>
+        <label className="field"><span>{t("editor.zoom")}</span>
+          <select name="editor-zoom" value={preferences.zoom} onChange={(e) => void setEditor({ ...preferences, zoom: Number(e.target.value) })}>
+            {zooms.map((zoom) => <option key={zoom} value={zoom}>{t("appearance.percent", { value: zoom })}</option>)}
+          </select>
+        </label>
+        <p className="muted small">{t("editor.zoomHint")}</p>
         {(["lineNumbers", "wordWrap"] as const).map((key) => <label className="check" key={key}><input type="checkbox" name={`editor-${key}`} checked={preferences[key]} onChange={(e) => void setEditor({ ...preferences, [key]: e.target.checked })} />{t(`editor.${key}`)}</label>)}
       </fieldset>
       <fieldset disabled={busy} className="settings-choice">
@@ -342,12 +365,39 @@ function MapSettings() {
   );
 }
 
-/** How the result grid draws its cells: zebra rows, NULL and booleans. */
+/** The most result tabs an editor tab may be set to keep (the core refuses more). */
+const MAX_RESULT_TABS = 100;
+/** The bounds of the grid's own font size, in pixels (the store refuses others). */
+const MIN_GRID_FONT = 10;
+const MAX_GRID_FONT = 20;
+
+/** How the result grid draws its cells (zebra rows, NULL and booleans) and how many result
+ *  tabs an editor tab keeps. */
 function GridSettings() {
   const { t } = useTranslation("settings");
   const grid = usePreferences((s) => s.grid);
   const busy = usePreferences((s) => s.loading);
   const setGrid = usePreferences((s) => s.setGrid);
+  const [tabs, setTabs] = useState(String(grid.resultTabs));
+  useEffect(() => setTabs(String(grid.resultTabs)), [grid.resultTabs]);
+  const [font, setFont] = useState(String(grid.fontSize));
+  useEffect(() => setFont(String(grid.fontSize)), [grid.fontSize]);
+  const saveFont = () => {
+    const size = Math.trunc(Number(font));
+    if (font.trim() !== "" && Number.isFinite(size) && size >= MIN_GRID_FONT && size <= MAX_GRID_FONT) {
+      if (size !== grid.fontSize) void setGrid({ ...grid, fontSize: size });
+    } else {
+      setFont(String(grid.fontSize));
+    }
+  };
+  const saveTabs = () => {
+    const count = Math.trunc(Number(tabs));
+    if (tabs.trim() !== "" && Number.isFinite(count) && count >= 1 && count <= MAX_RESULT_TABS) {
+      if (count !== grid.resultTabs) void setGrid({ ...grid, resultTabs: count });
+    } else {
+      setTabs(String(grid.resultTabs));
+    }
+  };
   return (
     <>
       <fieldset className="settings-choice" disabled={busy}>
@@ -364,8 +414,50 @@ function GridSettings() {
           <input type="checkbox" name="boolCheckboxes" checked={grid.boolCheckboxes} onChange={(e) => void setGrid({ ...grid, boolCheckboxes: e.target.checked })} />
           {t("appearance.boolCheckboxes")}
         </label>
+        <label className="check">
+          <input type="checkbox" name="colorize" checked={grid.colorize} onChange={(e) => void setGrid({ ...grid, colorize: e.target.checked })} />
+          {t("appearance.colorize")}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="headerType" checked={grid.headerType} onChange={(e) => void setGrid({ ...grid, headerType: e.target.checked })} />
+          {t("appearance.headerType")}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="headerComment" checked={grid.headerComment} onChange={(e) => void setGrid({ ...grid, headerComment: e.target.checked })} />
+          {t("appearance.headerComment")}
+        </label>
       </fieldset>
       <p className="muted small">{t("appearance.gridHint")}</p>
+      <label className="field port">
+        <span>{t("appearance.gridFontSize")}</span>
+        <input
+          type="number"
+          name="gridFontSize"
+          min={MIN_GRID_FONT}
+          max={MAX_GRID_FONT}
+          value={font}
+          disabled={busy}
+          onChange={(e) => setFont(e.target.value)}
+          onBlur={saveFont}
+          onKeyDown={(e) => e.key === "Enter" && saveFont()}
+        />
+      </label>
+      <p className="muted small">{t("appearance.gridFontSizeHint", { min: MIN_GRID_FONT, max: MAX_GRID_FONT })}</p>
+      <label className="field port">
+        <span>{t("appearance.resultTabs")}</span>
+        <input
+          type="number"
+          name="resultTabs"
+          min={1}
+          max={MAX_RESULT_TABS}
+          value={tabs}
+          disabled={busy}
+          onChange={(e) => setTabs(e.target.value)}
+          onBlur={saveTabs}
+          onKeyDown={(e) => e.key === "Enter" && saveTabs()}
+        />
+      </label>
+      <p className="muted small">{t("appearance.resultTabsHint", { max: MAX_RESULT_TABS })}</p>
       <SaveError setting="grid" />
     </>
   );

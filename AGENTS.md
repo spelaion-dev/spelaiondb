@@ -7,9 +7,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 ## Before touching anything
 - Read `docs/architecture.md` and the ADRs in `docs/adr/`. ADRs rule: if a change
   contradicts them, do not make it; propose a new ADR that supersedes the old one.
-- Current state: **v0.5**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQL Server, SQLite
-  and DuckDB drivers, configuration, SSH tunnels, core, local store, `spelaiondb mcp` (read-only, writes per connection) and the
-  `spelaiondb` binary, and the first version of the desktop app (`apps/desktop`).
+- Current state: the version in the workspace's `Cargo.toml`; what each release added is in
+  `docs/releases/` (and the Plane modules). This file does not repeat it, so it cannot go stale.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and
   commit messages.
 
@@ -217,7 +216,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   refused when it loads, and agents never see it (`AgentView::EngineWithoutBarrier`), until its
   own barrier exists. Tests: `spelaion-core`'s `tests/mongodb.rs` with
   `SPELAION_TEST_MONGO=127.0.0.1:27017` (or `SPELAION_DEV_PLUGIN_MONGODB` in a development
-  build).
+  build). A `mongodb+srv` address is resolved by the core (`mongodb_srv.rs`: its DNS seed
+  list, then TLS always on), and the plugin is given one routed endpoint: a plugin never
+  discovers addresses that would bypass the connection's route.
 - **Redis is a plugin whose language is not SQL** (ADR-056), the same way: its driver lives in
   `spelaion-dev/spelaiondb-plugin-redis` (Redis and Valkey), pinned in `plugins.toml`. Its
   language is `spelaion-dialect`'s `redis.rs`: one command per line, quoted as `redis-cli`
@@ -421,6 +422,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `.key` (opened with the key built into Beekeeper), and only ever held as `Secret`s; other
   saved secrets are listed, never decrypted. Tested against tables a real Beekeeper wrote
   (`tests/fixtures/beekeeper`).
+  `heidisql.rs` reads HeidiSQL's exported settings file and, on Windows, its registry
+  sessions, with one reader for both: the format is untrusted (bounded inputs, malformed
+  settings fail closed) and no password reaches an error or the preview.
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no
@@ -509,21 +513,59 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
   `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
-  only, stopped by a newer one or a cancel; `chart.rs` prepares a chart's points from that view,
+  only, stopped by a newer one or a cancel; `group.rs` is the grouping panel the same way:
+  the rows of that view counted by some columns (NULL a group of its own, a masked column by its
+  mask, a bounded answer), and "filter to a group" written as column filters of `filter.rs`
+  from one row of the group; `chart.rs` prepares a chart's points from that view,
   ADR-040: at most `MAX_CHART_POINTS`, rows combined by X, and it writes the saved PNG or SVG;
   `er/` is the ER diagram, ADR-046: the model read from the explorer's catalog, its layered layout
   computed once per model and display options, and its Mermaid and DBML text, which must parse
   with their own tools: `tests/er_diagram.rs` writes `apps/desktop/scripts/fixtures/er` and
   `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again)
-  and `cursor.rs` finds the statement under the editor's cursor. `progress.rs` thins a run's row
+  and `cursor.rs` finds the statement under the editor's cursor, says what Run will send
+  (`run_target`, the Run button's label) and writes the text of the statements picked from a
+  selection or from the cursor to the end (`pick_statements`, `from_cursor`): the rest written
+  over with spaces, and returned only if the engine's splitter reads in it exactly those
+  statements (`tests/run_from_cursor.rs`, on every dialect); its `outline` (one entry per
+  statement, bounded) and `neighbour_statement` are the editor's outline panel and its next /
+  previous statement, from the same splitter. `progress.rs` thins a run's row
   counts to a few a second for the app (a big result streams hundreds of batches a second;
   every other event and the final count go through as they come). `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it, and the
-  primary key orders it after the user's order, ADR-054), and writes "filter by this value"
+  primary key orders it after the user's order, ADR-054), writes the `ORDER BY` of its header
+  sort from the table's own columns (`table_order_by`: the UI names columns, never writes SQL),
+  and writes "filter by this value"
   conditions into its WHERE from the typed cell. `query_page.rs` pages an editor query only when
   each page can be fetched exactly (ADR-054): one table, its primary key in the result, keyset
-  pages after the last row shown, never OFFSET; anything else runs once as written.
+  pages after the last row shown, never OFFSET; anything else runs once as written. The grid's
+  sort of a paged query (a list of `SortKey`s, as the stored result's) is read again from the
+  server the same way: its columns order the pages first and may hold NULLs, which the core
+  writes last in both directions on every engine, in the `ORDER BY` and in the comparison that
+  fetches the next page alike.
   `tests/query_pages.rs` writes between pages on every engine.
+  `load_rows.rs` is "Load every row" and a page or row past the ones loaded (SDB-386): keyset
+  pages of a paged query in order, cancellable with whole pages kept, after an estimate of the
+  rows and memory; a table data tab's page N is its numbered page and its last page is counted
+  (`table_data.rs`). `transpose.rs` makes the transposed view, rows shown as columns, a result
+  of its own. `tests/result_jumps.rs` runs both paths on every engine.
+  `variables.rs` (SDB-383) writes the editor's `${name}` variables into a script before
+  anything else reads it, so the guard, the read-only checks and masking see the text that
+  runs: values are written in as they are, only in code (`Dialect::code_ranges`), one
+  statement at a time after splitting, and a value that ends its statement, starts another or
+  opens a string or a comment it does not close is refused. A name is only looked up in the
+  values given (the tab's, over its connection's in `spelaion-store`'s `connection_variables`):
+  never the environment, and `${env:…}` is not a name. Agents have no variables. Like
+  `classify.rs`, any change there needs tests that try to get around it (`tests/variables.rs`,
+  on every dialect).
+  `result_tabs.rs` (SDB-378) is each editor tab's result tabs over the `ResultStore`: which
+  results a run replaces is decided there, never in the UI. A run frees the results that are
+  not pinned, a run into a new tab frees none, a re-run of one result takes its place when
+  its new rows start, and past the user's limit the oldest unpinned result of an earlier run
+  is closed; a result with unsaved edits is never freed by a run. A pin is only an entry no
+  run frees: closing the tab frees it. A tab's name is the user's, else its statement's first
+  `--` comment line as the engine's dialect reads comments (`statement_title`). The app's run
+  commands place every result through `begin_run` and `RunResults::observe`
+  (`tests/kept_results.rs` runs it against a real session).
   `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
   read from the catalog again each time (the UI only names one), the values come from the
   stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
@@ -537,7 +579,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
   the engine's read-only transaction (the export barrier) in a session of its own, sampled past
-  100,000 rows; `tests/column_stats.rs` runs it on every engine.
+  100,000 rows; `tests/column_stats.rs` runs it on every engine. `column_top_values` is the same
+  count of the most frequent values alone, for the custom filter's value picker: a masked
+  column is refused before anything is read (`tests/masking.rs`).
+  `table_filters.rs` is what a table data tab remembers (the filters used on a table, and the
+  default one its tab opens with): local data in the store, so every filter is checked like a
+  page's before it is kept and again each time it is read, and a stored default that no longer
+  passes is handed back as refused, never as a filter. Like `table_data.rs`, any change there
+  needs tests that try to get around it.
   Server observation (the process monitor's other views): `observe.rs` runs each statement
   only after `classify_read_only` accepts it, as session metadata; `locks.rs` reads each
   engine's locks and waits and builds the blocking tree (ending a blocker always goes through
@@ -551,13 +600,43 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
   PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
   (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
+  `display.rs` (SDB-385) is how the grid shows values: `strftime` patterns for dates, times
+  and timestamps, a number's marks, a display time zone (jiff; values without a zone are never
+  converted) and how binary reads. Display only: `window_ipc` serves each cell as the database
+  prints it and, next to it, as it is shown, and the grid draws the second; copies, exports,
+  filters, value pickers, edits and Ctrl+F keep the database's text (`displayed_text` is the
+  one copy of what is shown, asked for explicitly). A masked column is never formatted.
+  `tests/value_display.rs` formats every engine's types and writes a filter from a formatted
+  cell.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
+  "Copy special…" (SDB-388) is `export.rs`'s `copy_special` (delimiter, quote, row delimiter,
+  NULL text, header, row numbers; the choices are the copy defaults, `History::copy_defaults`,
+  checked before they are saved), and copy as UPDATE is its `copy_updates`, through an
+  `UpdateTable` only `edit.rs`'s `update_copy_table` makes, by the rule of edits (ADR-014:
+  the table and its primary key from the catalog, rows read through this session, a query
+  only as a plain SELECT of one table, an engine without transactions refused); a masked
+  column in the key or the selection is refused, never written from the mask.
+  `tests/copy_updates.rs` runs the copied UPDATEs on every engine and reads the rows back.
   `export.rs` also holds the CSV options and formula escaping of files;
   `export_stream.rs` streams a query, a table data tab or explorer tables to a file
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
   tests that try to get around it (`tests/export_stream.rs`).
+  `pending.rs` keeps a table data page's pending edits (ADR-044): cells typed or changed in
+  bulk, rows to delete and rows to insert, in the core with the stored result they refer to,
+  each change a step undo and redo restore exactly; the stored result refuses to sort or filter
+  while edits are pending, so a position keeps naming the same row (`tests/bulk_edits.rs`).
+  `generate.rs` writes the explorer's "Generate SQL" for a table (SELECT by key or keys,
+  INSERT, upsert or MERGE where the engine has one, UPDATE, DELETE) with the engine's quoting
+  and `:named` placeholders; UPDATE and DELETE always carry a WHERE on what identifies a row
+  (the primary key, else a unique constraint, else every column) (`tests/generated_sql.rs`).
+  `plan/` is Visual EXPLAIN: each engine's reader (`postgres.rs`, `mysql.rs`, `sqlserver.rs`,
+  `sqlite.rs`, `duckdb.rs`) turns its plan into one tree, analysed the same way; the plan's
+  run (`run.rs`) is serialized and cancellable; `ANALYZE`, which runs the statement, needs a
+  confirmation of its own and is off on a read-only connection; explicit runs are recorded in
+  history; raw plan rows stay in the core, the page receives a bounded projection
+  (`tests/plans*.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement). Each stored result remembers the session
   that read it and that session's database (`ResultSource`; a statement that changed database
@@ -685,8 +764,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   could not open (`MissingPlugin.tsx`), which send to the page when an engine's plugin is not
   installed.
 - `crates/spelaion-store`: local SQLite (audit, query history, saved queries, personal settings,
+  the user's editor snippets and the template of new scripts in `editor_snippets.rs`, kept as
+  personal settings and checked by `spelaion-core`'s `editor_snippets.rs` when saved and when
+  read: bounded, plain text by `spelaion-config::check_plain_text`, the rule of a connection's
+  description; they are text the editor inserts, never run),
   the explorer's filters and bookmarks, the editor's open tabs per workspace and recent files in
-  `tabs.rs`; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
+  `tabs.rs`, each table's filter history and default filter in `table_filters.rs`; later the
+  schema cache). A new migration is appended to `MIGRATIONS` and its test finds it by its text,
+  never by "the last one". `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
   `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
@@ -727,7 +812,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   registered once in `src/commandRegistry.ts` and run through `src/commands.ts`: the tab and
   file menus, the activity bar, the global shortcuts and the command palette
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
-  menus against it. The palette's objects are only what the explorer already read (`catalog.ts`). Smoke test against the real app:
+  menus against it. The palette's objects are only what the explorer already read (`catalog.ts`).
+  In the SQL editor, completion, Ctrl+click and hover resolve a name with one reader of the
+  statement (`src/sqlCompletion.ts`: `completeSql` and `resolveName`, tested by
+  `scripts/sql-completion.test.mjs` and `scripts/sql-names.test.mjs`) over the catalog the tab
+  read in the background (`useCompletionCatalog.ts`): never a query per key or hover, and a
+  name that is not certainly one table or column shows nothing. They are hints: nothing is run
+  or decided from them. Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
   nothing is built twice: `npx tauri build --no-bundle -- -p spelaion-desktop -p
   spelaion-cli -p spelaion-plugin-fetch`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`,

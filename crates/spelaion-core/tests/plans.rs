@@ -119,6 +119,25 @@ async fn around_the_core(session: &Session, statements: &[&str]) {
     }
 }
 
+/// Waits, from a session of its own, until a statement holding `text` runs on the test
+/// PostgreSQL. Panics after 30 s.
+async fn wait_until_running_on_server(text: &str) {
+    let watcher = open(false).await.expect("a second session");
+    let sql = format!(
+        "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' \
+         AND pid <> pg_backend_pid() AND strpos(query, '{}') > 0",
+        text.replace('\'', "''")
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while run(&watcher.session, &sql).await == ["0"] {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{text} never ran on the server"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn analyzed() -> ExplainOptions {
     ExplainOptions {
         analyze: true,
@@ -493,6 +512,11 @@ async fn plans_are_serialized_cancellable_and_record_explicit_runs_in_history() 
         }
     });
     started_rx.await.unwrap();
+    // `StatementStarted` is the core's event: the statement may not have reached the server
+    // yet, and PostgreSQL drops a cancel that arrives before its query (SDB-221). The cancel
+    // below must find `pg_sleep` running, or the plan sleeps its 30 s (SDB-356). Another
+    // session sees it start.
+    wait_until_running_on_server("pg_sleep(30)").await;
     let queued = plan::explain(
         &session,
         "UPDATE plan_queue SET value=2 WHERE value=1",

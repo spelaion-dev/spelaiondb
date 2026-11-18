@@ -257,6 +257,61 @@ async fn agents_reads_make_the_session_read_only_in_the_engine() {
     .await;
 }
 
+/// ClickHouse's primary key is a sorting key: two rows may share it, so a query is never paged
+/// by it (ADR-054, SDB-405). Paged, a page boundary between two such rows would hide one; the
+/// query runs as written and every row is there.
+#[tokio::test]
+async fn a_query_is_not_paged_by_a_primary_key_rows_share() {
+    let Some(session) = session_as("spelaion", "spelaion").await else {
+        return;
+    };
+    let Some(cleanup) = session_as("spelaion", "spelaion").await else {
+        return;
+    };
+    let t = format!("shared_key_{}", std::process::id());
+    let drops = [format!("drop table if exists {t}")];
+    let body = async {
+        must(&session, &format!("drop table if exists {t}")).await;
+        must(
+            &session,
+            &format!(
+                "create table {t} (id UInt32, label String) engine = MergeTree primary key id order by id"
+            ),
+        )
+        .await;
+        must(
+            &session,
+            &format!("insert into {t} values (1, 'a'), (1, 'b'), (2, 'c'), (2, 'd')"),
+        )
+        .await;
+        // The plugin reports no primary key for it today (checked 2026-11-17); the core's rule
+        // refuses ClickHouse even if a later plugin reports the sorting key as one.
+        for sql in [
+            format!("select id, label from {t}"),
+            format!("select * from {t} order by id"),
+        ] {
+            assert!(
+                !spelaion_core::query_pages_exactly(&session, &sql, &[]).await,
+                "{sql} must run as written"
+            );
+            assert!(
+                spelaion_core::first_query_page_sql(&session, &sql, 1, &[])
+                    .await
+                    .is_none(),
+                "{sql}"
+            );
+        }
+        assert_eq!(
+            value(&session, &format!("select count() from {t}")).await,
+            "4"
+        );
+    };
+    cleaning_up(body, |panicked| {
+        run_cleanup("clickhouse", &cleanup, &drops, panicked)
+    })
+    .await;
+}
+
 /// A user the server already keeps read-only (`readonly = 1` in its profile: the setting cannot
 /// be set again) reads as any other: the barrier is already there.
 #[tokio::test]

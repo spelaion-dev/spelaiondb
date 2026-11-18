@@ -5,17 +5,38 @@ import { syntaxTree } from "@codemirror/language";
 import type { Completion, CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import type { ForeignKeyDetails } from "./bindings";
 
+/** A column as the catalog describes it, for the editor's hover. */
+export interface CompletionColumn {
+  name: string;
+  /** Its type as the engine writes it. */
+  type: string;
+  nullable: boolean;
+  comment: string | null;
+}
 export interface CompletionTable {
   schema: string;
   name: string;
   columns: string[];
   foreignKeys: ForeignKeyDetails[];
+  /** `table`, `view`…, as the explorer lists it. */
+  kind?: string;
+  /** Each column of `columns` with its type; absent until the table has been described. */
+  details?: CompletionColumn[];
 }
 export interface CompletionCatalog {
   tables: CompletionTable[];
   defaultSchema: string | null;
 }
 export const EMPTY_CATALOG: CompletionCatalog = { tables: [], defaultSchema: null };
+/** Tables named by the current statement, using the same scope and identifier rules as completion. */
+export function referencedCompletionTables(sql: string, catalog: CompletionCatalog, engine: string | null): CompletionTable[] {
+  // A script commonly ends in a semicolon; inspect the statement before it, not the empty
+  // statement after it. This is only a scheduling hint, never a query or a safety decision.
+  const end = sql.trimEnd().replace(/;$/, "").length;
+  const analysis = analyze(sql, end, catalog, engine);
+  if (!analysis) return [];
+  return [...new Set(analysis.scopes.flatMap((scope) => scope.sources.flatMap((source) => source.table ? [source.table] : [])))];
+}
 export type KeywordCase = "upper" | "lower" | "preserve";
 export function sqlDialect(engine: string | null): SQLDialect {
   // ClickHouse: MySQL's keywords and backticks are the closest CodeMirror has.
@@ -81,10 +102,29 @@ function tokenize(sql: string, engine: string | null): Token[] {
   return tokens;
 }
 
-interface Source { alias: Token; table?: CompletionTable; query?: Scope; names?: string[]; at: number }
+/** `parts`: the name as written in FROM (`schema.table`), when the source is a named relation;
+ *  `cte`: the name is a CTE of the statement, which shadows any table of that name. */
+interface Source { alias: Token; table?: CompletionTable; query?: Scope; names?: string[]; at: number; parts?: Token[]; cte?: boolean }
 interface Scope { start: number; end: number; top: number[]; sources: Source[]; ctes: Map<string, Source>; parent?: Scope; derived: boolean }
 
-export function completeSql(sql: string, pos: number, catalog: CompletionCatalog, engine: string | null, keywordCase: KeywordCase, explicit = true, onLimit?: () => void): CompletionResult | null {
+/** The statement around `pos` as completion reads it: its tokens, its scopes (queries, CTEs,
+ *  subqueries) with the relations each one names, and what is visible at `pos`. Completion,
+ *  Ctrl+click and hover all resolve names from this one reading. */
+interface Analysis {
+  tokens: Token[];
+  at(index: number | undefined): Token;
+  key(token: Token): string;
+  matches(token: Token, name: string): boolean;
+  scopes: Scope[];
+  active: Scope;
+  /** The relations visible at `pos`, the nearest scope's first. */
+  visible: Source[];
+  columns(source: Source): string[];
+  /** The table a written name (`table` or `schema.table`) is in the catalog, if exactly one. */
+  tableNamed(parts: Token[]): CompletionTable | undefined;
+}
+
+function analyze(sql: string, pos: number, catalog: CompletionCatalog, engine: string | null, onLimit?: () => void): Analysis | null {
   // Completion must stay cheap even for an accidentally pasted dump. No server fallback.
   if (sql.length > 300_000) { onLimit?.(); return null; }
   const all = tokenize(sql, engine);
@@ -112,6 +152,10 @@ export function completeSql(sql: string, pos: number, catalog: CompletionCatalog
     const out: number[] = [];
     for (let i = start; i < end; i++) { out.push(i); if (at(i).text === "(" && at(i).match >= i) i = at(i).match; }
     return out;
+  };
+  const tableNamed = (parts: Token[]) => {
+    const candidates = catalog.tables.filter((table) => matches(parts[parts.length - 1]!, table.name) && (parts.length < 2 || matches(parts[parts.length - 2]!, table.schema)));
+    return candidates.find((table) => table.schema === catalog.defaultSchema) ?? (candidates.length === 1 ? candidates[0] : undefined);
   };
   const scopes: Scope[] = [];
   let scopeLimit = false;
@@ -167,23 +211,20 @@ export function completeSql(sql: string, pos: number, catalog: CompletionCatalog
       if (!expectSource || ["LATERAL", "ONLY"].includes(kw)) continue;
       expectSource = false;
       let table: CompletionTable | undefined, query: Scope | undefined, cte: Source | undefined;
-      let last = n;
+      let last = n, parts: Token[] | undefined;
       if (t.text === "(" && ["SELECT", "WITH"].includes(upper(at(i + 1)))) {
         query = parse(i + 1, t.match, scope.ctes, scope, upper(at(i - 1)) !== "LATERAL"); parsedChildren.add(i);
       } else if (identifier(t)) {
-        const parts: Token[] = [t];
+        parts = [t];
         while (at(mainTop[last + 1])?.text === "." && identifier(at(mainTop[last + 2]))) { parts.push(at(mainTop[last + 2])); last += 2; }
         if (parts.length === 1) cte = scope.ctes.get(key(t));
-        if (!cte) {
-          const candidates = catalog.tables.filter((table) => matches(parts[parts.length - 1]!, table.name) && (parts.length < 2 || matches(parts[parts.length - 2]!, table.schema)));
-          table = candidates.find((table) => table.schema === catalog.defaultSchema) ?? (candidates.length === 1 ? candidates[0] : undefined);
-        }
+        if (!cte) table = tableNamed(parts);
       } else continue;
       let alias = at(mainTop[last]), after = last + 1;
       if (upper(at(mainTop[after])) === "AS") after++;
       const maybeAlias = at(mainTop[after]);
       if (identifier(maybeAlias) && !boundaries.has(upper(maybeAlias))) { alias = maybeAlias; last = after; }
-      if (alias && (table || query || cte)) scope.sources.push({ alias, table, query: query ?? cte?.query, names: cte?.names, at: i });
+      if (alias && (table || query || cte)) scope.sources.push({ alias, table, query: query ?? cte?.query, names: cte?.names, at: i, parts, cte: cte !== undefined });
       n = last;
     }
     for (let i = cursor; i < end; i++) {
@@ -233,6 +274,13 @@ export function completeSql(sql: string, pos: number, catalog: CompletionCatalog
   for (let scope: Scope | undefined = active; scope; scope = scope.derived ? undefined : scope.parent) {
     for (const source of scope.sources) if (!aliases.has(key(source.alias))) { visible.push(source); aliases.add(key(source.alias)); }
   }
+  return { tokens, at, key, matches, scopes, active, visible, columns, tableNamed };
+}
+
+export function completeSql(sql: string, pos: number, catalog: CompletionCatalog, engine: string | null, keywordCase: KeywordCase, explicit = true, onLimit?: () => void): CompletionResult | null {
+  const analysis = analyze(sql, pos, catalog, engine, onLimit);
+  if (!analysis) return null;
+  const { tokens, at, key, matches, active, visible, columns } = analysis;
   const current = tokens.find((t) => identifier(t) && t.from < pos && pos <= t.to);
   const from = current?.from ?? pos;
   const before = tokens.filter((t) => t.to <= from);
@@ -297,6 +345,81 @@ export function completeSql(sql: string, pos: number, catalog: CompletionCatalog
   const quotedPrefix = current?.kind === "quoted" ? current.value.slice(0, Math.max(0, pos - current.from - 1)).toLowerCase() : null;
   const filtered = quotedPrefix === null ? unique : unique.filter((option) => (option.displayLabel ?? option.label).toLowerCase().includes(quotedPrefix));
   return filtered.length ? { from, to: current?.closed ? current.to : pos, options: filtered, ...(quotedPrefix === null ? {} : { filter: false }) } : null;
+}
+
+/** What a name in the SQL text is, in the catalog already read: a table or view, or one of
+ *  its columns; `from` and `to` are the name's place in the text. */
+export type ResolvedName =
+  | { kind: "table"; table: CompletionTable; from: number; to: number }
+  | { kind: "column"; table: CompletionTable; column: string; from: number; to: number };
+
+/** Words before a relation's name outside FROM and JOIN (`DROP TABLE t`, `REFERENCES t`). */
+const beforeRelation = new Set(["TABLE", "VIEW", "REFERENCES", "TRUNCATE", "DESCRIBE", "DESC"]);
+
+/**
+ * The table or column the name at `pos` stands for (Ctrl+click and hover), read as completion
+ * reads the statement: an alias leads to its table, a CTE of the statement shadows a table of
+ * the same name, and a quoted name is compared as the engine compares it. Only the catalog
+ * given is looked at, never the database. `null` whenever the name is not certainly one
+ * thing: a table that is not in the catalog (or not read yet), a column that several visible
+ * tables have, one that may come from a subquery, or a table whose columns are not read yet.
+ */
+export function resolveName(sql: string, pos: number, catalog: CompletionCatalog, engine: string | null): ResolvedName | null {
+  const analysis = analyze(sql, pos, catalog, engine);
+  if (!analysis) return null;
+  const { tokens, at, matches, scopes, visible, columns, tableNamed } = analysis;
+  let index = tokens.findIndex((t) => identifier(t) && t.from <= pos && pos < t.to);
+  // Just after a name's last character still counts: where a click at its right edge lands.
+  if (index < 0) index = tokens.findIndex((t) => identifier(t) && t.to === pos);
+  if (index < 0) return null;
+  const token = tokens[index]!;
+  if (!token.closed) return null;
+  const touching = (a: Token, b: Token) => a.to === b.from;
+  // The dotted name the token is part of: `schema.table.column`, written without spaces.
+  let first = index, last = index;
+  while (first >= 2 && at(first - 1).text === "." && identifier(at(first - 2)) && touching(at(first - 2), at(first - 1)) && touching(at(first - 1), at(first))) first -= 2;
+  while (at(last + 1).text === "." && identifier(at(last + 2)) && touching(at(last), at(last + 1)) && touching(at(last + 1), at(last + 2))) last += 2;
+  const chain: Token[] = [];
+  for (let i = first; i <= last; i += 2) chain.push(at(i));
+  const place = (index - first) / 2;
+  const asTable = (table: CompletionTable | undefined, from: Token, to: Token): ResolvedName | null => table ? { kind: "table", table, from: from.from, to: to.to } : null;
+  const columnOf = (table: CompletionTable, name: Token): ResolvedName | null => {
+    const column = table.columns.find((c) => matches(name, c));
+    return column === undefined ? null : { kind: "column", table, column, from: name.from, to: name.to };
+  };
+  // A relation as written in FROM, JOIN, UPDATE or INTO, or its alias where it is declared.
+  // A CTE's name is the CTE, whatever table has that name.
+  for (const scope of scopes) for (const source of scope.sources) {
+    if (source.parts?.includes(token)) return source.cte ? null : asTable(source.table, source.parts[0]!, source.parts[source.parts.length - 1]!);
+    if (source.alias === token) return source.cte || source.query ? null : asTable(source.table, token, token);
+  }
+  // `DROP TABLE schema.name`, `REFERENCES name`: a relation named outside a query.
+  let before = first - 1;
+  if (upper(at(before)) === "EXISTS") { before--; if (upper(at(before)) === "NOT") before--; if (upper(at(before)) === "IF") before--; }
+  if (first > 0 && beforeRelation.has(upper(at(before)))) {
+    return asTable(tableNamed(chain), chain[0]!, chain[chain.length - 1]!);
+  }
+  if (chain.length > 1) {
+    // `alias.column`, `table.column`, `schema.table.column`: the relation is what is before
+    // the last dot, as an alias visible here or as a table's own name.
+    const qualifier = chain.slice(0, -1);
+    const source = qualifier.length === 1
+      ? visible.find((s) => matches(qualifier[0]!, s.alias.value))
+      : visible.find((s) => s.table !== undefined && s.table === tableNamed(qualifier));
+    if (!source || source.cte || source.query || !source.table) return null;
+    if (place === chain.length - 1) return columnOf(source.table, token);
+    // The relation's own name before the dot (not its schema).
+    return place === chain.length - 2 ? asTable(source.table, token, token) : null;
+  }
+  // A bare name: a column, if exactly one visible table has it and nothing else could.
+  if (at(index + 1).text === "(" || !visible.length) return null;
+  const derived = visible.filter((s) => s.cte || s.query || !s.table);
+  if (derived.some((s) => columns(s).some((c) => matches(token, c)))) return null;
+  const tables = visible.flatMap((s) => (s.table && !s.cte && !s.query ? [s.table] : []));
+  // A table still being read has no columns yet: the name may be one of its own.
+  if (tables.some((t) => t.details === undefined)) return null;
+  const owners = [...new Set(tables.filter((t) => t.columns.some((c) => matches(token, c))))];
+  return owners.length === 1 ? columnOf(owners[0]!, token) : null;
 }
 
 export function sqlCompletionSource(catalog: CompletionCatalog, engine: string | null, keywordCase: KeywordCase) {

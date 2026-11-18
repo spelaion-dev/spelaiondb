@@ -280,9 +280,23 @@
     "join": "Generate JOIN of the {{count}} chosen tables",
     "innerJoin": "Generate INNER JOIN of the {{count}} chosen tables"
   },
+  "pick": {
+    "title": "Run which statements?",
+    "explanation_one": "The selection holds {{count}} statement. Press its number to run it alone, or tick what to run. Nothing has run yet.",
+    "explanation_other": "The selection holds {{count}} statements. Press a statement's number to run it alone, or tick the ones to run. Nothing has run yet.",
+    "list": "Statements of the selection",
+    "more_one": "…and {{count}} more statement, which runs only with all of them",
+    "more_other": "…and {{count}} more statements, which run only with all of them",
+    "cancel": "Cancel",
+    "runChecked_one": "Run {{count}} statement",
+    "runChecked_other": "Run {{count}} statements",
+    "runAll": "Run all {{count}}"
+  },
   "params": {
     "title": "Query parameters",
     "explanation": "Numbers, NULL, TRUE and FALSE are written as they are; anything else as text, quoted for this database.",
+    "variablesTitle": "Values for the variables",
+    "variablesExplanation": "Each value is written into the statement as it is, before it runs, and kept for this tab. Save it for the connection in Variables… (the editor's actions menu).",
     "cancel": "Cancel",
     "run": "Run"
   },

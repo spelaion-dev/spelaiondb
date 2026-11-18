@@ -9,12 +9,13 @@ use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
     AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, EditorPreferences,
-    ExplorerFilter, ExplorerPreferences, GridPreferences, HistoryEntry, HistoryFilter, HistoryPage,
-    MapPreferences, NewHistoryEntry, RecentFile, SavedTabs, ScriptPreferences, Snippet,
-    SnippetFilter, SnippetFolder, Store, StoreError, ToolOutput,
+    ExplorerFilter, ExplorerPreferences, FilteredTable, GridPreferences, HistoryEntry,
+    HistoryFilter, HistoryPage, MapPreferences, NewHistoryEntry, RecentFile, SavedTabs,
+    ScriptPreferences, Snippet, SnippetFilter, SnippetFolder, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
+use crate::table_filters::{StoredTableFilters, TableFilterChange, stored_table_filters};
 use crate::{CoreEvent, ResultId, ScriptOptions, Session};
 
 /// Identity captured from the source session, never from a subsequently edited profile.
@@ -33,6 +34,12 @@ pub enum HistoryError {
     Store(#[from] StoreError),
     #[error("query history is unavailable")]
     Closed,
+    /// Display settings the core cannot use (SDB-385): nothing was saved.
+    #[error("{0}")]
+    Display(#[from] crate::DisplayError),
+    /// Copy defaults whose text could not be read back (SDB-388): nothing was saved.
+    #[error("{0}")]
+    CopyOptions(String),
     #[error("could not start query history: {0}")]
     Start(#[source] std::io::Error),
     #[error("unsupported language; expected system, en or es")]
@@ -43,12 +50,27 @@ pub enum HistoryError {
     InvalidSnippetName,
     #[error("{0}")]
     NamePattern(#[from] spelaion_config::NamePatternError),
+    /// An editor snippet or the template of new scripts was refused (SDB-384).
+    #[error("{0}")]
+    EditorSnippet(crate::editor_snippets::SnippetError),
 }
 
 /// Longest name of a saved query, in characters.
 const MAX_SNIPPET_NAME: usize = 200;
 
 type Reply<T> = oneshot::Sender<Result<T, StoreError>>;
+
+/// A snippet or template save as the actor answers it: the store's own failure, or why the
+/// core refused it (`None` when it was saved).
+fn refusal(
+    saved: Result<(), crate::editor_snippets::SnippetError>,
+) -> Result<Option<crate::editor_snippets::SnippetError>, StoreError> {
+    match saved {
+        Ok(()) => Ok(None),
+        Err(crate::editor_snippets::SnippetError::Store(error)) => Err(error),
+        Err(refused) => Ok(Some(refused)),
+    }
+}
 
 enum Request {
     HistoryPage {
@@ -116,6 +138,13 @@ enum Request {
         theme: String,
         reply: Reply<()>,
     },
+    GetInterfaceSize {
+        reply: Reply<u16>,
+    },
+    SetInterfaceSize {
+        size: u16,
+        reply: Reply<()>,
+    },
     GetUpdateCheck {
         reply: Reply<bool>,
     },
@@ -136,12 +165,45 @@ enum Request {
     GetEditor {
         reply: Reply<EditorPreferences>,
     },
+    GetEditorSnippets {
+        reply: Reply<Vec<spelaion_store::EditorSnippet>>,
+    },
+    /// The reply is why the snippet was refused, if it was.
+    SaveEditorSnippet {
+        snippet: spelaion_store::EditorSnippet,
+        reply: Reply<Option<crate::editor_snippets::SnippetError>>,
+    },
+    DeleteEditorSnippet {
+        name: String,
+        reply: Reply<bool>,
+    },
+    GetScriptTemplate {
+        reply: Reply<String>,
+    },
+    SetScriptTemplate {
+        template: String,
+        reply: Reply<Option<crate::editor_snippets::SnippetError>>,
+    },
     SetEditor {
         preferences: EditorPreferences,
         reply: Reply<()>,
     },
     GetGrid {
         reply: Reply<GridPreferences>,
+    },
+    GetDisplay {
+        reply: Reply<spelaion_store::DisplayPreferences>,
+    },
+    GetCopy {
+        reply: Reply<spelaion_store::CopyPreferences>,
+    },
+    SetCopy {
+        preferences: spelaion_store::CopyPreferences,
+        reply: Reply<()>,
+    },
+    SetDisplay {
+        preferences: spelaion_store::DisplayPreferences,
+        reply: Reply<()>,
     },
     GetMap {
         reply: Reply<MapPreferences>,
@@ -231,6 +293,24 @@ enum Request {
         workspace: String,
         connection: String,
         reply: Reply<ExplorerFilter>,
+    },
+    GetVariables {
+        workspace: String,
+        connection: String,
+        reply: Reply<Vec<(String, String)>>,
+    },
+    SetVariable {
+        workspace: String,
+        connection: String,
+        name: String,
+        value: Option<String>,
+        reply: Reply<()>,
+    },
+    /// A table data tab's filter history and default (`table_filters.rs`).
+    TableFilters {
+        table: FilteredTable,
+        change: TableFilterChange,
+        reply: Reply<StoredTableFilters>,
     },
     SetFilter {
         workspace: String,
@@ -330,6 +410,12 @@ impl QueryHistory {
                         Request::SetTheme { theme, reply } => {
                             let _ = reply.send(store.set_theme(&theme));
                         }
+                        Request::GetInterfaceSize { reply } => {
+                            let _ = reply.send(store.get_interface_size());
+                        }
+                        Request::SetInterfaceSize { size, reply } => {
+                            let _ = reply.send(store.set_interface_size(size));
+                        }
                         Request::GetUpdateCheck { reply } => {
                             let _ = reply.send(store.get_update_check());
                         }
@@ -352,8 +438,39 @@ impl QueryHistory {
                         Request::SetEditor { preferences, reply } => {
                             let _ = reply.send(store.set_editor_preferences(&preferences));
                         }
+                        Request::GetEditorSnippets { reply } => {
+                            let _ = reply.send(crate::editor_snippets::editor_snippets(&store));
+                        }
+                        Request::SaveEditorSnippet { snippet, reply } => {
+                            let _ = reply.send(refusal(
+                                crate::editor_snippets::save_editor_snippet(&store, &snippet),
+                            ));
+                        }
+                        Request::DeleteEditorSnippet { name, reply } => {
+                            let _ = reply.send(store.delete_editor_snippet(&name));
+                        }
+                        Request::GetScriptTemplate { reply } => {
+                            let _ = reply.send(crate::editor_snippets::new_script_template(&store));
+                        }
+                        Request::SetScriptTemplate { template, reply } => {
+                            let _ = reply.send(refusal(
+                                crate::editor_snippets::set_new_script_template(&store, &template),
+                            ));
+                        }
                         Request::GetGrid { reply } => {
                             let _ = reply.send(store.get_grid_preferences());
+                        }
+                        Request::GetDisplay { reply } => {
+                            let _ = reply.send(store.get_display_preferences());
+                        }
+                        Request::GetCopy { reply } => {
+                            let _ = reply.send(store.get_copy_preferences());
+                        }
+                        Request::SetCopy { preferences, reply } => {
+                            let _ = reply.send(store.set_copy_preferences(&preferences));
+                        }
+                        Request::SetDisplay { preferences, reply } => {
+                            let _ = reply.send(store.set_display_preferences(&preferences));
                         }
                         Request::GetMap { reply } => {
                             let _ = reply.send(store.get_map_preferences());
@@ -474,6 +591,34 @@ impl QueryHistory {
                             reply,
                         } => {
                             let _ = reply.send(store.explorer_filter(&workspace, &connection));
+                        }
+                        Request::GetVariables {
+                            workspace,
+                            connection,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.connection_variables(&workspace, &connection));
+                        }
+                        Request::SetVariable {
+                            workspace,
+                            connection,
+                            name,
+                            value,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.set_connection_variable(
+                                &workspace,
+                                &connection,
+                                &name,
+                                value.as_deref(),
+                            ));
+                        }
+                        Request::TableFilters {
+                            table,
+                            change,
+                            reply,
+                        } => {
+                            let _ = reply.send(stored_table_filters(&store, &table, change));
                         }
                         Request::SetFilter {
                             workspace,
@@ -684,6 +829,19 @@ impl QueryHistory {
             .await
     }
 
+    /// The interface size in percent (SDB-389), one of
+    /// [`spelaion_store::INTERFACE_SIZES`]; 100 until the user chooses another.
+    pub async fn interface_size(&self) -> Result<u16, HistoryError> {
+        self.request(|reply| Request::GetInterfaceSize { reply })
+            .await
+    }
+
+    /// Saves the interface size; the store refuses anything but one of its steps.
+    pub async fn set_interface_size(&self, size: u16) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetInterfaceSize { size, reply })
+            .await
+    }
+
     /// Whether the app checks for updates when it starts (ADR-021), defaulting to on.
     pub async fn update_check(&self) -> Result<bool, HistoryError> {
         self.request(|reply| Request::GetUpdateCheck { reply })
@@ -728,6 +886,53 @@ impl QueryHistory {
     pub async fn editor_preferences(&self) -> Result<EditorPreferences, HistoryError> {
         self.request(|reply| Request::GetEditor { reply }).await
     }
+
+    /// The user's own editor snippets (SDB-384), by name: only those that pass the core's
+    /// check.
+    pub async fn editor_snippets(
+        &self,
+    ) -> Result<Vec<spelaion_store::EditorSnippet>, HistoryError> {
+        self.request(|reply| Request::GetEditorSnippets { reply })
+            .await
+    }
+
+    /// Saves an editor snippet, replacing the one of the same name. The core checks it
+    /// (bounded sizes, no hidden characters, at most `MAX_SNIPPETS`) and refuses otherwise.
+    pub async fn save_editor_snippet(
+        &self,
+        snippet: spelaion_store::EditorSnippet,
+    ) -> Result<(), HistoryError> {
+        match self
+            .request(|reply| Request::SaveEditorSnippet { snippet, reply })
+            .await?
+        {
+            None => Ok(()),
+            Some(refused) => Err(HistoryError::EditorSnippet(refused)),
+        }
+    }
+
+    /// Deletes the editor snippet of that name; whether there was one.
+    pub async fn delete_editor_snippet(&self, name: String) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::DeleteEditorSnippet { name, reply })
+            .await
+    }
+
+    /// The text a new script starts with; empty when there is none.
+    pub async fn new_script_template(&self) -> Result<String, HistoryError> {
+        self.request(|reply| Request::GetScriptTemplate { reply })
+            .await
+    }
+
+    /// Saves the text a new script starts with (empty: none), checked like a snippet's text.
+    pub async fn set_new_script_template(&self, template: String) -> Result<(), HistoryError> {
+        match self
+            .request(|reply| Request::SetScriptTemplate { template, reply })
+            .await?
+        {
+            None => Ok(()),
+            Some(refused) => Err(HistoryError::EditorSnippet(refused)),
+        }
+    }
     pub async fn set_editor_preferences(
         &self,
         preferences: EditorPreferences,
@@ -760,6 +965,63 @@ impl QueryHistory {
         preferences: crate::BackupPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetBackup { preferences, reply })
+            .await
+    }
+
+    /// How the grid shows values (SDB-385). What was saved is read leniently: a setting the
+    /// core does not know, or can no longer use (a zone that is gone), is its default.
+    pub async fn display_format(&self) -> Result<crate::DisplayFormat, HistoryError> {
+        let saved = self.request(|reply| Request::GetDisplay { reply }).await?;
+        Ok(display_format_of(&saved))
+    }
+
+    /// Saves how the grid shows values, after checking it (`DisplayFormat::compile`): a
+    /// pattern that cannot format its kind of value, or a zone that does not exist, is
+    /// refused and nothing changes. Returns the settings ready to format with.
+    pub async fn set_display_format(
+        &self,
+        format: crate::DisplayFormat,
+    ) -> Result<crate::Display, HistoryError> {
+        let display = format.compile()?;
+        let preferences = spelaion_store::DisplayPreferences {
+            as_stored: format.as_stored,
+            date: format.date,
+            time: format.time,
+            timestamp: format.timestamp,
+            grouping: format.grouping.as_str().into(),
+            decimal: format.decimal.as_str().into(),
+            time_zone: format.time_zone,
+            binary: format.binary.as_str().into(),
+        };
+        self.request(|reply| Request::SetDisplay { preferences, reply })
+            .await?;
+        Ok(display)
+    }
+
+    /// The copy defaults (SDB-388): what "Copy special…" chose last. What was saved is read
+    /// leniently: options the core cannot read back are the defaults.
+    pub async fn copy_defaults(&self) -> Result<crate::CopySpecial, HistoryError> {
+        let saved = self.request(|reply| Request::GetCopy { reply }).await?;
+        Ok(copy_special_of(&saved))
+    }
+
+    /// Saves the copy defaults, after checking them (`CopySpecial::check`): options whose text
+    /// could not be read back are refused and nothing changes.
+    pub async fn set_copy_defaults(&self, options: crate::CopySpecial) -> Result<(), HistoryError> {
+        options.check().map_err(HistoryError::CopyOptions)?;
+        let preferences = spelaion_store::CopyPreferences {
+            delimiter: options.delimiter.to_string(),
+            quote: options.quote.map(String::from).unwrap_or_default(),
+            row_delimiter: match options.row_delimiter {
+                crate::RowDelimiter::Lf => "lf",
+                crate::RowDelimiter::CrLf => "crlf",
+            }
+            .into(),
+            null_text: options.null_text,
+            header: options.header,
+            row_numbers: options.row_numbers,
+        };
+        self.request(|reply| Request::SetCopy { preferences, reply })
             .await
     }
 
@@ -912,6 +1174,39 @@ impl QueryHistory {
         .await
     }
 
+    /// A connection's `${name}` variables for the editor's scripts (SDB-383), by name. Local
+    /// values: they are only ever written into a statement the user runs from the editor.
+    pub async fn connection_variables(
+        &self,
+        workspace: String,
+        connection: String,
+    ) -> Result<Vec<(String, String)>, HistoryError> {
+        self.request(|reply| Request::GetVariables {
+            workspace,
+            connection,
+            reply,
+        })
+        .await
+    }
+
+    /// Sets one of a connection's variables, or removes it (`None`).
+    pub async fn set_connection_variable(
+        &self,
+        workspace: String,
+        connection: String,
+        name: String,
+        value: Option<String>,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetVariable {
+            workspace,
+            connection,
+            name,
+            value,
+            reply,
+        })
+        .await
+    }
+
     /// A connection's explorer filter (ADR-025), empty if it has none.
     pub async fn explorer_filter(
         &self,
@@ -921,6 +1216,22 @@ impl QueryHistory {
         self.request(|reply| Request::GetFilter {
             workspace,
             connection,
+            reply,
+        })
+        .await
+    }
+
+    /// Changes what the store remembers of a table's filters and reads it back, in one step
+    /// of the store's actor. Nothing is checked here: `table_filters.rs` checks what goes in
+    /// and what comes out.
+    pub(crate) async fn stored_table_filters(
+        &self,
+        table: FilteredTable,
+        change: TableFilterChange,
+    ) -> Result<StoredTableFilters, HistoryError> {
+        self.request(|reply| Request::TableFilters {
+            table,
+            change,
             reply,
         })
         .await
@@ -1423,6 +1734,81 @@ impl PendingEntry {
     }
 }
 
+/// The display settings as they were saved, with whatever cannot be used any more left at its
+/// default: the grid must always open.
+/// The copy defaults as saved, or the defaults where they cannot be used: a field that is not
+/// one character, an unknown row delimiter, or options that together could not be read back.
+fn copy_special_of(saved: &spelaion_store::CopyPreferences) -> crate::CopySpecial {
+    let defaults = crate::CopySpecial::default();
+    let one = |text: &str| {
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => Some(c),
+            _ => None,
+        }
+    };
+    let options = crate::CopySpecial {
+        delimiter: one(&saved.delimiter).unwrap_or(defaults.delimiter),
+        quote: if saved.quote.is_empty() {
+            None
+        } else {
+            one(&saved.quote).or(defaults.quote)
+        },
+        row_delimiter: match saved.row_delimiter.as_str() {
+            "crlf" => crate::RowDelimiter::CrLf,
+            _ => crate::RowDelimiter::Lf,
+        },
+        null_text: saved.null_text.clone(),
+        header: saved.header,
+        row_numbers: saved.row_numbers,
+    };
+    if options.check().is_ok() {
+        options
+    } else {
+        defaults
+    }
+}
+
+fn display_format_of(saved: &spelaion_store::DisplayPreferences) -> crate::DisplayFormat {
+    let mut format = crate::DisplayFormat {
+        as_stored: saved.as_stored,
+        date: saved.date.clone(),
+        time: saved.time.clone(),
+        timestamp: saved.timestamp.clone(),
+        grouping: crate::Grouping::parse(&saved.grouping).unwrap_or_default(),
+        decimal: crate::DecimalMark::parse(&saved.decimal).unwrap_or_default(),
+        time_zone: saved.time_zone.clone(),
+        binary: crate::BinaryDisplay::parse(&saved.binary).unwrap_or_default(),
+    };
+    // One setting at a time: a bad one does not take the others with it.
+    let defaults = crate::DisplayFormat::default();
+    let usable = |candidate: &crate::DisplayFormat| candidate.compile().is_ok();
+    if !usable(&format) {
+        let only = |change: &dyn Fn(&mut crate::DisplayFormat)| {
+            let mut one = crate::DisplayFormat::default();
+            change(&mut one);
+            usable(&one)
+        };
+        if !only(&|f| f.date = format.date.clone()) {
+            format.date = defaults.date.clone();
+        }
+        if !only(&|f| f.time = format.time.clone()) {
+            format.time = defaults.time.clone();
+        }
+        if !only(&|f| f.timestamp = format.timestamp.clone()) {
+            format.timestamp = defaults.timestamp.clone();
+        }
+        if !only(&|f| f.time_zone = format.time_zone.clone()) {
+            format.time_zone = defaults.time_zone.clone();
+        }
+        if !usable(&format) {
+            format.grouping = defaults.grouping;
+            format.decimal = defaults.decimal;
+        }
+    }
+    format
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1431,6 +1817,44 @@ mod tests {
 
     use super::*;
     use crate::ResultStore;
+
+    #[test]
+    fn copy_defaults_are_read_leniently() {
+        let saved = spelaion_store::CopyPreferences {
+            delimiter: ";".into(),
+            quote: String::new(),
+            row_delimiter: "crlf".into(),
+            null_text: "NULL".into(),
+            header: false,
+            row_numbers: true,
+        };
+        assert_eq!(
+            copy_special_of(&saved),
+            crate::CopySpecial {
+                delimiter: ';',
+                quote: None,
+                row_delimiter: crate::RowDelimiter::CrLf,
+                null_text: "NULL".into(),
+                header: false,
+                row_numbers: true,
+            }
+        );
+        // A field it cannot use is its default; options that together could not be read
+        // back (the NULL text holds the delimiter) are all the defaults.
+        let odd = spelaion_store::CopyPreferences {
+            delimiter: "ab".into(),
+            row_delimiter: "cr".into(),
+            ..saved.clone()
+        };
+        let read = copy_special_of(&odd);
+        assert_eq!(read.delimiter, '\t');
+        assert_eq!(read.row_delimiter, crate::RowDelimiter::Lf);
+        let clash = spelaion_store::CopyPreferences {
+            null_text: "a;b".into(),
+            ..saved
+        };
+        assert_eq!(copy_special_of(&clash), crate::CopySpecial::default());
+    }
 
     #[derive(Default)]
     struct ContextState {
@@ -2487,6 +2911,30 @@ mod tests {
         let reopened = QueryHistory::open(path).unwrap();
         assert_eq!(reopened.theme().await.unwrap(), "dark");
         assert_eq!(reopened.language().await.unwrap(), "es");
+    }
+
+    #[tokio::test]
+    async fn interface_size_is_personal_persistent_and_only_one_of_its_steps() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "spelaion-core-interface-size-{}-{nonce}/state.db",
+            std::process::id()
+        ));
+        let history = QueryHistory::open(path.clone()).unwrap();
+        assert_eq!(
+            history.interface_size().await.unwrap(),
+            spelaion_store::DEFAULT_INTERFACE_SIZE
+        );
+        let largest = *spelaion_store::INTERFACE_SIZES.last().unwrap();
+        history.set_interface_size(largest).await.unwrap();
+        assert!(history.set_interface_size(largest + 1).await.is_err());
+        assert!(history.set_interface_size(0).await.is_err());
+        drop(history);
+        let reopened = QueryHistory::open(path).unwrap();
+        assert_eq!(reopened.interface_size().await.unwrap(), largest);
     }
 
     #[tokio::test]

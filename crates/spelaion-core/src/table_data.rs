@@ -17,6 +17,7 @@ use crate::export::sql_literal;
 use crate::filter::FilterOp;
 use crate::generate::{qualified, scalar_count};
 use crate::guard::sql_dialect;
+use crate::sort::MAX_SORT_KEYS;
 
 /// Most rows a page may ask for.
 pub const MAX_PAGE_ROWS: u64 = 100_000;
@@ -96,6 +97,86 @@ pub fn order_with_key(dialect: &dyn Dialect, order_by: &str, key: &[String]) -> 
     }
 }
 
+/// One column of a table data tab's sort (its header clicks), by the column's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnSort {
+    pub column: String,
+    pub descending: bool,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum OrderError {
+    #[error("the table has no column \"{0}\"")]
+    NoSuchColumn(String),
+    #[error("column \"{0}\" is in the sort twice")]
+    Repeated(String),
+    #[error("a table is sorted by at most {MAX_SORT_KEYS} columns")]
+    TooManyKeys,
+    /// The column is masked (ADR-051): its order would tell its values apart.
+    #[error("column \"{0}\" is masked: it cannot be sorted by")]
+    Masked(String),
+}
+
+/// The `ORDER BY` of a table data tab sorted by its headers: each column, the most
+/// significant first, as the catalog names it and quoted for the engine, `DESC` where asked.
+/// `columns` are the table's, read from the catalog: a name that is not one of them is
+/// refused, so the UI names columns and never writes SQL. NULLs go where the engine puts
+/// them, as in an `ORDER BY` the user types.
+pub fn order_by_columns(
+    dialect: &dyn Dialect,
+    columns: &[String],
+    sort: &[ColumnSort],
+    masked: &dyn Fn(&str) -> bool,
+) -> Result<String, OrderError> {
+    if sort.len() > MAX_SORT_KEYS {
+        return Err(OrderError::TooManyKeys);
+    }
+    let mut parts = Vec::with_capacity(sort.len());
+    for (i, key) in sort.iter().enumerate() {
+        let column = columns
+            .iter()
+            .find(|c| **c == key.column)
+            .ok_or_else(|| OrderError::NoSuchColumn(key.column.clone()))?;
+        if sort[..i].iter().any(|k| k.column == key.column) {
+            return Err(OrderError::Repeated(key.column.clone()));
+        }
+        if masked(column) {
+            return Err(OrderError::Masked(column.clone()));
+        }
+        let quoted = dialect.quote_identifier(column);
+        parts.push(if key.descending {
+            format!("{quoted} DESC")
+        } else {
+            quoted
+        });
+    }
+    Ok(parts.join(", "))
+}
+
+/// [`order_by_columns`] for a table of `session`, its columns read from the catalog now and
+/// the session's masked columns refused.
+pub async fn table_order_by(
+    session: &Session,
+    schema: &str,
+    name: &str,
+    sort: &[ColumnSort],
+) -> Result<String, String> {
+    if sort.is_empty() {
+        return Ok(String::new());
+    }
+    let table = session
+        .connection()
+        .describe_table(schema, name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let columns: Vec<String> = table.columns.into_iter().map(|c| c.name).collect();
+    let masking = session.masking();
+    order_by_columns(session.dialect().as_ref(), &columns, sort, &|column| {
+        masking.masks_table_column(name, column)
+    })
+    .map_err(|e| e.to_string())
+}
+
 /// [`table_page_sql`] with the page ordered by [`order_with_key`], the primary key read from
 /// the catalog now.
 pub async fn table_page_sql_by_key(session: &Session, page: &TablePage) -> Result<String, String> {
@@ -111,6 +192,68 @@ pub async fn table_page_sql_by_key(session: &Session, page: &TablePage) -> Resul
         ..page.clone()
     };
     table_page_sql(dialect.as_ref(), &page).map_err(|e| e.to_string())
+}
+
+/// Every row the filter keeps, ordered as the tab's pages are ([`order_with_key`], the primary
+/// key read from the catalog now): "Load every row" of a table data tab (SDB-386). The same
+/// SELECT as a page without its paging, checked as [`table_export_sql`] checks it, so the
+/// filter and the order still cannot add a limit, read another table or run anything else.
+pub async fn table_rows_sql_by_key(
+    session: &Session,
+    schema: &str,
+    name: &str,
+    filter: &str,
+    order_by: &str,
+) -> Result<String, String> {
+    let key = session
+        .connection()
+        .describe_table(schema, name)
+        .await
+        .map(|table| table.primary_key)
+        .unwrap_or_default();
+    let dialect = session.dialect();
+    let order = order_with_key(dialect.as_ref(), order_by, &key);
+    table_export_sql(dialect.as_ref(), schema, name, filter, &order).map_err(|e| e.to_string())
+}
+
+/// The last page of a table data tab, from its rows counted now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastPage {
+    /// The rows the filter keeps.
+    pub total: u64,
+    /// The last page's number, from 0 (0 with no rows).
+    pub page: u64,
+}
+
+/// The page that holds the last of `total` rows, `page_rows` to a page.
+pub fn last_page_of(total: u64, page_rows: u64) -> u64 {
+    if total == 0 || page_rows == 0 {
+        0
+    } else {
+        (total - 1) / page_rows
+    }
+}
+
+/// The last page of a table data tab (SDB-386): its rows counted on `session`, then the page
+/// that holds the last of them. A table data tab numbers its pages (ADR-054, point 4): the
+/// page is exact for the rows as they were counted, ordered by the primary key after the
+/// user's order; a row written after the count can move it, and a table without a primary key
+/// has no order that makes it exact (the bar says so).
+pub async fn last_table_page(
+    session: &Session,
+    schema: &str,
+    name: &str,
+    filter: &str,
+    page_rows: u64,
+) -> Result<LastPage, String> {
+    if page_rows == 0 || page_rows > MAX_PAGE_ROWS {
+        return Err(PageError::BadLimit.to_string());
+    }
+    let total = u64::try_from(count_table_rows(session, schema, name, filter).await?).unwrap_or(0);
+    Ok(LastPage {
+        total,
+        page: last_page_of(total, page_rows),
+    })
 }
 
 /// `SELECT COUNT(*)` of the rows the filter keeps, checked the same way.
@@ -515,6 +658,16 @@ mod tests {
     use super::*;
     use spelaion_dialect::SqliteDialect;
 
+    #[test]
+    fn the_last_page_holds_the_last_row() {
+        assert_eq!(last_page_of(0, 100), 0);
+        assert_eq!(last_page_of(1, 100), 0);
+        assert_eq!(last_page_of(100, 100), 0);
+        assert_eq!(last_page_of(101, 100), 1);
+        assert_eq!(last_page_of(250, 100), 2);
+        assert_eq!(last_page_of(10, 0), 0);
+    }
+
     struct Named(&'static str);
 
     impl Dialect for Named {
@@ -766,6 +919,51 @@ mod tests {
         )
         .unwrap();
         assert!(sql.contains("ORDER BY\nid, \"order line\"\n"), "{sql}");
+    }
+
+    #[test]
+    fn a_header_sort_is_written_from_the_tables_own_columns() {
+        let columns: Vec<String> = ["id", "order date", "total", "x\" DESC, (select 1) --"]
+            .map(String::from)
+            .to_vec();
+        let key = |column: &str, descending| ColumnSort {
+            column: column.into(),
+            descending,
+        };
+        let write = |dialect: &dyn Dialect, sort: &[ColumnSort]| {
+            order_by_columns(dialect, &columns, sort, &|column| column == "total")
+        };
+        assert_eq!(
+            write(&SqliteDialect, &[key("order date", true), key("id", false)]),
+            Ok("\"order date\" DESC, id".into())
+        );
+        assert_eq!(
+            write(&Named("mysql"), &[key("order date", false)]),
+            Ok("`order date`".into())
+        );
+        assert_eq!(write(&SqliteDialect, &[]), Ok(String::new()));
+        // A column whose name is SQL is still one quoted name, and the page still checks.
+        let order = write(&SqliteDialect, &[key("x\" DESC, (select 1) --", true)]).unwrap();
+        assert_eq!(order, "\"x\"\" DESC, (select 1) --\" DESC");
+        assert!(table_page_sql(&SqliteDialect, &page("", &order)).is_ok());
+        // Only the table's columns, by their exact name, once each, and never a masked one.
+        for name in ["id desc", "ID", "id; drop table orders", "1", ""] {
+            assert_eq!(
+                write(&SqliteDialect, &[key(name, false)]),
+                Err(OrderError::NoSuchColumn(name.into())),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            write(&SqliteDialect, &[key("id", false), key("id", true)]),
+            Err(OrderError::Repeated("id".into()))
+        );
+        assert_eq!(
+            write(&SqliteDialect, &[key("id", false), key("total", true)]),
+            Err(OrderError::Masked("total".into()))
+        );
+        let many: Vec<ColumnSort> = (0..=MAX_SORT_KEYS).map(|_| key("id", false)).collect();
+        assert_eq!(write(&SqliteDialect, &many), Err(OrderError::TooManyKeys));
     }
 
     fn page(filter: &str, order_by: &str) -> TablePage {
