@@ -39,8 +39,9 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   follows these rules, with "Rebase and merge" (one commit per change, as written), and delete
   its branch. GitHub's auto-merge can merge it as soon as CI passes.
 - **Security files need a person:** a pull request that touches a file listed in
-  `.github/CODEOWNERS` (the read-only and write barriers, secrets, trust, SSH host keys, the
-  patched TLS libraries, updates, CI itself) waits for an owner's approval. The author cannot
+  `.github/CODEOWNERS` (execution and import barriers, secrets and redaction, trust and
+  connection safeguards, SSH and remote SQLite boundaries, MCP client configuration, patched
+  TLS libraries, updates and CI) waits for an owner's approval. The author cannot
   approve their own: the other owner does.
 - A Plane work item is the unit of work (see "Work tracking" below).
 - To release, open a pull request `dev` → `main` and merge nothing else into `dev` until it is
