@@ -219,7 +219,7 @@ fn the_form_writes_each_setting_alone_and_takes_it_out_again() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 
     // PostgreSQL's pooler, written and removed the same way.
-    let text = format!("{PG}");
+    let text = PG.to_string();
     let path = fx.write("user/connections/pooled.toml", &text);
     let config = fx.config();
     let id = personal("pooled");
