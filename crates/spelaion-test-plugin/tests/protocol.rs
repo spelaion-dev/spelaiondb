@@ -12,9 +12,9 @@ use std::time::Duration;
 use arrow::array::{Array, Int64Array, StringArray};
 use futures_util::StreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, InsertTarget,
-    KeepAlive, LogicalType, NameFilter, ObjectKind, PlanMode, Result, Secret, TextRows, TlsMode,
-    TransactionState,
+    ConnectParams, Connection, DependencyKind, Driver, DriverError, ExecEvent, ExecOptions,
+    InsertTarget, KeepAlive, LogicalType, NameFilter, ObjectKind, PlanMode, Result, Secret,
+    TextRows, TlsMode, TransactionState,
 };
 use spelaion_plugin_host::{Plugin, REDACTED, VERSION};
 
@@ -442,6 +442,46 @@ async fn the_catalog_and_the_session_calls_answer_as_the_driver_does() {
             .is_empty()
     );
     assert!(within(c.list_server_objects()).await.unwrap().is_empty());
+
+    // A relation's properties, partitions and dependencies (1.2, SDB-393), as the driver gave
+    // them, an engine's own property name and a kind not tracked included.
+    let properties = within(c.object_properties("main", "people")).await.unwrap();
+    assert_eq!(properties.len(), 2);
+    assert_eq!(properties[0].name, "owner");
+    assert_eq!(properties[1].name, "made_up_flag");
+    let partitioning = within(c.table_partitions("main", "people"))
+        .await
+        .unwrap()
+        .expect("partitioned");
+    assert_eq!(partitioning.method, "range");
+    assert_eq!(partitioning.partitions.len(), 2);
+    assert_eq!(
+        partitioning.partitions[0].bound.as_deref(),
+        Some("FOR VALUES FROM (0) TO (100)")
+    );
+    assert!(partitioning.partitions[1].subpartitioned);
+    assert_eq!(
+        within(c.table_partitions("main", "adults")).await.unwrap(),
+        None
+    );
+    let dependencies = within(c.object_dependencies("main", "people"))
+        .await
+        .unwrap()
+        .expect("told");
+    assert_eq!(dependencies.uses[0].kind, DependencyKind::Sequence);
+    assert_eq!(dependencies.used_by[0].name, "adults");
+    assert_eq!(dependencies.untracked, [DependencyKind::Trigger]);
+    // An engine that cannot tell says so: never an empty list.
+    assert_eq!(
+        within(c.object_dependencies("main", "adults"))
+            .await
+            .unwrap(),
+        None
+    );
+    let refused = within(c.object_properties("main", "nope"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.to_string(), "no table main.nope");
 }
 
 #[tokio::test]
@@ -534,7 +574,26 @@ async fn a_plugin_of_version_1_0_is_never_sent_a_request_or_settings() {
         panic!("settings were sent to a plugin of 1.0");
     };
     assert!(error.to_string().contains("connection settings"), "{error}");
-    // It was refused in the core: the plugin is still there, and never saw either.
+    // 1.2's details are not asked of it: its engine tells none, as a driver without them.
+    assert!(
+        within(connection.object_properties("main", "people"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        within(connection.table_partitions("main", "people"))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        within(connection.object_dependencies("main", "people"))
+            .await
+            .unwrap(),
+        None
+    );
+    // It was refused in the core: the plugin is still there, and never saw any of it.
     assert!(within(plugin.is_running()).await);
     drop(connection);
     let _ = std::fs::remove_file(program);

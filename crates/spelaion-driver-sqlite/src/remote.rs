@@ -17,14 +17,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, Connection, Dialect, DriverError, EventStream, ExecEvent,
-    ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey, Remote, RemoteControl,
-    RemoteProcess, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo,
+    CancelHandle, Capabilities, Connection, Dependencies, Dialect, DriverError, EventStream,
+    ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ObjectProperty, ReferencingKey,
+    Remote, RemoteControl, RemoteProcess, Result, SchemaColumn, SchemaInfo, SchemaObject,
+    TableInfo,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
 use spelaion_sqlite_schema::catalog::{self, Row};
+use spelaion_sqlite_schema::details;
 use spelaion_sqlite_schema::typing::{is_dml, is_query};
 use spelaion_sqlite_schema::{ResultBuilder, ResultColumn, SqlValue};
 
@@ -834,6 +836,15 @@ impl Connection for RemoteConnection {
             .rows(catalog::relation_definition_sql(schema, name))
             .await?;
         catalog::relation_definition(schema, name, &rows)
+    }
+
+    // `.explain off` keeps a view's program in quote mode, as every other query.
+    async fn object_properties(&self, schema: &str, name: &str) -> Result<Vec<ObjectProperty>> {
+        details::properties(schema, name, |sql| self.rows(sql)).await
+    }
+
+    async fn object_dependencies(&self, schema: &str, name: &str) -> Result<Option<Dependencies>> {
+        details::dependencies(schema, name, |sql| self.rows(sql)).await
     }
 }
 

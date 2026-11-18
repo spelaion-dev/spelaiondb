@@ -1138,6 +1138,7 @@ async fn structure_forms_change_columns_on_every_engine() {
             table: "oa_alter_t".into(),
             columns: before.columns.iter().map(edit_of).collect(),
             drop: Vec::new(),
+            comment: None,
         };
         assert!(
             matches!(
@@ -1254,6 +1255,30 @@ async fn structure_forms_change_columns_on_every_engine() {
             "{label}: {qty:?}\n{script}"
         );
         assert_eq!(column(&last, "note").comment, None, "{label}\n{script}");
+
+        // The table's own comment (SDB-393): set with a quote in it, changed, then removed.
+        if label == "sqlite" {
+            let refused = alteration_plan(
+                &session,
+                &TableAlteration {
+                    comment: Some(Some("x".into())),
+                    ..unchanged.clone()
+                },
+            )
+            .await;
+            assert!(refused.is_err(), "{label}: SQLite tables have no comments");
+        } else {
+            for comment in [Some("the orders' table"), Some("changed"), None] {
+                let alteration = TableAlteration {
+                    columns: Vec::new(),
+                    comment: Some(comment.map(String::from)),
+                    ..unchanged.clone()
+                };
+                let script = apply_form(label, &session, &alteration).await;
+                let read = structure(label, &session, schema, "oa_alter_t").await;
+                assert_eq!(read.comment.as_deref(), comment, "{label}\n{script}");
+            }
+        }
         run(label, &session, &cleanup, true).await;
     }
 }
@@ -1292,6 +1317,7 @@ async fn mysql_restates_every_attribute_of_a_modified_column() {
                 table: "oa_modify_t".into(),
                 columns: vec![edit, n],
                 drop: Vec::new(),
+                comment: None,
             },
         )
         .await;
@@ -1369,6 +1395,7 @@ async fn constraints_drop_with_the_column_changes() {
                     DroppedConstraint::Constraint { name: unique },
                     DroppedConstraint::ForeignKey { name: fk },
                 ],
+                comment: None,
             },
         )
         .await;
@@ -1454,6 +1481,7 @@ async fn sqlite_rebuild_keeps_rows_indexes_triggers_views_and_keys() {
         table: "item".into(),
         columns: vec![qty, code],
         drop: Vec::new(),
+        comment: None,
     };
     let plan = alteration_plan(&session, &alteration).await.unwrap();
     assert!(plan.rebuilds() && plan.transactional());
@@ -1626,6 +1654,7 @@ async fn a_sqlite_rebuild_that_breaks_a_key_changes_nothing() {
         table: "item".into(),
         columns: vec![qty],
         drop: Vec::new(),
+        comment: None,
     };
     let script = alteration_plan(&session, &alteration)
         .await
@@ -1674,6 +1703,7 @@ async fn a_form_runs_only_the_script_it_showed() {
         table: "t".into(),
         columns: vec![a],
         drop: Vec::new(),
+        comment: None,
     };
     let script = alteration_plan(&session, &alteration)
         .await

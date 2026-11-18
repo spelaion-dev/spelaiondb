@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
-    LogicalType, ObjectKind, SchemaObjectKind, Value,
+    ConnectParams, Connection, ConstraintKind, DependencyInfo, DependencyKind, Driver, DriverError,
+    ExecEvent, ExecOptions, LogicalType, ObjectKind, SchemaObjectKind, Value,
 };
 use spelaion_driver_sqlite::SqliteDriver;
 
@@ -604,6 +604,121 @@ async fn introspection_describes_tables() {
         ]
     );
     assert_eq!(constraints(&line)[0].3, "PRIMARY KEY (order_id, n)");
+}
+
+/// A relation's properties and dependencies (SDB-393): what SQLite records, and what it does
+/// not said so rather than shown as nothing.
+#[tokio::test]
+async fn object_details_read_what_sqlite_records() {
+    let db = TempDb::new("details");
+    let conn = open(&db).await;
+    exec_all(
+        &*conn,
+        "create table customer (id integer primary key, email text) strict;
+         create table orders (id integer primary key, customer_id integer references customer (id),
+                              total numeric) without rowid;
+         create index orders_customer on orders (customer_id);
+         create table line (order_id integer references orders, sku text);
+         create view big_orders as select id, total from orders where total > 100;
+         create view by_customer as select c.email, o.total from customer c join orders o
+                                    on o.customer_id = c.id;
+         create view biggest as select * from big_orders;
+         create table gone (a);
+         create view broken as select a from gone;
+         drop table gone",
+    )
+    .await;
+    for trigger in [
+        "create trigger orders_total after update of total on orders begin select 1; end",
+        "create trigger big_insert instead of insert on big_orders begin select 1; end",
+    ] {
+        run(&*conn, trigger).await.unwrap();
+    }
+    let options = |props: Vec<spelaion_driver_api::ObjectProperty>| {
+        props
+            .into_iter()
+            .map(|p| format!("{}={}", p.name, p.value))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        options(conn.object_properties("main", "customer").await.unwrap()),
+        ["options=STRICT"]
+    );
+    assert_eq!(
+        options(conn.object_properties("main", "orders").await.unwrap()),
+        ["options=WITHOUT ROWID"]
+    );
+    assert!(
+        conn.object_properties("main", "big_orders")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(conn.object_properties("main", "nope").await.is_err());
+    // SQLite has no partitions.
+    assert_eq!(conn.table_partitions("main", "orders").await.unwrap(), None);
+
+    let names = |list: &[DependencyInfo]| {
+        list.iter()
+            .map(|d| {
+                format!(
+                    "{:?} {}{}",
+                    d.kind,
+                    d.name,
+                    d.detail
+                        .as_deref()
+                        .map(|d| format!(" [{d}]"))
+                        .unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let orders = conn
+        .object_dependencies("main", "ORDERS")
+        .await
+        .unwrap()
+        .expect("SQLite tells what it records");
+    assert_eq!(
+        names(&orders.uses),
+        ["Table customer [fk_0 (customer_id) → (id)]"]
+    );
+    // Views read through another view count too: `biggest` reads orders through big_orders.
+    assert_eq!(
+        names(&orders.used_by),
+        [
+            "View big_orders",
+            "View biggest",
+            "View by_customer",
+            "ForeignKey line [fk_0 (order_id)]",
+            "Trigger orders_total [on orders]",
+        ]
+    );
+    assert_eq!(orders.untracked, [DependencyKind::Trigger]);
+
+    let view = conn
+        .object_dependencies("main", "by_customer")
+        .await
+        .unwrap()
+        .expect("told");
+    assert_eq!(names(&view.uses), ["Table customer", "Table orders"]);
+    assert!(view.used_by.is_empty());
+    assert_eq!(
+        view.untracked,
+        [DependencyKind::Trigger, DependencyKind::View]
+    );
+    let big = conn
+        .object_dependencies("main", "big_orders")
+        .await
+        .unwrap()
+        .expect("told");
+    assert_eq!(names(&big.used_by), ["Trigger big_insert [on big_orders]"]);
+    // A view whose table was dropped says why; the others are not stopped by it.
+    let broken = conn
+        .object_dependencies("main", "broken")
+        .await
+        .unwrap_err();
+    assert!(broken.to_string().contains("gone"), "{broken}");
+    assert!(conn.object_dependencies("main", "nope").await.is_err());
 }
 
 #[tokio::test]

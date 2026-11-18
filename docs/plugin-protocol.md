@@ -71,7 +71,7 @@ one or refuses:
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"initialize",
- "params":{"protocols":[{"major":1,"minor":1}],"host":{"name":"spelaiondb","version":"0.10.0"}}}
+ "params":{"protocols":[{"major":1,"minor":2}],"host":{"name":"spelaiondb","version":"0.10.0"}}}
 
 {"jsonrpc":"2.0","id":1,
  "result":{"protocol":{"major":1,"minor":0},
@@ -92,9 +92,12 @@ What each minor version added:
 |---|---|
 | 1.0 | Everything not listed below |
 | 1.1 | Requests for engines whose language is not SQL (`run` kind `request`), `connect`'s `options`, and the object kinds `collection`, `node_label` and `relationship_type` (ADR-056) |
+| 1.2 | A relation's properties, partitions and dependencies: `object_properties`, `table_partitions` and `object_dependencies` (SDB-393) |
 
 The core never sends what a version added to a plugin that chose an older one: a request, or
-a `connect` with `options`, is refused in the core with a message that names both versions.
+a `connect` with `options`, is refused in the core with a message that names both versions;
+1.2's requests are not sent, and the engine tells none of them (no properties, no
+partitions, dependencies it cannot tell), as a compiled-in driver without them would.
 
 ## Errors
 A request that fails answers with an `error` whose `code` is `-32000` and whose `data` is the
@@ -261,11 +264,21 @@ name returns, as JSON with the field names of `spelaion-driver-api`.
 | `object_definition` | `object` | `{"sql": "…"}` |
 | `relation_definition` | `schema`, `name` | `{"sql": "…"}` |
 | `procedure_call` | `object` | `{"sql": "…"}` |
+| `object_properties` (1.2) | `schema`, `name` | `{"properties": [ObjectProperty]}` |
+| `table_partitions` (1.2) | `schema`, `name` | `{"partitioning": Partitioning \| null}` |
+| `object_dependencies` (1.2) | `schema`, `name` | `{"dependencies": Dependencies \| null}` |
 
 `filter` is a `NameFilter` (`{"include": ["…"], "exclude": ["…"]}`); with it the result is
 narrowed as `list_schemas_matching`, `list_objects_matching` and
 `list_schema_objects_matching` do. A plugin that does not support a request answers with the
 error its driver gives (`other`), never with silence.
+
+`table_partitions` answers `null` for a table that is not partitioned; `object_dependencies`
+answers `null` when the engine cannot tell what a relation uses and what uses it (never an
+empty list in its place), and its `untracked` names the kinds it does not record. A
+`DependencyInfo`'s `kind` is `table`, `view`, `materialized_view`, `function`, `procedure`,
+`trigger`, `foreign_key`, `sequence`, `type` or `index`; a core reads a kind it does not know
+as `other`.
 
 An `ObjectInfo`'s `kind` is `table`, `partitioned_table`, `view`, `materialized_view` or
 `foreign_table`, and since 1.1 also `collection` (records with no fixed columns: a MongoDB

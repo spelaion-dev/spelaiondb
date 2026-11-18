@@ -10,14 +10,15 @@ use futures_util::Stream;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, DriverError, EventStream, ExecEvent,
-    ExecOptions, InsertTarget, KeepAlive, NameFilter, ObjectInfo, PlanMode, ReferencingKey, Result,
-    SchemaColumn, SchemaInfo, SchemaObject, ServerObject, TableInfo, TextRows, TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, Dependencies, DriverError, EventStream,
+    ExecEvent, ExecOptions, InsertTarget, KeepAlive, NameFilter, ObjectInfo, ObjectProperty,
+    Partitioning, PlanMode, ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject,
+    ServerObject, TableInfo, TextRows, TransactionState,
 };
 use spelaion_plugin_protocol::ipc::BatchEncoder;
 use spelaion_plugin_protocol::{
-    CatalogRequest, Connect, ConnectResult, Execute, InsertRows, REQUESTS, Run, SessionRequest,
-    StreamId, method,
+    CatalogRequest, Connect, ConnectResult, DETAILS, Execute, InsertRows, REQUESTS, Run,
+    SessionRequest, StreamId, method,
 };
 use tokio::sync::mpsc;
 
@@ -115,6 +116,15 @@ impl PluginConnection {
     ) -> Result<T> {
         let value = self.process.shared().request(name, request).await?;
         field(value, key).ok_or_else(|| unexpected(name))
+    }
+
+    /// A catalog request about the relation `schema.name`.
+    fn relation(&self, schema: &str, name: &str) -> CatalogRequest {
+        CatalogRequest {
+            schema: Some(schema.to_string()),
+            name: Some(name.to_string()),
+            ..self.catalog()
+        }
     }
 
     fn catalog(&self) -> CatalogRequest {
@@ -374,6 +384,44 @@ impl Connection for PluginConnection {
         };
         self.ask(method::LIST_REFERENCING_KEYS, request, "keys")
             .await
+    }
+
+    // A plugin that speaks a protocol older than 1.2 is not asked: its engine tells none of
+    // these, as a compiled-in driver without them would (SDB-393).
+    async fn object_properties(&self, schema: &str, name: &str) -> Result<Vec<ObjectProperty>> {
+        if self.process.info().protocol < DETAILS {
+            return Ok(Vec::new());
+        }
+        self.ask(
+            method::OBJECT_PROPERTIES,
+            self.relation(schema, name),
+            "properties",
+        )
+        .await
+    }
+
+    async fn table_partitions(&self, schema: &str, name: &str) -> Result<Option<Partitioning>> {
+        if self.process.info().protocol < DETAILS {
+            return Ok(None);
+        }
+        self.ask(
+            method::TABLE_PARTITIONS,
+            self.relation(schema, name),
+            "partitioning",
+        )
+        .await
+    }
+
+    async fn object_dependencies(&self, schema: &str, name: &str) -> Result<Option<Dependencies>> {
+        if self.process.info().protocol < DETAILS {
+            return Ok(None);
+        }
+        self.ask(
+            method::OBJECT_DEPENDENCIES,
+            self.relation(schema, name),
+            "dependencies",
+        )
+        .await
     }
 
     async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
