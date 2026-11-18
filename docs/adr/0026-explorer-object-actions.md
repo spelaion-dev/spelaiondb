@@ -46,6 +46,23 @@ quoting must be the engine's.
    explorer filters (ADR-025): an object by its schema, name and kind. A bookmark whose object
    is gone stays until it is removed, and opening it says so.
 
+## Maintenance actions (2026-11-18, SDB-392)
+The explorer's Maintenance menu (a table, a materialized view, a SQLite or DuckDB schema) follows
+this ADR: the core writes each statement from the action and its options (`objects/maintenance.rs`:
+VACUUM with its options, ANALYZE, REFRESH MATERIALIZED VIEW, TRUNCATE with ONLY, RESTART
+IDENTITY and CASCADE, a table's own triggers on and off on PostgreSQL; CHECK, REPAIR, ANALYZE,
+OPTIMIZE and TRUNCATE on MySQL and MariaDB; a table or its indexes rebuilt and triggers on and off
+on SQL Server; the integrity check and VACUUM on SQLite, VACUUM and CHECKPOINT on DuckDB), and the
+dialog shows it before anything runs. Unlike a rename or a drop, it runs in an editor tab of its
+own, as shown: the guard asks there what it asks of any run (a TRUNCATE), a read-only connection
+refuses it there too (ADR-053), the engine's output (notices, the rows a check returns) lands in
+that tab's results and Messages, and VACUUM, which no engine runs inside a transaction, meets none
+(a new tab has none open, and the core never opens one before it, ADR-031). The plan refuses a
+read-only connection, or a session made read-only (SDB-395), before reading anything, checks that `CONCURRENTLY` can refresh the view
+(populated, with a unique index on plain columns), and lists what a TRUNCATE with CASCADE also
+empties, read from the catalog's foreign keys. PostgreSQL's triggers are switched with `USER`:
+`ALL` would also stop the foreign keys' triggers, which only a superuser may do.
+
 ## Consequences
 - An object action can never run SQL the user has not seen, nor anything else than what the
   core writes for the object chosen.

@@ -5375,6 +5375,47 @@ async fn active_schema(session: String, state: State<'_, AppState>) -> CmdResult
     spelaion_core::active_schema(&open.session).await
 }
 
+/// The maintenance actions the explorer offers on `target` on this session's engine (SDB-392):
+/// the core decides.
+#[command]
+async fn maintenance_kinds(
+    session: String,
+    target: ObjectTargetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<MaintenanceKindItem>> {
+    let open = state.session(&session).await?;
+    let target = spelaion_core::ObjectTarget::try_from(target)?;
+    Ok(
+        spelaion_core::maintenance_kinds(open.session.dialect().as_ref(), &target)
+            .into_iter()
+            .map(MaintenanceKindItem::from)
+            .collect(),
+    )
+}
+
+/// A maintenance action's statement, written by the core from the action and its options, with
+/// what the app says about it before it runs (SDB-392). Refused on a read-only connection or session. It
+/// runs, as shown, in an editor tab of its own: through the guard, as any run.
+#[command]
+async fn maintenance_plan(
+    session: String,
+    target: ObjectTargetItem,
+    kind: MaintenanceKindItem,
+    options: MaintenanceOptionsItem,
+    state: State<'_, AppState>,
+) -> CmdResult<MaintenancePlanItem> {
+    let open = state.session(&session).await?;
+    let request = spelaion_core::MaintenanceRequest {
+        target: spelaion_core::ObjectTarget::try_from(target)?,
+        kind: kind.into(),
+        options: options.into(),
+    };
+    spelaion_core::maintenance_plan(&open.session, &request, open.session.is_read_only())
+        .await
+        .map(MaintenancePlanItem::from)
+        .map_err(|e| e.to_string())
+}
+
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 /// was shown. The core writes the statements again from the change, and refuses read-only
 /// connections (ADR-026). Returns how many statements ran.
@@ -6123,6 +6164,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             object_actions,
             preview_object_change,
             apply_object_change,
+            maintenance_kinds,
+            maintenance_plan,
             principal_actions,
             preview_principal_change,
             apply_principal_change,

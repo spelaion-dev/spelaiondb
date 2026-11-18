@@ -7300,3 +7300,164 @@ impl From<spelaion_core::TlsWarning> for TlsWarningItem {
         }
     }
 }
+
+/// An action of the explorer's Maintenance menu (SDB-392).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum MaintenanceKindItem {
+    Vacuum,
+    Analyze,
+    RefreshMaterializedView,
+    Truncate,
+    EnableTriggers,
+    DisableTriggers,
+    Check,
+    Repair,
+    Optimize,
+    RebuildTable,
+    RebuildIndexes,
+    IntegrityCheck,
+    Checkpoint,
+}
+
+impl From<spelaion_core::MaintenanceKind> for MaintenanceKindItem {
+    fn from(kind: spelaion_core::MaintenanceKind) -> Self {
+        use spelaion_core::MaintenanceKind as K;
+        match kind {
+            K::Vacuum => Self::Vacuum,
+            K::Analyze => Self::Analyze,
+            K::RefreshMaterializedView => Self::RefreshMaterializedView,
+            K::Truncate => Self::Truncate,
+            K::EnableTriggers => Self::EnableTriggers,
+            K::DisableTriggers => Self::DisableTriggers,
+            K::Check => Self::Check,
+            K::Repair => Self::Repair,
+            K::Optimize => Self::Optimize,
+            K::RebuildTable => Self::RebuildTable,
+            K::RebuildIndexes => Self::RebuildIndexes,
+            K::IntegrityCheck => Self::IntegrityCheck,
+            K::Checkpoint => Self::Checkpoint,
+        }
+    }
+}
+
+impl From<MaintenanceKindItem> for spelaion_core::MaintenanceKind {
+    fn from(kind: MaintenanceKindItem) -> Self {
+        use MaintenanceKindItem as K;
+        match kind {
+            K::Vacuum => Self::Vacuum,
+            K::Analyze => Self::Analyze,
+            K::RefreshMaterializedView => Self::RefreshMaterializedView,
+            K::Truncate => Self::Truncate,
+            K::EnableTriggers => Self::EnableTriggers,
+            K::DisableTriggers => Self::DisableTriggers,
+            K::Check => Self::Check,
+            K::Repair => Self::Repair,
+            K::Optimize => Self::Optimize,
+            K::RebuildTable => Self::RebuildTable,
+            K::RebuildIndexes => Self::RebuildIndexes,
+            K::IntegrityCheck => Self::IntegrityCheck,
+            K::Checkpoint => Self::Checkpoint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum IndexCleanupItem {
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckModeItem {
+    Quick,
+    Fast,
+    Medium,
+    Extended,
+    Changed,
+}
+
+/// The options of a maintenance action; each action reads only its own (the core's
+/// `MaintenanceOptions`).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceOptionsItem {
+    pub full: bool,
+    pub freeze: bool,
+    pub analyze: bool,
+    pub disable_page_skipping: bool,
+    pub skip_locked: bool,
+    pub index_cleanup: Option<IndexCleanupItem>,
+    pub truncate_pages: Option<bool>,
+    pub verbose: bool,
+    pub no_data: bool,
+    pub concurrently: bool,
+    pub only: bool,
+    pub restart_identity: bool,
+    pub cascade: bool,
+    pub check_mode: Option<CheckModeItem>,
+    pub quick: bool,
+    pub extended: bool,
+    pub use_frm: bool,
+    pub local: bool,
+}
+
+impl From<MaintenanceOptionsItem> for spelaion_core::MaintenanceOptions {
+    fn from(o: MaintenanceOptionsItem) -> Self {
+        Self {
+            full: o.full,
+            freeze: o.freeze,
+            analyze: o.analyze,
+            disable_page_skipping: o.disable_page_skipping,
+            skip_locked: o.skip_locked,
+            index_cleanup: o.index_cleanup.map(|c| match c {
+                IndexCleanupItem::Auto => spelaion_core::IndexCleanup::Auto,
+                IndexCleanupItem::On => spelaion_core::IndexCleanup::On,
+                IndexCleanupItem::Off => spelaion_core::IndexCleanup::Off,
+            }),
+            truncate_pages: o.truncate_pages,
+            verbose: o.verbose,
+            no_data: o.no_data,
+            concurrently: o.concurrently,
+            only: o.only,
+            restart_identity: o.restart_identity,
+            cascade: o.cascade,
+            check_mode: o.check_mode.map(|m| match m {
+                CheckModeItem::Quick => spelaion_core::CheckMode::Quick,
+                CheckModeItem::Fast => spelaion_core::CheckMode::Fast,
+                CheckModeItem::Medium => spelaion_core::CheckMode::Medium,
+                CheckModeItem::Extended => spelaion_core::CheckMode::Extended,
+                CheckModeItem::Changed => spelaion_core::CheckMode::Changed,
+            }),
+            quick: o.quick,
+            extended: o.extended,
+            use_frm: o.use_frm,
+            local: o.local,
+        }
+    }
+}
+
+/// What the app shows before a maintenance action runs (SDB-392).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenancePlanItem {
+    /// The statement as it runs, in a tab of its own.
+    pub sql: String,
+    /// The engine refuses it inside a transaction (VACUUM).
+    pub outside_transaction: bool,
+    /// What a TRUNCATE with CASCADE also empties.
+    pub also_empties: Vec<String>,
+}
+
+impl From<spelaion_core::MaintenancePlan> for MaintenancePlanItem {
+    fn from(plan: spelaion_core::MaintenancePlan) -> Self {
+        Self {
+            sql: plan.sql,
+            outside_transaction: plan.outside_transaction,
+            also_empties: plan.also_empties,
+        }
+    }
+}

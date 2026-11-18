@@ -5659,6 +5659,52 @@ try {
     await roleRow.waitFor({ state: "detached" });
   }
 
+  step("maintenance: refresh a materialized view from the explorer, its SQL shown first and run in a tab of its own (SDB-392)");
+  {
+    const pgNode = page.locator('.node:has(> .connection-row:has-text("Postgres (Docker)"))');
+    // A materialized view to refresh, made in a tab of the connection the explorer opened.
+    const makePanel = await newQuery("Postgres (Docker)", "create materialized view if not exists public.smoke_mv as select 1 as id;");
+    await run(makePanel);
+    await makePanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    await page.keyboard.press("Control+w");
+    const publicSchema = pgNode.getByRole("button", { name: "Expand or collapse schema public", exact: true });
+    if ((await publicSchema.getAttribute("aria-expanded")) !== "true") await publicSchema.click();
+    // Read the schema again: the view is new.
+    await publicSchema.focus();
+    await page.keyboard.press("F5");
+    const viewsFolder = pgNode.getByRole("button", { name: "Expand or collapse Materialized views", exact: true });
+    if ((await viewsFolder.getAttribute("aria-expanded")) !== "true") await viewsFolder.click();
+    const viewRow = pgNode.locator(".row", { hasText: "smoke_mv" }).first();
+    await viewRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Maintenance" }).click();
+    await page.getByRole("menuitem", { name: "Refresh materialized view…" }).click();
+    const refresh = page.getByRole("dialog", { name: "Refresh materialized view: smoke_mv" });
+    await refresh.getByLabel("SQL that will run").filter({ hasText: "REFRESH MATERIALIZED VIEW public.smoke_mv;" }).waitFor();
+    await refresh.getByLabel("WITH NO DATA: leave it empty until the next refresh").check();
+    await refresh.getByLabel("SQL that will run").filter({ hasText: "REFRESH MATERIALIZED VIEW public.smoke_mv WITH NO DATA;" }).waitFor();
+    await refresh.getByLabel("WITH NO DATA: leave it empty until the next refresh").uncheck();
+    await refresh.getByLabel("SQL that will run").filter({ hasText: "REFRESH MATERIALIZED VIEW public.smoke_mv;" }).waitFor();
+    await shot("sdb-392-refresh-materialized-view");
+    // Run: a new tab with the statement, run as shown through the guard.
+    await refresh.getByRole("button", { name: "Run in a new tab", exact: true }).click();
+    await refresh.waitFor({ state: "detached" });
+    const ranPanel = page.locator(".tab-panel:not([hidden])");
+    await ranPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    assert.equal((await ranPanel.locator(".cm-content").innerText()).trim(), "REFRESH MATERIALIZED VIEW public.smoke_mv;");
+    await replaceQuery(ranPanel, "drop materialized view public.smoke_mv;");
+    await run(ranPanel);
+    // A DROP: the guard asks first.
+    const dropRisk = page.getByRole("dialog", { name: "Run these statements?" });
+    await dropRisk.getByRole("button", { name: "Run anyway", exact: true }).click();
+    await dropRisk.waitFor({ state: "detached" });
+    // The messages of the refresh are still there until the drop starts: give it that moment,
+    // then wait for it to end before closing the tab.
+    await page.waitForTimeout(500);
+    await page.waitForFunction(() => !document.querySelector(".tab-panel:not([hidden]) .editor-action-cancel"));
+    await ranPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    await page.keyboard.press("Control+w");
+  }
+
   step("backup and restore: the vendor's tools found or reported missing, a live log, a confirmed restore (ADR-049)");
   {
     // The explorer opened Postgres (Docker) in the accounts step: its menu has the backups.

@@ -223,6 +223,10 @@
   is SQLite's table rebuild; `create.rs` is the create table form; `source.rs` writes a view's or routine's
   definition as the statement that replaces it; `ddl.rs` edits the `CREATE TABLE` text SQLite and MySQL keep.
   `tests/object_actions.rs` runs each engine's statements on that engine.
+  `objects/maintenance.rs` (SDB-392) writes the explorer's maintenance actions (VACUUM, ANALYZE,
+  refresh, TRUNCATE options, triggers, CHECK / REPAIR / OPTIMIZE, rebuilds, integrity checks),
+  each run as shown in a tab of its own; `tests/object_actions.rs` runs each and refuses each on a
+  read-only connection.
   `objects/users.rs` (ADR-048) creates roles, users and logins, changes their password, locks
   and drops them: the script shown and compared has `'***'` for the password, the real one is
   written only into the statement that runs (never recorded) and scrubbed from its errors; any
