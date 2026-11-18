@@ -13,6 +13,7 @@ publish.workspace = true
 spelaion-driver-api.workspace = true
 spelaion-dialect.workspace = true
 arrow.workspace = true
+sqlparser = "0.63"
 
 [lints]
 workspace = true

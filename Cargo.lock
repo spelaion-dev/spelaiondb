@@ -5923,6 +5923,7 @@ dependencies = [
  "arrow",
  "spelaion-dialect",
  "spelaion-driver-api",
+ "sqlparser",
 ]
 
 [[package]]

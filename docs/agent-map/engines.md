@@ -25,6 +25,8 @@
   what the first batch holds, the type decided, `ResultBuilder` from storage-class values to
   Arrow batches). The SQLite driver's two transports and the libSQL plugin are built on it, so
   they show the same explorer and types; plugins take it by the plugin SDK's tag.
+  The SQLite driver's `describe_table` reads column and table CHECK constraints from the stored
+  CREATE TABLE in the catalog, including their names where given (`tests/sqlite.rs`).
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Its catalog and typing are `spelaion-sqlite-schema`'s; `exec.rs` only reads rusqlite's
   values into it. Its tests need nothing external.

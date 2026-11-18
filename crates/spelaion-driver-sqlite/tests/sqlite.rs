@@ -606,6 +606,63 @@ async fn introspection_describes_tables() {
     assert_eq!(constraints(&line)[0].3, "PRIMARY KEY (order_id, n)");
 }
 
+#[tokio::test]
+async fn describes_named_and_unnamed_checks_in_sqlite_tables() {
+    let db = TempDb::new("checks");
+    let conn = open(&db).await;
+    exec_all(
+        &*conn,
+        r#"attach ':memory:' as "check data";
+           create table "check data"."it's checked" (
+               qty integer constraint "nonnegative qty" check (qty >= 0),
+               status text check (status in ('new', 'paid')),
+               start integer,
+               finish integer,
+               constraint "ordered range" check (finish >= start),
+               check (qty = 0 or status = 'paid')
+           );
+           create view "check data".summary as select * from "it's checked""#,
+    )
+    .await;
+
+    let table = conn
+        .describe_table("check data", "it's checked")
+        .await
+        .unwrap();
+    assert_eq!(
+        constraints(&table),
+        [
+            (
+                Some("nonnegative qty"),
+                ConstraintKind::Check,
+                vec![],
+                "CHECK (qty >= 0)"
+            ),
+            (
+                None,
+                ConstraintKind::Check,
+                vec![],
+                "CHECK (status IN ('new', 'paid'))"
+            ),
+            (
+                Some("ordered range"),
+                ConstraintKind::Check,
+                vec![],
+                "CHECK (finish >= start)"
+            ),
+            (
+                None,
+                ConstraintKind::Check,
+                vec![],
+                "CHECK (qty = 0 OR status = 'paid')"
+            ),
+        ]
+    );
+
+    let view = conn.describe_table("check data", "summary").await.unwrap();
+    assert!(view.constraints.is_empty());
+}
+
 /// A relation's properties and dependencies (SDB-393): what SQLite records, and what it does
 /// not said so rather than shown as nothing.
 #[tokio::test]

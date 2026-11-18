@@ -749,12 +749,13 @@ impl Connection for RemoteConnection {
     }
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
-        let object = self
-            .list_objects(schema)
-            .await?
-            .into_iter()
-            .find(|o| o.name == name)
-            .ok_or_else(|| DriverError::Other(format!("{schema}.{name} does not exist")))?;
+        let (object, checks) = catalog::described_object(
+            schema,
+            name,
+            &self
+                .rows(catalog::described_object_sql(schema, name))
+                .await?,
+        )?;
         let (mut table, to_primary_keys) = catalog::table(
             object,
             &self.rows(catalog::columns_sql(schema, name)).await?,
@@ -770,6 +771,7 @@ impl Connection for RemoteConnection {
                     .await?,
             );
         }
+        table.constraints.extend(checks);
         Ok(table)
     }
 
