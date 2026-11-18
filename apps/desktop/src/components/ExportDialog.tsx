@@ -1,14 +1,15 @@
 // The export dialog (ADR-034): what to export (the loaded rows, a selection, or every row by
 // running the query or the table's SELECT again in a new session), the format and its options
 // (CSV, SQL, JSON, the file's name and gzip: SDB-391). The core writes the file and names it;
-// only counts and the options pass through here.
+// only counts and the options pass through here. It opens with the last export's choices,
+// which the core keeps and checks as personal settings (SDB-66).
 
 import { useEffect, useMemo, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { create } from "zustand";
 import { call, commands, type CellRange, type TextFormat } from "../api";
-import type { ExportFileOptions, ExportOutcome, ExportProgressItem, FileNamePatternItem, JsonOptionsItem, RerunCheckItem, SqlOptionsItem } from "../bindings";
+import type { ExportDefaultsItem, ExportFileOptions, ExportOutcome, ExportProgressItem, FileNamePatternItem, JsonOptionsItem, RerunCheckItem, SqlOptionsItem } from "../bindings";
 import { chooseFolder, chooseSavePath } from "../dialogs";
 import { useApp, useDialogs, type ResultMeta } from "../store";
 
@@ -108,6 +109,38 @@ function ExportForm({ request }: { request: ExportRequest }) {
   const [phase, setPhase] = useState<Phase>({ kind: "options" });
   const [exportId, setExportId] = useState<number | null>(null);
   const [lastPath, setLastPath] = useState<string | null>(null);
+  // The options are shown once the last export's choices are in (or could not be read).
+  const [ready, setReady] = useState(false);
+
+  // The last export's choices, as the core read them back (each unusable one at its default).
+  useEffect(() => {
+    let current = true;
+    void call(commands.exportDefaults())
+      .then((d) => {
+        if (!current) return;
+        setFormat(d.format);
+        if (DELIMITERS.includes(d.delimiter)) setDelimiter(d.delimiter);
+        else {
+          setDelimiter("other");
+          setOtherDelimiter(d.delimiter);
+        }
+        setHeader(d.header);
+        setNullText(d.nullText);
+        setEncoding(d.encoding);
+        setEscapeFormulas(d.escapeFormulas);
+        setGzip(d.gzip);
+        setNames(d.names);
+        setSql(d.sql);
+        setJson(d.json);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (current) setReady(true);
+      });
+    return () => {
+      current = false;
+    };
+  }, []);
 
   // The core says whether the query may run again and whether the tab holds a transaction.
   useEffect(() => {
@@ -163,6 +196,19 @@ function ExportForm({ request }: { request: ExportRequest }) {
     sql: { ...sql, upsert: sql.upsert && upsertPossible },
     json,
   });
+  /** What the dialog shows, kept as the next export's defaults. */
+  const defaults = (): ExportDefaultsItem => ({
+    format,
+    delimiter: chosenDelimiter,
+    header,
+    nullText,
+    encoding,
+    escapeFormulas,
+    gzip,
+    names,
+    sql,
+    json,
+  });
   const allRefused = request.kind === "result" && (!canStream || !!check?.refused);
   /** The table a single file is named after, if any (the core names a query's `result`). */
   const namedTable =
@@ -211,6 +257,9 @@ function ExportForm({ request }: { request: ExportRequest }) {
     }));
     if (!target) return;
     setLastPath(target);
+    // The choices of an export that starts are the next one's defaults; the core refuses
+    // options it could not use again, and the export then says what is wrong with them.
+    if (path === undefined) await call(commands.setExportDefaults(defaults())).catch(() => undefined);
     if (request.kind === "selection") return exportLoaded(target, request.range);
     if (request.kind === "result" && scope === "loaded") return exportLoaded(target, null);
     // A new run: a connection type that confirms execution asks first (the core refuses
@@ -294,7 +343,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
     <div className="modal-backdrop">
       <div className="modal export-dialog" role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
-        {phase.kind === "options" && (
+        {phase.kind === "options" && ready && (
           <>
             {request.kind === "result" && (
               <fieldset className="export-scope">

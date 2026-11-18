@@ -21,6 +21,7 @@ mod editor_snippets;
 mod er;
 mod export;
 mod export_binary;
+mod export_defaults;
 mod export_stream;
 mod export_xlsx;
 mod file_folder;
@@ -141,6 +142,7 @@ pub use export::{
     copy_selected_rows, copy_special, copy_text, copy_updates, export_to_file, formula_escaped,
     write_result,
 };
+pub use export_defaults::{ExportDefaults, ExportFileFormat, MAX_EXPORT_NULL_TEXT};
 pub use export_stream::{
     DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, FileNamePattern,
     MAX_NAME_PATTERN, NameParts, RerunCheck, StreamExport, TableSource, TablesError, export_query,

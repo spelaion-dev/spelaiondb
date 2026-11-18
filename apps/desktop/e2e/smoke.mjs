@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
-import { crc32, deflateSync } from "node:zlib";
+import { crc32, deflateSync, gunzipSync } from "node:zlib";
 import { createCipheriv } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1062,7 +1062,15 @@ try {
     return text;
   };
   const openResultExport = () => panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
-  assert.match(await exportWith(openResultExport, "Export result", "csv", exportPath("result.csv")), /^Exported 6 rows to /);
+  assert.match(
+    await exportWith(openResultExport, "Export result", "csv", exportPath("result.csv"), async (dialog) => {
+      // A new user's defaults (SDB-66): a comma, UTF-8 with a BOM and formula escaping on.
+      assert.equal(await dialog.getByRole("combobox", { name: /^Delimiter/ }).inputValue(), ",");
+      assert.equal(await dialog.getByRole("combobox", { name: /^Encoding/ }).inputValue(), "utf8Bom");
+      assert.ok(await dialog.getByRole("checkbox", { name: /^Escape formulas/ }).isChecked());
+    }),
+    /^Exported 6 rows to /,
+  );
   const csv = readFileSync(exportPath("result.csv"), "utf8");
   assert.ok(csv.startsWith("\ufeffcountry,orders,total\r\n"), csv.slice(0, 40));
   assert.equal(csv.trimEnd().split("\r\n").length, 7);
@@ -1098,7 +1106,12 @@ try {
       await page.mouse.click(grid.x + 80, grid.y + 34 + 12, { button: "right" });
       await panel.getByRole("menuitem", { name: "Export selection…" }).click();
     };
-    const selected = await exportWith(openSelection, "Export selection", "tsv", exportPath("selection.tsv"));
+    const selected = await exportWith(openSelection, "Export selection", "tsv", exportPath("selection.tsv"), async (dialog) => {
+      // The dialog opens with the last export's choices (SDB-66): no header, as above.
+      const header = dialog.getByRole("checkbox", { name: "Column names as the first row" });
+      assert.equal(await header.isChecked(), false);
+      await header.check();
+    });
     assert.match(selected, /^Exported 2 rows to /);
     const tsv = readFileSync(exportPath("selection.tsv"), "utf8").replace(/^\ufeff/, "").trimEnd().split("\n");
     assert.equal(tsv[0], "country\torders");
@@ -3822,6 +3835,10 @@ try {
     await ordersNode.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Export 2 tables…" }).click();
     const dialog = page.getByRole("dialog", { name: "Export 2 tables" });
+    // The last export was a TSV, with a semicolon for CSV and plain UTF-8 (SDB-66).
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("csv");
+    await dialog.getByRole("combobox", { name: /^Delimiter/ }).selectOption(",");
+    await dialog.getByRole("combobox", { name: /^Encoding/ }).selectOption("utf8Bom");
     await dialog.getByRole("button", { name: "Export…" }).click();
     await dialog.locator(".export-result", { hasText: "2 files" }).waitFor();
     await shot("05e-export-tables");
@@ -4396,6 +4413,8 @@ try {
     await panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
     const dialog = page.getByRole("dialog", { name: "Export result" });
     assert.ok(await dialog.getByRole("radio", { name: /^Every row the filter keeps/ }).isChecked());
+    // The last export was JSON (SDB-66).
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("csv");
     await dialog.getByRole("button", { name: "Export…" }).click();
     await dialog.locator(".export-result", { hasText: "Exported 1,000 rows" }).waitFor();
     await dialog.getByRole("button", { name: "Close" }).click();
@@ -4404,6 +4423,32 @@ try {
     assert.equal(lines.length, 1_001);
     assert.ok(lines[1].startsWith("50000,"), lines[1]);
     assert.ok(lines[1_000].startsWith("49001,"), lines[1_000]);
+  }
+  // The next export's defaults (SDB-66): chosen here, offered again after the app restarts.
+  {
+    const path = join(userDir, "orders-remembered.sql.gz");
+    await page.evaluate((target) => (window.__spelaionSavePath = target), path);
+    await panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export result" });
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("csv");
+    await dialog.getByRole("combobox", { name: /^Delimiter/ }).selectOption("|");
+    await dialog.getByRole("checkbox", { name: "Column names as the first row" }).uncheck();
+    await dialog.getByLabel("NULL as", { exact: true }).fill("(null)");
+    await dialog.getByRole("combobox", { name: /^Encoding/ }).selectOption("windows1252");
+    await dialog.getByRole("checkbox", { name: /^Escape formulas/ }).uncheck();
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("sqlInsert");
+    await dialog.getByLabel("Rows per INSERT").fill("100");
+    await dialog.getByRole("combobox", { name: /^Keywords/ }).selectOption("lower");
+    await dialog.locator(".export-file summary").click();
+    await dialog.getByRole("checkbox", { name: "Compress with gzip" }).check();
+    await dialog.getByRole("button", { name: "Export…" }).click();
+    await dialog.locator(".export-result", { hasText: "Exported 1,000 rows" }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    const bytes = readFileSync(path);
+    assert.deepEqual([bytes[0], bytes[1]], [0x1f, 0x8b], "a gzip file");
+    // 1,000 rows, 100 per statement, in lower case.
+    assert.equal(gunzipSync(bytes).toString("utf8").match(/^insert into /gm)?.length, 10);
   }
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("");
   await panel.getByRole("textbox", { name: "WHERE" }).fill("total > 1990");
@@ -9656,6 +9701,28 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.keyboard.insertText("select 'history_resumed_marker' as resumed;");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  // The export dialog opens with the choices of the last export before the restart (SDB-66).
+  {
+    await panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export result" });
+    const format = dialog.getByRole("combobox", { name: /^Format/ });
+    await format.waitFor();
+    assert.equal(await format.inputValue(), "sqlInsert");
+    assert.equal(await dialog.getByLabel("Rows per INSERT").inputValue(), "100");
+    assert.equal(await dialog.getByRole("combobox", { name: /^Keywords/ }).inputValue(), "lower");
+    await dialog.locator(".export-file summary").click();
+    assert.ok(await dialog.getByRole("checkbox", { name: "Compress with gzip" }).isChecked());
+    assert.equal(await dialog.locator('input[name="export-name-pattern"]').inputValue(), "workbook_{date}");
+    await format.selectOption("csv");
+    assert.equal(await dialog.getByRole("combobox", { name: /^Delimiter/ }).inputValue(), "|");
+    assert.equal(await dialog.getByRole("checkbox", { name: "Column names as the first row" }).isChecked(), false);
+    assert.equal(await dialog.getByLabel("NULL as", { exact: true }).inputValue(), "(null)");
+    assert.equal(await dialog.getByRole("combobox", { name: /^Encoding/ }).inputValue(), "windows1252");
+    assert.equal(await dialog.getByRole("checkbox", { name: /^Escape formulas/ }).isChecked(), false);
+    await shot("sdb-66-export-defaults-restored");
+    await dialog.getByRole("button", { name: "Close" }).last().click();
+    await dialog.waitFor({ state: "detached" });
+  }
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   history = page.getByRole("complementary", { name: "Query history", exact: true });
   await history.getByRole("textbox", { name: "Search query history" }).fill("round");

@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 mod aside;
 mod backup;
 mod editor_snippets;
+mod export;
 mod library;
 mod map;
 mod table_filters;
@@ -18,6 +19,10 @@ mod tabs;
 pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
 pub use editor_snippets::{EditorSnippet, is_snippet_name};
+pub use export::{
+    EXPORT_ENCODINGS, EXPORT_FORMATS, EXPORT_KEYWORD_CASES, EXPORT_MAX_ROWS_PER_INSERT,
+    EXPORT_NAME_CASES, EXPORT_NULL_TEXT_MAX, EXPORT_PATTERN_MAX, ExportPreferences,
+};
 pub use library::{HistoryFilter, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder};
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,

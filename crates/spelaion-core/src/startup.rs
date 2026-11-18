@@ -67,6 +67,7 @@ impl StartupFailure {
             | HistoryError::Start(_)
             | HistoryError::Display(_)
             | HistoryError::CopyOptions(_)
+            | HistoryError::ExportOptions(_)
             | HistoryError::UnsupportedLanguage
             | HistoryError::UnsupportedTheme
             | HistoryError::InvalidSnippetName
