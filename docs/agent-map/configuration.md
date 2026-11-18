@@ -15,6 +15,12 @@
   `list_connections` tells agents a database is for) and its `tags` are short labels the
   explorer filters connections by (`normalize_tags` in `draft.rs`): both bounded and without
   hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
+  Poolers and bastions (SDB-396): a PostgreSQL connection's `pooler` (`session` or
+  `transaction`), MySQL's and MariaDB's `cleartext_password` and the `databases` a MySQL,
+  MariaDB or SQL Server connection shows load only on those engines (`load.rs`); a pooler in
+  transaction mode refuses `[session]` and `read_only`, which would hold for one transaction.
+  The first two reach the driver only as `ConnectParams::options` (`engine_options.rs`), so an
+  older plugin that speaks protocol 1.0 refuses the connection instead of ignoring them.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server).
   Every file the configuration writes goes through `atomic_file` (temporary file + rename, the
