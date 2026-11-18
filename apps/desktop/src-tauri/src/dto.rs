@@ -3990,7 +3990,7 @@ impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
 }
 
 /// Text format to copy or export rows in.
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum TextFormat {
     Tsv,
@@ -5824,7 +5824,7 @@ pub enum AuditFormatItem {
 }
 
 /// Character encoding of an exported file (see `spelaion_core::TextEncoding`).
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum TextEncodingItem {
     Utf8,
@@ -5868,7 +5868,7 @@ pub struct ExportFileOptions {
 }
 
 /// How a SQL export writes its statements (SDB-391); the core checks it.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SqlOptionsItem {
     pub rows_per_insert: u32,
@@ -5916,7 +5916,7 @@ impl SqlOptionsItem {
 }
 
 /// How JSON and NDJSON write values (SDB-391).
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonOptionsItem {
     pub iso_dates: bool,
@@ -5943,7 +5943,7 @@ impl From<JsonOptionsItem> for spelaion_core::JsonOptions {
 
 /// How export files are named (SDB-391): `{table}`, `{schema}`, `{database}`, `{date}`,
 /// `{time}` and `{timestamp}` (with `timestamp_format`). The core checks and renders it.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FileNamePatternItem {
     pub pattern: String,
@@ -5982,6 +5982,118 @@ impl ExportFileOptions {
         };
         csv.check()?;
         Ok(csv)
+    }
+}
+
+/// The export dialog's defaults (SDB-66): what the last export chose, offered by the next.
+/// The core checks them before they are saved and reads them back leniently.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportDefaultsItem {
+    pub format: TextFormat,
+    /// CSV's delimiter: one character.
+    pub delimiter: String,
+    pub header: bool,
+    pub null_text: String,
+    pub encoding: TextEncodingItem,
+    pub escape_formulas: bool,
+    pub gzip: bool,
+    pub names: FileNamePatternItem,
+    pub sql: SqlOptionsItem,
+    pub json: JsonOptionsItem,
+}
+
+impl From<spelaion_core::ExportDefaults> for ExportDefaultsItem {
+    fn from(defaults: spelaion_core::ExportDefaults) -> Self {
+        use spelaion_core::{ExportFileFormat, KeywordCase, NameCase, TextEncoding};
+        Self {
+            format: match defaults.format {
+                ExportFileFormat::Csv => TextFormat::Csv,
+                ExportFileFormat::Tsv => TextFormat::Tsv,
+                ExportFileFormat::Json => TextFormat::Json,
+                ExportFileFormat::SqlInsert => TextFormat::SqlInsert,
+                ExportFileFormat::Markdown => TextFormat::Markdown,
+                ExportFileFormat::Html => TextFormat::Html,
+                ExportFileFormat::Ndjson => TextFormat::Ndjson,
+                ExportFileFormat::Parquet => TextFormat::Parquet,
+                ExportFileFormat::ArrowIpc => TextFormat::ArrowIpc,
+                ExportFileFormat::Xlsx => TextFormat::Xlsx,
+            },
+            delimiter: defaults.csv.delimiter.to_string(),
+            header: defaults.header,
+            null_text: defaults.csv.null_text,
+            encoding: match defaults.encoding {
+                TextEncoding::Utf8 => TextEncodingItem::Utf8,
+                TextEncoding::Utf8Bom => TextEncodingItem::Utf8Bom,
+                TextEncoding::Utf16Le => TextEncodingItem::Utf16Le,
+                TextEncoding::Windows1252 => TextEncodingItem::Windows1252,
+            },
+            escape_formulas: defaults.csv.escape_formulas,
+            gzip: defaults.gzip,
+            names: FileNamePatternItem {
+                pattern: defaults.names.pattern,
+                timestamp_format: defaults.names.timestamp_format,
+            },
+            sql: SqlOptionsItem {
+                // Checked by the core: at most its MAX_ROWS_PER_INSERT.
+                rows_per_insert: u32::try_from(defaults.sql.rows_per_insert).unwrap_or(1),
+                omit_schema: defaults.sql.omit_schema,
+                keyword_case: match defaults.sql.keyword_case {
+                    KeywordCase::Upper => "upper",
+                    KeywordCase::Lower => "lower",
+                }
+                .into(),
+                name_case: match defaults.sql.name_case {
+                    NameCase::AsIs => "asIs",
+                    NameCase::Lower => "lower",
+                    NameCase::Upper => "upper",
+                }
+                .into(),
+                upsert: defaults.sql.upsert,
+            },
+            json: JsonOptionsItem {
+                iso_dates: defaults.json.iso_dates,
+                json_as_json: defaults.json.json_as_json,
+            },
+        }
+    }
+}
+
+impl ExportDefaultsItem {
+    /// The defaults as the core reads them; the core checks them before they are saved.
+    pub fn into_defaults(self) -> Result<spelaion_core::ExportDefaults, String> {
+        use spelaion_core::ExportFileFormat;
+        let format = match self.format {
+            TextFormat::Csv => ExportFileFormat::Csv,
+            TextFormat::Tsv => ExportFileFormat::Tsv,
+            TextFormat::Json => ExportFileFormat::Json,
+            TextFormat::SqlInsert => ExportFileFormat::SqlInsert,
+            TextFormat::Markdown => ExportFileFormat::Markdown,
+            TextFormat::Html => ExportFileFormat::Html,
+            TextFormat::Ndjson => ExportFileFormat::Ndjson,
+            TextFormat::Parquet => ExportFileFormat::Parquet,
+            TextFormat::ArrowIpc => ExportFileFormat::ArrowIpc,
+            TextFormat::Xlsx => ExportFileFormat::Xlsx,
+            TextFormat::InList => return Err("an IN list is not a file format".into()),
+        };
+        let mut chars = self.delimiter.chars();
+        let (Some(delimiter), None) = (chars.next(), chars.next()) else {
+            return Err("the delimiter must be exactly one character".into());
+        };
+        Ok(spelaion_core::ExportDefaults {
+            format,
+            header: self.header,
+            csv: spelaion_core::CsvOptions {
+                delimiter,
+                null_text: self.null_text,
+                escape_formulas: self.escape_formulas,
+            },
+            encoding: self.encoding.into(),
+            gzip: self.gzip,
+            names: self.names.into(),
+            sql: self.sql.options()?,
+            json: self.json.into(),
+        })
     }
 }
 

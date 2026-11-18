@@ -386,6 +386,10 @@ export const commands = {
 	 *  the folder.
 	 */
 	exportFileName: (session: string, names: FileNamePatternItem, format: TextFormat, gzip: boolean, table: RelationRefItem | null) => typedError<string, string>(__TAURI_INVOKE("export_file_name", { session, names, format, gzip, table })),
+	/**  The export dialog's defaults (SDB-66): what the last export chose. */
+	exportDefaults: () => typedError<ExportDefaultsItem, string>(__TAURI_INVOKE("export_defaults")),
+	/**  Keeps the export dialog's choices as its next defaults, once the core has checked them. */
+	setExportDefaults: (defaults: ExportDefaultsItem) => typedError<null, string>(__TAURI_INVOKE("set_export_defaults", { defaults })),
 	/**  The copy defaults (SDB-388): what "Copy special…" chose last. */
 	copyDefaults: () => typedError<CopySpecialItem, string>(__TAURI_INVOKE("copy_defaults")),
 	/**
@@ -2860,6 +2864,24 @@ export type ExplorerPreferencesItem = {
 	connectedOnly: boolean,
 	serverSideFilters: boolean,
 	linkWithEditor: boolean,
+};
+
+/**
+ *  The export dialog's defaults (SDB-66): what the last export chose, offered by the next.
+ *  The core checks them before they are saved and reads them back leniently.
+ */
+export type ExportDefaultsItem = {
+	format: TextFormat,
+	/**  CSV's delimiter: one character. */
+	delimiter: string,
+	header: boolean,
+	nullText: string,
+	encoding: TextEncodingItem,
+	escapeFormulas: boolean,
+	gzip: boolean,
+	names: FileNamePatternItem,
+	sql: SqlOptionsItem,
+	json: JsonOptionsItem,
 };
 
 /**  How an export writes its file (ADR-034). The core checks the delimiter. */

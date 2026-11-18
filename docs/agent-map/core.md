@@ -173,6 +173,11 @@
   column in the key or the selection is refused, never written from the mask.
   `tests/copy_updates.rs` runs the copied UPDATEs on every engine and reads the rows back.
   `export.rs` also holds the CSV options and formula escaping of files;
+  `export_defaults.rs` (SDB-66) is what the export dialog offers when it opens: the last
+  export's format, CSV, file name, gzip, SQL and JSON choices, saved as personal settings
+  (`spelaion-store`'s `export.rs`) only once `ExportDefaults::check` accepts them (what an
+  export would accept) and read back part by part, a part this version cannot use at its
+  default (formula escaping is on for a new user, and a damaged flag reads as on);
   `export_stream.rs` streams a query, a table data tab or explorer tables to a file
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs

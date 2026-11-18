@@ -3110,6 +3110,31 @@ async fn copy_defaults(state: State<'_, AppState>) -> CmdResult<CopySpecialItem>
         .map_err(|e| e.to_string())
 }
 
+/// The export dialog's defaults (SDB-66): what the last export chose.
+#[command]
+async fn export_defaults(state: State<'_, AppState>) -> CmdResult<ExportDefaultsItem> {
+    state
+        .history
+        .export_defaults()
+        .await
+        .map(ExportDefaultsItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Keeps the export dialog's choices as its next defaults, once the core has checked them.
+#[command]
+async fn set_export_defaults(
+    defaults: ExportDefaultsItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let defaults = defaults.into_defaults()?;
+    state
+        .history
+        .set_export_defaults(defaults)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// "Copy special…" (SDB-388): a selection as delimited text, written by the core with the
 /// options given, which become the copy defaults once checked. The values are the database's
 /// own text, never the grid's display formats (a masked column's is the mask, ADR-051).
@@ -6260,6 +6285,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             delete_tunnel,
             copy_rows,
             export_file_name,
+            export_defaults,
+            set_export_defaults,
             copy_defaults,
             copy_special,
             copy_updates,

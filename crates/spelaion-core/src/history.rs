@@ -40,6 +40,9 @@ pub enum HistoryError {
     /// Copy defaults whose text could not be read back (SDB-388): nothing was saved.
     #[error("{0}")]
     CopyOptions(String),
+    /// Export defaults an export would refuse (SDB-66): nothing was saved.
+    #[error("{0}")]
+    ExportOptions(String),
     #[error("could not start query history: {0}")]
     Start(#[source] std::io::Error),
     #[error("unsupported language; expected system, en or es")]
@@ -210,6 +213,13 @@ enum Request {
     },
     SetCopy {
         preferences: spelaion_store::CopyPreferences,
+        reply: Reply<()>,
+    },
+    GetExport {
+        reply: Reply<spelaion_store::ExportPreferences>,
+    },
+    SetExport {
+        preferences: spelaion_store::ExportPreferences,
         reply: Reply<()>,
     },
     SetDisplay {
@@ -488,6 +498,12 @@ impl QueryHistory {
                         }
                         Request::SetCopy { preferences, reply } => {
                             let _ = reply.send(store.set_copy_preferences(&preferences));
+                        }
+                        Request::GetExport { reply } => {
+                            let _ = reply.send(store.get_export_preferences());
+                        }
+                        Request::SetExport { preferences, reply } => {
+                            let _ = reply.send(store.set_export_preferences(&preferences));
                         }
                         Request::SetDisplay { preferences, reply } => {
                             let _ = reply.send(store.set_display_preferences(&preferences));
@@ -1061,6 +1077,25 @@ impl QueryHistory {
             row_numbers: options.row_numbers,
         };
         self.request(|reply| Request::SetCopy { preferences, reply })
+            .await
+    }
+
+    /// The export dialog's defaults (SDB-66): what the last export chose. What was saved is
+    /// read leniently: a part this version cannot use is its default.
+    pub async fn export_defaults(&self) -> Result<crate::ExportDefaults, HistoryError> {
+        let saved = self.request(|reply| Request::GetExport { reply }).await?;
+        Ok(crate::ExportDefaults::from_saved(&saved))
+    }
+
+    /// Saves the export dialog's defaults, after checking them (`ExportDefaults::check`):
+    /// options an export would refuse are refused here too and nothing changes.
+    pub async fn set_export_defaults(
+        &self,
+        defaults: crate::ExportDefaults,
+    ) -> Result<(), HistoryError> {
+        defaults.check().map_err(HistoryError::ExportOptions)?;
+        let preferences = defaults.to_saved();
+        self.request(|reply| Request::SetExport { preferences, reply })
             .await
     }
 
@@ -2950,6 +2985,63 @@ mod tests {
         let reopened = QueryHistory::open(path).unwrap();
         assert_eq!(reopened.theme().await.unwrap(), "dark");
         assert_eq!(reopened.language().await.unwrap(), "es");
+    }
+
+    #[tokio::test]
+    async fn export_defaults_are_checked_and_survive_a_reopen() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "spelaion-core-export-defaults-{}-{nonce}/state.db",
+            std::process::id()
+        ));
+        let history = QueryHistory::open(path.clone()).unwrap();
+        assert_eq!(
+            history.export_defaults().await.unwrap(),
+            crate::ExportDefaults::default()
+        );
+        let chosen = crate::ExportDefaults {
+            format: crate::ExportFileFormat::Parquet,
+            header: false,
+            csv: crate::CsvOptions {
+                delimiter: '|',
+                null_text: "(null)".into(),
+                escape_formulas: false,
+            },
+            encoding: crate::TextEncoding::Utf16Le,
+            gzip: true,
+            names: crate::FileNamePattern {
+                pattern: "{table}_{date}".into(),
+                timestamp_format: "%Y".into(),
+            },
+            sql: crate::SqlOptions {
+                rows_per_insert: 1000,
+                ..crate::SqlOptions::default()
+            },
+            json: crate::JsonOptions {
+                iso_dates: true,
+                json_as_json: true,
+            },
+        };
+        history.set_export_defaults(chosen.clone()).await.unwrap();
+        // Options an export would refuse are not saved, and nothing of them is kept.
+        let refused = crate::ExportDefaults {
+            names: crate::FileNamePattern {
+                pattern: "{owner}".into(),
+                ..chosen.names.clone()
+            },
+            format: crate::ExportFileFormat::Json,
+            ..chosen.clone()
+        };
+        assert!(matches!(
+            history.set_export_defaults(refused).await,
+            Err(HistoryError::ExportOptions(_))
+        ));
+        drop(history);
+        let reopened = QueryHistory::open(path).unwrap();
+        assert_eq!(reopened.export_defaults().await.unwrap(), chosen);
     }
 
     #[tokio::test]
