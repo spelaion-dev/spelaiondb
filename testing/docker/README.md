@@ -103,9 +103,9 @@ docker compose -f testing/docker/compose.yaml up -d --force-recreate --renew-ano
 ## CI memory budget
 
 The main Compose project has a hard limit on every container. CI uses two phases: the default
-twenty services total **11,520 MiB (11.25 GiB)**; after they stop, Hive, Trino, Presto, InfluxDB, GreptimeDB and
+twenty-one services total **11,536 MiB (11.27 GiB)**; after they stop, Hive, Trino, Presto, InfluxDB, GreptimeDB and
 the two bastions total **6,784 MiB (6.625 GiB)**. The smoke job starts only the servers its app tests
-use, for **9,952 MiB (9.719 GiB)**. Running all twenty-five at once would total 18,176 MiB
+use, for **9,952 MiB (9.719 GiB)**. Running all twenty-six at once would total 18,192 MiB
 and leave too little room for compilation. Public GitHub `ubuntu-latest` runners have
 [16 GB of RAM](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories).
 Before starting either CI job's services, `check-memory.py` checks the resolved Compose JSON:
