@@ -5251,6 +5251,7 @@ impl From<&spelaion_core::TestStep> for TestStepItem {
         Self {
             kind: match &step.kind {
                 StepKind::Resolve => TestStepKindItem::Resolve,
+                StepKind::SessionSetup => TestStepKindItem::SessionSetup,
                 StepKind::Proxy {
                     proxy_type,
                     host,
@@ -5331,6 +5332,7 @@ impl From<&spelaion_core::TestStep> for TestStepItem {
 )]
 pub enum TestStepKindItem {
     Resolve,
+    SessionSetup,
     Proxy {
         proxy_type: String,
         host: String,

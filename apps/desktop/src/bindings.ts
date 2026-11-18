@@ -6360,11 +6360,11 @@ export type TestStepItem_Serialize = {
 
 export type TestStepKindItem = TestStepKindItem_Serialize | TestStepKindItem_Deserialize;
 
-export type TestStepKindItem_Deserialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
+export type TestStepKindItem_Deserialize = { kind: "resolve" } | { kind: "sessionSetup" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
 /**  `hop` counts from 1. */
 { kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context?: string | null; namespace?: string | null } | { kind: "ssm"; target: string; region?: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
 
-export type TestStepKindItem_Serialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
+export type TestStepKindItem_Serialize = { kind: "resolve" } | { kind: "sessionSetup" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
 /**  `hop` counts from 1. */
 { kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context: string | null; namespace: string | null } | { kind: "ssm"; target: string; region: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
 

@@ -290,7 +290,8 @@
   there needs tests that try to leak the password.
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
   hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
-  `Tunnel::probe`, login), its own tunnel, Stop that closes what it opened, failures classified
+  `Tunnel::probe`, login and session setup with the same safeguards as opening a session), its own
+  tunnel, Stop that closes what it opened, failures classified
   there and a `Redactor` every label, message and the diagnostics text pass through: any change
   there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
   `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
