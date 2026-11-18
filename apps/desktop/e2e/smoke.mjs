@@ -6190,7 +6190,14 @@ try {
     assert.ok(await ignoreErrors.isDisabled(), "nothing to ignore without setup statements");
     await wizard.getByLabel("Default schema", { exact: true }).fill("smoke_setup");
     await isolation.selectOption("repeatable-read");
-    await wizard.getByLabel("Run when a session opens", { exact: true }).fill("SET search_path TO smoke_setup, public;\nSET TIME ZONE 'UTC';");
+    const setupStatements = wizard.getByLabel("Run when a session opens", { exact: true });
+    await setupStatements.fill("SET search_path TO smoke_setup, public;\nSELECT sdb100_missing_column;");
+    await wizard.getByRole("tab", { name: "Main" }).click();
+    await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+    await wizard.getByRole("button", { name: "Test connection" }).click();
+    await wizard.locator(".test-log .step.failed", { hasText: "Session setup" }).getByText(/statement 2 of 2 failed/).waitFor();
+    await wizard.getByRole("tab", { name: "Session" }).click();
+    await setupStatements.fill("SET search_path TO smoke_setup, public;\nSET TIME ZONE 'UTC';");
     assert.ok(!(await ignoreErrors.isDisabled()));
     await shot("sdb-14-session-tab");
     await wizard.getByRole("tab", { name: "Options" }).click();

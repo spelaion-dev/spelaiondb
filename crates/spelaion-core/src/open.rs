@@ -620,32 +620,38 @@ pub async fn open_connection(
         open.close().await;
         return Err(OpenError::NoReadOnlyBarrier(reason));
     }
-    match apply_session_setup(&open.session, &open.resolved, restricted).await {
+    match finish_session_setup(&open.session, &open.resolved, restricted).await {
         Ok(report) => open.setup = report,
         Err(error) => {
             open.close().await;
-            return Err(error.into());
+            return Err(error);
         }
     }
+    // Scripts split as the session reads text: its sql_mode, setup included (SDB-161).
+    open.session.refresh_sql_mode().await;
+    Ok(open)
+}
+
+/// Applies the setup and verifies the server's read-only mode for opening and testing.
+pub(crate) async fn finish_session_setup(
+    session: &Session,
+    resolved: &ResolvedConnection,
+    restricted: bool,
+) -> Result<SetupReport, OpenError> {
+    let report = apply_session_setup(session, resolved, restricted).await?;
     // The server must say the session is read-only now (SDB-170): one that accepted the
     // statement and stayed writable gets no read-only connection, whatever it calls itself.
-    if open.resolved.params.read_only
-        && crate::session_setup::read_only_statement(open.session.dialect().name()).is_some()
-        && !crate::server_family::read_only_confirmed(
-            open.session.connection().as_ref(),
-            open.session.dialect().name(),
-        )
-        .await
+    let engine = session.dialect().name();
+    if resolved.params.read_only
+        && crate::session_setup::read_only_statement(engine).is_some()
+        && !crate::server_family::read_only_confirmed(session.connection().as_ref(), engine).await
     {
-        open.close().await;
         return Err(OpenError::NoReadOnlyBarrier(
             "read-only mode is not available on this server: it accepted the session's              read-only mode and its session is still writable"
                 .into(),
         ));
     }
-    // Scripts split as the session reads text: its sql_mode, setup included (SDB-161).
-    open.session.refresh_sql_mode().await;
-    Ok(open)
+    Ok(report)
 }
 
 /// Opens the tunnel a connection goes through, if any, and points `params` at its local end:

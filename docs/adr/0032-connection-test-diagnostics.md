@@ -22,7 +22,10 @@ message and guess. DBeaver and Tabularis both show a step-by-step log for this.
    - the Kubernetes port-forward, for a connection that uses one;
    - reach the database's address (from the last hop, through the proxy alone, or directly
      with a TCP connection), sending it nothing;
-   - log in to the database (or open its file), unless the test is "network only".
+   - log in to the database (or open its file), unless the test is "network only";
+   - apply any session settings and setup statements (ADR-037), under the same safeguards
+     as opening the session. A setup failure identifies its statement by number and reports
+     the redacted error in its own step.
 
    `spelaion-ssh` reports each part of the chain as it starts (`Tunnel::connect_observed`
    with a `TunnelStage`), and an error belongs to the part that was running. It also gained

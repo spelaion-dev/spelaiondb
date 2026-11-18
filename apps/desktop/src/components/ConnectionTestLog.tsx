@@ -93,6 +93,8 @@ function useStepTitle() {
         return kind.region ? t("testLog.steps.ssmRegion", { target: kind.target, region: kind.region }) : t("testLog.steps.ssm", { target: kind.target });
       case "target":
         return t("testLog.steps.target", { host: kind.host, port: kind.port });
+      case "sessionSetup":
+        return t("testLog.steps.sessionSetup");
       case "database":
         if (kind.file) return t("testLog.steps.file", { engine: kind.engine, database: kind.database });
         return kind.database

@@ -154,6 +154,14 @@ pub fn isolation_statement(engine: &str, level: IsolationLevel) -> Option<String
     }
 }
 
+pub(crate) fn needs_session_setup(resolved: &ResolvedConnection, engine: &str) -> bool {
+    let config = &resolved.session;
+    (resolved.params.read_only && read_only_statement(engine).is_some())
+        || config.setup.is_some()
+        || config.schema.is_some()
+        || config.isolation.is_some()
+}
+
 /// Sets up a session that has just opened: the engine's read-only mode on a read-only
 /// connection (ADR-053), the isolation level, then the default schema, then the setup
 /// statements, within the connection's connect timeout. Statements are run as the
@@ -163,14 +171,7 @@ pub async fn apply_session_setup(
     resolved: &ResolvedConnection,
     restricted: bool,
 ) -> Result<SetupReport, SetupError> {
-    let config = &resolved.session;
-    let read_only_mode =
-        resolved.params.read_only && read_only_statement(session.dialect().name()).is_some();
-    if !read_only_mode
-        && config.setup.is_none()
-        && config.schema.is_none()
-        && config.isolation.is_none()
-    {
+    if !needs_session_setup(resolved, session.dialect().name()) {
         return Ok(SetupReport::default());
     }
     let after = resolved.params.connect_timeout();

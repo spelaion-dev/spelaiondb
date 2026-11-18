@@ -256,6 +256,151 @@ async fn a_local_file_is_read_and_opened() {
 }
 
 #[tokio::test]
+async fn session_setup_failures_have_their_own_step_without_leaking_secrets() {
+    use spelaion_config::Engine;
+    let ws = Workspace::new("session-setup");
+    let planted = "setup_secret_734991";
+    let mut cases = Vec::new();
+    for engine in [Engine::Sqlite, Engine::Duckdb] {
+        let file = ws.base.join(format!("data.{}", engine.as_str()));
+        engines::create_database(engine, &file).await;
+        cases.push((
+            engine.as_str(),
+            format!("database = {}\n", toml_path(&file)),
+            planted,
+        ));
+    }
+    for (var, engine, database, user, password) in [
+        (
+            "SPELAION_TEST_PG",
+            "postgres",
+            "spelaion",
+            "spelaion",
+            "spelaion",
+        ),
+        (
+            "SPELAION_TEST_MYSQL",
+            "mysql",
+            "spelaion",
+            "root",
+            "spelaion-root",
+        ),
+        (
+            "SPELAION_TEST_MARIADB",
+            "mariadb",
+            "spelaion",
+            "root",
+            "spelaion-root",
+        ),
+        (
+            "SPELAION_TEST_MSSQL",
+            "sqlserver",
+            "master",
+            "sa",
+            "Spelaion-test-1",
+        ),
+    ] {
+        let Ok(addr) = std::env::var(var) else {
+            eprintln!("{var} not set: that engine is skipped");
+            continue;
+        };
+        let (host, port) = addr.rsplit_once(':').unwrap();
+        cases.push((
+            engine,
+            format!(
+                "host = {host:?}\nport = {port}\ndatabase = {database:?}\nuser = {user:?}\npassword = {{ secret = 'prompt' }}\n"
+            ),
+            password,
+        ));
+    }
+    for (engine, params, password) in cases {
+        let missing_column = if engine == "sqlite" {
+            planted
+        } else {
+            "sdb100_missing_column"
+        };
+        ws.write(
+            ".spelaion/connections/setup.toml",
+            &format!(
+                "schema_version = 1\nengine = {engine:?}\n{params}\n[session]\nsetup = 'SELECT 1; SELECT {missing_column};'\n"
+            ),
+        );
+        let seen = Seen::default();
+        let mut options = ws.options(TestScope::Full, TestUi::answering(&[]));
+        options.password = Some(Secret::new(password));
+        let report = run(ws.resolve("setup"), options, &seen).await;
+        let (position, step) = report
+            .failed()
+            .unwrap_or_else(|| panic!("{}", report.diagnostics));
+        assert_eq!(step.kind, StepKind::SessionSetup, "{}", report.diagnostics);
+        assert_eq!(report.steps[position - 1].status, StepStatus::Ok);
+        assert!(matches!(
+            report.steps[position - 1].kind,
+            StepKind::Database { .. }
+        ));
+        assert!(
+            step.failure
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("statement 2 of 2 failed"),
+            "{}",
+            report.diagnostics
+        );
+        if engine == "sqlite" {
+            assert!(step.failure.as_ref().unwrap().message.contains("***"));
+            assert_no_leak(&report, &seen, &[planted]);
+        }
+        let report = run(
+            ws.resolve("setup"),
+            ws.options(TestScope::Network, TestUi::answering(&[])),
+            &Seen::default(),
+        )
+        .await;
+        assert!(report.ok);
+        assert!(
+            report
+                .steps
+                .iter()
+                .all(|s| s.kind != StepKind::SessionSetup)
+        );
+    }
+}
+
+#[tokio::test]
+async fn production_test_refuses_setup_writes_even_when_errors_are_ignored() {
+    let ws = Workspace::new("session-setup-production");
+    let file = ws.base.join("data.sqlite");
+    engines::create_database(spelaion_config::Engine::Sqlite, &file).await;
+    ws.write(
+        ".spelaion/connections/setup.toml",
+        &format!(
+            "schema_version = 1\nengine = 'sqlite'\ndatabase = {}\nenv = 'prod'\n[session]\nsetup = 'SELECT 1; CREATE TABLE sdb100_should_not_exist (n INTEGER);'\nignore_setup_errors = true\n",
+            toml_path(&file)
+        ),
+    );
+    let report = run(
+        ws.resolve("setup"),
+        ws.options(TestScope::Full, TestUi::answering(&[])),
+        &Seen::default(),
+    )
+    .await;
+    let (_, step) = report
+        .failed()
+        .unwrap_or_else(|| panic!("{}", report.diagnostics));
+    assert_eq!(step.kind, StepKind::SessionSetup);
+    assert!(
+        step.failure
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("statement 2 of 2 cannot run"),
+        "{}",
+        report.diagnostics
+    );
+}
+
+#[tokio::test]
 async fn a_configuration_error_is_the_first_step() {
     let ws = Workspace::new("resolve");
     ws.write(
