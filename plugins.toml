@@ -80,34 +80,34 @@ program_sha256 = "97f489cf25ad48d26fc438658d0450954585668e6a09e849d76be3a2236e7a
 [[plugin]]
 name = "spelaiondb-plugin-mysql"
 repository = "spelaion-dev/spelaiondb-plugin-mysql"
-version = "0.1.3"
+version = "0.1.4"
 protocol = "1.1"
 engines = ["mysql", "mariadb"]
 min_app = "0.10.0"
 
 [plugin.platform.aarch64-apple-darwin]
-archive = "spelaiondb-plugin-mysql-0.1.3-aarch64-apple-darwin.tar.gz"
-archive_sha256 = "a43c6a784f06c23d0be8796d1d521566ce89ef68834a85274e16e5768529a002"
-archive_size = 3133545
-program_sha256 = "7619ddedd21022a601f770df1898c179da98d3919154ff2c962900ff6cd23818"
+archive = "spelaiondb-plugin-mysql-0.1.4-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "107bf298cb8c47f102fdda427ee985530fb0e0494a9d45b0190acff9dcb86976"
+archive_size = 3138226
+program_sha256 = "762c4e0bd4ebfb8f103245fa9045fdc8f7ea7cf841e7ae2aa6975c61483d60b1"
 
 [plugin.platform.x86_64-apple-darwin]
-archive = "spelaiondb-plugin-mysql-0.1.3-x86_64-apple-darwin.tar.gz"
-archive_sha256 = "0c048d23c667fea5af7dcc5927ac1e6782a49c3d8333fc609baf55465cd318c1"
-archive_size = 3380820
-program_sha256 = "28661cf818dbf012842455f9b0cdebbbbb35c54a97267ba43e401853ede97646"
+archive = "spelaiondb-plugin-mysql-0.1.4-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "7f9d7f027cdd1b70f42ddd4953d95af5c218a0f0d150ab2c5f1b8d9aa81ccd92"
+archive_size = 3383799
+program_sha256 = "5260bcccc758c4b7c70b67891051422e630249ae024d2d9d69ce34e1afa169e6"
 
 [plugin.platform.x86_64-pc-windows-msvc]
-archive = "spelaiondb-plugin-mysql-0.1.3-x86_64-pc-windows-msvc.tar.gz"
-archive_sha256 = "b79b077cdef2f045b6e310492d7332a0b1da73d05acdd701ffb52279258dc802"
-archive_size = 3407927
-program_sha256 = "03529c4e0ce051e87fa41b2d249bad0b90b183cd70db60901ee00002df20b797"
+archive = "spelaiondb-plugin-mysql-0.1.4-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "fc81dca6147ffa95631b8ac6cabe7d783667858bbc375f96b0b1d3d091fb7d12"
+archive_size = 3415419
+program_sha256 = "402e081729b924683950a26184998da3e7b56f927efb2c3844929aca5fd8694a"
 
 [plugin.platform.x86_64-unknown-linux-gnu]
-archive = "spelaiondb-plugin-mysql-0.1.3-x86_64-unknown-linux-gnu.tar.gz"
-archive_sha256 = "d89480e982d3423817ff1d0888d14c45db3b6ee3f1eaf1d6514f2639bd60ce82"
-archive_size = 3695374
-program_sha256 = "3510343c06fc93b74c64d0d9c9f5e52cd2fcb5b3fb81c7429cb4250352376658"
+archive = "spelaiondb-plugin-mysql-0.1.4-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "fdb7cf090385cc33cafacae72924a832cf11da4e57f70ac2bec129c20b4d2ed2"
+archive_size = 3700692
+program_sha256 = "edfc7e438242b838d228c478c573105251f23cc3469fce8b90b8ae61a3e0f907"
 
 # PostgreSQL.
 [[plugin]]
