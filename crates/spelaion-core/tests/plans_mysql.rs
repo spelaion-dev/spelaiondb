@@ -49,6 +49,7 @@ async fn open(variable: &str, engine: Engine, read_only: bool) -> Option<OpenCon
         kubernetes: None,
         sqlite3: None,
         file_folder: None,
+        databases: None,
         local_port: LocalPort::Any,
         keepalive: None,
         statement_timeout: Some(Duration::from_secs(5)),

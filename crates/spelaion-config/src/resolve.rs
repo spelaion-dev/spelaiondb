@@ -54,6 +54,8 @@ pub struct ResolvedConnection {
     /// A DuckDB connection to a folder of CSV, TSV and Parquet files (SDB-316): the folder.
     /// `params.database` is then `:memory:` and `params.read_only` is always set.
     pub file_folder: Option<PathBuf>,
+    /// The databases the explorer and the database picker show (SDB-396); all when `None`.
+    pub databases: Option<Vec<String>>,
     /// Where the SSH tunnel's local end listens for this connection.
     pub local_port: LocalPort,
     /// Keep the session alive after this long idle (ADR-028); `None`: off.
@@ -502,8 +504,8 @@ impl<'a> Resolver<'a> {
                 .connect_timeout
                 .filter(|s| *s > 0)
                 .map(|s| Duration::from_secs(s.into())),
-            // No engine of the configuration has settings of its own yet (ADR-056).
-            options: Default::default(),
+            // The engine's own settings the file asks for (ADR-056, SDB-396).
+            options: crate::engine_options::of(file),
         };
         // A folder of files is an in-memory DuckDB database that the core fills with a view of
         // each file, and it only reads (SDB-316): whatever the file says, it is read-only.
@@ -561,6 +563,7 @@ impl<'a> Resolver<'a> {
                 None => None,
             },
             file_folder,
+            databases: file.databases.clone(),
             local_port: match (file.local_port, self.config.user.tunnels.range()) {
                 (Some(port), _) => LocalPort::Fixed(port),
                 (None, Ok(Some((min, max)))) => LocalPort::Range { min, max },
