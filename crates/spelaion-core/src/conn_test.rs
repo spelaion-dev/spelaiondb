@@ -675,7 +675,7 @@ async fn connection_steps(
             format!("engine not available: {}", resolved.engine.as_str()),
         )
     })?;
-    let connection = connect_driver(driver.as_ref(), resolved.engine, &params)
+    let connection = connect_driver(driver.as_ref(), resolved, &params)
         .await
         .map_err(|e| open_failure(&e))?;
     let version = connection
@@ -898,9 +898,10 @@ fn open_failure(error: &OpenError) -> Failure {
         }
         OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
         // The test logs in without the session setup; only an opened session runs it.
-        OpenError::Setup(_) | OpenError::NoReadOnlyBarrier(_) | OpenError::FileFolder(_) => {
-            (FailureKind::Other, error.to_string())
-        }
+        OpenError::Setup(_)
+        | OpenError::NoReadOnlyBarrier(_)
+        | OpenError::FileFolder(_)
+        | OpenError::Cleartext(_) => (FailureKind::Other, error.to_string()),
     }
 }
 

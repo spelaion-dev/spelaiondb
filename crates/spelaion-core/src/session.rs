@@ -340,6 +340,23 @@ impl Session {
         }
     }
 
+    /// The databases its connection shows (SDB-396): every list of databases the session
+    /// gives keeps only these and `own`, the connection's database. What is shown, never a
+    /// permission.
+    pub fn with_shown_databases(
+        self,
+        names: &[String],
+        own: &str,
+        schemas_are_databases: bool,
+    ) -> Self {
+        self.tracked.show_only(crate::shown::ShownDatabases::new(
+            names,
+            own,
+            schemas_are_databases,
+        ));
+        self
+    }
+
     /// The server this PostgreSQL session reached (SDB-169): which barriers it enforces.
     pub fn with_server_family(mut self, family: crate::ServerFamily) -> Self {
         self.server_family = Some(family);

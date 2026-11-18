@@ -318,6 +318,11 @@ pub enum OpenError {
     /// A folder of files could not be set up to be read alone (SDB-316); it was closed again.
     #[error("{0}")]
     FileFolder(String),
+
+    /// The connection allows MySQL's cleartext password plugin on a route the password could be
+    /// read on (SDB-396); the driver was never called.
+    #[error("{0}")]
+    Cleartext(String),
 }
 
 /// Open tunnels, shared between connections (ADR-004): two tabs against the same database,
@@ -523,6 +528,11 @@ pub async fn open_connection(
         });
     }
     let mut params = resolved.connect_params(options.password);
+    // Said before a tunnel or a port-forward is started for nothing; `connect_driver` asks
+    // again, the one gate every connection goes through (SDB-396).
+    if let Some(reason) = crate::cleartext::refusal(&resolved, &params) {
+        return Err(OpenError::Cleartext(reason));
+    }
     crate::mongodb_srv::resolve(&resolved, &mut params).await?;
     let tunnel = start_tunnel(
         &resolved,
@@ -533,7 +543,7 @@ pub async fn open_connection(
     )
     .await?;
 
-    let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
+    let connection = connect_driver(driver.as_ref(), &resolved, &params).await?;
     // A folder of files: before anything else runs, its session is set up to read that folder
     // alone, and locked (SDB-316). Only on the in-memory, read-only database the resolver made.
     let folder = match &resolved.file_folder {
@@ -559,6 +569,13 @@ pub async fn open_connection(
         .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
         // A read-only connection runs only reads, settings and transaction control (ADR-053).
         .with_read_only(resolved.params.read_only);
+    if let Some(names) = &resolved.databases {
+        session = session.with_shown_databases(
+            names,
+            &resolved.params.database,
+            matches!(resolved.engine, Engine::Mysql | Engine::Mariadb),
+        );
+    }
     let refusal = family.as_ref().and_then(|family| {
         let read_only = resolved
             .params
@@ -840,10 +857,14 @@ pub(crate) fn remote_sqlite(tunnel: &Arc<Tunnel>, resolved: &ResolvedConnection)
 /// opened, not connected to: no limit there (DuckDB waits for another process's lock itself).
 pub(crate) async fn connect_driver(
     driver: &dyn Driver,
-    engine: Engine,
+    resolved: &ResolvedConnection,
     params: &ConnectParams,
 ) -> Result<Box<dyn Connection>, OpenError> {
-    if engine.is_file() && params.remote.is_none() {
+    // Before anything reaches the driver: the password is never let out in clear (SDB-396).
+    if let Some(reason) = crate::cleartext::refusal(resolved, params) {
+        return Err(OpenError::Cleartext(reason));
+    }
+    if resolved.engine.is_file() && params.remote.is_none() {
         return Ok(driver.connect(params).await?);
     }
     let after = params.connect_timeout();
