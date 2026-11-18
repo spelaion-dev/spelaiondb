@@ -13,6 +13,7 @@ mod column_stats;
 mod conn_test;
 mod cursor;
 mod data_search;
+pub mod diagnostics;
 mod display;
 mod edit;
 mod editor_snippets;

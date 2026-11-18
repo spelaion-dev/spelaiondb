@@ -120,6 +120,9 @@ export const COMMANDS = [
   { id: "view.mcp", category: "view", label: "shell:mcpServer", menus: ["activity"] },
   { id: "view.settings", category: "view", label: "settings:title", shortcut: "Ctrl+,", scope: "global", menus: ["activity"] },
   { id: "view.plugins", category: "view", label: "settings:plugins.title" },
+  // Bug reports (SDB-398): the report is the core's, scrubbed; nothing is sent.
+  { id: "help.copyDiagnostics", category: "general", label: "app:commands.copyDiagnostics" },
+  { id: "help.openIssue", category: "general", label: "app:commands.openIssue" },
 ] as const satisfies readonly CommandSpec[];
 
 export type CommandId = (typeof COMMANDS)[number]["id"];

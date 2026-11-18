@@ -53,7 +53,20 @@
     "missingShort": "missing",
     "forget": "Remove {{name}} from recent files"
   },
+  "screenFailed": {
+    "title": "This screen stopped working",
+    "body": "The rest of SpelaionDB still works. Reload this screen to try again. To tell us about it, copy the report and paste it into a GitHub issue.",
+    "reload": "Reload this screen",
+    "copy": "Copy report",
+    "report": "Open a GitHub issue",
+    "privacy": "The report holds the version, the system, the plugins, the error and the app log's last lines, with names, hosts, users, paths and secrets hidden. SpelaionDB sends nothing: you paste it yourself.",
+    "copied": "Report copied: paste it into the issue.",
+    "copyError": "Could not copy the report: {{detail}}",
+    "openError": "Could not open the browser: {{detail}}"
+  },
   "commands": {
+    "copyDiagnostics": "Copy diagnostic info",
+    "openIssue": "Open a GitHub issue",
     "categories": {
       "general": "General",
       "tab": "Tab",

@@ -238,7 +238,7 @@ fn swap_engines(state: &AppState) {
 }
 
 /// How many sessions are open on each engine.
-async fn sessions_by_engine(state: &AppState) -> HashMap<String, u32> {
+pub(crate) async fn sessions_by_engine(state: &AppState) -> HashMap<String, u32> {
     let mut counts = HashMap::new();
     for session in state.sessions.lock().await.values() {
         *counts
@@ -248,7 +248,7 @@ async fn sessions_by_engine(state: &AppState) -> HashMap<String, u32> {
     counts
 }
 
-async fn overview(state: &AppState) -> PluginsOverview {
+pub(crate) async fn overview(state: &AppState) -> PluginsOverview {
     let store = store_of(state);
     let catalogue = store.catalogue();
     let shipped = spelaion_core::plugins::shipped_folder();

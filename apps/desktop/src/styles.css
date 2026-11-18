@@ -5548,3 +5548,27 @@ button.value-picker-row.selected { background: var(--accent-soft); }
   padding: 0;
   border: none;
 }
+/* A screen that failed to render (SDB-398): its panel stands where the screen was. */
+.screen-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-md);
+  margin: auto;
+  padding: var(--space-2xl);
+  max-width: 560px;
+  color: var(--fg);
+  overflow: auto;
+}
+.screen-failed[hidden] { display: none; }
+.screen-failed h2 { margin: 0; font-size: var(--text-lg); line-height: var(--leading-lg); font-weight: 600; }
+.screen-failed p { margin: 0; line-height: 1.5; }
+.screen-failed-error {
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+  color: var(--danger-fg);
+  overflow-wrap: anywhere;
+}
+.screen-failed-actions { display: flex; flex-wrap: wrap; gap: var(--space-md); }
+.screen-failed.sidebar { margin: 0; max-width: none; background: var(--sidebar); }
+.screen-failed-app { min-height: 100vh; justify-content: center; }

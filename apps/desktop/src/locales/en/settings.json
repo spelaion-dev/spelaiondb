@@ -198,7 +198,12 @@
     "manualDownload": "This copy cannot update itself: download the new version from the releases page.",
     "openReleases": "Open releases page",
     "hint": "Updates are signed and installed only when you click “Install and restart”. Open tabs come back with their SQL, not run.",
-    "error": "Could not check for updates:"
+    "error": "Could not check for updates:",
+    "problem": "Report a problem",
+    "problemHint": "Copies the version, the system, the plugins, the engines in use and the app log's last lines, with names, hosts, users, paths and secrets hidden, to paste into a GitHub issue. SpelaionDB sends nothing.",
+    "diagnosticsCopied": "Diagnostic info copied.",
+    "diagnosticsError": "Could not copy the diagnostic info: {{detail}}",
+    "openIssueError": "Could not open the browser: {{detail}}"
   },
   "plugins": {
     "title": "Plugins",
