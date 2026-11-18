@@ -166,6 +166,12 @@ function restoreDemoConnections() {
     // Not there, or something else is in it: left as it is.
   }
   for (const copy of ["mysql-copy.toml", "mysql-copy-2.toml"]) rmSync(join(demoConnections, "docker", copy), { force: true });
+  // The databases list the SDB-396 step adds to MySQL (Docker), if a run stopped before it
+  // took it out again.
+  const mysqlFile = join(demoConnections, "docker", "mysql.toml");
+  const mysqlText = readFileSync(mysqlFile, "utf8");
+  const withoutList = mysqlText.replace(/^databases = .*\r?\n/m, "");
+  if (withoutList !== mysqlText) writeFileSync(mysqlFile, withoutList);
 }
 restoreDemoConnections();
 
@@ -6717,6 +6723,47 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await setExplorerBox("sortAlphabetically", true);
   await setShowSystem(false);
   await systemSchema.first().waitFor({ state: "detached" });
+
+  step("connection form: a MySQL connection shows only the databases it names (SDB-396)");
+  {
+    const mysqlFile = join(demoConnections, "docker", "mysql.toml");
+    const mysqlText = readFileSync(mysqlFile, "utf8");
+    const editMysql = async () => {
+      await (await connectionMenu("MySQL (Docker)")).getByRole("menuitem", { name: "Edit…" }).click();
+      const form = page.locator(".modal.wizard");
+      await form.getByRole("heading", { name: "Edit MySQL (Docker)" }).waitFor();
+      return form;
+    };
+    let form = await editMysql();
+    // Another case still names it; the connection's own database is always shown.
+    await form.locator('textarea[name="databases"]').fill("Performance_Schema");
+    await form.getByRole("checkbox", { name: /cleartext password plugin/ }).waitFor();
+    await shot("sdb-396-databases-shown");
+    await form.getByRole("button", { name: "Save changes" }).click();
+    await form.waitFor({ state: "detached" });
+    assert.match(readFileSync(mysqlFile, "utf8"), /^databases = \["Performance_Schema"\]$/m);
+    // A new tab's session lists only those in its database picker.
+    await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
+    const shownPanel = page.locator(".tab-panel:not([hidden])");
+    const askedAgain = page.getByRole("dialog").getByText("Password for MySQL (Docker)");
+    await Promise.race([askedAgain.waitFor(), shownPanel.locator(".status-connected").waitFor()]);
+    if (await askedAgain.isVisible()) {
+      await page.getByLabel("Password", { exact: true }).fill("spelaion");
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+    }
+    await shownPanel.locator(".status-connected").waitFor();
+    const shownPicker = shownPanel.getByLabel("Database", { exact: true });
+    await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await shownPicker.elementHandle());
+    const shownNames = await shownPicker.evaluate((el) => [...el.options].map((o) => o.value).filter(Boolean).sort());
+    assert.deepEqual(shownNames, ["performance_schema", "spelaion"]);
+    // Emptied again: the key goes and the file is as it was, byte for byte.
+    form = await editMysql();
+    assert.equal(await form.locator('textarea[name="databases"]').inputValue(), "Performance_Schema");
+    await form.locator('textarea[name="databases"]').fill("");
+    await form.getByRole("button", { name: "Save changes" }).click();
+    await form.waitFor({ state: "detached" });
+    assert.equal(readFileSync(mysqlFile, "utf8"), mysqlText);
+  }
 
   step("explorer: open a connected query for the selected database without asking again");
   await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
