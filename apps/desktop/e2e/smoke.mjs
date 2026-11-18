@@ -6742,9 +6742,17 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await form.getByRole("button", { name: "Save changes" }).click();
     await form.waitFor({ state: "detached" });
     assert.match(readFileSync(mysqlFile, "utf8"), /^databases = \["Performance_Schema"\]$/m);
-    // A new tab's session lists only those in its database picker.
+    // A session opened from the saved file lists only those in its database picker. (A tab
+    // opened from the explorer reuses the explorer session's connection as it was resolved,
+    // so the tab connects through its own connection list.)
     await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
     const shownPanel = page.locator(".tab-panel:not([hidden])");
+    await shownPanel.locator(".status-connected").waitFor();
+    const tabConnection = shownPanel.locator(".toolbar select").first();
+    await tabConnection.selectOption({ value: "" });
+    await shownPanel.locator(".status-connected").waitFor({ state: "detached" });
+    await tabConnection.selectOption({ value: "docker/mysql" });
+    await shownPanel.getByRole("button", { name: "Connect to choose database", exact: true }).click();
     const askedAgain = page.getByRole("dialog").getByText("Password for MySQL (Docker)");
     await Promise.race([askedAgain.waitFor(), shownPanel.locator(".status-connected").waitFor()]);
     if (await askedAgain.isVisible()) {
