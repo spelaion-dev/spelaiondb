@@ -6787,24 +6787,13 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await form.getByRole("button", { name: "Save changes" }).click();
     await form.waitFor({ state: "detached" });
     assert.match(readFileSync(mysqlFile, "utf8"), /^databases = \["Performance_Schema"\]$/m);
-    // A session opened from the saved file lists only those in its database picker. (A tab
-    // opened from the explorer reuses the explorer session's connection as it was resolved,
-    // so the tab connects through its own connection list.)
+    // A tab opened from the explorer, whose session was opened before the edit, uses the
+    // saved file (SDB-426): it lists only those in its database picker, and the same login
+    // keeps the password typed for the explorer, so nothing is asked.
     await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
     const shownPanel = page.locator(".tab-panel:not([hidden])");
     await shownPanel.locator(".status-connected").waitFor();
-    const tabConnection = shownPanel.locator(".toolbar select").first();
-    await tabConnection.selectOption({ value: "" });
-    await shownPanel.locator(".status-connected").waitFor({ state: "detached" });
-    await tabConnection.selectOption({ value: "docker/mysql" });
-    await shownPanel.getByRole("button", { name: "Connect to choose database", exact: true }).click();
-    const askedAgain = page.getByRole("dialog").getByText("Password for MySQL (Docker)");
-    await Promise.race([askedAgain.waitFor(), shownPanel.locator(".status-connected").waitFor()]);
-    if (await askedAgain.isVisible()) {
-      await page.getByLabel("Password", { exact: true }).fill("spelaion");
-      await page.getByRole("button", { name: "Connect", exact: true }).click();
-    }
-    await shownPanel.locator(".status-connected").waitFor();
+    assert.equal(await page.getByRole("dialog").count(), 0, "nothing asked for the same login");
     const shownPicker = shownPanel.getByLabel("Database", { exact: true });
     await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await shownPicker.elementHandle());
     const shownNames = await shownPicker.evaluate((el) => [...el.options].map((o) => o.value).filter(Boolean).sort());

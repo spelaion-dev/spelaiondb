@@ -34,6 +34,13 @@
   PostgreSQL plugin then prepares nothing by name. `tests/pgbouncer.rs` runs PostgreSQL
   through `testing/docker`'s PgBouncer (`SPELAION_TEST_PGBOUNCER=127.0.0.1:16432`), a
   connection without the setting included, which must lose a statement there.
+  `session_source.rs` (SDB-426) decides whether a session made from another one (a tab
+  opened from the explorer, a details or diagram tab, the process monitor; the app's
+  `connect_from_session`) may reuse that session's resolved connection: only while the
+  `ConnectionDefinition` it was opened from (`spelaion-config`'s `definition.rs`, no secrets)
+  is still the configuration's. After a saved edit the saved file is resolved again, and the
+  typed password goes with it only to the same login on the same route (`carried_password`);
+  otherwise the tab connects as a new one does. Nothing is run again (`tests/session_source.rs`).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
