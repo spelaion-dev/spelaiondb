@@ -22,6 +22,11 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
   (`SPELAION_TEST_CLICKHOUSE`, `SPELAION_TEST_TRINO`, `SPELAION_TEST_PRESTO`,
   `SPELAION_TEST_GIZMOSQL`; behind the
   bastions they are `clickhouse:8123`, `trino:8080`, `presto:8080` and `gizmosql:31337`).
+- PgBouncer in transaction mode, in front of `postgres`, is on `127.0.0.1:16432`
+  (`SPELAION_TEST_PGBOUNCER`, SDB-396): user and password `spelaion`, database `spelaion`. It
+  keeps no prepared statements for its clients and hands each transaction to the server
+  connection used least recently (`pgbouncer/pgbouncer.ini`), so a driver that relies on its
+  session fails there.
 - Oracle Database Free (Oracle's lite image, about 2 GB; a minute or two to start the first
   time) is on `127.0.0.1:11521` (`SPELAION_TEST_ORACLE`; behind the bastions `oracle:1521`):
   user and password `spelaion`, service `FREEPDB1`, made by `oracle/startup` on every start.
@@ -113,7 +118,7 @@ no unbounded service (even inactive profiles), at most 11.5 GiB per active phase
 least 4 GB (3,815 MiB) of the Docker
 host's actual RAM left** for the operating system, the kind cluster and Rust compilation/tests.
 This uses the daemon's reported RAM: a real runner reported 15,700 MiB after kernel reservations,
-which leaves 4,180 MiB after the default phase or 5,748 MiB during smoke, rather than assuming
+which leaves 4,164 MiB after the default phase or 5,748 MiB during smoke, rather than assuming
 it has 16 GiB available.
 The smaller protocol-family projects below are separate, opt-in projects; CI does not add
 them to this budget.
@@ -134,6 +139,7 @@ them to this budget.
 | libSQL, proxy, bastion1, bastion2, sqlitehost (each) | 64 | Container limit |
 | Redis | 32 | Container limit |
 | oracle-tls | 32 | Container limit |
+| PgBouncer | 16 | Container limit |
 | TDengine | 256 | Container limit |
 | Databend, Spanner emulator, InfluxDB (each) | 1024 | Container limit |
 | Hive (separate phase) | 1536 | 768 MiB heap, 128 MiB direct buffers, 64 MiB code cache |

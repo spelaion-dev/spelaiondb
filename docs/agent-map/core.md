@@ -21,6 +21,19 @@
   there needs tests that try to get around it (`tests/postgres_family.rs` and
   `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`, and GreptimeDB
   in the main project's `warehouse` profile, which CI runs).
+  `cleartext.rs` (SDB-396) decides whether a driver may answer MySQL's `mysql_clear_password`,
+  which sends the password as typed: only over TLS that checks the server's certificate or
+  through an SSH tunnel with hops (a proxy, SSM or Kubernetes alone is refused), asked in
+  `open::connect_driver`, the one gate every connection goes through, before the driver is
+  called; like `classify.rs`, any change there needs tests that try to get around it
+  (`tests/cleartext.rs`). `shown.rs` narrows every list of databases a session gives to the
+  connection's `databases` and its own database (and MySQL's and MariaDB's schemas, which are
+  its databases), in `health.rs`'s `Tracked`: what is shown, never a permission
+  (`tests/shown_databases.rs`). Behind a pooler in transaction mode the session is marked
+  (`Session::is_transaction_pooled`) and `objects::set_active_schema` refuses with why; the
+  PostgreSQL plugin then prepares nothing by name. `tests/pgbouncer.rs` runs PostgreSQL
+  through `testing/docker`'s PgBouncer (`SPELAION_TEST_PGBOUNCER=127.0.0.1:16432`), a
+  connection without the setting included, which must lose a statement there.
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
