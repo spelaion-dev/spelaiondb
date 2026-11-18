@@ -169,6 +169,8 @@ pub(crate) struct Tracked {
     inner: Arc<dyn Connection>,
     activity: Arc<Activity>,
     health: Health,
+    /// The databases the connection shows (SDB-396), set once when the session opens.
+    shown: std::sync::OnceLock<crate::shown::ShownDatabases>,
 }
 
 impl Tracked {
@@ -177,6 +179,26 @@ impl Tracked {
             inner,
             activity: Arc::new(Activity::new()),
             health: Health::new(),
+            shown: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Every list of databases is narrowed to `shown` from now on (SDB-396).
+    pub(crate) fn show_only(&self, shown: crate::shown::ShownDatabases) {
+        let _ = self.shown.set(shown);
+    }
+
+    fn shown_databases(&self, all: Vec<String>) -> Vec<String> {
+        match self.shown.get() {
+            Some(shown) => shown.databases(all),
+            None => all,
+        }
+    }
+
+    fn shown_schemas(&self, all: Vec<SchemaInfo>) -> Vec<SchemaInfo> {
+        match self.shown.get() {
+            Some(shown) => shown.schemas(all),
+            None => all,
         }
     }
 
@@ -467,11 +489,13 @@ impl Connection for Tracked {
     async fn list_databases(&self) -> Result<Vec<String>> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.list_databases().await)
+            .map(|all| self.shown_databases(all))
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.list_schemas().await)
+            .map(|all| self.shown_schemas(all))
     }
 
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>> {
@@ -517,6 +541,7 @@ impl Connection for Tracked {
     async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.list_schemas_matching(filter).await)
+            .map(|all| self.shown_schemas(all))
     }
 
     async fn list_objects_matching(
