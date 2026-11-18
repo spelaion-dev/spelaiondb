@@ -181,6 +181,8 @@ pub struct Session {
     /// Every use goes through [`Tracked`] (ADR-028).
     connection: Arc<dyn Connection>,
     tracked: Arc<Tracked>,
+    /// Behind a pooler in transaction mode (SDB-396).
+    transaction_pooled: bool,
     health: Health,
     keep_alive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     idle_close: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -337,7 +339,20 @@ impl Session {
             read_only: false,
             session_read_only: AtomicBool::new(false),
             server_family: None,
+            transaction_pooled: false,
         }
+    }
+
+    /// The session reaches PostgreSQL through a pooler in transaction mode (SDB-396): each
+    /// transaction may get another server connection, so nothing set for the session holds.
+    pub fn with_transaction_pooler(mut self, pooled: bool) -> Self {
+        self.transaction_pooled = pooled;
+        self
+    }
+
+    /// Whether a setting made for the session would hold no longer than one transaction.
+    pub fn is_transaction_pooled(&self) -> bool {
+        self.transaction_pooled
     }
 
     /// The databases its connection shows (SDB-396): every list of databases the session

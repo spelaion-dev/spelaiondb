@@ -1467,6 +1467,9 @@ pub struct ConnectionItem {
     pub sql: bool,
     /// Its TLS does not check its server (SDB-395), from the file as written.
     pub tls_warning: Option<TlsWarningItem>,
+    /// PostgreSQL behind a pooler (SDB-396): in transaction mode a session has no schema of
+    /// its own, so the editor's schema picker is off.
+    pub pooler: Option<PoolerItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -3283,6 +3286,32 @@ impl From<spelaion_config::TlsModeConfig> for TlsModeItem {
     }
 }
 
+/// A PostgreSQL connection's pooler (SDB-396).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolerItem {
+    Session,
+    Transaction,
+}
+
+impl From<spelaion_config::PoolerMode> for PoolerItem {
+    fn from(mode: spelaion_config::PoolerMode) -> Self {
+        match mode {
+            spelaion_config::PoolerMode::Session => Self::Session,
+            spelaion_config::PoolerMode::Transaction => Self::Transaction,
+        }
+    }
+}
+
+impl From<PoolerItem> for spelaion_config::PoolerMode {
+    fn from(mode: PoolerItem) -> Self {
+        match mode {
+            PoolerItem::Session => Self::Session,
+            PoolerItem::Transaction => Self::Transaction,
+        }
+    }
+}
+
 /// What a pasted connection URL fills in the form. The password goes only to the form's
 /// password field, like a typed one.
 #[derive(Debug, Clone, Serialize, Type)]
@@ -3331,6 +3360,13 @@ pub struct ConnectionDraftItem {
     pub database: String,
     /// DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316).
     pub file_folder: bool,
+    /// PostgreSQL behind a pooler (SDB-396); null for a direct connection.
+    pub pooler: Option<PoolerItem>,
+    /// MySQL and MariaDB: allow the cleartext password plugin (SDB-396). The core opens such a
+    /// connection only over a checked certificate or an SSH tunnel.
+    pub cleartext_password: bool,
+    /// The databases the connection shows (SDB-396); empty for all of them.
+    pub databases: Vec<String>,
     pub user: String,
     pub password_mode: PasswordMode,
     pub password_env: String,
@@ -3393,6 +3429,9 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             port: item.port,
             database: item.database,
             file_folder: item.file_folder,
+            pooler: item.pooler.map(Into::into),
+            cleartext_password: item.cleartext_password,
+            databases: item.databases,
             user: item.user,
             password: match item.password_mode {
                 PasswordMode::None => PasswordChoice::None,
@@ -3476,6 +3515,9 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             port: draft.port,
             database: draft.database,
             file_folder: draft.file_folder,
+            pooler: draft.pooler.map(Into::into),
+            cleartext_password: draft.cleartext_password,
+            databases: draft.databases,
             user: draft.user,
             password_mode,
             password_env,

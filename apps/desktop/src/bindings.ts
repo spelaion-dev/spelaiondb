@@ -1872,6 +1872,15 @@ export type ConnectionDraftItem_Deserialize = {
 	database: string,
 	/**  DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316). */
 	fileFolder: boolean,
+	/**  PostgreSQL behind a pooler (SDB-396); null for a direct connection. */
+	pooler?: PoolerItem | null,
+	/**
+	 *  MySQL and MariaDB: allow the cleartext password plugin (SDB-396). The core opens such a
+	 *  connection only over a checked certificate or an SSH tunnel.
+	 */
+	cleartextPassword: boolean,
+	/**  The databases the connection shows (SDB-396); empty for all of them. */
+	databases: string[],
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -1932,6 +1941,15 @@ export type ConnectionDraftItem_Serialize = {
 	database: string,
 	/**  DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316). */
 	fileFolder: boolean,
+	/**  PostgreSQL behind a pooler (SDB-396); null for a direct connection. */
+	pooler: PoolerItem | null,
+	/**
+	 *  MySQL and MariaDB: allow the cleartext password plugin (SDB-396). The core opens such a
+	 *  connection only over a checked certificate or an SSH tunnel.
+	 */
+	cleartextPassword: boolean,
+	/**  The databases the connection shows (SDB-396); empty for all of them. */
+	databases: string[],
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -2001,6 +2019,11 @@ export type ConnectionItem_Deserialize = {
 	sql: boolean,
 	/**  Its TLS does not check its server (SDB-395), from the file as written. */
 	tlsWarning?: TlsWarningItem | null,
+	/**
+	 *  PostgreSQL behind a pooler (SDB-396): in transaction mode a session has no schema of
+	 *  its own, so the editor's schema picker is off.
+	 */
+	pooler?: PoolerItem | null,
 };
 
 export type ConnectionItem_Serialize = {
@@ -2030,6 +2053,11 @@ export type ConnectionItem_Serialize = {
 	sql: boolean,
 	/**  Its TLS does not check its server (SDB-395), from the file as written. */
 	tlsWarning: TlsWarningItem | null,
+	/**
+	 *  PostgreSQL behind a pooler (SDB-396): in transaction mode a session has no schema of
+	 *  its own, so the editor's schema picker is off.
+	 */
+	pooler: PoolerItem | null,
 };
 
 /**
@@ -5127,6 +5155,9 @@ export type PluginsOverview_Serialize = {
 	catalogueSerial: number | null,
 	plugins: PluginItem_Serialize[],
 };
+
+/**  A PostgreSQL connection's pooler (SDB-396). */
+export type PoolerItem = "session" | "transaction";
 
 export type PreviewColumnItem = {
 	name: string,

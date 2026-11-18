@@ -103,6 +103,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
   // (PostgreSQL, DuckDB): it shows, and changes, where unqualified names are found (ADR-037).
   const engineInfo = useEngineInfo(connection?.engine);
   const supportsSchema = !tab.table && !supportsDatabase && Boolean(engineInfo?.sessionSchema);
+  // Behind a pooler in transaction mode the session keeps no schema of its own (SDB-396): the
+  // picker shows where names are found but cannot change it (the core refuses too).
+  const schemaPooled = connection?.pooler === "transaction";
   const [schemas, setSchemas] = useState<string[]>([]);
   const [schema, setSchema] = useState<string | null>(null);
   const [schemaBusy, setSchemaBusy] = useState(false);
@@ -1544,11 +1547,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
         {supportsSchema && tab.status === "connected" && (
           <select
             aria-label={t("schema")}
-            title={t("schemaHint")}
+            title={schemaPooled ? t("schemaPooled") : t("schemaHint")}
             name="schema"
             value={schema ?? ""}
             onChange={(e) => void changeSchema(e.target.value)}
-            disabled={running || schemaBusy || historySaving || workspaceChanging || activeResult?.paging?.loading}
+            disabled={schemaPooled || running || schemaBusy || historySaving || workspaceChanging || activeResult?.paging?.loading}
           >
             <option value="" disabled>{t("noSchema")}</option>
             {schema && !schemas.includes(schema) && <option value={schema}>{schema}</option>}

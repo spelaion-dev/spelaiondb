@@ -100,6 +100,7 @@ import {
   type SqlTemplateItem,
   type SnippetItem,
   type TextFormat,
+  type PoolerItem,
   type TlsModeItem,
   type TunnelItem,
   type UrlFields_Serialize,
@@ -150,7 +151,7 @@ export type { BlockItem, BulkActionItem, CellInputItem };
 export type { CopySpecialItem, UpdateSourceItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
-export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
+export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, PoolerItem, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ProxyDraft = ProxyDraftItem_Deserialize;

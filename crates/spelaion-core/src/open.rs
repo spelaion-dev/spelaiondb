@@ -569,6 +569,14 @@ pub async fn open_connection(
         .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
         // A read-only connection runs only reads, settings and transaction control (ADR-053).
         .with_read_only(resolved.params.read_only);
+    session = session.with_transaction_pooler(
+        resolved
+            .params
+            .options
+            .get(spelaion_config::engine_options::POOLER)
+            .map(String::as_str)
+            == Some("transaction"),
+    );
     if let Some(names) = &resolved.databases {
         session = session.with_shown_databases(
             names,
