@@ -10226,13 +10226,16 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // Leave nothing pending: cancel the query, discard the edit and close both tabs.
     await shown.getByRole("button", { name: "Cancel", exact: true }).click();
     await activeTab.locator(".tab-running").waitFor({ state: "detached" });
+    // Closing runs asynchronous checks. Wait for this tab to close before switching tabs.
+    const cancelledTab = await activeTab.elementHandle();
     await page.keyboard.press("Control+w");
+    await page.waitForFunction((tab) => !tab.isConnected, cancelledTab);
     await page.locator(".tabbar .tab", { hasText: editTab }).click();
     await page.locator(".tabbar .tab.active", { hasText: editTab }).waitFor();
     await shown.getByText("Updated: 1", { exact: false }).waitFor();
     await shown.getByRole("button", { name: "Discard" }).click();
-    await shown.getByText("Updated: 1", { exact: false }).waitFor({ state: "detached" });
-    await page.keyboard.press("Control+w");
+    await shown.getByText("No pending changes", { exact: true }).waitFor();
+    await shown.getByRole("grid").press("Control+w");
     await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
   }
 
