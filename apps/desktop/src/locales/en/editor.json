@@ -44,7 +44,6 @@
     "gridLabel_one": "Result with {{formattedCount}} row",
     "gridLabel_other": "Result with {{formattedCount}} rows",
     "accessibleCell": "Row {{row}}, {{column}} ({{type}}): {{value}}",
-    "accessibleCellLoading": "Row {{row}}, {{column}}: loading value",
     "accessibleCellError": "Row {{row}}, {{column}}: could not load value",
     "accessibleTruncated": "{{value}}… Open the cell viewer for the full value.",
     "copied_one": "Copied {{formattedCount}} row × {{columns}} columns",

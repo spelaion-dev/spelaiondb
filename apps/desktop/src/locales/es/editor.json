@@ -44,7 +44,6 @@
     "gridLabel_one": "Resultado con {{formattedCount}} fila",
     "gridLabel_other": "Resultado con {{formattedCount}} filas",
     "accessibleCell": "Fila {{row}}, {{column}} ({{type}}): {{value}}",
-    "accessibleCellLoading": "Fila {{row}}, {{column}}: cargando valor",
     "accessibleCellError": "Fila {{row}}, {{column}}: no se pudo cargar el valor",
     "accessibleTruncated": "{{value}}… Abre el visor de celda para ver el valor completo.",
     "copied_one": "Copiada {{formattedCount}} fila × {{columns}} columnas",

@@ -701,30 +701,56 @@ export function ResultGrid({
 
   // The canvas has no accessible cells. Expose the active one without putting result data in
   // React state; stale asynchronous answers must not announce a previously selected cell.
+  // Screen readers speak a cell when the grid's active descendant changes (SDB-425: Orca
+  // ignores new text in the same element), so each announcement is a cell with an id of its
+  // own, written whole (row, visible column, value) and only then made the active descendant:
+  // once per move, again after an edit changes its value, never a loading text in between.
   const activeRow = selection?.focus.row;
   const activeColumn = selection?.focus.col;
   const activeEdits = editing?.cells;
   const activeDeleted = editing?.deleted;
+  const announced = useRef({ serial: 0, said: "" });
   useEffect(() => {
     const target = accessibleCell.current;
-    if (!target || activeRow === undefined || activeColumn === undefined || activeRow >= result.rows) return;
+    const grid = scrollerRef.current;
+    if (!target || !grid) return;
+    if (activeRow === undefined || activeColumn === undefined || activeRow >= result.rows) {
+      grid.removeAttribute("aria-activedescendant");
+      if (target.parentElement) target.parentElement.hidden = true;
+      announced.current.said = "";
+      return;
+    }
     const column = result.columns[activeColumn];
     if (!column) return;
+    const row = numbers.format(rowOffset + activeRow + 1);
+    const colIndex = Math.max(1, visibleCols.indexOf(activeColumn) + 1);
     let current = true;
-    const describe = (value: string | null) => {
+    const expose = (text: string) => {
       if (!current) return;
-      const text = value === null ? "NULL" : value.length > 500 ? t("results.accessibleTruncated", { value: value.slice(0, 500) }) : value;
-      target.textContent = t("results.accessibleCell", { row: numbers.format(rowOffset + activeRow + 1), column: column.name, type: column.nativeType, value: text }) +
-        (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: FOLLOW_SHORTCUT })}` : "");
+      // The same cell saying the same thing again (a re-render) is not a new announcement; the
+      // same cell at another visible position (a column hidden or shown) is.
+      const said = `${activeRow}:${activeColumn}:${colIndex}:${text}`;
+      if (said === announced.current.said && grid.getAttribute("aria-activedescendant") === target.id) return;
+      announced.current = { serial: announced.current.serial + 1, said };
+      target.id = `${accessibleCellId}-${announced.current.serial}`;
+      target.setAttribute("aria-colindex", String(colIndex));
+      target.parentElement?.setAttribute("aria-rowindex", String(activeRow + 2));
+      if (target.parentElement) target.parentElement.hidden = false;
+      target.textContent = text;
+      grid.setAttribute("aria-activedescendant", target.id);
     };
-    target.textContent = t("results.accessibleCellLoading", { row: numbers.format(rowOffset + activeRow + 1), column: column.name });
+    const describe = (value: string | null) => {
+      const text = value === null ? "NULL" : value.length > 500 ? t("results.accessibleTruncated", { value: value.slice(0, 500) }) : value;
+      expose(t("results.accessibleCell", { row, column: column.name, type: column.nativeType, value: text }) +
+        (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: FOLLOW_SHORTCUT })}` : ""));
+    };
     const key = `${activeRow}:${activeColumn}`;
     if (activeEdits && key in activeEdits) describe(activeEdits[key] ?? null);
     else void call(commands.cellValue(result.id, activeRow, activeColumn)).then(describe, () => {
-      if (current) target.textContent = t("results.accessibleCellError", { row: numbers.format(rowOffset + activeRow + 1), column: column.name });
+      expose(t("results.accessibleCellError", { row, column: column.name }));
     });
     return () => { current = false; };
-  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers, keyColumns, rowOffset]);
+  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, visibleCols, view, t, numbers, keyColumns, rowOffset, accessibleCellId]);
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
   const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, sorting, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns, rowOffset });
@@ -2195,7 +2221,6 @@ export function ResultGrid({
         tabIndex={0}
         aria-rowcount={result.rows + 1}
         aria-colcount={visibleCols.length}
-        aria-activedescendant={selection && selection.focus.row < result.rows ? accessibleCellId : undefined}
         onFocus={() => {
           if (!selection && result.rows > 0 && visibleCols.length > 0) {
             const cell = { row: 0, col: firstVisible };
@@ -2293,9 +2318,11 @@ export function ResultGrid({
         }
       >
         <div aria-hidden="true" style={{ width: totalW, height: scrollMap(totalH, 0).spacerH }} />
-        {selection && selection.focus.row < result.rows && <div className="sr-only" role="row" aria-rowindex={selection.focus.row + 2}>
-          <div ref={accessibleCell} id={accessibleCellId} role="gridcell" aria-colindex={Math.max(1, visibleCols.indexOf(selection.focus.col) + 1)} aria-selected="true" aria-live="polite" aria-atomic="true" />
-        </div>}
+        {/* The active cell for screen readers: its id, indexes and text are written by the
+            effect above, together, when its value is known (SDB-425). */}
+        <div className="sr-only" role="row" hidden>
+          <div ref={accessibleCell} role="gridcell" aria-selected="true" />
+        </div>
       </div>
       <button
         type="button"
