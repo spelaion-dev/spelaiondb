@@ -201,6 +201,116 @@ pub enum PluginRemoval {
     Removed { overview: PluginsOverview },
 }
 
+/// One running plugin process, as Settings › Plugins shows it (SDB-399). The numbers are the
+/// core's, read from the operating system for that process.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginProcessItem {
+    /// The plugin's name: its program's, `spelaiondb-plugin-duckdb`.
+    pub name: String,
+    pub pid: u32,
+    pub memory_bytes: Option<f64>,
+    /// Since the previous reading, in percent of one core; none at the first.
+    pub cpu_percent: Option<f64>,
+    pub cpu_seconds: Option<f64>,
+    pub sessions: u32,
+    pub uptime_seconds: f64,
+    pub engines: Vec<String>,
+}
+
+/// What restarting a plugin did.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PluginRestart {
+    /// Nothing was stopped: these sessions (tabs, by id) have a transaction open, which the
+    /// restart would roll back (ADR-031). Call again with `confirmed` once the user agreed.
+    #[serde(rename_all = "camelCase")]
+    NeedsConfirmation { sessions: Vec<String> },
+    /// Stopped: its sessions are lost and the next connection starts it again.
+    Restarted,
+    /// It was not running (it ended meanwhile).
+    NotRunning,
+}
+
+/// The plugin's name from its program: the file name without `.exe`.
+fn plugin_name(program: &Path) -> String {
+    program
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| program.display().to_string())
+}
+
+/// The plugin processes running now, with what each uses (SDB-399). Nothing is started.
+#[command]
+pub async fn plugin_processes() -> CmdResult<Vec<PluginProcessItem>> {
+    Ok(spelaion_core::plugins::running()
+        .await
+        .into_iter()
+        .map(|plugin| PluginProcessItem {
+            name: plugin_name(&plugin.program),
+            pid: plugin.usage.pid,
+            memory_bytes: plugin.usage.memory_bytes.map(|bytes| bytes as f64),
+            cpu_percent: plugin.usage.cpu_percent,
+            cpu_seconds: plugin.usage.cpu_seconds,
+            sessions: u32::try_from(plugin.usage.sessions).unwrap_or(u32::MAX),
+            uptime_seconds: plugin.usage.uptime.as_secs_f64(),
+            engines: plugin.usage.engines,
+        })
+        .collect())
+}
+
+/// Restarts the plugin `name` (SDB-399): its process is stopped, given `STOP_GRACE` to close
+/// its files, and the next connection starts it again, checked again. Its sessions are lost
+/// (ADR-028): each tab says so at once, and nothing is run again. When a session of it has a
+/// transaction open, nothing is stopped until `confirmed` (ADR-031).
+#[command]
+pub async fn plugin_restart(
+    state: State<'_, AppState>,
+    name: String,
+    confirmed: bool,
+) -> CmdResult<PluginRestart> {
+    let _changing = state.plugins.changing.lock().await;
+    let Some(plugin) = spelaion_core::plugins::running()
+        .await
+        .into_iter()
+        .find(|plugin| plugin_name(&plugin.program) == name)
+    else {
+        return Ok(PluginRestart::NotRunning);
+    };
+    let engines = plugin.usage.engines.clone();
+    let of_plugin = |session: &crate::DesktopSession| {
+        engines
+            .iter()
+            .any(|engine| engine == session.open.resolved.engine.as_str())
+    };
+    if !confirmed {
+        let mut open: Vec<String> = state
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, session)| {
+                of_plugin(session) && session.open.session.transaction_status().is_open()
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !open.is_empty() {
+            open.sort();
+            return Ok(PluginRestart::NeedsConfirmation { sessions: open });
+        }
+    }
+    spelaion_core::plugins::stop(&plugin.program).await;
+    // Their connections are closed now: each tab is told at once (the health watcher sends
+    // `SessionLost`), rather than at its next keep-alive.
+    let reason = format!("the plugin {name} was restarted");
+    for session in state.sessions.lock().await.values() {
+        if of_plugin(session) {
+            session.open.session.mark_lost(reason.clone());
+        }
+    }
+    Ok(PluginRestart::Restarted)
+}
+
 /// How far an install's download is. Sent a few times a second at most.
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]

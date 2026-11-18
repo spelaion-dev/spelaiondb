@@ -280,6 +280,15 @@ export const commands = {
 	 *  swapped, so the next connection starts whatever build is left.
 	 */
 	pluginsRemove: (name: string, version: string, confirmed: boolean) => typedError<PluginRemoval_Serialize, string>(__TAURI_INVOKE("plugins_remove", { name, version, confirmed })),
+	/**  The plugin processes running now, with what each uses (SDB-399). Nothing is started. */
+	pluginProcesses: () => typedError<PluginProcessItem_Serialize[], string>(__TAURI_INVOKE("plugin_processes")),
+	/**
+	 *  Restarts the plugin `name` (SDB-399): its process is stopped, given `STOP_GRACE` to close
+	 *  its files, and the next connection starts it again, checked again. Its sessions are lost
+	 *  (ADR-028): each tab says so at once, and nothing is run again. When a session of it has a
+	 *  transaction open, nothing is stopped until `confirmed` (ADR-031).
+	 */
+	pluginRestart: (name: string, confirmed: boolean) => typedError<PluginRestart, string>(__TAURI_INVOKE("plugin_restart", { name, confirmed })),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
 	/**
@@ -4840,6 +4849,46 @@ export type PluginOffered = {
 	address: string,
 };
 
+/**
+ *  One running plugin process, as Settings › Plugins shows it (SDB-399). The numbers are the
+ *  core's, read from the operating system for that process.
+ */
+export type PluginProcessItem = PluginProcessItem_Serialize | PluginProcessItem_Deserialize;
+
+/**
+ *  One running plugin process, as Settings › Plugins shows it (SDB-399). The numbers are the
+ *  core's, read from the operating system for that process.
+ */
+export type PluginProcessItem_Deserialize = {
+	/**  The plugin's name: its program's, `spelaiondb-plugin-duckdb`. */
+	name: string,
+	pid: number,
+	memoryBytes?: number | null,
+	/**  Since the previous reading, in percent of one core; none at the first. */
+	cpuPercent?: number | null,
+	cpuSeconds?: number | null,
+	sessions: number,
+	uptimeSeconds: number | null,
+	engines: string[],
+};
+
+/**
+ *  One running plugin process, as Settings › Plugins shows it (SDB-399). The numbers are the
+ *  core's, read from the operating system for that process.
+ */
+export type PluginProcessItem_Serialize = {
+	/**  The plugin's name: its program's, `spelaiondb-plugin-duckdb`. */
+	name: string,
+	pid: number,
+	memoryBytes: number | null,
+	/**  Since the previous reading, in percent of one core; none at the first. */
+	cpuPercent: number | null,
+	cpuSeconds: number | null,
+	sessions: number,
+	uptimeSeconds: number | null,
+	engines: string[],
+};
+
 /**  A build on this machine that is not started, and why (the core's words). */
 export type PluginRefused = {
 	version: string,
@@ -4870,6 +4919,18 @@ export type PluginRemoval_Serialize =
 { kind: "needsConfirmation"; openSessions: number } | 
 /**  Removed; the engines were swapped. */
 { kind: "removed"; overview: PluginsOverview_Serialize };
+
+/**  What restarting a plugin did. */
+export type PluginRestart = 
+/**
+ *  Nothing was stopped: these sessions (tabs, by id) have a transaction open, which the
+ *  restart would roll back (ADR-031). Call again with `confirmed` once the user agreed.
+ */
+{ kind: "needsConfirmation"; sessions: string[] } | 
+/**  Stopped: its sessions are lost and the next connection starts it again. */
+{ kind: "restarted" } | 
+/**  It was not running (it ended meanwhile). */
+{ kind: "notRunning" };
 
 /**  Where a build is on this machine. */
 export type PluginSource = 

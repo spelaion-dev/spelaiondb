@@ -128,6 +128,48 @@ async fn a_pinned_program_next_to_the_app_serves_its_engines() {
     within(other.connect(&params())).await.unwrap();
 }
 
+/// Settings › Plugins (SDB-399): the core lists a pinned plugin's running process with what it
+/// uses, and restarting it (the core's `stop`) loses its sessions; the next connection starts
+/// it again, checked again.
+#[tokio::test]
+async fn the_core_lists_a_running_plugin_and_restarting_it_loses_its_sessions() {
+    let app = AppFolder::new("running");
+    let file = app.install(NAME);
+    let pins = pins_for(here(), &sha256_of(&file).unwrap());
+    let engines = engines_of(&pins, &app.0);
+    // By its whole path: the other tests of this file run their own copies, of the same name,
+    // at the same time.
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mine = canonical(&file);
+    let ours = |running: &[spelaion_core::plugins::RunningPlugin]| {
+        running
+            .iter()
+            .find(|plugin| canonical(&plugin.program) == mine)
+            .cloned()
+    };
+    assert!(
+        ours(&spelaion_core::plugins::running().await).is_none(),
+        "not started yet"
+    );
+    let driver = engines.driver("test").expect("pinned");
+    let session = within(driver.connect(&params())).await.unwrap();
+    let listed = ours(&spelaion_core::plugins::running().await).expect("listed once it runs");
+    assert_eq!(
+        listed.usage.engines,
+        vec!["test".to_string(), "test2".to_string()]
+    );
+    assert_eq!(listed.usage.sessions, 1);
+    assert!(listed.usage.memory_bytes.is_some());
+    within(spelaion_core::plugins::stop(&file)).await;
+    assert!(session.is_closed(), "its session is lost (ADR-028)");
+    assert!(ours(&spelaion_core::plugins::running().await).is_none());
+    let again = within(driver.connect(&params())).await.unwrap();
+    let relisted = ours(&spelaion_core::plugins::running().await).expect("started again");
+    assert_ne!(relisted.usage.pid, listed.usage.pid);
+    assert!(!again.is_closed());
+}
+
 /// A file with the pinned name that is not the pinned build is never started, and the engine
 /// does not quietly fall back to anything: the error says what was found.
 #[tokio::test]

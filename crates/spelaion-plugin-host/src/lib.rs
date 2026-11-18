@@ -18,6 +18,7 @@
 pub mod conformance;
 mod connection;
 mod process;
+mod usage;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,6 +41,26 @@ pub type LogSink = Arc<dyn Fn(&str) + Send + Sync>;
 /// What decides, each time a plugin's process is about to start, whether its file may be
 /// started (the core's pins, ADR-042). An error is why not: nothing is started then.
 pub type StartCheck = Arc<dyn Fn(&Path) -> std::result::Result<(), String> + Send + Sync>;
+
+/// What a plugin's running process uses (SDB-399), read by the core from the operating
+/// system for that one process. A number that cannot be read is `None`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessUsage {
+    pub pid: u32,
+    /// Its memory: the working set on Windows, the resident set elsewhere.
+    pub memory_bytes: Option<u64>,
+    /// The processor time it has taken since it started.
+    pub cpu_seconds: Option<f64>,
+    /// Its processor use since the previous reading, in percent of one core (more than 100
+    /// with several); none at the first reading.
+    pub cpu_percent: Option<f64>,
+    /// The engines it serves, by the names the configuration uses.
+    pub engines: Vec<String>,
+    /// The sessions it serves now.
+    pub sessions: usize,
+    /// How long it has run.
+    pub uptime: std::time::Duration,
+}
 
 /// An engine plugin: a program that is started when it is first needed and serves every
 /// session of its engines until this value is dropped.
@@ -127,6 +148,12 @@ impl Plugin {
             .await
             .as_ref()
             .is_some_and(|p| !p.is_dead())
+    }
+
+    /// What its process uses now, if it runs: never starts it.
+    pub async fn usage(&self) -> Option<ProcessUsage> {
+        let running = self.inner.running.lock().await;
+        running.as_ref().and_then(|process| process.usage())
     }
 
     /// Stops the process, and returns once it has ended: its input closes, so it drops its

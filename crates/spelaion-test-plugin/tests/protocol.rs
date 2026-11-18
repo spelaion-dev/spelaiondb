@@ -856,6 +856,75 @@ async fn stopping_a_plugin_is_like_its_death() {
 }
 
 #[tokio::test]
+async fn a_running_plugins_memory_processor_time_and_sessions_are_read() {
+    // SDB-399: read from the operating system for that one process, never by starting it.
+    let plugin = Plugin::new(PROGRAM);
+    assert_eq!(
+        within(plugin.usage()).await,
+        None,
+        "nothing runs, nothing is started"
+    );
+    assert!(!within(plugin.is_running()).await);
+    let first = connect(&plugin).await;
+    let usage = within(plugin.usage()).await.expect("it runs");
+    assert!(usage.pid > 0);
+    assert!(
+        usage.memory_bytes.is_some_and(|bytes| bytes > 1024 * 1024),
+        "{usage:?}"
+    );
+    assert!(
+        usage.cpu_seconds.is_some_and(|seconds| seconds >= 0.0),
+        "{usage:?}"
+    );
+    assert_eq!(usage.cpu_percent, None, "no share at the first reading");
+    assert_eq!(usage.sessions, 1);
+    let second = connect(&plugin).await;
+    // Work for the processor: a million rows read through.
+    let events = run(second.as_ref(), "rows 1000000").await;
+    assert!(events.iter().all(Result::is_ok));
+    let later = within(plugin.usage()).await.expect("it runs");
+    assert_eq!(later.pid, usage.pid, "the same process serves both");
+    assert_eq!(later.sessions, 2);
+    assert!(
+        later.cpu_seconds >= usage.cpu_seconds,
+        "{usage:?} then {later:?}"
+    );
+    assert!(
+        later.cpu_percent.is_some_and(|share| share >= 0.0),
+        "{later:?}"
+    );
+    assert!(later.uptime >= usage.uptime);
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn a_restart_loses_its_sessions_and_the_next_connection_starts_a_new_process() {
+    // SDB-399: what Settings › Plugins' Restart does. The sessions are lost (ADR-028), nothing
+    // is run again, and the next connection starts the program again.
+    let plugin = Plugin::new(PROGRAM);
+    let before = connect(&plugin).await;
+    let pid = within(plugin.usage()).await.expect("it runs").pid;
+    within(plugin.stop()).await;
+    assert!(before.is_closed(), "its session is lost");
+    assert_eq!(within(plugin.usage()).await, None);
+    let after = connect(&plugin).await;
+    let usage = within(plugin.usage()).await.expect("it runs again");
+    assert_ne!(usage.pid, pid, "a new process");
+    assert_eq!(
+        usage.sessions, 1,
+        "only the new session: the old one is not reopened"
+    );
+    assert!(before.is_closed());
+    assert!(
+        before
+            .execute("engine", &ExecOptions::default())
+            .await
+            .is_err()
+    );
+    assert_eq!(one(after.as_ref(), "engine").await, "test");
+}
+
+#[tokio::test]
 async fn the_plugin_ends_when_its_input_closes() {
     let mut child = std::process::Command::new(PROGRAM)
         .stdin(std::process::Stdio::piped())

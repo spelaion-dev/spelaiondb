@@ -26,7 +26,11 @@
     (`Plugin::stop`, or the last of it dropped) closes its input and kills it only if it has
     not ended after `STOP_GRACE` (5 s): a plugin killed at once could leave a file half written. The password goes
     only in `connect`, and every error, notice and log line of a plugin has the secrets it was
-    given taken out. `conformance.rs` is the set a plugin runs against itself in its own CI
+    given taken out. What a running plugin's process uses (`Plugin::usage`, SDB-399: memory,
+    processor time, sessions) is read for that one process with safe calls only (`usage.rs`: a
+    job object through `win32job` on Windows, `/proc` on Linux, `ps` elsewhere), never by
+    starting it; the core lists them (`plugins::running`) and Settings › Plugins' Restart is
+    `plugins::stop`. `conformance.rs` is the set a plugin runs against itself in its own CI
     (ADR-042).
   `crates/spelaion-test-plugin` is a made-up engine served as a plugin, never shipped; its
   `tests/protocol.rs` runs the protocol end to end (results, credit, cancel, a plugin that

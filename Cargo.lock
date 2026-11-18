@@ -5848,11 +5848,13 @@ dependencies = [
  "arrow",
  "async-trait",
  "futures-util",
+ "rustix",
  "serde",
  "serde_json",
  "spelaion-driver-api",
  "spelaion-plugin-protocol",
  "tokio",
+ "win32job",
 ]
 
 [[package]]

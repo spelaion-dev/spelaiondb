@@ -6504,12 +6504,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.locator('.connection-row:has-text("MySQL (Docker)") .twisty').click();
   await page.getByLabel("Password", { exact: true }).fill("spelaion");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await page.getByRole("button", { name: "Expand or collapse schema spelaion" }).waitFor();
+  await page.getByRole("button", { name: "Expand or collapse schema spelaion", exact: true }).waitFor();
   assert.ok(await page.locator('.connection-row:has-text("MySQL (Docker)") img.engine-icon').evaluate((icon) => icon.complete && icon.naturalWidth > 0));
   await connectionsActivity.click();
   await sidebar.waitFor({ state: "hidden" });
   await connectionsActivity.click();
-  await page.getByRole("button", { name: "Expand or collapse schema spelaion" }).waitFor();
+  await page.getByRole("button", { name: "Expand or collapse schema spelaion", exact: true }).waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
   // System schemas only when asked for, in Settings → Explorer (a personal preference).
   const systemSchema = page.getByRole("button", { name: "Expand or collapse schema information_schema" });
@@ -6551,7 +6551,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
   await panel.locator(".status-connected").waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
-  const mysqlSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion" });
+  const mysqlSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion", exact: true });
   await mysqlSchema.dblclick();
   await panel.locator(".status-connected").waitFor();
   const selectedDatabase = panel.getByLabel("Database", { exact: true });
@@ -7606,6 +7606,42 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const second = await newQuery("analytics", "select count(*) as n from sales;");
   await run(second);
   await second.locator(".statusline", { hasText: "1 row" }).waitFor();
+
+  step("plugin processes: Settings › Plugins shows DuckDB's process, Restart loses its sessions, and a tab reconnects by hand");
+  {
+    // SDB-399. The numbers are the core's, read for that one process.
+    let pid = null;
+    await withSettings("plugins", async (settings) => {
+      const row = settings.locator('.plugin-row[data-plugin="spelaiondb-plugin-duckdb"]');
+      const usage = row.locator(".plugin-process");
+      await usage.waitFor();
+      assert.match(await usage.innerText(), /^Running: .+ of memory, .+ processor, \d+ sessions?\.$/);
+      pid = await usage.getAttribute("data-pid");
+      // Read again every two seconds: the processor share needs two readings.
+      await row.locator(".plugin-process", { hasText: "%" }).waitFor({ timeout: 10_000 });
+      await shot("sdb-399-plugin-process");
+      // No transaction is open: it restarts without asking.
+      await row.getByRole("button", { name: "Restart" }).click();
+      await row.getByText("Restarted: its sessions were lost.", { exact: false }).waitFor();
+      assert.equal(await page.getByRole("dialog", { name: /Restart .* with an open transaction\?/ }).count(), 0);
+    });
+    // Its tabs say their session was lost at once (ADR-028), and nothing ran again.
+    const lostTab = second.locator(".status-lost");
+    await lostTab.waitFor();
+    assert.match(await lostTab.innerText(), /Connection lost/);
+    await lostTab.getByRole("button", { name: "Reconnect" }).click();
+    await second.locator(".status-connected").waitFor();
+    await second.getByText("Reconnected. Nothing was run again.", { exact: true }).waitFor();
+    await replaceQuery(second, "select * from range(3);");
+    await run(second);
+    await second.locator(".statusline", { hasText: "3 rows" }).waitFor();
+    // A new process serves it.
+    await withSettings("plugins", async (settings) => {
+      const usage = settings.locator('.plugin-row[data-plugin="spelaiondb-plugin-duckdb"] .plugin-process');
+      await usage.waitFor();
+      assert.notEqual(await usage.getAttribute("data-pid"), pid, "the plugin was started again");
+    });
+  }
 
   step("SQL Server: a new connection, a batch with two result sets");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
