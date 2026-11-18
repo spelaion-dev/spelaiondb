@@ -26,7 +26,8 @@ pub enum ExportFormat {
     Csv,
     /// Array of objects, one per row, keyed by column name.
     Json,
-    /// One `INSERT` per row into `table`, with the engine's literals and quoting.
+    /// `INSERT`s into `table` ([`SqlOptions::rows_per_insert`] rows each, one by default), with
+    /// the engine's literals and quoting, or the engine's upsert ([`SqlOptions::upsert`]).
     SqlInsert { table: String },
     /// One `INSERT` containing every selected row, with the engine's literals and quoting.
     SqlInsertBatch { table: String },
@@ -38,6 +39,160 @@ pub enum ExportFormat {
     /// An HTML table (header row and one row per result row), for pasting into documents and
     /// spreadsheets. NULL is an empty cell.
     Html,
+    /// Newline-delimited JSON: one object per line, keyed by column name (SDB-391).
+    Ndjson,
+    /// Apache Parquet, typed from each column's logical and native type (SDB-391): written by
+    /// `export_binary.rs`, one row group per batch.
+    Parquet,
+    /// The Arrow IPC file format, with the same types as Parquet (SDB-391).
+    ArrowIpc,
+}
+
+impl ExportFormat {
+    /// Written a batch at a time by `export_binary.rs` rather than a row at a time.
+    pub fn is_binary(&self) -> bool {
+        match self {
+            ExportFormat::Parquet | ExportFormat::ArrowIpc => true,
+            ExportFormat::Tsv
+            | ExportFormat::Csv
+            | ExportFormat::Json
+            | ExportFormat::SqlInsert { .. }
+            | ExportFormat::SqlInsertBatch { .. }
+            | ExportFormat::Markdown
+            | ExportFormat::InList
+            | ExportFormat::Html
+            | ExportFormat::Ndjson => false,
+        }
+    }
+
+    /// A file's extension: `orders.csv`, or `orders.csv.gz` when the file is compressed with
+    /// gzip. Parquet compresses its own column chunks instead, so it stays `.parquet`.
+    pub fn extension(&self, gzip: bool) -> String {
+        let base = match self {
+            ExportFormat::Tsv => "tsv",
+            ExportFormat::Csv => "csv",
+            ExportFormat::Json => "json",
+            ExportFormat::SqlInsert { .. } | ExportFormat::SqlInsertBatch { .. } => "sql",
+            ExportFormat::Markdown => "md",
+            ExportFormat::InList => "txt",
+            ExportFormat::Html => "html",
+            ExportFormat::Ndjson => "ndjson",
+            ExportFormat::Parquet => return "parquet".into(),
+            ExportFormat::ArrowIpc => "arrow",
+        };
+        if gzip {
+            format!("{base}.gz")
+        } else {
+            base.into()
+        }
+    }
+}
+
+/// Most rows one `INSERT` of an export may hold ([`SqlOptions::rows_per_insert`]).
+pub const MAX_ROWS_PER_INSERT: usize = 10_000;
+
+/// How SQL keywords are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeywordCase {
+    #[default]
+    Upper,
+    Lower,
+}
+
+/// How table and column names are written, before the engine quotes them where it must.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NameCase {
+    #[default]
+    AsIs,
+    Lower,
+    Upper,
+}
+
+impl NameCase {
+    fn apply(self, name: &str) -> String {
+        match self {
+            NameCase::AsIs => name.to_string(),
+            NameCase::Lower => name.to_lowercase(),
+            NameCase::Upper => name.to_uppercase(),
+        }
+    }
+}
+
+/// How a SQL export writes its statements (SDB-391). The default is what the clipboard and
+/// earlier exports wrote: one `INSERT` per row, keywords in upper case, names as they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SqlOptions {
+    /// Rows per `INSERT`, from 1 to [`MAX_ROWS_PER_INSERT`]; SQL Server's statements hold at
+    /// most 1,000 rows (error 10738 beyond), so they are split there.
+    pub rows_per_insert: usize,
+    /// Leave the table's schema out of its name (a table export writes it by default).
+    pub omit_schema: bool,
+    pub keyword_case: KeywordCase,
+    pub name_case: NameCase,
+    /// Each statement in the engine's upsert form, by the table's primary key from the catalog:
+    /// `ON CONFLICT … DO UPDATE` (PostgreSQL, SQLite, DuckDB), `ON DUPLICATE KEY UPDATE`
+    /// (MySQL, MariaDB) or `MERGE` (SQL Server). Only for a table's export.
+    pub upsert: bool,
+}
+
+impl Default for SqlOptions {
+    fn default() -> Self {
+        Self {
+            rows_per_insert: 1,
+            omit_schema: false,
+            keyword_case: KeywordCase::Upper,
+            name_case: NameCase::AsIs,
+            upsert: false,
+        }
+    }
+}
+
+impl SqlOptions {
+    pub fn check(&self) -> Result<(), String> {
+        if (1..=MAX_ROWS_PER_INSERT).contains(&self.rows_per_insert) {
+            Ok(())
+        } else {
+            Err(format!(
+                "an INSERT holds from 1 to {MAX_ROWS_PER_INSERT} rows"
+            ))
+        }
+    }
+}
+
+/// The table a SQL export writes into, as the core resolved it: its schema (`None`: left out)
+/// and, for an upsert, its primary key from the catalog.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SqlTarget {
+    pub(crate) schema: Option<String>,
+    pub(crate) key: Vec<String>,
+}
+
+/// Engines whose upsert form a SQL export writes.
+pub(crate) fn upsert_supported(engine: &str) -> bool {
+    matches!(
+        engine,
+        "postgres" | "sqlite" | "duckdb" | "mysql" | "sqlserver"
+    )
+}
+
+/// How JSON and NDJSON write values (SDB-391).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JsonOptions {
+    /// Timestamps in ISO 8601 (`2024-03-04T10:00:00.5`, `…Z` with a time zone) instead of the
+    /// database's text (`2024-03-04 10:00:00.5`). Values ISO cannot hold (infinity, BC) keep
+    /// the database's text.
+    pub iso_dates: bool,
+    /// A JSON column's value embedded as JSON; off, it is a string like any text.
+    pub json_as_json: bool,
+}
+
+impl Default for JsonOptions {
+    fn default() -> Self {
+        Self {
+            iso_dates: false,
+            json_as_json: true,
+        }
+    }
 }
 
 /// How CSV and TSV fields are written (ADR-034). The default is what the clipboard uses:
@@ -134,10 +289,19 @@ pub(crate) struct RowWriter {
     format: ExportFormat,
     header: bool,
     csv: CsvOptions,
+    json: JsonOptions,
     engine: &'static str,
     metas: Vec<ColumnMeta>,
     names: Vec<String>,
-    insert_prefix: String,
+    /// What starts a SQL statement, up to its first row: `INSERT INTO t (a, b) VALUES `, or
+    /// SQL Server's `MERGE INTO t AS tgt USING (VALUES `.
+    statement_head: String,
+    /// What ends a SQL statement after its last row, before the `;`: nothing, or the upsert.
+    statement_tail: String,
+    /// Rows per SQL statement.
+    rows_per_statement: usize,
+    /// Rows of the SQL statement being written.
+    in_statement: usize,
     items: Vec<String>,
     seen: HashSet<String>,
     written: usize,
@@ -153,29 +317,168 @@ impl RowWriter {
         metas: Vec<ColumnMeta>,
     ) -> Self {
         let names = unique_names(metas.iter().map(|m| m.name.as_str()));
-        let insert_prefix = match &format {
-            ExportFormat::SqlInsert { table } | ExportFormat::SqlInsertBatch { table } => format!(
-                "INSERT INTO {} ({}) VALUES (",
-                dialect.quote_identifier(table),
-                metas
-                    .iter()
-                    .map(|m| dialect.quote_identifier(&m.name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            _ => String::new(),
-        };
-        Self {
+        let mut writer = Self {
             format,
             header,
             csv,
+            json: JsonOptions::default(),
             engine: dialect.name(),
             metas,
             names,
-            insert_prefix,
+            statement_head: String::new(),
+            statement_tail: String::new(),
+            rows_per_statement: 1,
+            in_statement: 0,
             items: Vec::new(),
             seen: HashSet::new(),
             written: 0,
+        };
+        writer.set_sql(dialect, &SqlOptions::default(), &SqlTarget::default());
+        writer
+    }
+
+    /// How JSON and NDJSON write values.
+    pub(crate) fn with_json(mut self, json: JsonOptions) -> Self {
+        self.json = json;
+        self
+    }
+
+    /// How SQL statements are written, into `target` (its schema and, for an upsert, its
+    /// primary key, which the caller checked is among the columns written).
+    pub(crate) fn with_sql(
+        mut self,
+        dialect: &dyn Dialect,
+        options: &SqlOptions,
+        target: &SqlTarget,
+    ) -> Self {
+        self.set_sql(dialect, options, target);
+        self
+    }
+
+    fn set_sql(&mut self, dialect: &dyn Dialect, options: &SqlOptions, target: &SqlTarget) {
+        let table = match &self.format {
+            ExportFormat::SqlInsert { table } | ExportFormat::SqlInsertBatch { table } => {
+                table.clone()
+            }
+            ExportFormat::Tsv
+            | ExportFormat::Csv
+            | ExportFormat::Json
+            | ExportFormat::Markdown
+            | ExportFormat::InList
+            | ExportFormat::Html
+            | ExportFormat::Ndjson
+            | ExportFormat::Parquet
+            | ExportFormat::ArrowIpc => return,
+        };
+        let per = match self.format {
+            ExportFormat::SqlInsertBatch { .. } => usize::MAX,
+            _ => options.rows_per_insert.max(1),
+        };
+        self.rows_per_statement = if self.engine == "sqlserver" {
+            per.min(SQL_SERVER_MAX_VALUES_ROWS)
+        } else {
+            per
+        };
+        let kw = |text: &str| match options.keyword_case {
+            KeywordCase::Upper => text.to_string(),
+            KeywordCase::Lower => text.to_lowercase(),
+        };
+        let name = |text: &str| dialect.quote_identifier(&options.name_case.apply(text));
+        let table_name = match target.schema.as_deref() {
+            Some(schema) if !options.omit_schema && !schema.is_empty() => qualified(
+                dialect,
+                &options.name_case.apply(schema),
+                &options.name_case.apply(&table),
+            ),
+            _ => name(&table),
+        };
+        let columns: Vec<String> = self.metas.iter().map(|m| name(&m.name)).collect();
+        let list = columns.join(", ");
+        let others: Vec<&String> = self
+            .metas
+            .iter()
+            .zip(&columns)
+            .filter(|(m, _)| !target.key.contains(&m.name))
+            .map(|(_, quoted)| quoted)
+            .collect();
+        let keys: Vec<String> = target.key.iter().map(|k| name(k)).collect();
+        if !options.upsert || target.key.is_empty() {
+            self.statement_head = format!(
+                "{} {table_name} ({list}) {} ",
+                kw("INSERT INTO"),
+                kw("VALUES")
+            );
+            self.statement_tail = String::new();
+            return;
+        }
+        match self.engine {
+            "sqlserver" => {
+                self.statement_head = format!(
+                    "{} {table_name} {} tgt {} ({} ",
+                    kw("MERGE INTO"),
+                    kw("AS"),
+                    kw("USING"),
+                    kw("VALUES")
+                );
+                let on: Vec<String> = keys.iter().map(|k| format!("tgt.{k} = src.{k}")).collect();
+                let matched = if others.is_empty() {
+                    String::new()
+                } else {
+                    let set: Vec<String> = others
+                        .iter()
+                        .map(|c| format!("tgt.{c} = src.{c}"))
+                        .collect();
+                    format!(" {} {}", kw("WHEN MATCHED THEN UPDATE SET"), set.join(", "))
+                };
+                let sources: Vec<String> = columns.iter().map(|c| format!("src.{c}")).collect();
+                self.statement_tail = format!(
+                    ") {} src ({list}) {} {}{matched} {} ({list}) {} ({})",
+                    kw("AS"),
+                    kw("ON"),
+                    on.join(&format!(" {} ", kw("AND"))),
+                    kw("WHEN NOT MATCHED THEN INSERT"),
+                    kw("VALUES"),
+                    sources.join(", ")
+                );
+            }
+            "mysql" => {
+                self.statement_head = format!(
+                    "{} {table_name} ({list}) {} ",
+                    kw("INSERT INTO"),
+                    kw("VALUES")
+                );
+                // Every column in the key: a no-op update keeps the row as it is.
+                let updated: Vec<&String> = if others.is_empty() {
+                    columns.iter().take(1).collect()
+                } else {
+                    others
+                };
+                let set: Vec<String> = updated
+                    .iter()
+                    .map(|c| format!("{c} = {}({c})", kw("VALUES")))
+                    .collect();
+                self.statement_tail =
+                    format!(" {} {}", kw("ON DUPLICATE KEY UPDATE"), set.join(", "));
+            }
+            // PostgreSQL, SQLite and DuckDB share `ON CONFLICT`.
+            _ => {
+                self.statement_head = format!(
+                    "{} {table_name} ({list}) {} ",
+                    kw("INSERT INTO"),
+                    kw("VALUES")
+                );
+                let action = if others.is_empty() {
+                    kw("DO NOTHING")
+                } else {
+                    let set: Vec<String> = others
+                        .iter()
+                        .map(|c| format!("{c} = {}.{c}", kw("EXCLUDED")))
+                        .collect();
+                    format!("{} {}", kw("DO UPDATE SET"), set.join(", "))
+                };
+                self.statement_tail =
+                    format!(" {} ({}) {action}", kw("ON CONFLICT"), keys.join(", "));
+            }
         }
     }
 
@@ -207,11 +510,13 @@ impl RowWriter {
                     .collect();
                 writeln!(out, "| {} |", rules.join(" | "))
             }
+            ExportFormat::Parquet | ExportFormat::ArrowIpc => Err(not_text()),
             ExportFormat::Tsv
             | ExportFormat::Csv
             | ExportFormat::SqlInsert { .. }
             | ExportFormat::SqlInsertBatch { .. }
-            | ExportFormat::InList => Ok(()),
+            | ExportFormat::InList
+            | ExportFormat::Ndjson => Ok(()),
         }
     }
 
@@ -227,43 +532,26 @@ impl RowWriter {
                 self.write_line(out, &fields)?;
             }
             ExportFormat::Json => {
-                out.write_all(if self.written == 0 {
-                    b"\n  {"
-                } else {
-                    b",\n  {"
-                })?;
-                for (i, (name, value)) in self.names.iter().zip(values).enumerate() {
-                    if i > 0 {
-                        out.write_all(b", ")?;
-                    }
-                    write!(
-                        out,
-                        "{}: {}",
-                        json_string(name),
-                        json_value(value, self.metas[i].logical)
-                    )?;
-                }
-                out.write_all(b"}")?;
+                out.write_all(if self.written == 0 { b"\n  " } else { b",\n  " })?;
+                self.write_object(values, out)?;
             }
-            ExportFormat::SqlInsert { .. } => {
-                out.write_all(self.insert_prefix.as_bytes())?;
-                out.write_all(self.literals(values).join(", ").as_bytes())?;
-                out.write_all(b");\n")?;
+            ExportFormat::Ndjson => {
+                self.write_object(values, out)?;
+                out.write_all(b"\n")?;
             }
-            ExportFormat::SqlInsertBatch { .. } => {
-                if self.written == 0 {
-                    out.write_all(self.insert_prefix.as_bytes())?;
-                } else if self.engine == "sqlserver"
-                    && self.written.is_multiple_of(SQL_SERVER_MAX_VALUES_ROWS)
-                {
-                    // SQL Server takes at most 1000 rows per VALUES: another INSERT.
-                    out.write_all(b";\n")?;
-                    out.write_all(self.insert_prefix.as_bytes())?;
+            ExportFormat::SqlInsert { .. } | ExportFormat::SqlInsertBatch { .. } => {
+                if self.in_statement == 0 {
+                    out.write_all(self.statement_head.as_bytes())?;
+                    out.write_all(b"(")?;
                 } else {
                     out.write_all(b",\n  (")?;
                 }
                 out.write_all(self.literals(values).join(", ").as_bytes())?;
                 out.write_all(b")")?;
+                self.in_statement += 1;
+                if self.in_statement >= self.rows_per_statement {
+                    self.end_statement(out)?;
+                }
             }
             ExportFormat::InList => {
                 let literals = self.literals(values);
@@ -291,6 +579,7 @@ impl RowWriter {
                     .collect();
                 writeln!(out, "| {} |", cells.join(" | "))?;
             }
+            ExportFormat::Parquet | ExportFormat::ArrowIpc => return Err(not_text()),
         }
         self.written += 1;
         Ok(())
@@ -304,14 +593,42 @@ impl RowWriter {
             }
             ExportFormat::InList => write!(out, "({})", self.items.join(", "))?,
             ExportFormat::Html => out.write_all(b"  </tbody>\n</table>\n")?,
-            ExportFormat::SqlInsertBatch { .. } if self.written > 0 => out.write_all(b";\n")?,
+            ExportFormat::SqlInsert { .. } | ExportFormat::SqlInsertBatch { .. } => {
+                if self.in_statement > 0 {
+                    self.end_statement(out)?;
+                }
+            }
+            ExportFormat::Parquet | ExportFormat::ArrowIpc => return Err(not_text()),
             ExportFormat::Tsv
             | ExportFormat::Csv
-            | ExportFormat::SqlInsert { .. }
-            | ExportFormat::SqlInsertBatch { .. }
-            | ExportFormat::Markdown => {}
+            | ExportFormat::Markdown
+            | ExportFormat::Ndjson => {}
         }
         Ok(self.written)
+    }
+
+    fn end_statement(&mut self, out: &mut dyn Write) -> io::Result<()> {
+        out.write_all(self.statement_tail.as_bytes())?;
+        out.write_all(b";\n")?;
+        self.in_statement = 0;
+        Ok(())
+    }
+
+    /// `{"name": value, …}` for JSON and NDJSON.
+    fn write_object(&self, values: &[Value], out: &mut dyn Write) -> io::Result<()> {
+        out.write_all(b"{")?;
+        for (i, (name, value)) in self.names.iter().zip(values).enumerate() {
+            if i > 0 {
+                out.write_all(b", ")?;
+            }
+            write!(
+                out,
+                "{}: {}",
+                json_string(name),
+                json_value_with(value, self.metas[i].logical, self.json)
+            )?;
+        }
+        out.write_all(b"}")
     }
 
     fn literals(&self, values: &[Value]) -> Vec<String> {
@@ -403,13 +720,25 @@ pub fn write_result(
         .collect();
     let rows = options.rows.start.min(result.rows())..options.rows.end.min(result.rows());
     let metas: Vec<ColumnMeta> = columns.iter().map(|&c| schema.columns[c].clone()).collect();
-    let mut writer = RowWriter::new(
+    let writer = RowWriter::new(
         options.format.clone(),
         options.header,
         options.csv.clone(),
         dialect,
         metas,
     );
+    write_rows(result, rows, &columns, writer, out)
+}
+
+/// The `rows` of the view, with `columns` in this order, through `writer`.
+fn write_rows(
+    result: &StoredResult,
+    rows: Range<usize>,
+    columns: &[usize],
+    mut writer: RowWriter,
+    out: &mut dyn Write,
+) -> io::Result<usize> {
+    let schema = result.schema();
     writer.begin(out)?;
     let mut start = rows.start;
     while start < rows.end {
@@ -550,20 +879,88 @@ pub struct FileSummary {
 pub fn export_to_file(
     result: &StoredResult,
     options: &ExportOptions,
-    encoding: TextEncoding,
+    file_options: &FileOptions,
     dialect: &dyn Dialect,
     path: &Path,
 ) -> io::Result<FileSummary> {
-    options
-        .csv
-        .check()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-    let mut file = PartFile::create(path, encoding)?;
-    match write_result(result, options, dialect, file.writer()) {
+    let invalid = |e: String| io::Error::new(io::ErrorKind::InvalidInput, e);
+    options.csv.check().map_err(invalid)?;
+    file_options.sql.check().map_err(invalid)?;
+    if file_options.sql.upsert {
+        return Err(invalid(
+            "an upsert is written for a table: export the table, or turn upsert off".into(),
+        ));
+    }
+    let schema = result.schema();
+    let columns: Vec<usize> = options
+        .columns
+        .iter()
+        .copied()
+        .filter(|&c| c < schema.columns.len())
+        .collect();
+    let rows = options.rows.start.min(result.rows())..options.rows.end.min(result.rows());
+    if options.format.is_binary() {
+        let fields: Vec<_> = columns
+            .iter()
+            .map(|&c| schema.arrow.field(c).clone())
+            .collect();
+        let mut file = crate::export_binary::BinaryFile::create(
+            path,
+            &options.format,
+            file_options.gzip,
+            &fields,
+            columns,
+            CHUNK,
+            None,
+        )?;
+        let mut start = rows.start;
+        while start < rows.end {
+            let len = CHUNK.min(rows.end - start);
+            for batch in result.window(start, len) {
+                file.write(&batch)?;
+            }
+            start += len;
+        }
+        return file.finish();
+    }
+    let mut file = PartFile::create(path, file_options.encoding, file_options.gzip)?;
+    let metas: Vec<ColumnMeta> = columns.iter().map(|&c| schema.columns[c].clone()).collect();
+    let writer = RowWriter::new(
+        options.format.clone(),
+        options.header,
+        options.csv.clone(),
+        dialect,
+        metas,
+    )
+    .with_json(file_options.json)
+    .with_sql(dialect, &file_options.sql, &SqlTarget::default());
+    match write_rows(result, rows, &columns, writer, file.writer()) {
         Ok(rows) => file.commit(rows as u64),
         Err(e) => {
             file.discard();
             Err(e)
+        }
+    }
+}
+
+/// How an export's file is written, besides its format (SDB-391).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileOptions {
+    /// Of the text formats; Parquet and Arrow are binary.
+    pub encoding: TextEncoding,
+    /// The file compressed with gzip (Parquet: its column chunks, with Parquet's own codec).
+    pub gzip: bool,
+    pub sql: SqlOptions,
+    pub json: JsonOptions,
+}
+
+impl Default for FileOptions {
+    fn default() -> Self {
+        Self {
+            encoding: TextEncoding::Utf8,
+            gzip: false,
+            sql: SqlOptions::default(),
+            json: JsonOptions::default(),
         }
     }
 }
@@ -576,35 +973,133 @@ pub fn export_to_file(
 /// `<path>.<pid>-<n>.part` instead of sharing the first one's. Dropped without
 /// [`PartFile::commit`], it deletes the temporary file.
 pub(crate) struct PartFile {
-    out: Encoder<io::BufWriter<AtomicWriter>>,
+    out: Encoder<Sink>,
+}
+
+/// Bytes on their way to the temporary file, counted as they reach it (the file's size, after
+/// gzip), and shared with whoever reports progress.
+pub(crate) struct Counted {
+    inner: io::BufWriter<AtomicWriter>,
+    bytes: u64,
+    progress: Option<Arc<AtomicU64>>,
+}
+
+impl Write for Counted {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.bytes += written as u64;
+        if let Some(counter) = &self.progress {
+            counter.store(self.bytes, Ordering::Relaxed);
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Where a file's bytes go: straight to it, or through gzip (SDB-391).
+pub(crate) enum Sink {
+    Plain(Counted),
+    Gzip(flate2::write::GzEncoder<Counted>),
+}
+
+impl Sink {
+    fn counted(&mut self) -> &mut Counted {
+        match self {
+            Sink::Plain(counted) => counted,
+            Sink::Gzip(gzip) => gzip.get_mut(),
+        }
+    }
+
+    /// Ends gzip's stream, if any.
+    fn finish(self) -> io::Result<Counted> {
+        match self {
+            Sink::Plain(counted) => Ok(counted),
+            Sink::Gzip(gzip) => gzip.finish(),
+        }
+    }
+}
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Sink::Plain(counted) => counted.write(buf),
+            Sink::Gzip(gzip) => gzip.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Sink::Plain(counted) => counted.flush(),
+            Sink::Gzip(gzip) => gzip.flush(),
+        }
+    }
 }
 
 impl PartFile {
-    pub(crate) fn create(path: &Path, encoding: TextEncoding) -> io::Result<Self> {
+    /// `gzip`: the file is one gzip stream of what is written.
+    pub(crate) fn create(path: &Path, encoding: TextEncoding, gzip: bool) -> io::Result<Self> {
         let file = AtomicWriter::create_with_suffix(path, ".part", NewFileMode::Default)?;
+        let counted = Counted {
+            inner: io::BufWriter::with_capacity(1 << 20, file),
+            bytes: 0,
+            progress: None,
+        };
+        let sink = if gzip {
+            Sink::Gzip(flate2::write::GzEncoder::new(
+                counted,
+                flate2::Compression::default(),
+            ))
+        } else {
+            Sink::Plain(counted)
+        };
         let mut part = Self {
-            out: Encoder::new(io::BufWriter::with_capacity(1 << 20, file), encoding),
+            out: Encoder::new(sink, encoding),
         };
         // On an error `part` is dropped, which deletes the temporary file.
         part.writer().write_bom()?;
         Ok(part)
     }
 
-    pub(crate) fn writer(&mut self) -> &mut Encoder<io::BufWriter<AtomicWriter>> {
+    pub(crate) fn writer(&mut self) -> &mut Encoder<Sink> {
         &mut self.out
     }
 
-    /// Flushes, renames to the final name and says what was written.
+    /// The bytes written to the file from now on are also stored in `counter`.
+    pub(crate) fn report_to(&mut self, counter: Arc<AtomicU64>) {
+        let counted = self.out.inner.counted();
+        counter.store(counted.bytes, Ordering::Relaxed);
+        counted.progress = Some(counter);
+    }
+
+    /// The writer, for a writer that must own it (Parquet's, Arrow's); dropped, it deletes
+    /// the temporary file like the [`PartFile`] would.
+    pub(crate) fn into_writer(self) -> Encoder<Sink> {
+        self.out
+    }
+
+    /// The [`PartFile`] of a writer [`PartFile::into_writer`] gave.
+    pub(crate) fn from_writer(out: Encoder<Sink>) -> Self {
+        Self { out }
+    }
+
+    /// Flushes, ends gzip's stream, renames to the final name and says what was written.
     pub(crate) fn commit(self, rows: u64) -> io::Result<FileSummary> {
         let mut out = self.out;
         out.flush()?;
+        let replaced = out.replaced();
+        let mut counted = out.into_inner().finish()?;
+        counted.flush()?;
         let summary = FileSummary {
             rows,
-            bytes: out.bytes(),
-            replaced: out.replaced(),
+            bytes: counted.bytes,
+            replaced,
             peak_rows: 0,
         };
-        out.into_inner()
+        counted
+            .inner
             .into_inner()
             .map_err(|e| e.into_error())?
             .commit()?;
@@ -624,17 +1119,14 @@ pub(crate) fn part_path(path: &Path) -> PathBuf {
     PathBuf::from(temporary)
 }
 
-/// Writes UTF-8 text in another encoding, counting the bytes written and the characters it
-/// could not encode.
+/// Writes UTF-8 text in another encoding, counting the characters it could not encode. Bytes
+/// that are not text (Parquet's, Arrow's) go through unchanged in UTF-8.
 pub(crate) struct Encoder<W: Write> {
     inner: W,
     encoding: TextEncoding,
     /// The start of a character split between two writes.
     pending: Vec<u8>,
-    bytes: u64,
     replaced: u64,
-    /// Shared with whoever reports progress.
-    progress: Option<Arc<AtomicU64>>,
 }
 
 impl<W: Write> Encoder<W> {
@@ -643,16 +1135,8 @@ impl<W: Write> Encoder<W> {
             inner,
             encoding,
             pending: Vec::new(),
-            bytes: 0,
             replaced: 0,
-            progress: None,
         }
-    }
-
-    /// Bytes written from now on are also stored in `counter`.
-    pub(crate) fn report_to(&mut self, counter: Arc<AtomicU64>) {
-        counter.store(self.bytes, Ordering::Relaxed);
-        self.progress = Some(counter);
     }
 
     fn write_bom(&mut self) -> io::Result<()> {
@@ -661,10 +1145,6 @@ impl<W: Write> Encoder<W> {
             TextEncoding::Utf16Le => self.emit(&[0xff, 0xfe]),
             TextEncoding::Utf8 | TextEncoding::Windows1252 => Ok(()),
         }
-    }
-
-    pub(crate) fn bytes(&self) -> u64 {
-        self.bytes
     }
 
     pub(crate) fn replaced(&self) -> u64 {
@@ -676,12 +1156,7 @@ impl<W: Write> Encoder<W> {
     }
 
     fn emit(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.inner.write_all(bytes)?;
-        self.bytes += bytes.len() as u64;
-        if let Some(counter) = &self.progress {
-            counter.store(self.bytes, Ordering::Relaxed);
-        }
-        Ok(())
+        self.inner.write_all(bytes)
     }
 
     fn encode(&mut self, text: &str) -> io::Result<()> {
@@ -1226,17 +1701,47 @@ fn json_string(text: &str) -> String {
     out
 }
 
-/// Numbers and booleans as JSON values; JSON columns embedded as JSON; exact decimals and
-/// everything else as strings (a JSON number could lose a decimal's precision).
-fn json_value(value: &Value, logical: LogicalType) -> String {
+/// What [`RowWriter::begin`], `row` and `finish` say for a format written in batches.
+fn not_text() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "Parquet and Arrow are written a batch at a time, not as text",
+    )
+}
+
+/// A timestamp's ISO 8601 text: `2024-03-04T10:00:00.5`, or `…Z` with a time zone (the core
+/// keeps those in UTC). `None` for what ISO cannot hold (infinity, BC) and other values.
+fn iso_timestamp(value: &Value) -> Option<String> {
+    let text = value.to_string();
+    if text.contains("infinity") || text.ends_with(" BC") {
+        return None;
+    }
+    match value {
+        Value::Timestamp(_) => Some(text.replacen(' ', "T", 1)),
+        Value::TimestampTz(_) => Some(format!(
+            "{}Z",
+            text.strip_suffix("+00")?.replacen(' ', "T", 1)
+        )),
+        _ => None,
+    }
+}
+
+/// Numbers and booleans as JSON values; JSON columns embedded as JSON (unless `options` says
+/// otherwise); exact decimals and everything else as strings (a JSON number could lose a
+/// decimal's precision); timestamps in ISO 8601 when `options` asks.
+fn json_value_with(value: &Value, logical: LogicalType, options: JsonOptions) -> String {
     match value {
         Value::Null => "null".into(),
         Value::Bool(b) => b.to_string(),
         Value::Int(i) => i.to_string(),
         Value::Float(f) if f.is_finite() => value.to_string(),
+        Value::Timestamp(_) | Value::TimestampTz(_) if options.iso_dates => {
+            json_string(&iso_timestamp(value).unwrap_or_else(|| value.to_string()))
+        }
         other => {
             let text = other.to_string();
-            let is_json = logical == LogicalType::Json
+            let is_json = options.json_as_json
+                && logical == LogicalType::Json
                 && matches!(
                     text.trim_start().chars().next(),
                     Some('{' | '[' | '"' | 't' | 'f' | 'n' | '-' | '0'..='9')
@@ -2120,7 +2625,10 @@ mod tests {
         let summary = export_to_file(
             &result,
             &options(ExportFormat::Csv),
-            TextEncoding::Utf8Bom,
+            &FileOptions {
+                encoding: TextEncoding::Utf8Bom,
+                ..FileOptions::default()
+            },
             &Quoted("postgres"),
             &csv,
         )
@@ -2134,7 +2642,10 @@ mod tests {
         export_to_file(
             &result,
             &options(ExportFormat::Json),
-            TextEncoding::Utf8,
+            &FileOptions {
+                encoding: TextEncoding::Utf8,
+                ..FileOptions::default()
+            },
             &Quoted("postgres"),
             &json,
         )
@@ -2150,7 +2661,10 @@ mod tests {
             export_to_file(
                 &result,
                 &options(ExportFormat::Csv),
-                TextEncoding::Utf8Bom,
+                &FileOptions {
+                    encoding: TextEncoding::Utf8Bom,
+                    ..FileOptions::default()
+                },
                 &Quoted("postgres"),
                 &missing
             )
@@ -2176,7 +2690,10 @@ mod tests {
             export_to_file(
                 &result,
                 &options,
-                TextEncoding::Utf8,
+                &FileOptions {
+                    encoding: TextEncoding::Utf8,
+                    ..FileOptions::default()
+                },
                 &Quoted("postgres"),
                 path,
             )
@@ -2191,8 +2708,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("out.csv");
-        let mut first = PartFile::create(&path, TextEncoding::Utf8).unwrap();
-        let mut second = PartFile::create(&path, TextEncoding::Utf8).unwrap();
+        let mut first = PartFile::create(&path, TextEncoding::Utf8, false).unwrap();
+        let mut second = PartFile::create(&path, TextEncoding::Utf8, false).unwrap();
         assert!(
             dir.join("out.csv.part").exists(),
             "the first is <name>.part (ADR-034)"
@@ -2204,7 +2721,7 @@ mod tests {
         second.commit(1).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"second");
         // A cancelled one leaves nothing and the file as it was.
-        let mut cancelled = PartFile::create(&path, TextEncoding::Utf8).unwrap();
+        let mut cancelled = PartFile::create(&path, TextEncoding::Utf8, false).unwrap();
         cancelled.writer().write_all(b"partial").unwrap();
         cancelled.discard();
         assert_eq!(std::fs::read(&path).unwrap(), b"second");
@@ -2378,9 +2895,7 @@ mod tests {
                 encoder.write_all(piece).unwrap();
             }
             let replaced = encoder.replaced();
-            let bytes = encoder.bytes();
             let out = encoder.into_inner();
-            assert_eq!(bytes, out.len() as u64);
             (out, replaced)
         };
         let text = "año €5 — 日";
@@ -2434,7 +2949,10 @@ mod tests {
                 header: false,
                 csv: CsvOptions::default(),
             },
-            TextEncoding::Utf16Le,
+            &FileOptions {
+                encoding: TextEncoding::Utf16Le,
+                ..FileOptions::default()
+            },
             &Quoted("postgres"),
             &path,
         )
@@ -2460,7 +2978,10 @@ mod tests {
                     ..CsvOptions::default()
                 },
             },
-            TextEncoding::Utf8,
+            &FileOptions {
+                encoding: TextEncoding::Utf8,
+                ..FileOptions::default()
+            },
             &Quoted("postgres"),
             &path,
         );
@@ -2651,5 +3172,488 @@ mod tests {
         ] {
             assert_eq!(options.check(), Ok(()), "{options:?}");
         }
+    }
+
+    /// The SQL export of `rows` and `columns` of the sample through `options`, into `target`.
+    fn sql_export(
+        engine: &'static str,
+        options: &SqlOptions,
+        target: &SqlTarget,
+        rows: Range<usize>,
+        columns: Vec<usize>,
+    ) -> String {
+        let result = sample();
+        let result = result.read().unwrap();
+        let metas = columns
+            .iter()
+            .map(|&c| result.schema().columns[c].clone())
+            .collect();
+        let dialect = Quoted(engine);
+        let writer = RowWriter::new(
+            ExportFormat::SqlInsert {
+                table: "items".into(),
+            },
+            false,
+            CsvOptions::default(),
+            &dialect,
+            metas,
+        )
+        .with_sql(&dialect, options, target);
+        let mut out = Vec::new();
+        write_rows(&result, rows, &columns, writer, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn sql_options_group_rows_qualify_and_change_case() {
+        let in_public = SqlTarget {
+            schema: Some("public".into()),
+            key: vec![],
+        };
+        let two = SqlOptions {
+            rows_per_insert: 2,
+            ..SqlOptions::default()
+        };
+        assert_eq!(
+            sql_export("postgres", &two, &in_public, 0..3, vec![0, 1]),
+            "INSERT INTO \"public\".\"items\" (\"id\", \"name\") VALUES (1, 'plain'),\n  (2, 'a,b \"q\"\tc\nd');\nINSERT INTO \"public\".\"items\" (\"id\", \"name\") VALUES (NULL, 'it''s \\ x');\n"
+        );
+        let styled = SqlOptions {
+            omit_schema: true,
+            keyword_case: KeywordCase::Lower,
+            name_case: NameCase::Upper,
+            ..SqlOptions::default()
+        };
+        assert_eq!(
+            sql_export("postgres", &styled, &in_public, 0..1, vec![0, 1]),
+            "insert into \"ITEMS\" (\"ID\", \"NAME\") values (1, 'plain');\n"
+        );
+        // SQL Server's statements hold at most 1,000 rows, whatever was asked.
+        let many = SqlOptions {
+            rows_per_insert: MAX_ROWS_PER_INSERT,
+            ..SqlOptions::default()
+        };
+        let result = sample();
+        let result = result.read().unwrap();
+        let metas = vec![result.schema().columns[0].clone()];
+        for (engine, per) in [("sqlserver", 1_000), ("postgres", MAX_ROWS_PER_INSERT)] {
+            let writer = RowWriter::new(
+                ExportFormat::SqlInsert { table: "t".into() },
+                false,
+                CsvOptions::default(),
+                &Quoted(engine),
+                metas.clone(),
+            )
+            .with_sql(&Quoted(engine), &many, &SqlTarget::default());
+            assert_eq!(writer.rows_per_statement, per, "{engine}");
+        }
+        assert!(
+            SqlOptions {
+                rows_per_insert: 0,
+                ..SqlOptions::default()
+            }
+            .check()
+            .is_err()
+        );
+        assert!(
+            SqlOptions {
+                rows_per_insert: MAX_ROWS_PER_INSERT + 1,
+                ..SqlOptions::default()
+            }
+            .check()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn upserts_are_written_in_each_engines_form() {
+        let upsert = SqlOptions {
+            upsert: true,
+            ..SqlOptions::default()
+        };
+        let by_id = SqlTarget {
+            schema: None,
+            key: vec!["id".into()],
+        };
+        let grouped = SqlOptions {
+            rows_per_insert: 2,
+            ..upsert.clone()
+        };
+        assert_eq!(
+            sql_export("postgres", &upsert, &by_id, 0..1, vec![0, 1]),
+            "INSERT INTO \"items\" (\"id\", \"name\") VALUES (1, 'plain') ON CONFLICT (\"id\") DO UPDATE SET \"name\" = EXCLUDED.\"name\";\n"
+        );
+        assert_eq!(
+            sql_export("mysql", &upsert, &by_id, 0..1, vec![0, 1]),
+            "INSERT INTO `items` (`id`, `name`) VALUES (1, 'plain') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);\n"
+        );
+        assert_eq!(
+            sql_export("sqlserver", &grouped, &by_id, 0..2, vec![0, 1]),
+            "MERGE INTO \"items\" AS tgt USING (VALUES (1, N'plain'),\n  (2, N'a,b \"q\"\tc\nd')) AS src (\"id\", \"name\") ON tgt.\"id\" = src.\"id\" WHEN MATCHED THEN UPDATE SET tgt.\"name\" = src.\"name\" WHEN NOT MATCHED THEN INSERT (\"id\", \"name\") VALUES (src.\"id\", src.\"name\");\n"
+        );
+        // Every column in the key: nothing to update.
+        assert_eq!(
+            sql_export("sqlite", &upsert, &by_id, 0..1, vec![0]),
+            "INSERT INTO \"items\" (\"id\") VALUES (1) ON CONFLICT (\"id\") DO NOTHING;\n"
+        );
+        assert_eq!(
+            sql_export("mysql", &upsert, &by_id, 0..1, vec![0]),
+            "INSERT INTO `items` (`id`) VALUES (1) ON DUPLICATE KEY UPDATE `id` = VALUES(`id`);\n"
+        );
+        assert_eq!(
+            sql_export("sqlserver", &upsert, &by_id, 0..1, vec![0]),
+            "MERGE INTO \"items\" AS tgt USING (VALUES (1)) AS src (\"id\") ON tgt.\"id\" = src.\"id\" WHEN NOT MATCHED THEN INSERT (\"id\") VALUES (src.\"id\");\n"
+        );
+        // Lower-case keywords reach every part of it.
+        let lower = SqlOptions {
+            keyword_case: KeywordCase::Lower,
+            ..upsert.clone()
+        };
+        assert_eq!(
+            sql_export("duckdb", &lower, &by_id, 0..1, vec![0, 1]),
+            "insert into \"items\" (\"id\", \"name\") values (1, 'plain') on conflict (\"id\") do update set \"name\" = excluded.\"name\";\n"
+        );
+        // Without a key there is no upsert to write: plain INSERTs.
+        assert_eq!(
+            sql_export("postgres", &upsert, &SqlTarget::default(), 0..1, vec![0]),
+            "INSERT INTO \"items\" (\"id\") VALUES (1);\n"
+        );
+    }
+
+    #[test]
+    fn ndjson_is_one_object_per_line_and_json_options_apply() {
+        let result = sample();
+        let result = result.read().unwrap();
+        let ndjson = render(ExportFormat::Ndjson, 0..3, 0..5, false, "postgres");
+        let lines: Vec<&str> = ndjson.lines().collect();
+        assert_eq!(lines.len(), 3, "{ndjson}");
+        for line in &lines {
+            let value: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert!(value.is_object(), "{line}");
+        }
+        let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["id"], 1);
+        assert_eq!(first["doc"]["a"][1], 2);
+        // JSON columns as strings, on request.
+        let metas: Vec<_> = (0..5).map(|c| result.schema().columns[c].clone()).collect();
+        let writer = RowWriter::new(
+            ExportFormat::Ndjson,
+            false,
+            CsvOptions::default(),
+            &Quoted("postgres"),
+            metas,
+        )
+        .with_json(JsonOptions {
+            iso_dates: false,
+            json_as_json: false,
+        });
+        let mut out = Vec::new();
+        write_rows(&result, 0..1, &[0, 1, 2, 3, 4], writer, &mut out).unwrap();
+        let first: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(first["doc"], "{\"a\": [1, 2]}");
+        // ISO dates: a `T`, and `Z` for a time zone; infinity stays as the database writes it.
+        let iso = JsonOptions {
+            iso_dates: true,
+            json_as_json: true,
+        };
+        let at = Value::Timestamp(1_000_000);
+        assert_eq!(
+            json_value_with(&at, LogicalType::Timestamp, iso),
+            format!("\"{}\"", at.to_string().replacen(' ', "T", 1))
+        );
+        let zoned = Value::TimestampTz(1_000_000);
+        let text = zoned.to_string();
+        assert_eq!(
+            json_value_with(&zoned, LogicalType::TimestampTz, iso),
+            format!(
+                "\"{}Z\"",
+                text.strip_suffix("+00").unwrap().replacen(' ', "T", 1)
+            )
+        );
+        assert_eq!(
+            json_value_with(&Value::Timestamp(i64::MAX), LogicalType::Timestamp, iso),
+            "\"infinity\""
+        );
+        assert_eq!(
+            json_value_with(&at, LogicalType::Timestamp, JsonOptions::default()),
+            format!("\"{at}\"")
+        );
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("spelaion-export-formats-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    fn all_of_sample(format: ExportFormat) -> ExportOptions {
+        ExportOptions {
+            format,
+            rows: 0..3,
+            columns: (0..7).collect(),
+            header: true,
+            csv: CsvOptions::default(),
+        }
+    }
+
+    #[test]
+    fn gzip_files_hold_exactly_the_text() {
+        use std::io::Read;
+        let result = sample();
+        let result = result.read().unwrap();
+        let plain = temp("plain.csv");
+        let packed = temp("packed.csv.gz");
+        let options = all_of_sample(ExportFormat::Csv);
+        let plain_summary = export_to_file(
+            &result,
+            &options,
+            &FileOptions::default(),
+            &Quoted("postgres"),
+            &plain,
+        )
+        .unwrap();
+        let summary = export_to_file(
+            &result,
+            &options,
+            &FileOptions {
+                gzip: true,
+                ..FileOptions::default()
+            },
+            &Quoted("postgres"),
+            &packed,
+        )
+        .unwrap();
+        let bytes = std::fs::read(&packed).unwrap();
+        assert_eq!(&bytes[..2], &[0x1f, 0x8b], "a gzip stream");
+        // The summary says the file's size, not the text's.
+        assert_eq!(summary.bytes, bytes.len() as u64);
+        assert_eq!(
+            plain_summary.bytes,
+            std::fs::metadata(&plain).unwrap().len()
+        );
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(&bytes[..])
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, std::fs::read_to_string(&plain).unwrap());
+        // Nothing is left behind under a temporary name.
+        assert!(!part_path(&packed).exists());
+        // An upsert needs a table: a loaded result cannot be one.
+        let refused = export_to_file(
+            &result,
+            &all_of_sample(ExportFormat::SqlInsert { table: "t".into() }),
+            &FileOptions {
+                sql: SqlOptions {
+                    upsert: true,
+                    ..SqlOptions::default()
+                },
+                ..FileOptions::default()
+            },
+            &Quoted("postgres"),
+            &temp("upsert.sql"),
+        );
+        assert!(refused.is_err());
+    }
+
+    /// A result with a decimal column whose native type declares its precision and scale.
+    fn decimal_sample(
+        values: &[Option<&str>],
+        native: &str,
+    ) -> Arc<std::sync::RwLock<StoredResult>> {
+        let schema = Arc::new(ResultSchema::new(vec![ColumnMeta {
+            name: "amount".into(),
+            logical: LogicalType::Decimal,
+            native_type: native.into(),
+            native_id: None,
+            origin: None,
+        }]));
+        let store = ResultStore::new();
+        let id = store.create(schema.clone());
+        store
+            .append(
+                id,
+                RecordBatch::try_new(
+                    schema.arrow.clone(),
+                    vec![Arc::new(StringArray::from(values.to_vec())) as ArrayRef],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        store.get(id).unwrap()
+    }
+
+    fn read_parquet(path: &Path) -> Vec<RecordBatch> {
+        let file = std::fs::File::open(path).unwrap();
+        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn read_arrow(path: &Path) -> Vec<RecordBatch> {
+        let file = std::fs::File::open(path).unwrap();
+        arrow::ipc::reader::FileReader::try_new(file, None)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn parquet_and_arrow_files_read_back_with_their_types() {
+        use arrow::datatypes::DataType;
+        let result = sample();
+        let result = result.read().unwrap();
+        for (format, name) in [
+            (ExportFormat::Parquet, "sample.parquet"),
+            (ExportFormat::ArrowIpc, "sample.arrow"),
+        ] {
+            let path = temp(name);
+            let summary = export_to_file(
+                &result,
+                &all_of_sample(format.clone()),
+                &FileOptions::default(),
+                &Quoted("postgres"),
+                &path,
+            )
+            .unwrap();
+            assert_eq!(summary.rows, 3);
+            assert_eq!(summary.bytes, std::fs::metadata(&path).unwrap().len());
+            let batches = if format == ExportFormat::Parquet {
+                read_parquet(&path)
+            } else {
+                read_arrow(&path)
+            };
+            let schema = batches[0].schema();
+            let types: Vec<DataType> = schema
+                .fields()
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect();
+            assert_eq!(
+                types,
+                vec![
+                    DataType::Int64,
+                    DataType::Utf8,
+                    DataType::Float64,
+                    DataType::Boolean,
+                    DataType::Utf8,
+                    DataType::Binary,
+                    // A decimal without a declared precision stays exact text.
+                    DataType::Utf8,
+                ],
+                "{name}"
+            );
+            // The core's metadata travels with the columns.
+            assert_eq!(
+                schema
+                    .field(0)
+                    .metadata()
+                    .get("spelaion.logical")
+                    .map(String::as_str),
+                Some("int"),
+                "{name}"
+            );
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(rows, 3);
+            // Every cell reads back as the store holds it.
+            for (c, field) in schema.fields().iter().enumerate() {
+                let logical = result.schema().columns[c].logical;
+                for row in 0..3 {
+                    let back = Value::from_array(batches[0].column(c).as_ref(), row, logical);
+                    assert_eq!(
+                        back.map(|v| v.to_string()),
+                        result.value_at(row, c).map(|v| v.to_string()),
+                        "{name} {} row {row}",
+                        field.name()
+                    );
+                }
+            }
+        }
+        // A declared decimal is a Decimal128 of that precision and scale, exact.
+        let amounts = decimal_sample(
+            &[Some("12345678901234567890.1234"), None, Some("-0.5")],
+            "numeric(30,4)",
+        );
+        let amounts = amounts.read().unwrap();
+        let path = temp("amounts.parquet");
+        let options = ExportOptions {
+            format: ExportFormat::Parquet,
+            rows: 0..3,
+            columns: vec![0],
+            header: true,
+            csv: CsvOptions::default(),
+        };
+        export_to_file(
+            &amounts,
+            &options,
+            &FileOptions::default(),
+            &Quoted("postgres"),
+            &path,
+        )
+        .unwrap();
+        let batches = read_parquet(&path);
+        assert_eq!(
+            batches[0].schema().field(0).data_type(),
+            &DataType::Decimal128(30, 4)
+        );
+        let decimals = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Decimal128Array>()
+            .unwrap();
+        assert_eq!(decimals.value_as_string(0), "12345678901234567890.1234");
+        assert!(arrow::array::Array::is_null(decimals, 1));
+        assert_eq!(decimals.value_as_string(2), "-0.5000");
+        // A value the declared type cannot hold stops the export, and leaves no file.
+        let nan = decimal_sample(&[Some("1.5"), Some("NaN")], "numeric(10,2)");
+        let nan = nan.read().unwrap();
+        let path = temp("nan.parquet");
+        let error = export_to_file(
+            &nan,
+            &ExportOptions {
+                rows: 0..2,
+                ..options.clone()
+            },
+            &FileOptions::default(),
+            &Quoted("postgres"),
+            &path,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("amount: NaN"), "{error}");
+        assert!(!path.exists() && !part_path(&path).exists());
+        // gzip compresses Parquet's column chunks: the file is still Parquet.
+        let path = temp("packed.parquet");
+        export_to_file(
+            &result,
+            &all_of_sample(ExportFormat::Parquet),
+            &FileOptions {
+                gzip: true,
+                ..FileOptions::default()
+            },
+            &Quoted("postgres"),
+            &path,
+        )
+        .unwrap();
+        assert_eq!(&std::fs::read(&path).unwrap()[..4], b"PAR1");
+        assert_eq!(read_parquet(&path)[0].num_rows(), 3);
+    }
+
+    #[test]
+    fn extensions_follow_the_format_and_gzip() {
+        assert_eq!(ExportFormat::Csv.extension(false), "csv");
+        assert_eq!(ExportFormat::Csv.extension(true), "csv.gz");
+        assert_eq!(ExportFormat::Ndjson.extension(true), "ndjson.gz");
+        assert_eq!(ExportFormat::ArrowIpc.extension(true), "arrow.gz");
+        // Parquet compresses inside the file.
+        assert_eq!(ExportFormat::Parquet.extension(true), "parquet");
+        assert_eq!(
+            ExportFormat::SqlInsert { table: "t".into() }.extension(false),
+            "sql"
+        );
     }
 }

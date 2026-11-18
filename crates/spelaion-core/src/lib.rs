@@ -19,6 +19,7 @@ mod edit;
 mod editor_snippets;
 mod er;
 mod export;
+mod export_binary;
 mod export_stream;
 mod file_folder;
 mod filter;
@@ -131,15 +132,16 @@ pub use er::{
     mermaid, read_model as read_er_model, save_diagram_text,
 };
 pub use export::{
-    CopyError, CopySpecial, CsvOptions, ExportFormat, ExportOptions, FileSummary, GenericDialect,
-    MAX_IN_LIST, MAX_NULL_TEXT, NameStyle, RowDelimiter, TextEncoding, column_in_list,
-    column_names, copy_selected_rows, copy_special, copy_text, copy_updates, export_to_file,
-    formula_escaped, write_result,
+    CopyError, CopySpecial, CsvOptions, ExportFormat, ExportOptions, FileOptions, FileSummary,
+    GenericDialect, JsonOptions, KeywordCase, MAX_IN_LIST, MAX_NULL_TEXT, MAX_ROWS_PER_INSERT,
+    NameCase, NameStyle, RowDelimiter, SqlOptions, TextEncoding, column_in_list, column_names,
+    copy_selected_rows, copy_special, copy_text, copy_updates, export_to_file, formula_escaped,
+    write_result,
 };
 pub use export_stream::{
-    DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, RerunCheck,
-    StreamExport, TableSource, TablesError, export_query, export_table, export_tables, file_name,
-    follow_session_context, rerun_check,
+    DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, FileNamePattern,
+    MAX_NAME_PATTERN, NameParts, RerunCheck, StreamExport, TableSource, TablesError, export_query,
+    export_table, export_tables, file_name, follow_session_context, rerun_check,
 };
 pub use file_folder::{FolderReport, FolderView, MAX_VIEWS as MAX_FOLDER_VIEWS, SkippedFile};
 pub use filter::{ColumnFilter, FilterMode, FilterOp};

@@ -365,6 +365,9 @@ fn csv() -> StreamExport {
             escape_formulas: true,
         },
         encoding: TextEncoding::Utf8,
+        gzip: false,
+        sql: spelaion_core::SqlOptions::default(),
+        json: spelaion_core::JsonOptions::default(),
         columns: None,
         batch_size: DEFAULT_BATCH_ROWS,
     }
