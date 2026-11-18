@@ -27,6 +27,15 @@ export const commands = {
 	explainQuery: (session: string, sql: string, options: ExplainOptions_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("explain_query", { session, sql, options, onEvent })),
 	openPlanFile: (path: string) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("open_plan_file", { path })),
 	startupPlanPath: () => __TAURI_INVOKE<string | null>("startup_plan_path"),
+	/**
+	 *  What this app's own command line asked for, once: the folder is already open and the plan
+	 *  goes through `startup_plan_path`, so only the files, the connection and the refusals.
+	 */
+	takeLaunchRequest: () => __TAURI_INVOKE<LaunchRequestItem_Serialize | null>("take_launch_request"),
+	/**  The folders opened most recently, newest first. */
+	recentFolders: () => typedError<RecentFolderItem[], string>(__TAURI_INVOKE("recent_folders")),
+	/**  Takes a folder out of the recent folders; the folder itself is not touched. */
+	forgetRecentFolder: (path: string) => typedError<boolean, string>(__TAURI_INVOKE("forget_recent_folder", { path })),
 	planPage: (plan: number, view: PlanView, offset: number, limit: number) => typedError<PlanPage_Serialize, string>(__TAURI_INVOKE("plan_page", { plan, view, offset, limit })),
 	planStatistics: (plan: number, kind: PlanStatKind, offset: number, limit: number) => typedError<PlanStatsPage_Serialize, string>(__TAURI_INVOKE("plan_statistics", { plan, kind, offset, limit })),
 	planRawWindow: (plan: number, offset: number) => typedError<RawWindow_Serialize, string>(__TAURI_INVOKE("plan_raw_window", { plan, offset })),
@@ -1127,6 +1136,7 @@ export const commands = {
 export const events = {
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
+	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
 	pluginInstallProgress: makeEvent<PluginInstallProgress, PluginInstallProgress>("plugin-install-progress"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
@@ -3571,6 +3581,55 @@ export type LastPageItem = {
 	page: number,
 };
 
+export type LaunchRefusedItem = {
+	argument: string,
+	reason: string,
+};
+
+/**  What a launch asks the page to open, already checked by the core. */
+export type LaunchRequestItem = LaunchRequestItem_Serialize | LaunchRequestItem_Deserialize;
+
+/**  What a launch asks the page to open, already checked by the core. */
+export type LaunchRequestItem_Deserialize = {
+	/**  A folder to open (a second launch's: the first launch's is open already). */
+	folder?: string | null,
+	/**  A connection to select in the explorer, by id: never connected. */
+	connection?: string | null,
+	/**  `.sql` files to open in tabs, in order. */
+	files: string[],
+	/**  An execution plan file to open. */
+	plan?: string | null,
+	/**  What was not accepted and why, to say so. */
+	refused: LaunchRefusedItem[],
+};
+
+/**  What a launch asks the page to open, already checked by the core. */
+export type LaunchRequestItem_Serialize = {
+	/**  A folder to open (a second launch's: the first launch's is open already). */
+	folder: string | null,
+	/**  A connection to select in the explorer, by id: never connected. */
+	connection: string | null,
+	/**  `.sql` files to open in tabs, in order. */
+	files: string[],
+	/**  An execution plan file to open. */
+	plan: string | null,
+	/**  What was not accepted and why, to say so. */
+	refused: LaunchRefusedItem[],
+};
+
+/**  A second launch (or Finder) asked the running window to open something. */
+export type LaunchRequested = LaunchRequested_Serialize | LaunchRequested_Deserialize;
+
+/**  A second launch (or Finder) asked the running window to open something. */
+export type LaunchRequested_Deserialize = {
+	request: LaunchRequestItem_Deserialize,
+};
+
+/**  A second launch (or Finder) asked the running window to open something. */
+export type LaunchRequested_Serialize = {
+	request: LaunchRequestItem_Serialize,
+};
+
 /**  The line break a `.sql` file is written with. */
 export type LineEndingItem = "lf" | "crLf" | "cr";
 
@@ -5047,6 +5106,15 @@ export type RecentFileItem = {
 	path: string,
 	name: string,
 	/**  Still on disk (checked when listed). */
+	exists: boolean,
+};
+
+/**  One recent folder, as the folder menu and the palette list it. */
+export type RecentFolderItem = {
+	path: string,
+	/**  Its last part, to show first. */
+	name: string,
+	/**  Whether it is still there. */
 	exists: boolean,
 };
 

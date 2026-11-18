@@ -321,6 +321,11 @@ interface AppStore {
   historyRevision: number;
   historySaving: string[];
   workspaceChanging: boolean;
+  /** Why the last change of folder failed, shown above the explorer (SDB-397: wherever it
+   *  was asked, the folder menu, a recent folder, the palette or a second launch). */
+  folderError: string | null;
+  /** What a launch from outside asked for and could not be opened (SDB-397). */
+  launchNotice: string | null;
   /** Text of the explorer's quick filter; null while its box is closed. */
   explorerFilter: string | null;
   /** Tags the quick filter asks of connections (all of them); empty while its box is closed. */
@@ -390,6 +395,8 @@ interface AppStore {
   refreshHistory(): void;
   setHistorySaving(connection: string, saving: boolean): void;
   setWorkspaceChanging(changing: boolean): void;
+  setFolderError(error: string | null): void;
+  setLaunchNotice(notice: string | null): void;
   clearTabConnections(): void;
   setResultsMaximized(id: string, maximized: boolean): void;
   setExplorerFilter(filter: string | null): void;
@@ -425,6 +432,8 @@ export const useApp = create<AppStore>((set) => ({
   historyRevision: 0,
   historySaving: [],
   workspaceChanging: false,
+  folderError: null,
+  launchNotice: null,
   explorerFilter: null,
   explorerTags: [],
   openConnections: [],
@@ -606,6 +615,8 @@ export const useApp = create<AppStore>((set) => ({
     historySaving: saving ? [...new Set([...s.historySaving, connection])] : s.historySaving.filter((id) => id !== connection),
   })),
   setWorkspaceChanging: (workspaceChanging) => set({ workspaceChanging }),
+  setFolderError: (folderError) => set({ folderError }),
+  setLaunchNotice: (launchNotice) => set({ launchNotice }),
   setExplorerFilter: (explorerFilter) =>
     set((s) => ({ explorerFilter, explorerTags: explorerFilter === null ? [] : s.explorerTags })),
   toggleExplorerTag: (tag) =>

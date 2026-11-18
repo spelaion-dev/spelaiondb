@@ -30,7 +30,6 @@ import {
   type TableKeyItem,
 } from "../api";
 import {
-  confirmLeaving,
   connectTabFromExplorer,
   explorerDatabase,
   EXPLORER_REFRESH_EVENT,
@@ -47,7 +46,6 @@ import { sortByName } from "../explorerSort";
 import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
-import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
 import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
@@ -75,6 +73,8 @@ import { openDiagram } from "../diagramTabs";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 import { ObjectMenu } from "./ObjectMenu";
 import { MissingPlugin } from "./MissingPlugin";
+import { FolderMenuButton } from "./FolderMenu";
+import { folderSwitchBlocked, switchFolder } from "../folders";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -1212,14 +1212,9 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const { t, i18n } = useTranslation("shell");
   const workspace = useApp((s) => s.workspace);
   const connections = useApp((s) => s.connections);
-  const cannotSwitch = useApp(
-    (s) =>
-      s.workspaceChanging ||
-      s.historySaving.length > 0 ||
-      s.tabs.some((t) => t.status === "connecting" || t.run?.running),
-  );
+  const cannotSwitch = useApp((s) => folderSwitchBlocked(s));
   const [showProblems, setShowProblems] = useState(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
+  const folderError = useApp((s) => s.folderError);
   /** What the last paste of a connection (Ctrl+V) went wrong with. */
   const [pasteError, setPasteError] = useState<string | null>(null);
   const tree = useRef<HTMLDivElement>(null);
@@ -1379,54 +1374,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
 
   async function openFolder() {
     const path = await chooseFolder(t("openFolderTitle"), workspaceParent());
-    if (!path) return;
-    const app = useApp.getState();
-    // A connection ID can refer to a different server in the next folder: the tabs on screen
-    // are kept under this folder and the next folder's own tabs come back (ADR-036).
-    if (app.tabs.some((t) => t.status === "connecting") || app.historySaving.length > 0) return;
-    // Changing folder closes every tab's session (ADR-031): ask first, as before closing tabs,
-    // about open transactions, running queries and row edits not applied (SDB-140).
-    let open: string[] = [];
-    try {
-      open = await call(commands.sessionsToConfirm(app.tabs.map((t) => t.id)));
-    } catch {
-      // The sessions are gone: nothing is left to roll back.
-    }
-    if (!(await confirmLeaving("folder", open))) return;
-    // Saving started while the question was open, or a tab began connecting: nothing changes.
-    const now = useApp.getState();
-    if (now.tabs.some((t) => t.savingEdits || t.status === "connecting") || now.historySaving.length > 0) return;
-    app.setWorkspaceChanging(true);
-    setFolderError(null);
-    // Tabs belong to the folder they were opened in (ADR-036): the old folder's are written
-    // now, and the new folder's come back once it is open.
-    await flushTabs();
-    detachTabs();
-    try {
-      const sessions = [
-        ...now.tabs.map((t) => t.id),
-        ...now.connections.map((c) => `meta:${c.id}`),
-      ];
-      // The core stops the runs the user agreed to cancel, then the sessions close.
-      const running = now.tabs.filter((t) => t.run?.running).map((t) => t.id);
-      app.clearTabConnections();
-      app.setConnections([]);
-      await Promise.all(running.map((id) => call(commands.cancel(id)).catch(() => undefined)));
-      await Promise.all(
-        sessions.map((session) => call(commands.disconnect(session))),
-      );
-      await Promise.all(
-        now.tabs.map((tab) => call(commands.releaseResults(tab.id))),
-      );
-      app.setWorkspace(await call(commands.openWorkspace(path)));
-      await refreshConnections();
-    } catch (e) {
-      setFolderError(errorText(e));
-      await refreshConnections().catch(() => undefined);
-    } finally {
-      await restoreTabs();
-      app.setWorkspaceChanging(false);
-    }
+    if (path) await switchFolder(path);
   }
 
   async function trust() {
@@ -1523,14 +1471,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           <div className="workspace-name" title={workspace?.workspace ?? ""}>
             {folderName ?? t("noFolder")}
           </div>
-          <button
-            className="ghost"
-            onClick={() => void openFolder()}
-            title={t("openAnotherFolder")}
-            disabled={cannotSwitch}
-          >
-            {t("openFolder")}
-          </button>
+          {/* Open folder… and the recent folders (SDB-397). */}
+          <FolderMenuButton disabled={cannotSwitch} onOpenFolder={() => void openFolder()} />
         </div>
         <div className="sidebar-tools">
           <span className="sidebar-section-title">{t("connections")}</span>

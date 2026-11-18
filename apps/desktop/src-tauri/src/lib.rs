@@ -11,6 +11,7 @@ mod file_dialog;
 mod files;
 mod import;
 mod interaction;
+mod launch;
 mod library;
 mod mcp;
 mod panics;
@@ -69,6 +70,8 @@ struct AppState {
     display: std::sync::RwLock<Arc<spelaion_core::Display>>,
     plans: Arc<spelaion_core::plan::PlanStore>,
     startup_plan: std::sync::Mutex<Option<String>>,
+    /// What this app's own command line asked to open (SDB-397), until the page takes it.
+    launch: std::sync::Mutex<launch::LaunchSlot>,
     sessions: Mutex<HashMap<String, DesktopSession>>,
     history: QueryHistory,
     /// Writes the open tabs to the local store on a deadline (ADR-036).
@@ -632,6 +635,9 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
         path.as_bytes(),
         spelaion_config::atomic_file::NewFileMode::OwnerOnly,
     );
+    // The folder menu's and the palette's recent folders (SDB-397): a list, never a reason
+    // for the folder not to open.
+    let _ = state.history.add_recent_folder(path.clone()).await;
     state.reload().await;
     state.workspace_version.fetch_add(1, Ordering::Release);
     state.info().await
@@ -6015,6 +6021,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             plans::explain_query,
             plans::open_plan_file,
             plans::startup_plan_path,
+            launch::take_launch_request,
+            launch::recent_folders,
+            launch::forget_recent_folder,
             plans::plan_page,
             plans::plan_statistics,
             plans::plan_raw_window,
@@ -6332,7 +6341,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             TransactionChanged,
             QuitRequested,
             plugins::PluginInstallProgress,
-            plugins::PluginsChanged
+            plugins::PluginsChanged,
+            launch::LaunchRequested
         ])
 }
 
@@ -6396,7 +6406,7 @@ fn open_main_window(
 /// built hidden, moved left of every monitor at its usual size, and only then shown; it can
 /// never be activated, so it never takes the foreground. The test drives the page over
 /// WebView2's debugging port, which needs neither. Without it nothing changes.
-const OFFSCREEN_SWITCH: &str = "SPELAION_E2E_OFFSCREEN";
+pub(crate) const OFFSCREEN_SWITCH: &str = "SPELAION_E2E_OFFSCREEN";
 
 /// Moves `window` entirely left of every monitor, keeping its size.
 ///
@@ -6498,37 +6508,57 @@ pub fn run() {
             &format!("could not make the personal folder private: {e}"),
         );
     }
-    // Initial folder: command-line argument or the last one opened.
+    // What the command line asks for (SDB-397), read by the core: a folder, `.sql` files, a
+    // connection to select, a plan. A launch while this personal folder's app is open hands
+    // its arguments to that window and ends here.
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let startup_plan = arguments
-        .windows(2)
-        .find(|args| args[0] == "--plan")
-        .map(|args| args[1].clone())
-        .or_else(|| {
-            arguments
-                .first()
-                .filter(|path| {
-                    Path::new(path).is_file()
-                        && matches!(
-                            Path::new(path).extension().and_then(|s| s.to_str()),
-                            Some("json" | "plan" | "sqlplan" | "xml")
-                        )
-                })
-                .cloned()
-        });
-    let workspace = arguments
-        .first()
-        .filter(|arg| !arg.starts_with('-') && Some(*arg) != startup_plan.as_ref())
-        .cloned()
-        .map(PathBuf::from)
+    let cwd = std::env::current_dir().unwrap_or_else(|_| user_dir.clone());
+    let instance = match spelaion_core::instance::claim(&user_dir, &arguments, &cwd) {
+        spelaion_core::instance::Claim::HandedOver => std::process::exit(0),
+        spelaion_core::instance::Claim::First(server) => Some(server),
+        spelaion_core::instance::Claim::Alone(why) => {
+            startup::note(
+                &log,
+                &format!("a second launch will open another window: {why}"),
+            );
+            None
+        }
+    };
+    let launch_request = spelaion_core::launch::parse(&arguments, &cwd);
+    let startup_plan = launch_request
+        .plan
+        .as_ref()
+        .map(|plan| plan.display().to_string());
+    // Initial folder: the command line's, or the last one opened.
+    let workspace = launch_request
+        .folder
+        .clone()
         .or_else(|| {
             std::fs::read_to_string(last_workspace_file(&user_dir))
                 .ok()
                 .map(|s| PathBuf::from(s.trim()))
         })
         .filter(|p| p.is_dir());
+    // The folder is open already and the plan has its own way: the rest goes to the page.
+    let launch_slot = {
+        let mut item = launch::LaunchRequestItem::from(&launch_request);
+        item.folder = None;
+        item.plan = None;
+        launch::LaunchSlot {
+            request: (item.connection.is_some()
+                || !item.files.is_empty()
+                || !item.refused.is_empty())
+            .then_some(item),
+            taken: false,
+        }
+    };
     let config = load(workspace.as_deref(), &user_dir);
     let history = open_history(&user_dir, &log);
+    // The folder opened at start is the most recent one (SDB-397).
+    if let Some(folder) = &workspace {
+        let _ =
+            tauri::async_runtime::block_on(history.add_recent_folder(folder.display().to_string()));
+    }
     // Its writer runs on Tauri's runtime, which `block_on` starts here.
     let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
     // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
@@ -6556,6 +6586,7 @@ pub fn run() {
         results,
         plans: Arc::new(spelaion_core::plan::PlanStore::new()),
         startup_plan: std::sync::Mutex::new(startup_plan),
+        launch: std::sync::Mutex::new(launch_slot),
         sessions: Mutex::new(HashMap::new()),
         history,
         tabs,
@@ -6594,6 +6625,10 @@ pub fn run() {
             // The window and its webview (WebView2 on Windows, WebKitGTK on Linux) open here:
             // when they cannot, there is no page to tell it in. An error returned from `setup`
             // would only be Tauri's panic.
+            // Later launches of this personal folder's app hand their arguments to this one.
+            if let Some(server) = instance {
+                launch::serve(server, app.handle().clone());
+            }
             if let Err(e) = open_main_window(app, interface_size) {
                 startup::ask(&StartupFailure::window(&e), &setup_log);
                 std::process::exit(1);
@@ -6609,6 +6644,11 @@ pub fn run() {
         }
     };
     app.run(|app, event| {
+        // Files opened from Finder (SDB-397): macOS sends them as an event, not as arguments.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Opened { urls } = &event {
+            launch::opened(app, urls);
+        }
         // Tauri exits without dropping the state: stop each `kubectl port-forward`
         // first, or it would outlive the app (ADR-015).
         if let tauri::RunEvent::Exit = event {

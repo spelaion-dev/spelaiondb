@@ -273,6 +273,11 @@
   network profile file, the user name, the home folder and other absolute paths, IP addresses
   and host names. The app sends nothing (the issue page opens only on a click, at a fixed
   address); any change there needs tests that try to leak a password, a host or a path.
+  `launch.rs` reads what the desktop app is asked to open from outside (SDB-397): a folder,
+  `.sql` files (checked as a picked file is), a connection to select, a plan; nothing there
+  connects or runs. `instance.rs` keeps one app per personal folder: a later launch hands its
+  arguments to the running one over a local port, with a token from an owner-only file in the
+  personal folder; any change there needs tests that try to hand over without it.
   `startup.rs` is what the desktop app says when it cannot start (SDB-283): no personal folder,
   a local store it cannot open (a newer version's is never started over: it says to update) or
   no window; the app shows it in a native dialog (`apps/desktop/src-tauri/src/startup.rs`, never
