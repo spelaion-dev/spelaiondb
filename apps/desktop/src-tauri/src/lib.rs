@@ -2990,6 +2990,7 @@ fn export_format(format: TextFormat) -> ExportFormat {
         TextFormat::Ndjson => ExportFormat::Ndjson,
         TextFormat::Parquet => ExportFormat::Parquet,
         TextFormat::ArrowIpc => ExportFormat::ArrowIpc,
+        TextFormat::Xlsx => ExportFormat::Xlsx,
     }
 }
 
@@ -3048,7 +3049,7 @@ async fn copy_rows(
     }
     if matches!(
         format,
-        TextFormat::Ndjson | TextFormat::Parquet | TextFormat::ArrowIpc
+        TextFormat::Ndjson | TextFormat::Parquet | TextFormat::ArrowIpc | TextFormat::Xlsx
     ) {
         return Err("that format is for files, not for the clipboard".into());
     }

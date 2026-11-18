@@ -39,6 +39,7 @@ export const useExport = create<{ request: ExportRequest | null; open(request: E
 
 const FORMATS: { format: TextFormat; extension: string }[] = [
   { format: "csv", extension: "csv" },
+  { format: "xlsx", extension: "xlsx" },
   { format: "tsv", extension: "tsv" },
   { format: "json", extension: "json" },
   { format: "sqlInsert", extension: "sql" },
@@ -136,9 +137,12 @@ function ExportForm({ request }: { request: ExportRequest }) {
   }, [running, close]);
 
   const text = format === "csv" || format === "tsv";
-  // Parquet compresses inside the file; the other formats become `.gz` files (as the core says).
+  // Parquet compresses inside the file and a workbook is a zip already; the other formats
+  // become `.gz` files (as the core says).
+  const workbook = format === "xlsx";
   const baseExtension = FORMATS.find((f) => f.format === format)?.extension ?? "txt";
-  const extension = gzip && format !== "parquet" ? `${baseExtension}.gz` : baseExtension;
+  const useGzip = gzip && !workbook;
+  const extension = useGzip && format !== "parquet" ? `${baseExtension}.gz` : baseExtension;
   // An upsert needs a table, whose key the core reads from the catalog: a table's every row.
   const upsertPossible = request.kind === "tables" || (request.kind === "result" && request.table !== null && scope === "all");
   const chosenDelimiter = delimiter === "other" ? otherDelimiter : delimiter;
@@ -155,7 +159,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
     escapeFormulas,
     encoding: text ? encoding : "utf8",
     columns,
-    gzip,
+    gzip: useGzip,
     sql: { ...sql, upsert: sql.upsert && upsertPossible },
     json,
   });
@@ -182,7 +186,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
   async function askPath(): Promise<string | null> {
     if (request.kind === "tables" && request.tables.length > 1) return chooseFolder(t("export.chooseFolder"));
     // The name the pattern gives, written by the core; the save dialog picks the folder.
-    const name = await call(commands.exportFileName(request.session, names, format, gzip, namedTable));
+    const name = await call(commands.exportFileName(request.session, names, format, useGzip, namedTable));
     return chooseSavePath({
       defaultPath: name,
       filters: [{ name: t(`results.export.${format}`), extensions: [extension] }],
@@ -225,7 +229,10 @@ function ExportForm({ request }: { request: ExportRequest }) {
       if (request.kind === "tables" && request.tables.length > 1) {
         const outcome = await call(commands.exportTables(request.session, id, request.tables, target, names, options(), channel));
         const rows = outcome.files.reduce((sum, f) => sum + (f.summary.rows ?? 0), 0);
-        const written = t("export.tablesDone", { count: outcome.files.length, formattedCount: numbers.format(outcome.files.length), rows: numbers.format(rows), folder: target });
+        // As XLSX the tables are the sheets of one workbook.
+        const written = workbook
+          ? t("export.workbookDone", { count: outcome.files.length, formattedCount: numbers.format(outcome.files.length), rows: numbers.format(rows), path: outcome.files[0]?.path ?? target })
+          : t("export.tablesDone", { count: outcome.files.length, formattedCount: numbers.format(outcome.files.length), rows: numbers.format(rows), folder: target });
         if (outcome.cancelled) setPhase({ kind: "done", text: `${t("export.cancelled")} ${written}` });
         else if (outcome.error != null) {
           const failed = request.tables[outcome.failedTable ?? 0]?.name ?? "";
@@ -327,7 +334,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
                 })}
               </p>
             )}
-            {request.kind === "tables" && request.tables.length > 1 && <p className="muted small">{t("export.tablesHint")}</p>}
+            {request.kind === "tables" && request.tables.length > 1 && <p className="muted small">{t(workbook ? "export.tablesWorkbookHint" : "export.tablesHint")}</p>}
             {hidden.length > 0 && (
               <label className="check">
                 <input type="checkbox" checked={shownOnly} onChange={(e) => setShownOnly(e.target.checked)} />
@@ -451,10 +458,11 @@ function ExportForm({ request }: { request: ExportRequest }) {
                 <input name="export-timestamp-format" value={names.timestampFormat} spellCheck={false} onChange={(e) => setNames({ ...names, timestampFormat: e.target.value })} />
               </label>
               <label className="check">
-                <input type="checkbox" checked={gzip} onChange={(e) => setGzip(e.target.checked)} />
+                <input type="checkbox" checked={useGzip} disabled={workbook} onChange={(e) => setGzip(e.target.checked)} />
                 {t("export.gzip")}
               </label>
               {gzip && format === "parquet" && <p className="muted small">{t("export.gzipParquet")}</p>}
+              {workbook && <p className="muted small">{t("export.gzipWorkbook")}</p>}
             </details>
             <div className="modal-actions">
               <button onClick={close}>{t("export.close")}</button>

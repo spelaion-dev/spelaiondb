@@ -3244,7 +3244,7 @@ export type ImportChoice = {
 	action: string,
 };
 
-export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown";
+export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown" | "xlsx";
 
 /**
  *  A connection found in another client's files. No secret travels: only whether a password
@@ -3348,6 +3348,8 @@ export type ImportOptionsItem = {
 	timestampFormat: string,
 	/**  `UTC` or an offset (`+02:00`); empty: none. */
 	timeZone: string,
+	/**  The sheet of a workbook (XLSX); empty: the first one. */
+	sheet: string,
 };
 
 /**  How an import ended. */
@@ -3378,6 +3380,8 @@ export type ImportPreviewItem = {
 	sampled: number,
 	more: boolean,
 	suggestedTable: string,
+	/**  The worksheets of a workbook (XLSX), in order; empty for the other formats. */
+	sheets: string[],
 };
 
 export type ImportProgressItem = {
@@ -6213,7 +6217,9 @@ export type TextEncodingItem = "utf8" | "utf8Bom" | "utf16Le" | "windows1252";
 /**  Text format to copy or export rows in. */
 export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList" | "html" | 
 /**  Files only (SDB-391). */
-"ndjson" | "parquet" | "arrowIpc";
+"ndjson" | "parquet" | "arrowIpc" | 
+/**  Files only (SDB-390). */
+"xlsx";
 
 /**  A piece of a script, in UTF-8 bytes like every position the core gives. */
 export type TextSpan = {

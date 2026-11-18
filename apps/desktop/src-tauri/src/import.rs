@@ -54,6 +54,7 @@ pub enum ImportFormatItem {
     Tsv,
     Json,
     Markdown,
+    Xlsx,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -88,6 +89,8 @@ pub struct ImportOptionsItem {
     pub timestamp_format: String,
     /// `UTC` or an offset (`+02:00`); empty: none.
     pub time_zone: String,
+    /// The sheet of a workbook (XLSX); empty: the first one.
+    pub sheet: String,
 }
 
 fn one_char(what: &str, text: &str, optional: bool) -> CmdResult<Option<char>> {
@@ -117,6 +120,7 @@ impl TryFrom<ImportOptionsItem> for ParseOptions {
                 ImportFormatItem::Tsv => ImportFormat::Tsv,
                 ImportFormatItem::Json => ImportFormat::Json,
                 ImportFormatItem::Markdown => ImportFormat::Markdown,
+                ImportFormatItem::Xlsx => ImportFormat::Xlsx,
             },
             encoding: match item.encoding {
                 SourceEncodingItem::Auto => SourceEncoding::Auto,
@@ -135,6 +139,7 @@ impl TryFrom<ImportOptionsItem> for ParseOptions {
             date_format: text(item.date_format),
             timestamp_format: text(item.timestamp_format),
             time_zone: text(item.time_zone),
+            sheet: text(item.sheet),
         })
     }
 }
@@ -158,6 +163,7 @@ impl From<ParseOptions> for ImportOptionsItem {
                 ImportFormat::Tsv => ImportFormatItem::Tsv,
                 ImportFormat::Json => ImportFormatItem::Json,
                 ImportFormat::Markdown => ImportFormatItem::Markdown,
+                ImportFormat::Xlsx => ImportFormatItem::Xlsx,
             },
             encoding: encoding_item(o.encoding),
             delimiter: o.delimiter.to_string(),
@@ -170,6 +176,7 @@ impl From<ParseOptions> for ImportOptionsItem {
             date_format: o.date_format.unwrap_or_default(),
             timestamp_format: o.timestamp_format.unwrap_or_default(),
             time_zone: o.time_zone.unwrap_or_default(),
+            sheet: o.sheet.unwrap_or_default(),
         }
     }
 }
@@ -226,6 +233,8 @@ pub struct ImportPreviewItem {
     pub sampled: u32,
     pub more: bool,
     pub suggested_table: String,
+    /// The worksheets of a workbook (XLSX), in order; empty for the other formats.
+    pub sheets: Vec<String>,
 }
 
 fn count(n: usize) -> u32 {
@@ -421,6 +430,7 @@ pub async fn import_preview(
         sampled: count(preview.sampled),
         more: preview.more,
         suggested_table: preview.suggested_table,
+        sheets: preview.sheets,
     })
 }
 

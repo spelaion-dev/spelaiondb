@@ -66,7 +66,8 @@
       "html": "Tabla HTML",
       "ndjson": "NDJSON (un objeto JSON por línea)",
       "parquet": "Parquet",
-      "arrowIpc": "Archivo Arrow IPC"
+      "arrowIpc": "Archivo Arrow IPC",
+      "xlsx": "Excel (XLSX)"
     },
     "sortAsc": "Ordenar ascendente",
     "sortDesc": "Ordenar descendente",
@@ -752,7 +753,11 @@
     "upsertTableOnly": "Los upserts necesitan una tabla: exporta todas las filas de una tabla para escribirlos.",
     "jsonOptions": "Opciones de JSON",
     "isoDates": "Marcas de tiempo en ISO 8601",
-    "jsonAsJson": "Columnas JSON como JSON, no como texto"
+    "jsonAsJson": "Columnas JSON como JSON, no como texto",
+    "tablesWorkbookHint": "Un libro en la carpeta que elijas, una hoja por tabla, con el nombre del patrón de nombre de archivo ({table} es la base de datos). Un archivo existente se conserva: se usa otro nombre.",
+    "workbookDone_one": "{{rows}} filas de {{formattedCount}} tabla escritas en {{path}}.",
+    "workbookDone_other": "{{rows}} filas de {{formattedCount}} tablas escritas en {{path}}, una hoja cada una.",
+    "gzipWorkbook": "Un libro ya está comprimido."
   },
   "import": {
     "title": "Importar datos",
@@ -778,7 +783,8 @@
       "csv": "CSV",
       "tsv": "TSV (separado por tabuladores)",
       "json": "Array JSON",
-      "markdown": "Tabla Markdown"
+      "markdown": "Tabla Markdown",
+      "xlsx": "Libro de Excel (XLSX)"
     },
     "encoding": "Codificación",
     "encodingAuto": "Detectar ({{found}})",
@@ -864,7 +870,8 @@
     "cancelled_one": "Importación cancelada: se confirmó {{formattedCount}} fila antes; el resto de su lote se deshizo.",
     "cancelled_other": "Importación cancelada: se confirmaron {{formattedCount}} filas antes; el resto de su lote se deshizo.",
     "failed": "No se pudo importar: {{reason}}",
-    "openTable": "Abrir tabla"
+    "openTable": "Abrir tabla",
+    "sheet": "Hoja"
   },
   "maximizeResults": "Maximizar los resultados (Ctrl+Alt+M)",
   "restoreResults": "Mostrar el editor (Ctrl+Alt+M)",

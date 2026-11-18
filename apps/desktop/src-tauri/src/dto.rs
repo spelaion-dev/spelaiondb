@@ -3819,6 +3819,8 @@ pub enum TextFormat {
     Ndjson,
     Parquet,
     ArrowIpc,
+    /// Files only (SDB-390).
+    Xlsx,
 }
 
 /// How column names are copied (see `spelaion_core::NameStyle`).
