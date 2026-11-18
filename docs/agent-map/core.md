@@ -174,6 +174,13 @@
   `FileNamePattern` names the files (`{table}`, `{schema}`, `{database}`, `{date}`, `{time}`,
   `{timestamp}`), made safe by `file_name`. `tests/export_formats.rs` reads every format back
   on every engine, runs an upsert twice and checks masked columns.
+  XLSX (SDB-390) is `export_xlsx.rs`'s, streamed the same way: a sheet is a zip entry (the
+  `zip` crate, deflate only) written as its rows arrive, strings inline (no shared-strings
+  table grows), and past Excel's 1,048,576 rows a sheet goes on in `name (2)`. Numbers,
+  booleans, dates, times and timestamps are real cells only when Excel holds them exactly (an
+  integer up to 2^53, a decimal a double holds digit for digit, a date from 1900-03-01); anything
+  else is its text, and a value longer than a cell holds stops the export naming the column.
+  Explorer tables as XLSX are one workbook, a sheet each (`export_tables`' `export_workbook`).
   `pending.rs` keeps a table data page's pending edits (ADR-044): cells typed or changed in
   bulk, rows to delete and rows to insert, in the core with the stored result they refer to,
   each change a step undo and redo restore exactly; the stored result refuses to sort or filter
@@ -219,7 +226,13 @@
   only a cell edit's text, applied by `edit.rs`; `tests/value_pickers.rs` reads every pick back
   on every engine, and searches a million-row table.
   `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
-  arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
+  arrays and Markdown tables as untrusted input (bounded records, columns and whole reads), and
+  `xlsx.rs` a sheet of an XLSX file (SDB-390): every part's declared size, compression and
+  ratio checked before it is unpacked, never more unpacked than declared and its CRC checked,
+  no DOCTYPE, bounded nesting, tags, sheets, styles, shared strings, rows and columns, formulas
+  never evaluated (their saved value, else their text); any change there needs tests that try to
+  get around it (its own unit tests craft the workbooks; `tests/xlsx.rs` goes through Excel and
+  back on every engine),
   `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
   the DDL, checks read-only and the guard, and loads the rows in transactions through
   `Connection::insert_rows`, which takes them as columns of text (`TextRows`: Arrow, read as

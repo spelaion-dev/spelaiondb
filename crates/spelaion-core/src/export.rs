@@ -46,13 +46,16 @@ pub enum ExportFormat {
     Parquet,
     /// The Arrow IPC file format, with the same types as Parquet (SDB-391).
     ArrowIpc,
+    /// An Excel workbook (SDB-390): a sheet per result or table, numbers and dates as real
+    /// cells, written by `export_xlsx.rs` a batch at a time.
+    Xlsx,
 }
 
 impl ExportFormat {
     /// Written a batch at a time by `export_binary.rs` rather than a row at a time.
     pub fn is_binary(&self) -> bool {
         match self {
-            ExportFormat::Parquet | ExportFormat::ArrowIpc => true,
+            ExportFormat::Parquet | ExportFormat::ArrowIpc | ExportFormat::Xlsx => true,
             ExportFormat::Tsv
             | ExportFormat::Csv
             | ExportFormat::Json
@@ -78,6 +81,8 @@ impl ExportFormat {
             ExportFormat::Html => "html",
             ExportFormat::Ndjson => "ndjson",
             ExportFormat::Parquet => return "parquet".into(),
+            // A workbook is a zip already.
+            ExportFormat::Xlsx => return "xlsx".into(),
             ExportFormat::ArrowIpc => "arrow",
         };
         if gzip {
@@ -368,7 +373,8 @@ impl RowWriter {
             | ExportFormat::Html
             | ExportFormat::Ndjson
             | ExportFormat::Parquet
-            | ExportFormat::ArrowIpc => return,
+            | ExportFormat::ArrowIpc
+            | ExportFormat::Xlsx => return,
         };
         let per = match self.format {
             ExportFormat::SqlInsertBatch { .. } => usize::MAX,
@@ -510,7 +516,7 @@ impl RowWriter {
                     .collect();
                 writeln!(out, "| {} |", rules.join(" | "))
             }
-            ExportFormat::Parquet | ExportFormat::ArrowIpc => Err(not_text()),
+            ExportFormat::Parquet | ExportFormat::ArrowIpc | ExportFormat::Xlsx => Err(not_text()),
             ExportFormat::Tsv
             | ExportFormat::Csv
             | ExportFormat::SqlInsert { .. }
@@ -579,7 +585,9 @@ impl RowWriter {
                     .collect();
                 writeln!(out, "| {} |", cells.join(" | "))?;
             }
-            ExportFormat::Parquet | ExportFormat::ArrowIpc => return Err(not_text()),
+            ExportFormat::Parquet | ExportFormat::ArrowIpc | ExportFormat::Xlsx => {
+                return Err(not_text());
+            }
         }
         self.written += 1;
         Ok(())
@@ -598,7 +606,9 @@ impl RowWriter {
                     self.end_statement(out)?;
                 }
             }
-            ExportFormat::Parquet | ExportFormat::ArrowIpc => return Err(not_text()),
+            ExportFormat::Parquet | ExportFormat::ArrowIpc | ExportFormat::Xlsx => {
+                return Err(not_text());
+            }
             ExportFormat::Tsv
             | ExportFormat::Csv
             | ExportFormat::Markdown
@@ -899,6 +909,30 @@ pub fn export_to_file(
         .filter(|&c| c < schema.columns.len())
         .collect();
     let rows = options.rows.start.min(result.rows())..options.rows.end.min(result.rows());
+    if options.format == ExportFormat::Xlsx {
+        let fields: Vec<_> = columns
+            .iter()
+            .map(|&c| schema.arrow.field(c).clone())
+            .collect();
+        // The sheet is named after the file.
+        let sheet = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.split('.').next())
+            .unwrap_or("Result")
+            .to_string();
+        let mut book = crate::export_xlsx::XlsxBook::create(path, None)?;
+        book.begin_sheet(&sheet, &fields, columns)?;
+        let mut start = rows.start;
+        while start < rows.end {
+            let len = CHUNK.min(rows.end - start);
+            for batch in result.window(start, len) {
+                book.write(&batch)?;
+            }
+            start += len;
+        }
+        return book.finish();
+    }
     if options.format.is_binary() {
         let fields: Vec<_> = columns
             .iter()
@@ -1676,7 +1710,7 @@ fn unique_names<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     out
 }
 
-fn text(value: &Value) -> Option<String> {
+pub(crate) fn text(value: &Value) -> Option<String> {
     match value {
         Value::Null => None,
         other => Some(other.to_string()),
