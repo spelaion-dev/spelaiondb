@@ -26,6 +26,7 @@ spelaion-https = { path = "crates/spelaion-https" }
 
 anyhow = "1"
 arrow = { version = "60", default-features = false, features = ["ipc"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "flate2", "flate2-rust_backend"] }
 async-trait = "0.1"
 futures-util = "0.3"
 insta = "1"

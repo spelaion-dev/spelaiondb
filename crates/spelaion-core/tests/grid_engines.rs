@@ -999,6 +999,9 @@ async fn mysql_zero_dates_far_down_sort_filter_and_export() {
                 escape_formulas: false,
             },
             encoding: spelaion_core::TextEncoding::Utf8,
+            gzip: false,
+            sql: spelaion_core::SqlOptions::default(),
+            json: spelaion_core::JsonOptions::default(),
             columns: None,
             batch_size: spelaion_core::DEFAULT_BATCH_ROWS,
         };

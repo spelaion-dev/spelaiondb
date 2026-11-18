@@ -17,6 +17,7 @@ spelaion-driver-sqlite.workspace = true
 spelaion-ssh.workspace = true
 spelaion-store.workspace = true
 arrow.workspace = true
+parquet.workspace = true
 async-stream = "0.3"
 futures-util.workspace = true
 sqlparser = { version = "0.63", features = ["visitor"] }
