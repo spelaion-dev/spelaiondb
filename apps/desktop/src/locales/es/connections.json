@@ -519,5 +519,16 @@
     "repeatable-read": "Repeatable read",
     "serializable": "Serializable",
     "snapshot": "Snapshot"
+  },
+  "tlsWarning": {
+    "unverified": "El modo TLS “{{mode}}” no comprueba el certificado del servidor: cualquiera en la red entre tú y {{host}} podría leerlo o suplantarlo. Usa verify-full para comprobarlo.",
+    "unencrypted": "TLS está desactivado: todo lo que se envía a {{host}}, contraseña incluida, cruza la red sin cifrar.",
+    "unverifiedTunneled": "A través del túnel, el modo TLS “{{mode}}” no comprueba el certificado de {{host}} en el último tramo, del final del túnel al servidor.",
+    "unencryptedTunneled": "A través del túnel, el último tramo hasta {{host}}, del final del túnel al servidor, no va cifrado."
+  },
+  "control": {
+    "disconnectAll": "Desconectar todo",
+    "disconnectOthers": "Desconectar todas las demás",
+    "disconnectOthersHere": "Desconectar todas las demás"
   }
 }

@@ -1458,6 +1458,8 @@ pub struct ConnectionItem {
     /// Whether its engine is queried with SQL. One that is not (ADR-056) is read by the core in
     /// its own language: what the app writes SQL for is not offered on it.
     pub sql: bool,
+    /// Its TLS does not check its server (SDB-395), from the file as written.
+    pub tls_warning: Option<TlsWarningItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -4977,6 +4979,8 @@ pub struct CellRange {
 pub enum ConnectionTestOutcome {
     Tested {
         report: TestReportItem,
+        /// The connection's TLS does not check its server (SDB-395), from its resolved form.
+        tls_warning: Option<TlsWarningItem>,
     },
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
@@ -4988,9 +4992,7 @@ pub enum ConnectionTestOutcome {
         root: String,
     },
     /// Personal `${user.…}` variables to ask for first (ADR-022).
-    MissingVariables {
-        names: Vec<String>,
-    },
+    MissingVariables { names: Vec<String> },
 }
 
 impl ConnectionTestOutcome {
@@ -7264,6 +7266,37 @@ impl From<spelaion_core::LastPage> for LastPageItem {
         Self {
             total: last.total as f64,
             page: u32::try_from(last.page).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// A connection whose TLS does not check its server (SDB-395), as the core decided it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsWarningItem {
+    /// `unencrypted` (`disable`) or `unverified` (`prefer`, `require`).
+    pub risk: String,
+    /// The TLS mode as the connection file writes it.
+    pub mode: String,
+    pub host: String,
+    /// Through an SSH tunnel, AWS SSM or a Kubernetes forward: the calmer warning.
+    pub tunneled: bool,
+}
+
+impl From<spelaion_core::TlsWarning> for TlsWarningItem {
+    fn from(w: spelaion_core::TlsWarning) -> Self {
+        Self {
+            risk: match w.risk {
+                spelaion_core::TlsRisk::Unencrypted => "unencrypted",
+                spelaion_core::TlsRisk::Unverified => "unverified",
+            }
+            .into(),
+            mode: w.mode.into(),
+            host: w.host,
+            tunneled: match w.route {
+                spelaion_core::TlsRoute::Tunneled => true,
+                spelaion_core::TlsRoute::Direct => false,
+            },
         }
     }
 }

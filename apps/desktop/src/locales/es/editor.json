@@ -1555,5 +1555,15 @@
     "placeholder": "Número de fila",
     "of": "de {{total}}",
     "past": "El resultado tiene {{rows}} filas: la fila {{row}} está más allá del final."
+  },
+  "session": {
+    "reconnect": "Reconectar",
+    "readOnly": "Solo lectura en esta sesión",
+    "readWrite": "Quitar solo lectura de esta sesión",
+    "readOnlyOn": "Esta sesión es de solo lectura: se rechaza toda escritura hasta que se reconecte o la quites.",
+    "readOnlyOff": "Esta sesión vuelve a poder escribir.",
+    "readOnlyFailed": "No se pudo cambiar el modo de solo lectura de la sesión: {{detail}}",
+    "readOnlyChip": "Sesión de solo lectura",
+    "readOnlyHint": "La sesión de esta pestaña rechaza escrituras, como una conexión de solo lectura. Haz clic para quitarlo."
   }
 }

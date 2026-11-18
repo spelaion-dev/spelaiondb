@@ -3427,6 +3427,8 @@ try {
       "New query", "Open object by name…", "Refresh all schemas",
       "Edit…", "Configure filters…",
       "Back up…", "Run SQL file…",
+      // Only Shop's own sessions are open here: nothing else to disconnect (SDB-395).
+      "Disconnect all",
       "Duplicate", "Copy", "Paste connection", "Move to folder…",
       "Delete…",
     ]);
@@ -9672,6 +9674,58 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await shown.getByText("Updated: 1", { exact: false }).waitFor();
     await shown.getByRole("button", { name: "Discard" }).click();
     await shown.getByText("Updated: 1", { exact: false }).waitFor({ state: "detached" });
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
+  }
+
+  step("read-only for this session refuses a write; disconnect all asks first with a transaction open (SDB-395)");
+  {
+    const controlPanel = await newQuery("Shop (SQLite)", "create temp table control_tx (x);");
+    await run(controlPanel);
+    await controlPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    const fromPalette = async (search, command) => {
+      await page.keyboard.press("Control+Shift+P");
+      const commandPalette = page.getByRole("dialog", { name: "Command palette" });
+      await commandPalette.getByRole("combobox").fill(search);
+      await commandPalette.locator(`[data-command="${command}"]`).click();
+      await commandPalette.waitFor({ state: "detached" });
+    };
+    // The session refuses the write before anything is sent, as a read-only connection's does.
+    await fromPalette("Read-only for this session", "editor.sessionReadOnly");
+    const chip = controlPanel.getByRole("button", { name: "Read-only session" });
+    await chip.waitFor();
+    await replaceQuery(controlPanel, "insert into control_tx values (1);");
+    await run(controlPanel);
+    await controlPanel.getByText("nothing was run", { exact: false }).first().waitFor();
+    // The chip ends it: the same write runs.
+    await chip.click();
+    await chip.waitFor({ state: "detached" });
+    await run(controlPanel);
+    await controlPanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
+    await controlPanel.getByText("nothing was run", { exact: false }).waitFor({ state: "detached" });
+    // A transaction open: Disconnect all asks first, and Cancel keeps it.
+    await controlPanel.locator(".transaction-controls").getByRole("checkbox", { name: "Auto-commit" }).click();
+    await controlPanel.locator(".transaction-controls input[type=checkbox]:not(:checked)").waitFor();
+    await replaceQuery(controlPanel, "insert into control_tx values (2);");
+    await run(controlPanel);
+    await controlPanel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+    await controlPanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
+    await fromPalette("Disconnect all", "connections.disconnectAll");
+    const asked = page.getByRole("dialog", { name: "Disconnect with an open transaction?" });
+    await asked.getByText("the server rolls back what was not committed", { exact: false }).waitFor();
+    await shot("sdb-395-disconnect-all-asks");
+    await asked.getByRole("button", { name: "Cancel", exact: true }).click();
+    await asked.waitFor({ state: "detached" });
+    await controlPanel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+    await controlPanel.locator(".status-connected").waitFor();
+    // Accepted: the session ends and the server rolls the transaction back; nothing reconnects.
+    await fromPalette("Disconnect all", "connections.disconnectAll");
+    await asked.getByRole("button", { name: "Disconnect and roll back", exact: true }).click();
+    await asked.waitFor({ state: "detached" });
+    await controlPanel.locator(".tx-badge").waitFor({ state: "detached" });
+    await controlPanel.getByText("Disconnected", { exact: true }).waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await controlPanel.locator(".status-connected").count(), 0, "nothing reconnects on its own");
     await page.keyboard.press("Control+w");
     await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
   }

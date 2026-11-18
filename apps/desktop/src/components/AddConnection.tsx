@@ -16,6 +16,9 @@ import {
   type UrlFields,
 } from "../api";
 import { tagsInUse } from "../connectionInfo";
+import { tlsWarningText } from "../tlsWarning";
+import type { TlsWarningItem } from "../bindings";
+import { Icon } from "./Icons";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./ConnectionTypePicker";
 import { EngineIcon } from "./EngineIcon";
@@ -618,6 +621,30 @@ function ConnectionForm(props: {
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.running;
 
+  // A TLS mode that does not check the server, on a host that is not this machine (SDB-395):
+  // the core decides it from what is typed, and says it again with the test's result.
+  const [tlsWarning, setTlsWarning] = useState<TlsWarningItem | null>(null);
+  const [testTlsWarning, setTestTlsWarning] = useState<TlsWarningItem | null>(null);
+  const tlsKey = JSON.stringify([request.personal, request.engine, request.host, request.tlsMode, request.tunnel, request.kubernetes !== null, request.fileFolder, request.sqlite3]);
+  useEffect(() => {
+    let current = true;
+    const timer = window.setTimeout(() => {
+      call(commands.draftTlsWarning(request))
+        .then((warning) => { if (current) setTlsWarning(warning); })
+        .catch(() => { if (current) setTlsWarning(null); });
+    }, 250);
+    return () => { current = false; window.clearTimeout(timer); };
+    // Only what the rule reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tlsKey]);
+  const tlsNote = (warning: TlsWarningItem | null, className = "") =>
+    warning && (
+      <p className={`tls-warning small${className}`} role="status">
+        <Icon name="shieldAlert" size={14} />
+        <span>{tlsWarningText(t, warning)}</span>
+      </p>
+    );
+
   // A new connection is named by the personal pattern (ADR-030) until the user types a name.
   const suggestKey = JSON.stringify([request.engine, request.host, request.port, request.database, request.user, request.env]);
   useEffect(() => {
@@ -708,6 +735,7 @@ function ConnectionForm(props: {
         test.clear();
         return;
       }
+      setTestTlsWarning(reviewed.tlsWarning);
       test.finish(reviewed.report);
     } catch (e) {
       test.clear();
@@ -856,6 +884,7 @@ function ConnectionForm(props: {
                     />
                   </Field>
                 </div>
+                {tlsNote(tlsWarning)}
                 {/* A libSQL server serves one database per address (ADR-058). */}
                 {engine.id !== "libsql" && (
                   <Field label={engine.id === "oracle" ? t("fields.serviceName") : t("fields.database")}>
@@ -1006,6 +1035,7 @@ function ConnectionForm(props: {
                 </button>
               </div>
               <p className="muted small">{t("fields.tlsHint")}</p>
+              {tlsNote(tlsWarning)}
               {passwordless && (
                 <>
                   <div className="form-pair">
@@ -1381,6 +1411,7 @@ function ConnectionForm(props: {
         </div>
       </div>
 
+      {test.steps && test.report && tlsNote(testTlsWarning, " tls-warning-test")}
       {test.steps && (
         <ConnectionTestLog steps={test.steps} report={test.report} running={test.running} onStop={test.stop} onClose={test.clear} />
       )}

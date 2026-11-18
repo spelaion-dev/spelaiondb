@@ -59,6 +59,8 @@ import { topDialog } from "../modalFocus";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 import { useFittingMarks } from "../connectionMarks";
+import { tlsWarningText } from "../tlsWarning";
+import { Icon } from "./Icons";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { StructureDialog } from "./StructureDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
@@ -1935,18 +1937,25 @@ function ConnectionNode({
           // The description, then the marks after the name, which may not fit.
           title={connectionTooltip(connection, [
             kind ? t("typeTooltip", { name: kind.name }) : null,
+            connection.tlsWarning ? tlsWarningText(t, connection.tlsWarning) : null,
             connection.tunnel ? t("tunnel", { name: connection.tunnel }) : null,
             connection.tags.length > 0 ? t("tagsTooltip", { tags: connection.tags.join(", ") }) : null,
           ])}
         >
           {connection.name}
         </span>
-        {(kind || connection.tunnel || connection.tags.length > 0) && (
+        {(kind || connection.tlsWarning || connection.tunnel || connection.tags.length > 0) && (
           // In order of importance: the type (its dot always stays), SSH, then a few quiet tags (a
           // click filters the explorer by one), each shown whole or not at all where it fits
           // (connectionMarks.ts). The name's tooltip has them all.
           <span ref={marksRef} className="connection-marks">
             {kind && <TypeBadge type={kind} small />}
+            {connection.tlsWarning && (
+              // Its TLS does not check the server (SDB-395): the core decided it.
+              <span className="tls-mark" role="img" aria-label={tlsWarningText(t, connection.tlsWarning)} title={tlsWarningText(t, connection.tlsWarning)}>
+                <Icon name="shieldAlert" size={14} />
+              </span>
+            )}
             {connection.tunnel && (
               <span
                 className="tag"

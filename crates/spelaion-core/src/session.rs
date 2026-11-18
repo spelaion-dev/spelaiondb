@@ -2,7 +2,7 @@
 //! In the app there is one per editor tab (ADR-004).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -209,6 +209,9 @@ pub struct Session {
     /// The connection is read-only (ADR-053): a run refuses, before anything is sent, a script
     /// with a statement that is not a read, a session setting or transaction control.
     read_only: bool,
+    /// The user made this session read-only from its tab (SDB-395): the same barrier as a
+    /// read-only connection's, added to the connection's and never taking it away.
+    session_read_only: AtomicBool,
     /// The server a PostgreSQL session reached (SDB-169), read by [`crate::open_connection`]
     /// when it opens; `None` for the other engines and for sessions built without it.
     server_family: Option<crate::ServerFamily>,
@@ -332,6 +335,7 @@ impl Session {
             cancel_gate: CancelGate::default(),
             masking: Arc::new(MaskPolicy::none()),
             read_only: false,
+            session_read_only: AtomicBool::new(false),
             server_family: None,
         }
     }
@@ -379,9 +383,27 @@ impl Session {
         self
     }
 
-    /// The session belongs to a read-only connection (ADR-053).
+    /// The session refuses every script a read-only connection does not run (ADR-053): its
+    /// connection is read-only, or the user made the session read-only (SDB-395). Every check
+    /// of the barrier reads this.
     pub fn is_read_only(&self) -> bool {
+        self.read_only || self.is_session_read_only()
+    }
+
+    /// The session's connection is read-only (ADR-053): nothing done to the session loosens it.
+    pub fn is_connection_read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// The user made this session read-only from its tab (SDB-395).
+    pub fn is_session_read_only(&self) -> bool {
+        self.session_read_only.load(Ordering::SeqCst)
+    }
+
+    /// Sets or clears the session's own read-only mark. Only `session_read_only.rs` calls it,
+    /// after its checks; it never changes what the connection says.
+    pub(crate) fn mark_session_read_only(&self, read_only: bool) {
+        self.session_read_only.store(read_only, Ordering::SeqCst);
     }
 
     /// Masks these columns in every result the session stores (ADR-051).
@@ -750,7 +772,7 @@ impl Session {
         // A read-only connection refuses the whole run before anything is sent (ADR-053),
         // whatever the caller checked: the user's scripts, query pages and plans all come here.
         let refusal = match kind {
-            RunKind::User if self.read_only => {
+            RunKind::User if self.is_read_only() => {
                 crate::guard::check_read_only(dialect.as_ref(), &script).err()
             }
             RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,

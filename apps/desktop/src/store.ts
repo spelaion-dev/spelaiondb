@@ -127,6 +127,9 @@ export interface Tab {
   lostTransaction?: boolean;
   /** Its transaction as the core last told it (ADR-031); the core decides, this only shows. */
   transaction?: TransactionStatusItem;
+  /** "Read-only for this session" (SDB-395): the core made its session refuse writes, until it
+   *  reconnects or the user turns it off. Only shown: the core holds the barrier. */
+  sessionReadOnly?: boolean;
   serverVersion: string | null;
   sql: string;
   run: RunState | null;
@@ -278,7 +281,7 @@ export interface ExplorerReveal {
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
-export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | ResultTabCommand | EditorActionId;
+export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | "reconnect" | "sessionReadOnly" | ResultTabCommand | EditorActionId;
 /** What a result tab's menu asks about the tab's active result (SDB-378). */
 export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "resultResetName" | "resultClose";
 
