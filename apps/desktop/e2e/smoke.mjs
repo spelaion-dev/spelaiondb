@@ -7143,12 +7143,72 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.keyboard.insertText("select id, name from smoke_edit order by id;");
   await run(panel);
   await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+  // What a screen reader is given as the selection moves (SDB-425): the canvas grid's active
+  // descendant is a cell of its own for each move, its row, visible column and value written
+  // before it becomes the active descendant, once per move, and again after an edit.
+  const announceGrid = panel.locator(".grid-scroller");
+  const announced = (pattern) => page.waitForFunction(([source]) => {
+    const grid = document.querySelector(".tab-panel:not([hidden]) .grid-scroller");
+    const id = grid?.getAttribute("aria-activedescendant");
+    const cell = id ? document.getElementById(id) : null;
+    return Boolean(cell && new RegExp(source).test(cell.textContent ?? ""));
+  }, [pattern.source]);
+  const announcements = () => page.evaluate(() => window.__announcements.length);
+  await announceGrid.evaluate((grid) => {
+    window.__announcements = [];
+    window.__announcer?.disconnect();
+    window.__announcer = new MutationObserver(() => window.__announcements.push(grid.getAttribute("aria-activedescendant")));
+    window.__announcer.observe(grid, { attributes: true, attributeFilter: ["aria-activedescendant"] });
+  });
+  const announceMove = async (key, pattern) => {
+    const before = await announcements();
+    await page.keyboard.press(key);
+    await announced(pattern);
+    // Nothing more arrives for the same move: no duplicate, no late stale answer.
+    await page.waitForTimeout(400);
+    assert.equal(await announcements() - before, 1, `one announcement for ${key}`);
+  };
+  {
+    const box = await announceGrid.boundingBox();
+    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+    await announced(/^Row 1, id \(/);
+    await announceMove("ArrowRight", /^Row 1, name \(/);
+    await announceMove("ArrowDown", /^Row 2, name \(/);
+    await announceMove("ArrowUp", /^Row 1, name \(/);
+    // The accessibility tree (what AT-SPI and UI Automation read) names the active cell with
+    // that text, and the focused grid points at it.
+    const activeId = await announceGrid.getAttribute("aria-activedescendant");
+    const cellText = await page.evaluate((id) => document.getElementById(id).textContent, activeId);
+    const cdp = await page.context().newCDPSession(page);
+    const { root: domRoot } = await cdp.send("DOM.getDocument", { depth: 0 });
+    const selector = await page.evaluate((id) => `#${CSS.escape(id)}`, activeId);
+    const { nodeId: cellNode } = await cdp.send("DOM.querySelector", { nodeId: domRoot.nodeId, selector });
+    const { nodes: cellAx } = await cdp.send("Accessibility.getPartialAXTree", { nodeId: cellNode, fetchRelatives: false });
+    assert.equal(cellAx[0].name?.value, cellText);
+    const { nodeId: gridNode } = await cdp.send("DOM.querySelector", { nodeId: domRoot.nodeId, selector: ".tab-panel:not([hidden]) .grid-scroller" });
+    const { nodes: gridAx } = await cdp.send("Accessibility.getPartialAXTree", { nodeId: gridNode, fetchRelatives: false });
+    const descendant = (gridAx[0].properties ?? []).find((property) => property.name === "activedescendant");
+    assert.equal(descendant?.value?.relatedNodes?.[0]?.backendDOMNodeId, cellAx[0].backendDOMNodeId, "the grid's active descendant is that cell");
+    // A hidden column is skipped: the cell says its visible column and position.
+    await page.mouse.click(box.x + 52 + 20, box.y + 18, { button: "right" });
+    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Hide id" }).click();
+    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+    await announced(/^Row 1, name \(/);
+    assert.equal(await page.evaluate((id) => document.getElementById(id).getAttribute("aria-colindex"), await announceGrid.getAttribute("aria-activedescendant")), "1");
+    await announceMove("ArrowDown", /^Row 2, name \(/);
+    await panel.locator(".grid-footer .grid-hidden").click();
+    await panel.getByRole("dialog", { name: "Columns" }).getByRole("button", { name: "Show all" }).click();
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .grid-hidden") === null);
+  }
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("query edit");
     await editor.press("Enter");
+    // Back in the grid, the edited value is said (SDB-425).
+    await announced(/^Row 1, name \(.*\): query edit$/);
     await page.keyboard.press("Enter");
     const valueEditor = panel.locator(".cell-viewer").getByRole("textbox", { name: "New value for name" });
     await valueEditor.fill("viewer shortcut");
