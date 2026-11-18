@@ -184,6 +184,10 @@ pub use objects::{
     privilege_scope_fields, privilege_scopes, qualified_name, search_objects, set_active_schema,
     supports_added_checks, table_structure,
 };
+pub use objects::{
+    CheckMode, IndexCleanup, MaintenanceKind, MaintenanceOptions, MaintenancePlan,
+    MaintenanceRequest, maintenance_kinds, maintenance_plan, maintenance_statement,
+};
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
     create_file_database, dialect_of, open_connection, open_route, test_tunnel,

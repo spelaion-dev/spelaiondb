@@ -646,6 +646,17 @@ export const commands = {
 	 */
 	applyObjectChange: (session: string, change: ObjectChangeItem_Deserialize, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_object_change", { session, change, confirmed })),
 	/**
+	 *  The maintenance actions the explorer offers on `target` on this session's engine (SDB-392):
+	 *  the core decides.
+	 */
+	maintenanceKinds: (session: string, target: ObjectTargetItem_Deserialize) => typedError<MaintenanceKindItem[], string>(__TAURI_INVOKE("maintenance_kinds", { session, target })),
+	/**
+	 *  A maintenance action's statement, written by the core from the action and its options, with
+	 *  what the app says about it before it runs (SDB-392). Refused on a read-only connection or session. It
+	 *  runs, as shown, in an editor tab of its own: through the guard, as any run.
+	 */
+	maintenancePlan: (session: string, target: ObjectTargetItem_Deserialize, kind: MaintenanceKindItem, options: MaintenanceOptionsItem_Deserialize) => typedError<MaintenancePlanItem, string>(__TAURI_INVOKE("maintenance_plan", { session, target, kind, options })),
+	/**
 	 *  Which accounts the explorer may create, give a password, lock or drop on this session's
 	 *  engine (ADR-048): the core decides.
 	 */
@@ -1526,6 +1537,8 @@ export type ChartSeriesItem = {
 	name: string,
 	values: (number | null)[],
 };
+
+export type CheckModeItem = "quick" | "fast" | "medium" | "extended" | "changed";
 
 /**  A column's allowed values, in the catalog's order. */
 export type ChoicePickerItem = {
@@ -3392,6 +3405,8 @@ export type ImportTarget = {
 
 export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
 
+export type IndexCleanupItem = "auto" | "on" | "off";
+
 export type IndexDetails = {
 	name: string,
 	unique: boolean,
@@ -3601,6 +3616,75 @@ export type LockSnapshotItem_Serialize = {
 export type LockWaitItem = {
 	waiting: string,
 	blocking: string,
+};
+
+/**  An action of the explorer's Maintenance menu (SDB-392). */
+export type MaintenanceKindItem = "vacuum" | "analyze" | "refreshMaterializedView" | "truncate" | "enableTriggers" | "disableTriggers" | "check" | "repair" | "optimize" | "rebuildTable" | "rebuildIndexes" | "integrityCheck" | "checkpoint";
+
+/**
+ *  The options of a maintenance action; each action reads only its own (the core's
+ *  `MaintenanceOptions`).
+ */
+export type MaintenanceOptionsItem = MaintenanceOptionsItem_Serialize | MaintenanceOptionsItem_Deserialize;
+
+/**
+ *  The options of a maintenance action; each action reads only its own (the core's
+ *  `MaintenanceOptions`).
+ */
+export type MaintenanceOptionsItem_Deserialize = {
+	full: boolean,
+	freeze: boolean,
+	analyze: boolean,
+	disablePageSkipping: boolean,
+	skipLocked: boolean,
+	indexCleanup?: IndexCleanupItem | null,
+	truncatePages?: boolean | null,
+	verbose: boolean,
+	noData: boolean,
+	concurrently: boolean,
+	only: boolean,
+	restartIdentity: boolean,
+	cascade: boolean,
+	checkMode?: CheckModeItem | null,
+	quick: boolean,
+	extended: boolean,
+	useFrm: boolean,
+	local: boolean,
+};
+
+/**
+ *  The options of a maintenance action; each action reads only its own (the core's
+ *  `MaintenanceOptions`).
+ */
+export type MaintenanceOptionsItem_Serialize = {
+	full: boolean,
+	freeze: boolean,
+	analyze: boolean,
+	disablePageSkipping: boolean,
+	skipLocked: boolean,
+	indexCleanup: IndexCleanupItem | null,
+	truncatePages: boolean | null,
+	verbose: boolean,
+	noData: boolean,
+	concurrently: boolean,
+	only: boolean,
+	restartIdentity: boolean,
+	cascade: boolean,
+	checkMode: CheckModeItem | null,
+	quick: boolean,
+	extended: boolean,
+	useFrm: boolean,
+	local: boolean,
+};
+
+/**  What the app shows before a maintenance action runs (SDB-392). */
+export type MaintenancePlanItem = {
+	/**  The statement as it runs, in a tab of its own. */
+	sql: string,
+	/**  The engine refuses it inside a transaction (VACUUM). */
+	outsideTransaction: boolean,
+	/**  What a TRUNCATE with CASCADE also empties. */
+	alsoEmpties: string[],
 };
 
 /**  What the coordinates are, which decides whether a web map's tiles can go behind them. */

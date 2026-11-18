@@ -66,7 +66,8 @@ import { StructureDialog } from "./StructureDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AccountDialog, usePrincipalActions, type AccountAction } from "./AccountDialog";
 import { PrivilegesDialog } from "./PrivilegesDialog";
-import type { PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } from "../bindings";
+import type { MaintenanceKindItem, PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } from "../bindings";
+import { MaintenanceDialog } from "./MaintenanceDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
@@ -201,8 +202,9 @@ function matchesFilter(name: string, filter: string): boolean {
 }
 
 /** A separate submenu, positioned outside the scrollable explorer menu. */
-function GenerateMenu({ children }: { children: ReactNode }) {
+function GenerateMenu({ children, label }: { children: ReactNode; label?: string }) {
   const { t } = useTranslation("shell");
+  const title = label ?? t("generateSql");
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const submenu = useRef<HTMLDivElement>(null);
@@ -230,13 +232,39 @@ function GenerateMenu({ children }: { children: ReactNode }) {
       if (!e.currentTarget.contains(e.relatedTarget) && !submenu.current?.contains(e.relatedTarget)) setOpen(false);
     }}>
       <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}>
-        {t("generateSql")} ▸
+        {title} ▸
       </button>
       {open && createPortal(
-        <div ref={submenu} className="grid-menu object-menu explorer-generate-items" role="menu" aria-label={t("generateSql")}>{children}</div>,
+        <div ref={submenu} className="grid-menu object-menu explorer-generate-items" role="menu" aria-label={title}>{children}</div>,
         document.body,
       )}
     </div>
+  );
+}
+
+/** The Maintenance submenu of a table, a materialized view or a SQLite / DuckDB schema
+ *  (SDB-392): the actions the core offers there on this engine, each opening its dialog. */
+function MaintenanceMenu({ session, target, onPick }: { session: string; target: ObjectTargetItem; onPick(kind: MaintenanceKindItem): void }) {
+  const { t } = useTranslation("shell");
+  const [kinds, setKinds] = useState<MaintenanceKindItem[]>([]);
+  const key = JSON.stringify(target);
+  useEffect(() => {
+    let current = true;
+    call(commands.maintenanceKinds(session, target))
+      .then((answer) => { if (current) setKinds(answer); })
+      .catch(() => { if (current) setKinds([]); });
+    return () => { current = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, key]);
+  if (kinds.length === 0) return null;
+  return (
+    <GenerateMenu label={t("maintenance.menu")}>
+      {kinds.map((kind) => (
+        <button key={kind} role="menuitem" onClick={() => onPick(kind)}>
+          {t("maintenance.menuItem", { action: t(`maintenance.kinds.${kind}`) })}
+        </button>
+      ))}
+    </GenerateMenu>
   );
 }
 
@@ -2132,6 +2160,9 @@ function SchemaNode({
   const [others, setOthers] = useState<SchemaObjectItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useContextMenu();
+  /** The maintenance action whose dialog is open (SDB-392). */
+  const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
+  const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
   /** Bumped by "Refresh schema": the tables already described read their details again. */
   const [refreshed, setRefreshed] = useState(0);
   const sort = useSortByName();
@@ -2375,6 +2406,14 @@ function SchemaNode({
                 {t(`create.${kind}`)}
               </button>
             ))}
+          <MaintenanceMenu
+            session={session}
+            target={{ kind: "schema", name: schema }}
+            onPick={(kind) => {
+              setMenu(null);
+              setMaintaining(kind);
+            }}
+          />
           {actions?.dropSchemas && (
             <>
               <hr />
@@ -2387,6 +2426,18 @@ function SchemaNode({
             </>
           )}
         </ObjectMenu>
+      )}
+      {maintaining && (
+        <MaintenanceDialog
+          session={session}
+          connectionId={connectionId}
+          engine={engine}
+          schema={schema}
+          name={schema}
+          target={{ kind: "schema", name: schema }}
+          kind={maintaining}
+          onClose={() => setMaintaining(null)}
+        />
       )}
       {creatingTable && (
         <CreateTableDialog
@@ -2526,6 +2577,9 @@ function ObjectNode({
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [generatedSql, setGeneratedSql] = useState<string | null>(null);
+  /** The maintenance action whose dialog is open (SDB-392). */
+  const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
+  const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
   const openDetails = (kind: TableDetailKind) => {
     const app = useApp.getState();
     const existing = app.tabs.some((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
@@ -2856,6 +2910,14 @@ function ObjectNode({
               </button>
             ))}
           </GenerateMenu>
+          <MaintenanceMenu
+            session={session}
+            target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
+            onPick={(kind) => {
+              setMenu(null);
+              setMaintaining(kind);
+            }}
+          />
         </ObjectMenu>
       )}
       {error && (
@@ -2865,6 +2927,18 @@ function ObjectNode({
       )}
       {open && loadingDetails && <div className="children muted small" role="status">{t("loadingDetails")}</div>}
       {generatedSql !== null && <GeneratedSqlDialog initialSql={generatedSql} onClose={() => setGeneratedSql(null)} />}
+      {maintaining && (
+        <MaintenanceDialog
+          session={session}
+          connectionId={connectionId}
+          engine={engine}
+          schema={object.schema}
+          name={object.name}
+          target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
+          kind={maintaining}
+          onClose={() => setMaintaining(null)}
+        />
+      )}
       {renaming && (
         <ObjectChangeDialog
           session={session}

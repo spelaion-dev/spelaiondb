@@ -9,6 +9,10 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
 use spelaion_core::{
+    CheckMode, IndexCleanup, MaintenanceKind, MaintenanceOptions, MaintenanceRequest, RunRefused,
+    check_run, maintenance_kinds, maintenance_plan,
+};
+use spelaion_core::{
     ColumnEdit, CoreEvent, CreateKind, DroppedConstraint, EditableColumn, FoundObject, NewColumn,
     NewForeignKey, NewIndex, NewIndexKind, NewTable, NewTableElement, ObjectChange, ObjectError,
     ObjectTarget, ResultStore, SEARCH_LIMIT, Session, SourceTarget, TableAlteration,
@@ -2007,4 +2011,289 @@ DELIMITER ;",
         );
         run(label, &session, cleanup, true).await;
     }
+}
+
+/// The maintenance actions the explorer offers for `target` (SDB-392), each with options that
+/// exercise its SQL: several variants where an action has several shapes.
+fn maintenance_requests(label: &str, target: &ObjectTarget) -> Vec<MaintenanceRequest> {
+    let dialect = spelaion_dialect::for_engine(match label {
+        "mariadb" => "mysql",
+        other => other,
+    })
+    .unwrap();
+    let mut out = Vec::new();
+    for kind in maintenance_kinds(dialect.as_ref(), target) {
+        let variants: Vec<MaintenanceOptions> = match (label, kind) {
+            ("postgres", MaintenanceKind::Vacuum) => vec![
+                MaintenanceOptions::default(),
+                MaintenanceOptions {
+                    full: true,
+                    freeze: true,
+                    analyze: true,
+                    verbose: true,
+                    ..Default::default()
+                },
+                MaintenanceOptions {
+                    disable_page_skipping: true,
+                    skip_locked: true,
+                    index_cleanup: Some(IndexCleanup::Off),
+                    truncate_pages: Some(false),
+                    ..Default::default()
+                },
+            ],
+            ("postgres", MaintenanceKind::Analyze) => vec![MaintenanceOptions {
+                verbose: true,
+                ..Default::default()
+            }],
+            ("postgres", MaintenanceKind::Truncate) => vec![MaintenanceOptions {
+                only: true,
+                restart_identity: true,
+                ..Default::default()
+            }],
+            ("mysql" | "mariadb", MaintenanceKind::Check) => vec![
+                MaintenanceOptions::default(),
+                MaintenanceOptions {
+                    check_mode: Some(CheckMode::Extended),
+                    ..Default::default()
+                },
+            ],
+            ("mysql" | "mariadb", MaintenanceKind::Repair) => vec![MaintenanceOptions {
+                quick: true,
+                local: true,
+                ..Default::default()
+            }],
+            // OPTIMIZE NO_WRITE_TO_BINLOG needs MySQL's OPTIMIZE_LOCAL_TABLE privilege, which
+            // the test user has not got: OPTIMIZE runs plain.
+            ("mysql" | "mariadb", MaintenanceKind::Analyze) => vec![MaintenanceOptions {
+                local: true,
+                ..Default::default()
+            }],
+            _ => vec![MaintenanceOptions::default()],
+        };
+        for options in variants {
+            out.push(MaintenanceRequest {
+                target: target.clone(),
+                kind,
+                options,
+            });
+        }
+    }
+    out
+}
+
+/// Runs one statement; `Err` with the first error.
+async fn ran(session: &Session, sql: &str) -> Result<(), String> {
+    let events: Vec<CoreEvent> = session.run_script(sql).collect().await;
+    for event in &events {
+        match event {
+            CoreEvent::StatementFailed { error, .. } => return Err(error.message.clone()),
+            CoreEvent::ResultStarted { result, .. } => {
+                session.results().remove(*result);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Drops and creates the table the maintenance tests act on, with two rows.
+fn maintenance_setup(label: &str, schema: &str, table: &str, child: &str) -> Vec<String> {
+    let drop = |name: &str| match label {
+        "sqlserver" => {
+            format!("IF OBJECT_ID('{schema}.{name}') IS NOT NULL DROP TABLE {schema}.{name}")
+        }
+        _ => format!("DROP TABLE IF EXISTS {schema}.{name}"),
+    };
+    vec![
+        drop(child),
+        drop(table),
+        format!("CREATE TABLE {schema}.{table} (id INT PRIMARY KEY, v INT)"),
+        format!("INSERT INTO {schema}.{table} VALUES (1, 10), (2, 20)"),
+    ]
+}
+
+#[tokio::test]
+async fn maintenance_actions_run_on_each_engine() {
+    let mut tested = Vec::new();
+    for (label, session, schema) in engines().await {
+        let table = "maint_orders";
+        let child = "maint_lines";
+        let setup = maintenance_setup(label, schema, table, child);
+        let refs: Vec<&str> = setup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, false).await;
+        let tables = relation(schema, table, ObjectKind::Table);
+        let database = ObjectTarget::Schema {
+            name: schema.to_string(),
+        };
+        let mut count = 0;
+        for target in [&tables, &database] {
+            for request in maintenance_requests(label, target) {
+                let plan = maintenance_plan(&session, &request, false)
+                    .await
+                    .unwrap_or_else(|e| panic!("{label}: {:?}: {e}", request.kind));
+                ran(&session, &plan.sql)
+                    .await
+                    .unwrap_or_else(|e| panic!("{label}: {}\n→ {e}", plan.sql));
+                // Never on a read-only connection or session: refused before anything is read.
+                assert_eq!(
+                    maintenance_plan(&session, &request, true).await,
+                    Err(ObjectError::ReadOnly),
+                    "{label}: {:?}",
+                    request.kind
+                );
+                count += 1;
+            }
+        }
+        assert!(count > 0, "{label}: no maintenance action ran");
+        if label == "sqlite" {
+            // The integrity check's answer is its rows: "ok".
+            let plan = maintenance_plan(
+                &session,
+                &MaintenanceRequest {
+                    target: database.clone(),
+                    kind: MaintenanceKind::IntegrityCheck,
+                    options: MaintenanceOptions::default(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+            assert_eq!(text(&session, &plan.sql).await, "ok");
+        }
+        if label == "postgres" {
+            // TRUNCATE … CASCADE says what else it empties, and empties it.
+            let fill = [
+                format!("INSERT INTO {schema}.{table} VALUES (1, 10)"),
+                format!(
+                    "CREATE TABLE {schema}.{child} (id INT PRIMARY KEY, order_id INT REFERENCES {schema}.{table} (id))"
+                ),
+                format!("INSERT INTO {schema}.{child} VALUES (1, 1)"),
+            ];
+            let refs: Vec<&str> = fill.iter().map(String::as_str).collect();
+            run(label, &session, &refs, false).await;
+            let cascade = MaintenanceRequest {
+                target: tables.clone(),
+                kind: MaintenanceKind::Truncate,
+                options: MaintenanceOptions {
+                    cascade: true,
+                    ..Default::default()
+                },
+            };
+            let plan = maintenance_plan(&session, &cascade, false).await.unwrap();
+            assert_eq!(plan.also_empties, [format!("{schema}.{child}")]);
+            assert!(!plan.outside_transaction);
+            ran(&session, &plan.sql).await.unwrap();
+            assert_eq!(
+                text(&session, &format!("SELECT count(*) FROM {schema}.{child}")).await,
+                "0"
+            );
+            // A materialized view: refreshed with and without data; CONCURRENTLY only with a
+            // unique index, which the plan checks first.
+            let view_sql = [
+                format!("DROP MATERIALIZED VIEW IF EXISTS {schema}.maint_view"),
+                format!(
+                    "CREATE MATERIALIZED VIEW {schema}.maint_view AS SELECT id, v FROM {schema}.{table}"
+                ),
+            ];
+            let refs: Vec<&str> = view_sql.iter().map(String::as_str).collect();
+            run(label, &session, &refs, false).await;
+            let view = relation(schema, "maint_view", ObjectKind::MaterializedView);
+            let refresh = |options: MaintenanceOptions| MaintenanceRequest {
+                target: view.clone(),
+                kind: MaintenanceKind::RefreshMaterializedView,
+                options,
+            };
+            let concurrently = MaintenanceOptions {
+                concurrently: true,
+                ..Default::default()
+            };
+            assert!(matches!(
+                maintenance_plan(&session, &refresh(concurrently.clone()), false).await,
+                Err(ObjectError::Unsupported(_))
+            ));
+            let index = format!("CREATE UNIQUE INDEX maint_view_id ON {schema}.maint_view (id)");
+            run(label, &session, &[index.as_str()], false).await;
+            for options in [
+                MaintenanceOptions {
+                    no_data: true,
+                    ..Default::default()
+                },
+                MaintenanceOptions::default(),
+                concurrently,
+            ] {
+                let plan = maintenance_plan(&session, &refresh(options), false)
+                    .await
+                    .unwrap();
+                ran(&session, &plan.sql)
+                    .await
+                    .unwrap_or_else(|e| panic!("{}\n→ {e}", plan.sql));
+            }
+            for request in maintenance_requests(label, &view) {
+                let plan = maintenance_plan(&session, &request, false)
+                    .await
+                    .unwrap_or_else(|e| panic!("{:?}: {e}", request.kind));
+                ran(&session, &plan.sql)
+                    .await
+                    .unwrap_or_else(|e| panic!("{}\n→ {e}", plan.sql));
+            }
+            let drop_view = format!("DROP MATERIALIZED VIEW IF EXISTS {schema}.maint_view");
+            run(label, &session, &[drop_view.as_str()], true).await;
+        }
+        let cleanup = [
+            format!("DROP TABLE IF EXISTS {schema}.{child}"),
+            format!("DROP TABLE IF EXISTS {schema}.{table}"),
+        ];
+        let refs: Vec<&str> = cleanup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, true).await;
+        tested.push(label);
+    }
+    eprintln!("tested on {tested:?}");
+}
+
+#[tokio::test]
+async fn maintenance_statements_are_refused_on_read_only_connections_on_each_engine() {
+    let mut tested = Vec::new();
+    for (label, session, schema) in engines().await {
+        let table = "maint_ro";
+        let setup = maintenance_setup(label, schema, table, "maint_ro_child");
+        let refs: Vec<&str> = setup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, false).await;
+        let tables = relation(schema, table, ObjectKind::Table);
+        let database = ObjectTarget::Schema {
+            name: schema.to_string(),
+        };
+        // The statements as the app shows them, written while the session could write.
+        let mut statements = Vec::new();
+        for target in [&tables, &database] {
+            for request in maintenance_requests(label, target) {
+                statements.push(
+                    maintenance_plan(&session, &request, false)
+                        .await
+                        .unwrap()
+                        .sql,
+                );
+            }
+        }
+        // The same session, read-only as a read-only connection's is (ADR-053): the app's check
+        // refuses each statement, and so does the session's own run, before sending it.
+        let read_only = session.with_read_only(true);
+        for sql in &statements {
+            assert!(
+                matches!(
+                    check_run(&read_only, sql, &Safeguards::default(), true),
+                    Err(RunRefused::ReadOnly(_))
+                ),
+                "{label}: {sql}"
+            );
+            let error = ran(&read_only, sql)
+                .await
+                .expect_err(&format!("{label}: {sql} ran"));
+            assert!(error.contains("nothing was run"), "{label}: {sql}: {error}");
+        }
+        let writable = read_only.with_read_only(false);
+        let cleanup = format!("DROP TABLE IF EXISTS {schema}.{table}");
+        run(label, &writable, &[cleanup.as_str()], true).await;
+        tested.push(label);
+    }
+    eprintln!("tested on {tested:?}");
 }

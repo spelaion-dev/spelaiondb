@@ -9,6 +9,7 @@
 mod alter;
 mod create;
 mod ddl;
+mod maintenance;
 mod privileges;
 mod rebuild;
 mod source;
@@ -20,6 +21,10 @@ pub use alter::{
 };
 pub use create::{
     NewColumn, NewForeignKey, NewIndex, NewTable, apply_create_table, create_table_plan,
+};
+pub use maintenance::{
+    CheckMode, IndexCleanup, MaintenanceKind, MaintenanceOptions, MaintenancePlan,
+    MaintenanceRequest, maintenance_kinds, maintenance_plan, maintenance_statement,
 };
 pub use privileges::{
     GrantedPrivilege, PrivilegeChange, PrivilegeScope, PrivilegeScopeFields, PrivilegeTarget,
