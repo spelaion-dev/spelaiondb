@@ -4825,6 +4825,14 @@ try {
     await chart.getByRole("checkbox", { name: "orders" }).uncheck();
     await page.keyboard.press("Escape");
     await svg.locator(".chart-title", { hasText: "revenue by country" }).waitFor();
+    // The title follows the settings at once, the points come from the core afterwards, and
+    // new points clear the tooltip (ResultChart's `setHover(null)` on `points`): a key pressed
+    // in between showed it and lost it (SDB-342). Wait for the one-series points: six bars and
+    // no legend swatches, where the two-series chart had 6 × 2 + 2.
+    for (let tries = 0; (await svg.locator("rect").count()) !== 6; tries++) {
+      assert.ok(tries < 100, "the chart never drew the revenue series alone");
+      await page.waitForTimeout(100);
+    }
     // The keyboard reaches every point: its tooltip names the country and its value.
     await svg.focus();
     await page.keyboard.press("Home");
