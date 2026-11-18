@@ -153,9 +153,13 @@ pub fn pick_statements(
         return Err(RunPickError::Nothing);
     };
     let wanted: Vec<&str> = kept.iter().map(|s| s.text(script)).collect();
-    // From the first statement chosen to the last one; then the whole script, which also
-    // keeps what the splitter reads before them (a `DELIMITER` line) and after them.
-    for (start, end) in [(first.start, last.end), (0, script.len())] {
+    // From the first statement chosen to the last one (with the data that follows it, a
+    // `COPY … FROM STDIN`'s); then the whole script, which also keeps what the splitter reads
+    // before them (a `DELIMITER` line) and after them.
+    for (start, end) in [
+        (first.start, extent(dialect, script, last)),
+        (0, script.len()),
+    ] {
         let mut text = String::with_capacity(end - start);
         let mut at = start;
         for (span, keep) in spans.iter().zip(&keep) {
@@ -164,11 +168,16 @@ pub fn pick_statements(
             }
             text.push_str(&script[at..span.start]);
             if *keep {
+                // Its data, if any, is in what follows it and is copied as it is.
                 text.push_str(span.text(script));
+                at = span.end;
             } else {
-                blank(span.text(script), &mut text);
+                // A statement left out goes with its data (SDB-162): left behind, the data
+                // would be read as SQL.
+                let until = extent(dialect, script, span).min(end);
+                blank(&script[span.start..until], &mut text);
+                at = until;
             }
-            at = span.end;
         }
         text.push_str(&script[at..end]);
         let read = dialect.split_statements(&text);
@@ -186,6 +195,17 @@ pub fn pick_statements(
         }
     }
     Err(RunPickError::Inseparable)
+}
+
+/// Where the statement at `span` ends with what belongs to it: the data of a `COPY … FROM
+/// STDIN` and the `\.` line that ends it (SDB-162), else the statement itself.
+fn extent(dialect: &dyn Dialect, script: &str, span: &StatementSpan) -> usize {
+    match dialect.copy_data(script, span) {
+        None => span.end,
+        Some(data) => script[data.end..]
+            .find('\n')
+            .map_or(script.len(), |p| data.end + p + 1),
+    }
 }
 
 /// The statement at byte `offset` (`statement_at`'s) as text to run, for Ctrl+Enter, with the
