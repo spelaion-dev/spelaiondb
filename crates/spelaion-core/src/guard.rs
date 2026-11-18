@@ -261,12 +261,14 @@ pub fn check_script(
     }
 }
 
-/// A script a read-only connection refuses (ADR-053): nothing of it runs, whatever was
+/// A script a read-only connection or session refuses (ADR-053): nothing of it runs, whatever was
 /// confirmed. It names the first statement refused and why.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "the connection is read-only, so nothing was run: statement {}, \"{statement}\", is refused ({reason}). Only reads, session settings and transaction control run on a read-only connection",
-    .index + 1
+    "{subject} is read-only, so nothing was run: statement {}, \"{statement}\", is refused ({reason}). Only reads, session settings and transaction control run on a read-only {scope}",
+    .index + 1,
+    subject = if *.session_only { "this session" } else { "the connection" },
+    scope = if *.session_only { "session" } else { "connection" }
 )]
 pub struct ReadOnlyRefusal {
     /// Position among the script's statements.
@@ -275,6 +277,14 @@ pub struct ReadOnlyRefusal {
     /// The start of the statement, to recognize it.
     pub statement: String,
     pub reason: String,
+    session_only: bool,
+}
+
+impl ReadOnlyRefusal {
+    pub(crate) fn for_session(mut self, session: &Session) -> Self {
+        self.session_only = !session.is_connection_read_only() && session.is_session_read_only();
+        self
+    }
 }
 
 /// Whether every statement of `script`, split like a run, may run on a read-only connection
@@ -291,6 +301,7 @@ pub fn check_read_only(dialect: &dyn Dialect, script: &str) -> Result<(), ReadOn
                 span,
                 statement: start_of(text),
                 reason,
+                session_only: false,
             });
         }
     }
@@ -300,7 +311,7 @@ pub fn check_read_only(dialect: &dyn Dialect, script: &str) -> Result<(), ReadOn
 /// Why a script from the editor may not run on its session yet.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RunRefused {
-    /// The connection is read-only and the script is not: no confirmation changes that.
+    /// The session is read-only and the script is not: no confirmation changes that.
     #[error(transparent)]
     ReadOnly(ReadOnlyRefusal),
     #[error(transparent)]
@@ -318,7 +329,8 @@ pub fn check_run(
 ) -> Result<(), RunRefused> {
     let dialect = session.dialect();
     if session.is_read_only() {
-        check_read_only(dialect.as_ref(), script).map_err(RunRefused::ReadOnly)?;
+        check_read_only(dialect.as_ref(), script)
+            .map_err(|refusal| RunRefused::ReadOnly(refusal.for_session(session)))?;
     }
     check_script(dialect.as_ref(), script, safeguards, confirmed)
         .map_err(RunRefused::NeedsConfirmation)
