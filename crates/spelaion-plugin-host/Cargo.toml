@@ -17,5 +17,14 @@ serde_json = "1"
 # process + io-util: the plugin is a child program, talked to through its pipes.
 tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "rt", "macros"] }
 
+# Reading a plugin process's memory and processor time (SDB-399), with safe calls only: the
+# workspace forbids `unsafe`. Both are already in the workspace (win32job for SSM sessions,
+# rustix for process groups).
+[target.'cfg(windows)'.dependencies]
+win32job = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["param"] }
+
 [lints]
 workspace = true

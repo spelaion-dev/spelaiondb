@@ -6111,6 +6111,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             plugins::plugins_cancel_install,
             plugins::plugins_install_file,
             plugins::plugins_remove,
+            plugins::plugin_processes,
+            plugins::plugin_restart,
             engine_catalog,
             keychain_available,
             list_tunnels,
