@@ -6190,12 +6190,17 @@ try {
     assert.ok(await ignoreErrors.isDisabled(), "nothing to ignore without setup statements");
     await wizard.getByLabel("Default schema", { exact: true }).fill("smoke_setup");
     await isolation.selectOption("repeatable-read");
-    const setupStatements = wizard.getByLabel("Run when a session opens", { exact: true });
+    // By its name: once it holds text, Chromium's accessible name for a textarea inside its
+    // label includes that text, so an exact label no longer finds it.
+    const setupStatements = wizard.locator('textarea[name="sessionSetup"]');
     await setupStatements.fill("SET search_path TO smoke_setup, public;\nSELECT sdb100_missing_column;");
     await wizard.getByRole("tab", { name: "Main" }).click();
     await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
     await wizard.getByRole("button", { name: "Test connection" }).click();
     await wizard.locator(".test-log .step.failed", { hasText: "Session setup" }).getByText(/statement 2 of 2 failed/).waitFor();
+    // The test log takes the bottom of the form: close it so the Session tab has its room.
+    await wizard.getByRole("button", { name: "Close the test log" }).click();
+    await wizard.locator(".test-log").waitFor({ state: "detached" });
     await wizard.getByRole("tab", { name: "Session" }).click();
     await setupStatements.fill("SET search_path TO smoke_setup, public;\nSET TIME ZONE 'UTC';");
     assert.ok(!(await ignoreErrors.isDisabled()));
