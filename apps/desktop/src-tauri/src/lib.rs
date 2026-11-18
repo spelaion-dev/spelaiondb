@@ -5130,6 +5130,68 @@ async fn table_keys(
     Ok(keys.into_iter().map(TableKeyItem::from).collect())
 }
 
+/// A relation's comment and its properties from the catalog: owner, tablespace, storage
+/// engine… (SDB-393).
+#[command]
+async fn object_properties(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ObjectPropertiesItem> {
+    let open = state.session(&session).await?;
+    let connection = open.session.connection();
+    let described = connection
+        .describe_table(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    let properties = connection
+        .object_properties(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(ObjectPropertiesItem {
+        comment: described.object.comment.filter(|c| !c.is_empty()),
+        properties: properties.into_iter().map(Into::into).collect(),
+    })
+}
+
+/// How a table is partitioned and its partitions; `None` for a table that is not, or an engine
+/// that does not tell (SDB-393).
+#[command]
+async fn table_partitions(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<PartitioningItem>> {
+    let open = state.session(&session).await?;
+    let partitioning = open
+        .session
+        .connection()
+        .table_partitions(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(partitioning.map(Into::into))
+}
+
+/// What a relation uses and what uses it; `None` when the engine cannot tell (SDB-393).
+#[command]
+async fn object_dependencies(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<DependenciesItem>> {
+    let open = state.session(&session).await?;
+    let dependencies = open
+        .session
+        .connection()
+        .object_dependencies(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(dependencies.map(Into::into))
+}
+
 /// The foreign keys of other tables that point to `schema.table` (the explorer's and the table
 /// details' "References"), from the catalog.
 #[command]
@@ -6229,6 +6291,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             table_filter_condition,
             table_keys,
             referencing_keys,
+            object_properties,
+            table_partitions,
+            object_dependencies,
             follow_key,
             row_references,
             export_result,

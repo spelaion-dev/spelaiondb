@@ -37,6 +37,8 @@ export function StructureDialog({
   const connection = useApp((s) => s.connections.find((c) => c.id === connectionId));
   const [structure, setStructure] = useState<TableStructureItem | null>(null);
   const [edits, setEdits] = useState<ColumnEditItem[]>([]);
+  /** The table's comment as typed (SDB-393). */
+  const [tableComment, setTableComment] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ key: string; value: AlterationPreviewItem } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -51,6 +53,7 @@ export function StructureDialog({
       .then((value) => {
         if (!current) return;
         setStructure(value);
+        setTableComment(value.comment ?? "");
         setEdits(value.columns
           .filter((c) => !only || only.includes(c.name))
           .map((c) => ({ name: c.name, dataType: c.dataType, nullable: c.nullable, default: c.default, comment: c.comment })));
@@ -71,9 +74,13 @@ export function StructureDialog({
         || (edit.default ?? "") !== (before.default ?? "") || (edit.comment ?? "") !== (before.comment ?? ""));
     }),
     drop: drop ? [drop.constraint] : [],
-  }), [schema, table, edits, structure, drop]);
+    // The form's value, or the catalog's while it shows none: the core changes it only when it
+    // differs from the catalog's.
+    comment: structure?.comments && !drop ? (tableComment.trim() === "" ? null : tableComment) : (structure?.comment ?? null),
+  }), [schema, table, edits, structure, drop, tableComment]);
   const key = JSON.stringify(alteration);
-  const changed = alteration.columns.length > 0 || alteration.drop.length > 0;
+  const commentChanged = (alteration.comment ?? "").trim() !== (structure?.comment ?? "").trim();
+  const changed = alteration.columns.length > 0 || alteration.drop.length > 0 || commentChanged;
 
   // The SQL follows the form; an answer to an older state is ignored.
   useEffect(() => {
@@ -145,6 +152,12 @@ export function StructureDialog({
           {drop ? t("structure.dropHint") : rebuilds ? t("structure.rebuildHint") : transactional ? t("structure.hint") : t("structure.notTransactional")}
         </p>
         {loadError && <p className="error small" role="alert">{t("structure.loadFailed", { detail: loadError })}</p>}
+        {!drop && structure?.comments && (
+          <label className="field structure-table-comment">
+            {t("structure.tableComment")}
+            <input type="text" name="structure-table-comment" value={tableComment} disabled={busy} onChange={(e) => setTableComment(e.target.value)} />
+          </label>
+        )}
         {!drop && structure && (
           <div className="structure-columns" role="group" aria-label={t("structure.columns")}>
             <div className="structure-scroll">

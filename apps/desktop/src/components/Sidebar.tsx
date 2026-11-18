@@ -27,6 +27,7 @@ import {
   type ServerObjectKindItem,
   type SqlTemplateItem,
   type TableDetails,
+  type PartitioningItem,
   type TableKeyItem,
 } from "../api";
 import {
@@ -545,6 +546,32 @@ function CollectionNode({ session, connectionId, object }: { session: string; co
 }
 
 /** A constraint or foreign key of a table: its menu can drop it, where the engine can. */
+/** A table's metadata that is a view of its own, not a list in the tree (SDB-393). */
+function DetailRow({ label, icon, onOpen }: { label: string; icon: TreeIconKind; onOpen(): void }) {
+  const { t } = useTranslation("shell");
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        role="button"
+        tabIndex={0}
+        title={t("tableDetails.openHint")}
+        onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
+      >
+        <span className="twisty" />
+        <TreeIcon kind={icon} />
+        <span className="label">{label}</span>
+      </div>
+    </div>
+  );
+}
+
 function LeafRow({
   session,
   connectionId,
@@ -560,7 +587,7 @@ function LeafRow({
   schema: string;
   label: string;
   detail: string;
-  icon: "constraints" | "foreignKeys";
+  icon: TreeIconKind;
   /** What "Drop…" drops; none when it cannot be dropped from here. */
   target: ObjectTargetItem | null;
   onChanged(): void;
@@ -980,7 +1007,7 @@ function schemaObjectFolder(kind: SchemaObjectKindItem): SchemaFolder {
 
 const SERVER_FOLDERS = ["roles", "users", "logins", "tablespaces", "extensions"] as const;
 
-type TreeIconKind = "folder" | "table" | "view" | "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers" | "column";
+type TreeIconKind = "folder" | "table" | "view" | "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers" | "column" | "properties" | "partitions" | "dependencies";
 
 /** Small, neutral line icons distinguish explorer nodes without competing with their labels. */
 function TreeIcon({ kind }: { kind: TreeIconKind }) {
@@ -994,6 +1021,9 @@ function TreeIcon({ kind }: { kind: TreeIconKind }) {
       {kind === "foreignKeys" && <><path d="M6.5 10.8 5.3 12a2.5 2.5 0 0 1-3.5-3.5l2.3-2.3a2.5 2.5 0 0 1 3.5 0M9.5 5.2 10.7 4a2.5 2.5 0 0 1 3.5 3.5l-2.3 2.3a2.5 2.5 0 0 1-3.5 0M5.9 10.1l4.2-4.2" /></>}
       {kind === "indexes" && <><path d="M3 3.5h10M3 8h10M3 12.5h10" /><circle cx="5" cy="3.5" r="1" fill="var(--panel)" /><circle cx="10" cy="8" r="1" fill="var(--panel)" /><circle cx="6.5" cy="12.5" r="1" fill="var(--panel)" /></>}
       {kind === "triggers" && <path d="M8.9 1.8 3.7 8h3.7l-.4 6.2L12.4 7H8.7z" />}
+      {kind === "properties" && <><circle cx="8" cy="8" r="6" /><path d="M8 7.3v4M8 4.9v.1" /></>}
+      {kind === "partitions" && <><rect x="2" y="2.5" width="12" height="11" rx="1" /><path d="M2 6.2h12M2 9.8h12" /></>}
+      {kind === "dependencies" && <><circle cx="4" cy="4" r="1.8" /><circle cx="12" cy="12" r="1.8" /><path d="m5.3 5.3 5.4 5.4M10.7 7.4v3.3H7.4" /></>}
     </svg>
   );
 }
@@ -1102,7 +1132,9 @@ function Folder({
   children,
 }: {
   label: string;
-  count: number;
+  /** What it holds; none shown when it is not known (a partitioned table whose engine does not
+   * list its partitions). */
+  count?: number;
   icon?: TreeIconKind;
   initiallyOpen?: boolean;
   /** Shown open whatever its state (the quick filter shows what matches inside). */
@@ -1169,7 +1201,7 @@ function Folder({
             {t("filtered")}
           </span>
         )}
-        <span className="muted small">{count.toLocaleString(i18n.language)}</span>
+        {count !== undefined && <span className="muted small">{count.toLocaleString(i18n.language)}</span>}
       </div>
       {menu && (onConfigureFilter || create) && (
         <ObjectMenu at={menu}>
@@ -2511,6 +2543,8 @@ function ObjectNode({
   const [details, setDetails] = useState<TableDetails | null>(null);
   /** Foreign keys of other tables that point to this one; none when they cannot be read. */
   const [references, setReferences] = useState<TableKeyItem[]>([]);
+  /** How the table is partitioned, when it is and the engine tells (SDB-393). */
+  const [partitions, setPartitions] = useState<PartitioningItem | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [menu, setMenu] = useContextMenu();
   const sort = useSortByName();
@@ -2546,12 +2580,16 @@ function ObjectNode({
     setLoadingDetails(true);
     setError(null);
     try {
-      const [described, referencing] = await Promise.all([
+      const tableLike = object.kind === "table" || object.kind === "partitioned_table";
+      const [described, referencing, partitioning] = await Promise.all([
         call(commands.describeTable(session, object.schema, object.name, columnFilter)),
         call(commands.referencingKeys(session, object.schema, object.name)).catch((): TableKeyItem[] => []),
+        // Extra: a table whose partitions cannot be read still shows the rest.
+        tableLike ? call(commands.tablePartitions(session, object.schema, object.name)).catch(() => null) : Promise.resolve(null),
       ]);
       setDetails(described);
       setReferences(referencing);
+      setPartitions(partitioning);
     } catch (e) {
       setDetails(null);
       setError(errorText(e));
@@ -3041,6 +3079,25 @@ function ObjectNode({
               />
             ))}
           </Folder>
+          {(partitions || object.kind === "partitioned_table") && (
+            <Folder label={t("folders.partitions")} count={partitions?.partitions.length} icon="partitions" onOpenView={() => openDetails("partitions")}>
+              {(partitions?.partitions ?? []).map((partition) => (
+                <LeafRow
+                  key={`${partition.schema}.${partition.name}`}
+                  session={session}
+                  connectionId={connectionId}
+                  schema={object.schema}
+                  label={partition.schema === object.schema ? partition.name : `${partition.schema}.${partition.name}`}
+                  detail={partition.bound ?? t("tableDetails.defaultPartition")}
+                  icon="table"
+                  target={null}
+                  onChanged={refresh}
+                />
+              ))}
+            </Folder>
+          )}
+          <DetailRow label={t("folders.properties")} icon="properties" onOpen={() => openDetails("properties")} />
+          <DetailRow label={t("folders.dependencies")} icon="dependencies" onOpen={() => openDetails("dependencies")} />
         </div>
       )}
     </div>

@@ -98,7 +98,7 @@ export interface RunState {
 }
 
 export type TabStatus = "disconnected" | "connecting" | "connected";
-export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "references" | "indexes" | "triggers";
+export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "references" | "indexes" | "triggers" | "properties" | "partitions" | "dependencies";
 
 /**
  * A tab, in the order the tab bar shows it (pinned tabs first). The fields kept when a tab is

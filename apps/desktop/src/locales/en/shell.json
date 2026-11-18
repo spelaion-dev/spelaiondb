@@ -171,7 +171,10 @@
     "constraints": "Constraints",
     "foreignKeys": "Foreign keys",
     "references": "References",
-    "indexes": "Indexes"
+    "indexes": "Indexes",
+    "properties": "Properties",
+    "partitions": "Partitions",
+    "dependencies": "Dependencies"
   },
   "tableDetails": {
     "title": "{{section}} of {{table}}",
@@ -201,7 +204,22 @@
     "close": "Close",
     "referencingTable": "Referencing table",
     "openData": "Open data",
-    "referencesHint": "Foreign keys of other tables that point to {{table}}"
+    "referencesHint": "Foreign keys of other tables that point to {{table}}",
+    "property": "Property",
+    "value": "Value",
+    "bound": "Rows it holds",
+    "rows": "Rows (estimate)",
+    "subpartitioned": "Subpartitioned",
+    "direction": "Direction",
+    "kind": "Kind",
+    "detail": "Detail",
+    "uses": "Uses",
+    "usedBy": "Used by",
+    "defaultPartition": "Default partition",
+    "partitionedBy": "Partitioned by {{method}} on {{key}}.",
+    "notPartitioned": "This table is not partitioned, or this connection's engine does not list partitions yet.",
+    "dependenciesUnknown": "This connection's engine cannot tell what this object uses or what uses it.",
+    "untracked": "The engine does not record every dependency of these kinds, so some may be missing: {{kinds}}."
   },
   "newTableElement": {
     "title": "Add to {{section}} of {{table}}",
@@ -522,7 +540,9 @@
     "apply": "Apply changes",
     "applying": "Applying…",
     "failed": "Could not apply the changes: {{detail}}",
-    "loadFailed": "Could not read the columns: {{detail}}"
+    "loadFailed": "Could not read the columns: {{detail}}",
+    "tableComment": "Table comment",
+    "editComment": "Edit comment…"
   },
   "create": {
     "table": "New table…",
@@ -892,5 +912,30 @@
       "triggers": "triggers",
       "rows": "rows"
     }
+  },
+  "properties": {
+    "comment": "Comment",
+    "owner": "Owner",
+    "tablespace": "Tablespace",
+    "engine": "Engine",
+    "collation": "Collation",
+    "charset": "Character set",
+    "created": "Created",
+    "updated": "Updated",
+    "options": "Options",
+    "persistence": "Persistence"
+  },
+  "dependencyKinds": {
+    "table": "Table",
+    "view": "View",
+    "materializedView": "Materialized view",
+    "function": "Function",
+    "procedure": "Procedure",
+    "trigger": "Trigger",
+    "foreignKey": "Foreign key",
+    "sequence": "Sequence",
+    "type": "Type",
+    "index": "Index",
+    "other": "Other"
   }
 }
