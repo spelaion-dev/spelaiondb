@@ -11,6 +11,7 @@ import {
   type EngineChangeItem,
   type EngineItem,
   type PasswordMode,
+  type PoolerItem,
   type TlsModeItem,
   type TunnelItem,
   type UrlFields,
@@ -498,6 +499,9 @@ function ConnectionForm(props: {
     port: prefill?.port ?? null,
     database: prefill?.database ?? "",
     fileFolder,
+    pooler: null,
+    cleartextPassword: false,
+    databases: [],
     user: prefill?.user ?? "",
     passwordEnv: "",
     passwordOther: "",
@@ -581,6 +585,15 @@ function ConnectionForm(props: {
     setSaveError(null);
   }, []);
 
+  // SDB-396: a pooler is PostgreSQL's, the cleartext password plugin MySQL's and MariaDB's,
+  // and a list of databases is chosen where the server has several to pick from.
+  const pooler = engine.id === "postgres";
+  const transactionPooled = pooler && draft.pooler === "transaction";
+  const cleartext = engine.id === "mysql" || engine.id === "mariadb";
+  const choosesDatabases = cleartext || engine.id === "sqlserver";
+  // A hint only: the core checks when it opens (a certificate checked, or a profile with SSH
+  // hops; a profile with only a proxy or SSM is refused there).
+  const cleartextSafeRoute = draft.tlsMode === "verify-ca" || draft.tlsMode === "verify-full" || (useTunnel && !useKubernetes);
   // Agents write only on an exposed connection that is not read-only (ADR-019), on an engine
   // whose writes the core can run (SDB-325).
   const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly && engine.agentWrites;
@@ -617,6 +630,14 @@ function ConnectionForm(props: {
       : { readOnly: false, mcpExposed: false, mcpWrites: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }),
     // Neither is offered where the core has no read barrier (Oracle, libSQL, Flight SQL).
     ...(engine.readBarrier ? {} : { readOnly: false, mcpExposed: false, mcpWrites: false }),
+    // SDB-396: each only on the engine that has it, as the core checks.
+    pooler: pooler ? draft.pooler : null,
+    cleartextPassword: cleartext && draft.cleartextPassword,
+    databases: choosesDatabases ? draft.databases : [],
+    // A pooler in transaction mode keeps nothing set for the session (the core refuses it).
+    ...(transactionPooled
+      ? { readOnly: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }
+      : {}),
   };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.running;
@@ -892,6 +913,23 @@ function ConnectionForm(props: {
                   </Field>
                 )}
                 {useKubernetes && <p className="muted small">{t("kubernetes.mainHint")}</p>}
+                {pooler && (
+                  <>
+                    <Field label={t("fields.pooler")}>
+                      <select
+                        aria-label={t("fields.pooler")}
+                        name="pooler"
+                        value={draft.pooler ?? ""}
+                        onChange={(e) => update({ pooler: (e.target.value || null) as PoolerItem | null })}
+                      >
+                        <option value="">{t("pooler.none")}</option>
+                        <option value="session">{t("pooler.session")}</option>
+                        <option value="transaction">{t("pooler.transaction")}</option>
+                      </select>
+                    </Field>
+                    <p className="muted small">{transactionPooled ? t("pooler.transactionHint") : t("pooler.hint")}</p>
+                  </>
+                )}
               </fieldset>
               <fieldset>
                 <legend>{t("sections.authentication")}</legend>
@@ -962,7 +1000,42 @@ function ConnectionForm(props: {
                     <p className="muted small">{t("auth.envHint")}</p>
                   </>
                 )}
+                {cleartext && (
+                  <>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        name="cleartextPassword"
+                        checked={draft.cleartextPassword}
+                        onChange={(e) => update({ cleartextPassword: e.target.checked })}
+                      />
+                      {t("fields.cleartextPassword")}
+                    </label>
+                    <p className="muted small">{t("fields.cleartextPasswordHint")}</p>
+                    {draft.cleartextPassword && !cleartextSafeRoute && (
+                      <p className="error small" role="alert">{t("fields.cleartextPasswordRoute")}</p>
+                    )}
+                  </>
+                )}
               </fieldset>
+              {choosesDatabases && (
+                <fieldset>
+                  <legend>{t("sections.databases")}</legend>
+                  {/* One name per line; the core trims them and keeps each once. */}
+                  <Field label={t("fields.databases")}>
+                    <textarea
+                      className="masking-patterns"
+                      name="databases"
+                      rows={3}
+                      spellCheck={false}
+                      value={draft.databases.join("\n")}
+                      placeholder={t("fields.databasesPlaceholder")}
+                      onChange={(e) => update({ databases: e.target.value.split("\n") })}
+                    />
+                  </Field>
+                  <p className="muted small">{t("fields.databasesHint")}</p>
+                </fieldset>
+              )}
             </>
           ) : (
             fileFolder ? (
@@ -1175,6 +1248,8 @@ function ConnectionForm(props: {
         )}
 
         <div id="connection-tab-session" role="tabpanel" hidden={tab !== "session"}>
+          {transactionPooled && <p className="banner" role="note">{t("pooler.noSession")}</p>}
+          <fieldset disabled={transactionPooled} className="plain-group">
           {(engine.sessionSchema || engine.isolationLevels.length > 0) && (
             <fieldset>
               <legend>{t("sections.session")}</legend>
@@ -1236,6 +1311,7 @@ function ConnectionForm(props: {
             </label>
             <p className="muted small">{t("fields.sessionSetupHint")}</p>
             {setupRestricted && <p className="muted small">{t("fields.sessionSetupRestricted")}</p>}
+          </fieldset>
           </fieldset>
         </div>
 
@@ -1338,9 +1414,15 @@ function ConnectionForm(props: {
           {engine.readBarrier ? <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">
-              <input type="checkbox" checked={draft.readOnly || fileFolder} disabled={fileFolder} onChange={(e) => update({ readOnly: e.target.checked })} />
+              <input
+                type="checkbox"
+                checked={(draft.readOnly || fileFolder) && !transactionPooled}
+                disabled={fileFolder || transactionPooled}
+                onChange={(e) => update({ readOnly: e.target.checked })}
+              />
               {t("fields.readOnly")}
             </label>
+            {transactionPooled && <p className="muted small">{t("pooler.noReadOnly")}</p>}
             <label className="check">
               <input type="checkbox" checked={draft.mcpExposed && !fileFolder} disabled={fileFolder} onChange={(e) => update({ mcpExposed: e.target.checked })} />
               {t("fields.mcpExposed")}

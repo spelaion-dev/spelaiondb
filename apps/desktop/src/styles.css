@@ -2909,6 +2909,9 @@ select {
   width: min(720px, 92vw);
   height: min(620px, 86vh);
 }
+.connection-form fieldset.plain-group {
+  margin: 0;
+}
 .connection-form fieldset.hop {
   position: relative;
   border: 1px solid var(--line);

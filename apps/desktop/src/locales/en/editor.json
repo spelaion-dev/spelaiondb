@@ -1602,5 +1602,6 @@
     "readOnlyFailed": "Could not change the session's read-only mode: {{detail}}",
     "readOnlyChip": "Read-only session",
     "readOnlyHint": "This tab's session refuses writes, as a read-only connection does. Click to end it."
-  }
+  },
+  "schemaPooled": "This connection goes through a pooler in transaction mode, which keeps no session settings: qualify names with their schema."
 }

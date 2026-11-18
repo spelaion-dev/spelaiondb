@@ -34,7 +34,8 @@
     "session": "Valores por defecto",
     "setup": "Sentencias de inicio",
     "onThisComputer": "En este equipo",
-    "masking": "Enmascarado de columnas"
+    "masking": "Enmascarado de columnas",
+    "databases": "Bases de datos que se muestran"
   },
   "fields": {
     "name": "Nombre",
@@ -143,7 +144,14 @@
     "maskNever": "Dejar visibles estas columnas",
     "maskNeverPlaceholder": "email_verified",
     "maskTypeRequires": "El tipo {{type}} siempre enmascara: {{patterns}}.",
-    "maskingHint": "Un patrón por línea, sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Un patrón coincide con el nombre de una columna o con la columna de tabla que lee; tabla.columna nombra también la tabla. Los valores enmascarados se muestran como •••••• en la cuadrícula, las copias, las exportaciones, las estadísticas y las respuestas a los agentes; puedes mostrar una celda cada vez. «Dejar visibles» exime de tus propios patrones aquí, nunca de los de un tipo de conexión. El enmascarado aparta los valores de la pantalla, no del SQL: una expresión como lower(email) lo salta, y también un alias en SQL Server, DuckDB y SQLite en un servidor. Usa los permisos de la base de datos para apartar los datos de las personas."
+    "maskingHint": "Un patrón por línea, sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Un patrón coincide con el nombre de una columna o con la columna de tabla que lee; tabla.columna nombra también la tabla. Los valores enmascarados se muestran como •••••• en la cuadrícula, las copias, las exportaciones, las estadísticas y las respuestas a los agentes; puedes mostrar una celda cada vez. «Dejar visibles» exime de tus propios patrones aquí, nunca de los de un tipo de conexión. El enmascarado aparta los valores de la pantalla, no del SQL: una expresión como lower(email) lo salta, y también un alias en SQL Server, DuckDB y SQLite en un servidor. Usa los permisos de la base de datos para apartar los datos de las personas.",
+    "pooler": "Pooler",
+    "cleartextPassword": "Permitir el plugin de contraseña en claro (mysql_clear_password)",
+    "cleartextPasswordHint": "Algunos proxies y los inicios de sesión LDAP o PAM lo piden. Envía la contraseña tal como se escribe, así que la conexión solo se abre con TLS que comprueba el certificado del servidor (cualquiera de las opciones «Verificar») o a través de un perfil de red con saltos SSH.",
+    "cleartextPasswordRoute": "Tal como está, esta conexión no se abriría: elige una de las opciones «Verificar» en la pestaña SSL, o conecta a través de un perfil de red con saltos SSH.",
+    "databases": "Mostrar solo estas bases de datos",
+    "databasesPlaceholder": "Todas las bases de datos",
+    "databasesHint": "Un nombre por línea, sin distinguir mayúsculas. Vacío: todas. La base de datos de la propia conexión se muestra siempre. Solo oculta las demás en el explorador, el selector de base de datos y las listas de los agentes: una sentencia puede seguir usándolas, según lo permita el servidor."
   },
   "tls": {
     "disable": "Desactivado",
@@ -530,5 +538,14 @@
     "disconnectAll": "Desconectar todo",
     "disconnectOthers": "Desconectar todas las demás",
     "disconnectOthersHere": "Desconectar todas las demás"
+  },
+  "pooler": {
+    "none": "Ninguno: conexión directa",
+    "session": "PgBouncer en modo sesión",
+    "transaction": "PgBouncer en modo transacción",
+    "hint": "En modo sesión el pooler mantiene una conexión al servidor durante toda la sesión, así que todo funciona como en una conexión directa.",
+    "transactionHint": "En modo transacción cada transacción puede ir por otra conexión al servidor: SpelaionDB no usa sentencias preparadas, y la sesión no tiene valores por defecto, sentencias de inicio, esquema propio ni modo de solo lectura.",
+    "noSession": "Esta conexión pasa por un pooler en modo transacción, que no conserva ajustes de sesión: estos no se guardan. Cualifica los nombres con su esquema, o fija lo que necesites dentro de cada transacción.",
+    "noReadOnly": "No disponible a través de un pooler en modo transacción: el modo de solo lectura de la sesión duraría una sola transacción. Usa un usuario de base de datos de solo lectura, o conecta a través del pooler en modo sesión."
   }
 }

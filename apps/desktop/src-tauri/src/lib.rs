@@ -823,6 +823,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             read_only: c.file.read_only,
             sql: c.file.engine.is_sql(),
             tls_warning,
+            pooler: c.file.pooler.map(Into::into),
         });
     }
     Ok(items)
