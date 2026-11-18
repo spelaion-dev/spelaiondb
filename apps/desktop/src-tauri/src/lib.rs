@@ -28,8 +28,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use futures_util::StreamExt;
 use spelaion_config::{
-    Config, ConnectionDraft, ConnectionId, Resolver, Source, SystemBackend, TrustStore,
-    default_user_dir, load,
+    Config, ConnectionDefinition, ConnectionDraft, ConnectionId, Resolver, Source, SystemBackend,
+    TrustStore, default_user_dir, load,
 };
 use spelaion_core::{
     AppLog, Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect,
@@ -102,6 +102,22 @@ struct DesktopSession {
     password: Option<Secret>,
     /// Captured when connecting: changing folders must not reattribute an existing tab.
     history_workspace: String,
+    /// What the session was opened from (SDB-426), without secrets: a session made from this
+    /// one reuses its connection only while the configuration still says the same.
+    definition: Option<ConnectionDefinition>,
+}
+
+/// The definition `id` has in `config` now (SDB-426), as a session records it.
+fn definition_now(
+    config: &Config,
+    trust: &TrustStore,
+    id: &ConnectionId,
+) -> Option<ConnectionDefinition> {
+    let trusted = config
+        .workspace_root
+        .as_deref()
+        .is_some_and(|root| trust.is_trusted(root));
+    config.connection_definition(id, trusted)
 }
 
 /// Connection tests running now, by the id the UI gave them, to stop them (ADR-032).
@@ -1862,7 +1878,7 @@ async fn connect(
     }
     let id = parse_id(&connection);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let (resolved, history_workspace) = {
+    let (resolved, history_workspace, definition) = {
         let config = state.config.read().await;
         let resolved = match Resolver::new(&config, &trust, &SystemBackend).resolve(&id) {
             Ok(resolved) => resolved,
@@ -1877,7 +1893,11 @@ async fn connect(
             }
             Err(e) => return Err(e.to_string()),
         };
-        (resolved, history_workspace(&config, id.source))
+        (
+            resolved,
+            history_workspace(&config, id.source),
+            definition_now(&config, &trust, &id),
+        )
     };
     let save_to = match &resolved.password {
         spelaion_config::Password::Prompt { save_to } => save_to.clone(),
@@ -1960,6 +1980,7 @@ async fn connect(
             open,
             password,
             history_workspace,
+            definition,
         },
     );
     drop(sessions);
@@ -1973,7 +1994,10 @@ async fn connect(
 }
 
 /// Open an independent tab from an existing explorer session, reusing its in-memory
-/// credentials and exact resolved connection. Passwords never cross back into the UI.
+/// credentials and exact resolved connection while the configuration still says the same
+/// (SDB-426, the core decides): after a saved edit the saved file is resolved again, and the
+/// typed password goes with it only to the same login, or the tab is told to connect as a new
+/// one does. Passwords never cross back into the UI.
 #[command]
 async fn connect_from_session(
     source: String,
@@ -1982,7 +2006,7 @@ async fn connect_from_session(
     editor: bool,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CmdResult<String> {
+) -> CmdResult<FromSessionOutcome> {
     if source == session {
         return Err("the source and target sessions must differ".into());
     }
@@ -1990,7 +2014,7 @@ async fn connect_from_session(
     if !workspace_version.is_multiple_of(2) {
         return Err("the folder is changing; select a connection again".into());
     }
-    let (source_open, password, history_workspace) = {
+    let (source_open, typed, history_workspace, opened) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
             .get(&source)
@@ -1999,7 +2023,41 @@ async fn connect_from_session(
             source.open.clone(),
             source.password.clone(),
             source.history_workspace.clone(),
+            source.definition.clone(),
         )
+    };
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let (resolved, password, definition) = {
+        let config = state.config.read().await;
+        let id = &source_open.resolved.id;
+        let now = definition_now(&config, &trust, id);
+        let current = opened
+            .as_ref()
+            .map(|opened| spelaion_core::session_source::source_session(opened, now.as_ref()));
+        match current {
+            Some(spelaion_core::session_source::SourceSession::Current) => {
+                (source_open.resolved.clone(), typed.clone(), now)
+            }
+            Some(spelaion_core::session_source::SourceSession::Changed) | None => {
+                // Edited since the source opened: the saved file, resolved as `connect` does.
+                // Whatever needs the user (trust, a change, variables, a password for another
+                // login) is left to that path.
+                let Ok(fresh) = Resolver::new(&config, &trust, &SystemBackend).resolve(id) else {
+                    return Ok(FromSessionOutcome::ConnectAgain);
+                };
+                let carried = spelaion_core::session_source::carried_password(
+                    &source_open.resolved,
+                    &fresh,
+                    typed.as_ref(),
+                );
+                if matches!(fresh.password, spelaion_config::Password::Prompt { .. })
+                    && carried.is_none()
+                {
+                    return Ok(FromSessionOutcome::ConnectAgain);
+                }
+                (fresh, carried, now)
+            }
+        }
     };
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
@@ -2008,14 +2066,9 @@ async fn connect_from_session(
         password: password.clone(),
         read_only_session: false,
     };
-    let open = open_connection(
-        source_open.resolved.clone(),
-        &state.engines(),
-        options,
-        state.results.clone(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let open = open_connection(resolved, &state.engines(), options, state.results.clone())
+        .await
+        .map_err(|e| e.to_string())?;
     if let Some(database) = database
         && let Err(error) = open.session.connection().select_database(&database).await
     {
@@ -2053,9 +2106,10 @@ async fn connect_from_session(
             open,
             password,
             history_workspace,
+            definition,
         },
     );
-    Ok(server_version)
+    Ok(FromSessionOutcome::Connected { server_version })
 }
 
 /// Keeps a session alive if its connection asks for it, closes it when its type says it has

@@ -1711,6 +1711,22 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
     }
 }
 
+/// A session made from another one (SDB-426).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FromSessionOutcome {
+    Connected {
+        server_version: String,
+    },
+    /// The connection was edited since the source session opened and the new session needs
+    /// the user (a password for another login, trust, variables): connect as a new tab does.
+    ConnectAgain,
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(
     tag = "kind",

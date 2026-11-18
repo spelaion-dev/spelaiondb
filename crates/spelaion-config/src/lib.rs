@@ -17,6 +17,7 @@ mod conn_url;
 mod copy;
 mod datagrip;
 mod dbeaver;
+mod definition;
 mod draft;
 mod edit;
 mod engine_change;
@@ -53,6 +54,7 @@ pub use copy::{
 };
 pub use datagrip::{DatagripError, datagrip_dirs, jetbrains_dir, read_datagrip};
 pub use dbeaver::{DbeaverError, dbeaver_workspace, read_dbeaver};
+pub use definition::ConnectionDefinition;
 pub use draft::{
     CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, SessionDraft, add_connection,
     connection_password_stored, connection_revision, connections_dir, delete_connection,

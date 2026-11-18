@@ -15,6 +15,9 @@
   `list_connections` tells agents a database is for) and its `tags` are short labels the
   explorer filters connections by (`normalize_tags` in `draft.rs`): both bounded and without
   hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
+  `definition.rs` (SDB-426) is what a connection's session is opened from, without secrets
+  (its file, its network profile, `user.toml`, the connection types, the repository and its
+  trust), compared before a session is made from another one; nothing secret is read for it.
   Poolers and bastions (SDB-396): a PostgreSQL connection's `pooler` (`session` or
   `transaction`), MySQL's and MariaDB's `cleartext_password` and the `databases` a MySQL,
   MariaDB or SQL Server connection shows load only on those engines (`load.rs`); a pooler in

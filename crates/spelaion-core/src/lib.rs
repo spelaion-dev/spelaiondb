@@ -66,6 +66,7 @@ mod server_settings;
 mod session;
 mod session_read_only;
 mod session_setup;
+pub mod session_source;
 mod shown;
 mod sort;
 mod sql_file;

@@ -203,14 +203,26 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
   useApp.getState().updateTab(tabId, { status: "connecting", serverVersion: null });
   void (async () => {
     try {
-      const serverVersion = await call(commands.connectFromSession(source, tabId, database ?? null, isEditorSession(tabId)));
+      const outcome = await call(commands.connectFromSession(source, tabId, database ?? null, isEditorSession(tabId)));
+      // The connection was edited since the source opened and needs the user (SDB-426): the
+      // tab connects as a new one does, from the saved file, then to the database it wanted.
+      const serverVersion = outcome.kind === "connected"
+        ? outcome.serverVersion
+        : await openSession(tabId, connectionId);
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") {
-        await call(commands.disconnect(tabId)).catch(() => undefined);
+        if (serverVersion !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
         return;
       }
+      if (serverVersion === null) {
+        useApp.getState().updateTab(tabId, { status: "disconnected" });
+        return;
+      }
+      if (outcome.kind === "connectAgain" && database) {
+        await call(commands.selectDatabase(tabId, database)).catch(() => undefined);
+      }
       useApp.getState().updateTab(tabId, { status: "connected", serverVersion });
-      await showTransaction(tabId);
+      if (outcome.kind === "connected") await showTransaction(tabId);
     } catch (e) {
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") return;

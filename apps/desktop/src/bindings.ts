@@ -986,9 +986,12 @@ export const commands = {
 	connect: (session: string, connection: string, password: string | null, remember: boolean, editor: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember, editor })),
 	/**
 	 *  Open an independent tab from an existing explorer session, reusing its in-memory
-	 *  credentials and exact resolved connection. Passwords never cross back into the UI.
+	 *  credentials and exact resolved connection while the configuration still says the same
+	 *  (SDB-426, the core decides): after a saved edit the saved file is resolved again, and the
+	 *  typed password goes with it only to the same login, or the tab is told to connect as a new
+	 *  one does. Passwords never cross back into the UI.
 	 */
-	connectFromSession: (source: string, session: string, database: string | null, editor: boolean) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database, editor })),
+	connectFromSession: (source: string, session: string, database: string | null, editor: boolean) => typedError<FromSessionOutcome, string>(__TAURI_INVOKE("connect_from_session", { source, session, database, editor })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
@@ -3118,6 +3121,14 @@ export type FoundObjectItem_Deserialize = { kind: "relation"; object: ObjectItem
 
 /**  What "Open object by name" found: a relation or another object of a schema. */
 export type FoundObjectItem_Serialize = { kind: "relation"; object: ObjectItem_Serialize } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
+
+/**  A session made from another one (SDB-426). */
+export type FromSessionOutcome = { kind: "connected"; serverVersion: string } | 
+/**
+ *  The connection was edited since the source session opened and the new session needs
+ *  the user (a password for another login, trust, variables): connect as a new tab does.
+ */
+{ kind: "connectAgain" };
 
 /**  How the stored value was written. */
 export type GeoFormat = 
