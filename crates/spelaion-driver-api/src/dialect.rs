@@ -22,6 +22,16 @@ pub trait Dialect: Send + Sync {
     /// blocks (for example `$$ … $$` in PostgreSQL).
     fn split_statements(&self, script: &str) -> Vec<StatementSpan>;
 
+    /// The data that follows the statement at `span` in `script` and belongs to it, as its
+    /// engine's client sends it apart from the statement: PostgreSQL's `COPY … FROM STDIN`,
+    /// whose rows follow on the next lines up to a line `\.` (SDB-162). The splitter skips
+    /// that data, so it is never a statement, never searched for placeholders
+    /// ([`Dialect::code_ranges`] leaves it out) and never read by the guard. `None` for a
+    /// statement without any (every statement of most engines).
+    fn copy_data(&self, _script: &str, _span: &StatementSpan) -> Option<Range<usize>> {
+        None
+    }
+
     /// Quotes an identifier for use in generated SQL.
     fn quote_identifier(&self, ident: &str) -> String;
 

@@ -32,7 +32,10 @@
   `Dialect::code_ranges` is what lies outside a script's strings, quoted names and comments, as
   that engine's splitter reads them (each dialect builds it from its splitter's own pieces with
   `code_ranges`): the editor's `:name` placeholders (`spelaion-core`'s `params.rs`) are looked
-  for only there.
+  for only there. `Dialect::copy_data` is the data that belongs to a statement and follows it
+  in the script (PostgreSQL's `COPY … FROM STDIN` rows up to a line `\.`, SDB-162): the
+  splitter skips it and `code_ranges` leaves it out, so it is never a statement, a placeholder
+  or the guard's to read.
   `thread_cancel` is the cancel of the engines that run on a thread of their own (DuckDB, local
   SQLite): their interrupt only reaches the statement running at that moment, so a cancel is
   remembered for everything sent before it (a queued statement never starts, a running one is
