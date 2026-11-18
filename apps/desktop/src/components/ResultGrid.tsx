@@ -1807,6 +1807,10 @@ export function ResultGrid({
     };
   }, [menu]);
 
+  function selectAll() {
+    setSelection({ anchor: { row: 0, col: firstVisible }, focus: { row: result.rows - 1, col: lastVisible } });
+  }
+
   function onKeyDown(e: React.KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
     const printable = printableGridKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing });
@@ -1865,7 +1869,7 @@ export function ResultGrid({
     }
     if (mod && e.key.toLowerCase() === "a" && result.rows > 0) {
       e.preventDefault();
-      setSelection({ anchor: { row: 0, col: firstVisible }, focus: { row: result.rows - 1, col: lastVisible } });
+      selectAll();
       return;
     }
     if (!selection || result.rows === 0) return;
@@ -2293,6 +2297,18 @@ export function ResultGrid({
           <div ref={accessibleCell} id={accessibleCellId} role="gridcell" aria-colindex={Math.max(1, visibleCols.indexOf(selection.focus.col) + 1)} aria-selected="true" aria-live="polite" aria-atomic="true" />
         </div>}
       </div>
+      <button
+        type="button"
+        className="grid-select-all"
+        style={{ width: rowNumW, height: HEADER_H }}
+        aria-label={t("results.selectAll")}
+        title={`${t("results.selectAll")} (Ctrl+A)`}
+        disabled={!result.rows || !visibleCols.length}
+        onClick={() => {
+          scrollerRef.current?.focus({ preventScroll: true });
+          selectAll();
+        }}
+      ><Icon name="scan" /></button>
       {menu && menu.header !== undefined && (
         <div ref={menuRef} className="grid-menu result-grid-menu" role="menu" aria-label={result.columns[menu.header]?.name} style={{ left: menu.x, top: menu.y }}>
           <HeaderMenuItems

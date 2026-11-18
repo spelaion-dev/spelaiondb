@@ -94,6 +94,7 @@
     "jumpTitle": "Ir a la columna",
     "jumpPlaceholder": "Nombre de columna…",
     "jumpNone": "Ninguna columna coincide",
+    "selectAll": "Seleccionar todas las celdas",
     "columnFilters": "Filtros de columna",
     "filteredBy": "Filtrado por",
     "removeFilter": "Quitar el filtro {{filter}}",
