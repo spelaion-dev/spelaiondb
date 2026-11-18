@@ -614,6 +614,27 @@ impl Default for ExplorerPreferences {
     }
 }
 
+/// How many recent folders are remembered (SDB-397).
+pub const MAX_RECENT_FOLDERS: usize = 10;
+
+/// A path a recent folder may have: absolute, on one line, of a sane length.
+fn valid_folder_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 4096
+        && !path.chars().any(char::is_control)
+        && std::path::Path::new(path).is_absolute()
+}
+
+/// Whether two paths name the same folder: case and slashes are ignored on Windows.
+fn same_folder(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        let fold = |p: &str| p.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+        fold(a) == fold(b)
+    } else {
+        a.trim_end_matches('/') == b.trim_end_matches('/')
+    }
+}
+
 /// The interface sizes the user may choose (SDB-389), in percent of the normal size: the
 /// whole window is drawn at that scale, every size the other settings give included.
 pub const INTERFACE_SIZES: [u16; 5] = [90, 100, 110, 125, 150];
@@ -1399,6 +1420,43 @@ impl Store {
     pub fn set_theme(&self, theme: &str) -> Result<(), StoreError> {
         validate_theme(theme)?;
         self.set_personal_setting("theme", theme)
+    }
+
+    /// The folders opened most recently (SDB-397), newest first, at most
+    /// [`MAX_RECENT_FOLDERS`]. What cannot be a folder's path is left out.
+    pub fn recent_folders(&self) -> Result<Vec<String>, StoreError> {
+        Ok(self
+            .personal_setting("recent_folders")?
+            .unwrap_or_default()
+            .lines()
+            .filter(|path| valid_folder_path(path))
+            .take(MAX_RECENT_FOLDERS)
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Puts `path` first in the recent folders (moving it if it was there already).
+    pub fn add_recent_folder(&self, path: &str) -> Result<(), StoreError> {
+        if !valid_folder_path(path) {
+            return Err(StoreError::new("not a folder's path".into()));
+        }
+        let mut folders = self.recent_folders()?;
+        folders.retain(|folder| !same_folder(folder, path));
+        folders.insert(0, path.to_string());
+        folders.truncate(MAX_RECENT_FOLDERS);
+        self.set_personal_setting("recent_folders", &folders.join("\n"))
+    }
+
+    /// Takes `path` out of the recent folders; whether it was there. The folder is untouched.
+    pub fn forget_recent_folder(&self, path: &str) -> Result<bool, StoreError> {
+        let mut folders = self.recent_folders()?;
+        let before = folders.len();
+        folders.retain(|folder| !same_folder(folder, path));
+        if folders.len() == before {
+            return Ok(false);
+        }
+        self.set_personal_setting("recent_folders", &folders.join("\n"))?;
+        Ok(true)
     }
 
     /// The interface size (SDB-389), one of [`INTERFACE_SIZES`], shared by every workspace in
@@ -2615,6 +2673,47 @@ mod tests {
                 ..changed
             }
         );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn recent_folders_are_newest_first_bounded_and_forgotten_on_request() {
+        let path = temp("recent-folders");
+        let store = Store::open(&path).unwrap();
+        assert!(store.recent_folders().unwrap().is_empty());
+        let folder = |n: usize| {
+            if cfg!(windows) {
+                format!("C:\\work\\repo{n}")
+            } else {
+                format!("/work/repo{n}")
+            }
+        };
+        for n in 0..12 {
+            store.add_recent_folder(&folder(n)).unwrap();
+        }
+        let recent = store.recent_folders().unwrap();
+        assert_eq!(recent.len(), MAX_RECENT_FOLDERS);
+        assert_eq!(recent[0], folder(11));
+        // Opened again: first, once.
+        store.add_recent_folder(&folder(5)).unwrap();
+        let recent = store.recent_folders().unwrap();
+        assert_eq!(recent[0], folder(5));
+        assert_eq!(recent.iter().filter(|f| **f == folder(5)).count(), 1);
+        assert!(store.forget_recent_folder(&folder(5)).unwrap());
+        assert!(!store.forget_recent_folder(&folder(5)).unwrap());
+        assert!(!store.recent_folders().unwrap().contains(&folder(5)));
+        for refused in ["", "relative/path", "C:\\a\nb", "/a\u{7}b"] {
+            assert!(store.add_recent_folder(refused).is_err(), "{refused:?}");
+        }
+        // A damaged value keeps only what can be a folder's path.
+        store
+            .set_personal_setting(
+                "recent_folders",
+                &format!("{}\nrelative\n\u{1}x", folder(1)),
+            )
+            .unwrap();
+        assert_eq!(store.recent_folders().unwrap(), vec![folder(1)]);
         drop(store);
         let _ = std::fs::remove_file(path);
     }

@@ -52,6 +52,15 @@
     "publisher": "SpelaionDB contributors",
     "copyright": "Copyright 2026 SpelaionDB contributors. Licensed under Apache-2.0.",
     "category": "DeveloperTool",
+    "fileAssociations": [
+      {
+        "ext": ["sql"],
+        "name": "SQL script",
+        "description": "SQL script",
+        "role": "Editor",
+        "mimeType": "application/sql"
+      }
+    ],
     "shortDescription": "Desktop database client with first-class SSH tunnels and an MCP server",
     "longDescription": "SpelaionDB is an open-source desktop client for PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB, with SSH tunnels through any number of bastions, a read-only MCP server for AI agents, and configuration you can share through git.",
     "homepage": "https://spelaion.dev",

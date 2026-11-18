@@ -101,8 +101,8 @@ async function freePort() {
   return port;
 }
 
-function startApp(extraEnv = {}) {
-  return spawn(exe, [demo], {
+function startApp(extraEnv = {}, extraArgs = []) {
+  return spawn(exe, [demo, ...extraArgs], {
     env: {
       ...process.env,
       ...extraEnv,
@@ -9753,6 +9753,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     mkdirSync(otherFolder, { recursive: true });
     await page.evaluate((target) => (window.__spelaionOpenFolder = target), otherFolder);
     await page.getByTitle("Open another folder").click();
+    // The folder's menu (SDB-397): Open folder… and the recent folders.
+    const folderMenu = page.getByRole("menu", { name: "Folders" });
+    await folderMenu.getByRole("menuitem", { name: "Open folder…" }).click();
     const folderEdits = page.getByRole("dialog", { name: "Open another folder with unsaved row changes?" });
     await folderEdits.waitFor();
     assert.deepEqual(await folderEdits.locator(".unsaved-edits-list li").allInnerTexts(), [editTab]);
@@ -9907,6 +9910,45 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.equal(app.exitCode, null, "the first close request waits for the UI");
     requestClose(app.pid);
     await quitWithin(exitedFrozen, 15_000, "a second close request did not quit a frozen UI");
+  }
+
+  step("opening from outside: an .sql file on the command line opens in a tab, not run, and a second launch hands its file to the open window");
+  {
+    // SDB-397. The restored tab reconnects (the setting is on from the step before); the
+    // opened files have no connection and nothing runs.
+    const first = join(userDir, "from-outside.sql");
+    const second = join(userDir, "handed-over.sql");
+    writeFileSync(first, "select 'from outside' as which;\n");
+    writeFileSync(second, "select 'handed over' as which;\n");
+    await browser.close().catch(() => {});
+    app = startApp({}, [first, "--connection", "no-such-connection"]);
+    browser = await connect();
+    page = await appPage();
+    page.setDefaultTimeout(30_000);
+    const tabLabel = (name) => page.locator(".tabbar .tab .tab-label", { hasText: name });
+    await tabLabel("from-outside.sql").waitFor();
+    let opened = page.locator(".tab-panel:not([hidden])");
+    assert.ok((await opened.locator(".cm-content").innerText()).includes("select 'from outside' as which;"));
+    await page.waitForTimeout(500);
+    assert.equal(await opened.locator(".grid-host").count(), 0, "opening ran nothing");
+    assert.equal(await page.locator(".tabbar .tab", { hasText: "from-outside.sql" }).locator(".dot-connected").count(), 0, "and connected nothing");
+    // What could not be opened is said, not guessed.
+    await page.locator(".launch-notice", { hasText: "no-such-connection" }).waitFor();
+    // A second launch with this personal folder hands its file over and ends at once.
+    const launch = startApp({}, [second]);
+    const [code] = await Promise.race([once(launch, "exit"), new Promise((_, reject) => setTimeout(() => reject(new Error("the second launch did not end")), 20_000))]);
+    assert.equal(code, 0, "the second launch ended after handing over");
+    await tabLabel("handed-over.sql").waitFor();
+    opened = page.locator(".tab-panel:not([hidden])");
+    assert.ok((await opened.locator(".cm-content").innerText()).includes("select 'handed over' as which;"));
+    await page.waitForTimeout(500);
+    assert.equal(await opened.locator(".grid-host").count(), 0, "the handed-over file ran nothing");
+    assert.equal(await page.locator(".tabbar .tab").count(), 3, "the restored tab and the two files");
+    await shot("sdb-397-opened-from-outside");
+    // The recent folders list the demo, opened at start.
+    const recent = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("recent_folders"));
+    assert.ok(recent.some((folder) => folder.name === "demo"), JSON.stringify(recent));
+    await closeApp();
   }
 
   checkContentSecurityPolicy();

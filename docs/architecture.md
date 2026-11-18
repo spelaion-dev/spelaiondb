@@ -106,6 +106,23 @@ in development the window loads Vite's server directly, so `vite.config.ts` read
 sends it as that server's header. The Windows smoke test fails on any refusal the policy
 reports, and checks first that an injected inline script does not run.
 
+**Opening from outside the app (SDB-397)**
+`spelaion-desktop [FOLDER] [FILE.sql …] [--connection ID] [--plan FILE]`: the core reads the
+words (`spelaion-core`'s `launch.rs`). A folder must exist. A file must be an existing `.sql`
+file no bigger than the editor opens, then read like a picked one (ADR-036). A connection is
+only selected in the explorer. What is not accepted is said in a banner. Nothing is
+connected or run: the files open as tabs without a connection, and a folder goes through
+repository trust (ADR-022).
+
+One app runs per personal folder (`instance.rs`). The first listens on a local port and writes
+the port and a random token, owner-only, to `desktop-instance.json`. A later launch with the
+same personal folder sends its arguments and its folder there with the token, and ends. The
+running window opens them as above (a folder after the same questions as the folder menu).
+Keyed by the personal folder, so a second profile or the smoke test's folder never sends
+anything to the user's app. No dependency was added for it. The installers register `.sql`
+files (`tauri.conf.json`'s `fileAssociations`); macOS's Finder sends them as an event, read
+the same way.
+
 ## Phases
 - **Phase 0** (done, 2026-11-02): risk experiments for the conditional decisions; ADR-003,
   ADR-007 and ADR-010 record what they measured.

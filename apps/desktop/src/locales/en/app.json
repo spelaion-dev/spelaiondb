@@ -99,6 +99,7 @@
     "results": "Commands and objects",
     "connection": "Connection",
     "recentFile": "Recent file",
+    "recentFolder": "Recent folder",
     "hint": "Commands, connections, recent files and the objects the explorer has loaded. Enter runs it.",
     "actionHint": "Enter runs the action; Escape goes back.",
     "nothing": "No matching commands or objects. Objects appear once their schema is open in the explorer.",

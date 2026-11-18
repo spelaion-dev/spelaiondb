@@ -141,6 +141,17 @@ enum Request {
     GetInterfaceSize {
         reply: Reply<u16>,
     },
+    GetRecentFolders {
+        reply: Reply<Vec<String>>,
+    },
+    AddRecentFolder {
+        path: String,
+        reply: Reply<()>,
+    },
+    ForgetRecentFolder {
+        path: String,
+        reply: Reply<bool>,
+    },
     SetInterfaceSize {
         size: u16,
         reply: Reply<()>,
@@ -412,6 +423,15 @@ impl QueryHistory {
                         }
                         Request::GetInterfaceSize { reply } => {
                             let _ = reply.send(store.get_interface_size());
+                        }
+                        Request::GetRecentFolders { reply } => {
+                            let _ = reply.send(store.recent_folders());
+                        }
+                        Request::AddRecentFolder { path, reply } => {
+                            let _ = reply.send(store.add_recent_folder(&path));
+                        }
+                        Request::ForgetRecentFolder { path, reply } => {
+                            let _ = reply.send(store.forget_recent_folder(&path));
                         }
                         Request::SetInterfaceSize { size, reply } => {
                             let _ = reply.send(store.set_interface_size(size));
@@ -833,6 +853,25 @@ impl QueryHistory {
     /// [`spelaion_store::INTERFACE_SIZES`]; 100 until the user chooses another.
     pub async fn interface_size(&self) -> Result<u16, HistoryError> {
         self.request(|reply| Request::GetInterfaceSize { reply })
+            .await
+    }
+
+    /// The folders opened most recently (SDB-397), newest first.
+    pub async fn recent_folders(&self) -> Result<Vec<String>, HistoryError> {
+        self.request(|reply| Request::GetRecentFolders { reply })
+            .await
+    }
+
+    /// Puts a folder first in the recent folders; the store refuses what is not a path.
+    pub async fn add_recent_folder(&self, path: String) -> Result<(), HistoryError> {
+        self.request(|reply| Request::AddRecentFolder { path, reply })
+            .await
+    }
+
+    /// Takes a folder out of the recent folders (never touching the folder); whether it was
+    /// there.
+    pub async fn forget_recent_folder(&self, path: String) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::ForgetRecentFolder { path, reply })
             .await
     }
 

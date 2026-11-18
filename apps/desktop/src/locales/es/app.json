@@ -99,6 +99,7 @@
     "results": "Comandos y objetos",
     "connection": "Conexión",
     "recentFile": "Archivo reciente",
+    "recentFolder": "Carpeta reciente",
     "hint": "Comandos, conexiones, archivos recientes y los objetos que ha cargado el explorador. Intro lo ejecuta.",
     "actionHint": "Intro ejecuta la acción; Escape vuelve atrás.",
     "nothing": "Ningún comando ni objeto coincide. Los objetos aparecen al abrir su esquema en el explorador.",

@@ -5572,3 +5572,5 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .screen-failed-actions { display: flex; flex-wrap: wrap; gap: var(--space-md); }
 .screen-failed.sidebar { margin: 0; max-width: none; background: var(--sidebar); }
 .screen-failed-app { min-height: 100vh; justify-content: center; }
+/* What a launch from outside could not open (SDB-397): one line per item. */
+.launch-notice span { white-space: pre-line; }
