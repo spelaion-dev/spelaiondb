@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use spelaion_core::{CoreEvent, ResultStore, Session};
+use spelaion_core::{CoreEvent, ResultStore, ScriptStop, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Value};
 
 /// A read that runs for hours unless it is cancelled, and fails when it is.
@@ -43,12 +43,17 @@ async fn session(var: &str, driver: Arc<dyn Driver>) -> Option<Arc<Session>> {
     )))
 }
 
-/// Whether the run's statement ended as cancelled (a one-statement script has nothing left
-/// to stop, so its summary names no stop).
+/// Whether the run's statement ended as cancelled: stopped by the engine (a one-statement
+/// script has nothing left after it, so its summary names no stop), or never sent because the
+/// cancel arrived first (its summary stops at it, with nothing executed).
 fn cancelled(events: &[CoreEvent]) -> bool {
-    events.iter().any(
-        |event| matches!(event, CoreEvent::StatementFailed { index: 0, error } if error.cancelled),
-    )
+    events.iter().any(|event| match event {
+        CoreEvent::StatementFailed { index: 0, error } => error.cancelled,
+        CoreEvent::ScriptFinished { summary, .. } => {
+            summary.stop == Some(ScriptStop::Cancelled { index: 0 }) && summary.executed == 0
+        }
+        _ => false,
+    })
 }
 
 /// The first value of `sql`, and how long it took.
