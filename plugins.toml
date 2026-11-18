@@ -211,34 +211,34 @@ program_sha256 = "fff838d1f4656bcad0243ee8e6ddba87b286ac8d1dc92a44f46bd494d412ee
 [[plugin]]
 name = "spelaiondb-plugin-clickhouse"
 repository = "spelaion-dev/spelaiondb-plugin-clickhouse"
-version = "0.1.0"
+version = "0.1.1"
 protocol = "1.0"
 engines = ["clickhouse"]
 min_app = "0.10.0"
 
 [plugin.platform.aarch64-apple-darwin]
-archive = "spelaiondb-plugin-clickhouse-0.1.0-aarch64-apple-darwin.tar.gz"
-archive_sha256 = "2d33a4332457b5abe68b2611198dd5d71a979fcd3d1c257b4ef3e0d70e2026e0"
-archive_size = 2208187
-program_sha256 = "10df14134fa5b9eca26010e1f649d9e212cb0260a438ac9f7e9c1340ceb7a89f"
+archive = "spelaiondb-plugin-clickhouse-0.1.1-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "06977b5d074d4b86537e69e73d3b79bccced9fe4bf1dd295c5dd9c6619d689d8"
+archive_size = 2210556
+program_sha256 = "fde002b8d756cb15b2b82b7825af382f91bc79b46f6068c96ffaf681555b1f96"
 
 [plugin.platform.x86_64-apple-darwin]
-archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-apple-darwin.tar.gz"
-archive_sha256 = "9f3d72e2dc1ab7bb4964bc48bea635d1c344a06ebac7dc0933767b809e7d3444"
-archive_size = 2366798
-program_sha256 = "5bb3cff30acbe072abb3bb57784e7946e3466c389117638c9420fd3eb9cbe716"
+archive = "spelaiondb-plugin-clickhouse-0.1.1-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "b2e2541afaec917737c68ec477d73ed433640362b2af34911ef402518cf5da78"
+archive_size = 2371295
+program_sha256 = "9b4da4f4a1e49e29d383effcd5127d12a5b6b4f509528f03ae3155ed8db14312"
 
 [plugin.platform.x86_64-pc-windows-msvc]
-archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-pc-windows-msvc.tar.gz"
-archive_sha256 = "1d4f6831dbbeb4f2cc5b8bcf8de0f87d2346a9a8fb22f7aa78f9d3b9b6481795"
-archive_size = 2334080
-program_sha256 = "7e8f7334bc352f18009402fa559e0348f3423f65734e2cd57b6bdfa79c4de35b"
+archive = "spelaiondb-plugin-clickhouse-0.1.1-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "8e1edf543fe2c3afafab54b9505d141126efa9adafbc3a8e828b285060634781"
+archive_size = 2335734
+program_sha256 = "3bd288473c303bf05491505be3899af9355614b0a01ee450e2101101acd63905"
 
 [plugin.platform.x86_64-unknown-linux-gnu]
-archive = "spelaiondb-plugin-clickhouse-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
-archive_sha256 = "428b7477d4728c60c95ae7f5f44a9e6f9918b18c3fa5920ae27386a524982e20"
-archive_size = 2614187
-program_sha256 = "78608a52ae7ddd3a043b4a6008de4af1a18c01e55a8681cd23b436c30b929244"
+archive = "spelaiondb-plugin-clickhouse-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "4271bf25d85ca8b80abb4c42f3a2793b0431315346472ebef5b88a4abbebdb55"
+archive_size = 2612941
+program_sha256 = "c4c0d302f34740f8f2b88202a55c8b05dc65e15836d572f8bfc6b5cd1ad4909e"
 [[plugin]]
 name = "spelaiondb-plugin-redis"
 repository = "spelaion-dev/spelaiondb-plugin-redis"
