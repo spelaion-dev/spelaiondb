@@ -7301,6 +7301,46 @@ impl From<spelaion_core::TlsWarning> for TlsWarningItem {
     }
 }
 
+/// A part of a table, for what a duplicate keeps and what it does not (SDB-394).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TablePartItem {
+    Columns,
+    NotNull,
+    Defaults,
+    PrimaryKey,
+    Unique,
+    Checks,
+    Indexes,
+    ForeignKeys,
+    Identity,
+    IdentityPosition,
+    Comments,
+    Triggers,
+    Rows,
+}
+
+impl From<spelaion_core::TablePart> for TablePartItem {
+    fn from(part: spelaion_core::TablePart) -> Self {
+        use spelaion_core::TablePart as P;
+        match part {
+            P::Columns => Self::Columns,
+            P::NotNull => Self::NotNull,
+            P::Defaults => Self::Defaults,
+            P::PrimaryKey => Self::PrimaryKey,
+            P::Unique => Self::Unique,
+            P::Checks => Self::Checks,
+            P::Indexes => Self::Indexes,
+            P::ForeignKeys => Self::ForeignKeys,
+            P::Identity => Self::Identity,
+            P::IdentityPosition => Self::IdentityPosition,
+            P::Comments => Self::Comments,
+            P::Triggers => Self::Triggers,
+            P::Rows => Self::Rows,
+        }
+    }
+}
+
 /// An action of the explorer's Maintenance menu (SDB-392).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -7440,6 +7480,31 @@ impl From<MaintenanceOptionsItem> for spelaion_core::MaintenanceOptions {
     }
 }
 
+/// "Duplicate table…": what to copy (the core's `DuplicateTable`).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateTableItem {
+    pub schema: String,
+    pub name: String,
+    pub new_schema: String,
+    pub new_name: String,
+    pub with_data: bool,
+    pub with_indexes: bool,
+}
+
+impl From<DuplicateTableItem> for spelaion_core::DuplicateTable {
+    fn from(item: DuplicateTableItem) -> Self {
+        Self {
+            schema: item.schema,
+            name: item.name,
+            new_schema: item.new_schema,
+            new_name: item.new_name,
+            with_data: item.with_data,
+            with_indexes: item.with_indexes,
+        }
+    }
+}
+
 /// What the app shows before a maintenance action runs (SDB-392).
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -7460,4 +7525,15 @@ impl From<spelaion_core::MaintenancePlan> for MaintenancePlanItem {
             also_empties: plan.also_empties,
         }
     }
+}
+
+/// What the duplicate form shows before the copy runs (SDB-394).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicatePlanItem {
+    pub sql: String,
+    pub kept: Vec<TablePartItem>,
+    pub not_kept: Vec<TablePartItem>,
+    /// The indexes and constraints may be left out on this engine.
+    pub indexes_optional: bool,
 }

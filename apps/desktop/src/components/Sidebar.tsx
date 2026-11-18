@@ -62,6 +62,7 @@ import { useFittingMarks } from "../connectionMarks";
 import { tlsWarningText } from "../tlsWarning";
 import { Icon } from "./Icons";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
+import { DuplicateTableDialog } from "./DuplicateTableDialog";
 import { StructureDialog } from "./StructureDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AccountDialog, usePrincipalActions, type AccountAction } from "./AccountDialog";
@@ -2580,6 +2581,8 @@ function ObjectNode({
   /** The maintenance action whose dialog is open (SDB-392). */
   const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
   const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
+  /** "Duplicate table…" is open (SDB-394). */
+  const [duplicating, setDuplicating] = useState(false);
   const openDetails = (kind: TableDetailKind) => {
     const app = useApp.getState();
     const existing = app.tabs.some((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
@@ -2861,6 +2864,17 @@ function ObjectNode({
           <hr />
           <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
           <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
+          {!view && object.kind !== "collection" && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                setDuplicating(true);
+              }}
+            >
+              {t("duplicate.menu")}
+            </button>
+          )}
           {canRename && (
             <button
               role="menuitem"
@@ -2938,6 +2952,9 @@ function ObjectNode({
           kind={maintaining}
           onClose={() => setMaintaining(null)}
         />
+      )}
+      {duplicating && (
+        <DuplicateTableDialog session={session} connectionId={connectionId} schema={object.schema} name={object.name} onClose={() => setDuplicating(false)} />
       )}
       {renaming && (
         <ObjectChangeDialog

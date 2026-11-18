@@ -657,6 +657,13 @@ export const commands = {
 	 */
 	maintenancePlan: (session: string, target: ObjectTargetItem_Deserialize, kind: MaintenanceKindItem, options: MaintenanceOptionsItem_Deserialize) => typedError<MaintenancePlanItem, string>(__TAURI_INVOKE("maintenance_plan", { session, target, kind, options })),
 	/**
+	 *  "Duplicate table…" (SDB-394): the statements of a copy, written by the core from the
+	 *  catalog read now, with what it keeps and what it does not. Refused on a read-only
+	 *  connection or session. They run, as shown, in an editor tab of their own: through the guard and the
+	 *  connection type's confirmation, as any run.
+	 */
+	duplicateTablePlan: (session: string, request: DuplicateTableItem) => typedError<DuplicatePlanItem, string>(__TAURI_INVOKE("duplicate_table_plan", { session, request })),
+	/**
 	 *  Which accounts the explorer may create, give a password, lock or drop on this session's
 	 *  engine (ADR-048): the core decides.
 	 */
@@ -2396,6 +2403,25 @@ export type DroppedConstraintItem = { kind: "constraint"; name: string } | { kin
 export type DuckdbFormatItem = "parquet" | "csv";
 
 export type DumpContentItem = "schemaAndData" | "schemaOnly" | "dataOnly";
+
+/**  What the duplicate form shows before the copy runs (SDB-394). */
+export type DuplicatePlanItem = {
+	sql: string,
+	kept: TablePartItem[],
+	notKept: TablePartItem[],
+	/**  The indexes and constraints may be left out on this engine. */
+	indexesOptional: boolean,
+};
+
+/**  "Duplicate table…": what to copy (the core's `DuplicateTable`). */
+export type DuplicateTableItem = {
+	schema: string,
+	name: string,
+	newSchema: string,
+	newName: string,
+	withData: boolean,
+	withIndexes: boolean,
+};
 
 /**  A connection made by "Duplicate" (ADR-030). */
 export type DuplicatedItem = {
@@ -5844,6 +5870,9 @@ export type TablePageItem = {
 	limit: number,
 	offset: number,
 };
+
+/**  A part of a table, for what a duplicate keeps and what it does not (SDB-394). */
+export type TablePartItem = "columns" | "notNull" | "defaults" | "primaryKey" | "unique" | "checks" | "indexes" | "foreignKeys" | "identity" | "identityPosition" | "comments" | "triggers" | "rows";
 
 /**  A table chosen in the explorer, by schema and name. */
 export type TableRefItem = {

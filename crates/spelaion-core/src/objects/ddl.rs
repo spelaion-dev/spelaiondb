@@ -202,6 +202,58 @@ fn word_is(sql: &str, token: &Token, word: &str) -> bool {
     token.kind == Tok::Word && sql[token.start..token.end].eq_ignore_ascii_case(word)
 }
 
+/// The text of a name that starts at token `i` and may be qualified (`schema.name`): its start
+/// and end in `sql`.
+fn qualified_range(tokens: &[Token], mut i: usize) -> Result<(usize, usize), DdlError> {
+    let first = tokens
+        .get(i)
+        .filter(|t| matches!(t.kind, Tok::Word | Tok::Quoted | Tok::String))
+        .ok_or(DdlError::Unreadable("a name is missing"))?;
+    let start = first.start;
+    while tokens.get(i + 1).is_some_and(|t| t.kind == Tok::Dot) && tokens.get(i + 2).is_some() {
+        i += 2;
+    }
+    Ok((start, tokens[i].end))
+}
+
+/// A kept `CREATE TABLE` or `CREATE INDEX` text with the object's (maybe qualified) name
+/// replaced by `new_name`, and for an index the table after `ON` replaced by `on_table`: the
+/// copy of a table and of its indexes (SDB-394). Both replacements are written by the caller,
+/// quoted for the engine.
+pub(crate) fn rename_created(
+    sql: &str,
+    flavor: Flavor,
+    new_name: &str,
+    on_table: Option<&str>,
+) -> Result<String, DdlError> {
+    let tokens = tokenize(sql, flavor)?;
+    let keyword = tokens
+        .iter()
+        .position(|t| word_is(sql, t, "TABLE") || word_is(sql, t, "INDEX"))
+        .ok_or(DdlError::Unreadable("not a CREATE TABLE or CREATE INDEX"))?;
+    let mut i = keyword + 1;
+    // IF NOT EXISTS
+    if tokens.get(i).is_some_and(|t| word_is(sql, t, "IF")) {
+        i += 3;
+    }
+    let name = qualified_range(&tokens, i)?;
+    let mut replacements = vec![(name, new_name)];
+    if let Some(table) = on_table {
+        let on = tokens[i..]
+            .iter()
+            .position(|t| word_is(sql, t, "ON"))
+            .map(|p| p + i)
+            .ok_or(DdlError::Unreadable("the index names no table"))?;
+        replacements.push((qualified_range(&tokens, on + 1)?, table));
+    }
+    let mut out = sql.to_string();
+    replacements.sort_by_key(|((start, _), _)| std::cmp::Reverse(*start));
+    for ((start, end), text) in replacements {
+        out.replace_range(start..end, text);
+    }
+    Ok(out)
+}
+
 /// What a clause of a column definition does, as far as the forms are concerned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClauseKind {

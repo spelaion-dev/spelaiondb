@@ -5416,6 +5416,30 @@ async fn maintenance_plan(
         .map_err(|e| e.to_string())
 }
 
+/// "Duplicate table…" (SDB-394): the statements of a copy, written by the core from the
+/// catalog read now, with what it keeps and what it does not. Refused on a read-only
+/// connection or session. They run, as shown, in an editor tab of their own: through the guard and the
+/// connection type's confirmation, as any run.
+#[command]
+async fn duplicate_table_plan(
+    session: String,
+    request: DuplicateTableItem,
+    state: State<'_, AppState>,
+) -> CmdResult<DuplicatePlanItem> {
+    let open = state.session(&session).await?;
+    let engine = open.session.dialect().name().to_string();
+    let plan =
+        spelaion_core::duplicate_plan(&open.session, &request.into(), open.session.is_read_only())
+            .await
+            .map_err(|e| e.to_string())?;
+    Ok(DuplicatePlanItem {
+        sql: plan.sql,
+        kept: plan.kept.into_iter().map(TablePartItem::from).collect(),
+        not_kept: plan.not_kept.into_iter().map(TablePartItem::from).collect(),
+        indexes_optional: spelaion_core::duplicate_options(&engine).indexes_optional,
+    })
+}
+
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 /// was shown. The core writes the statements again from the change, and refuses read-only
 /// connections (ADR-026). Returns how many statements ran.
@@ -6166,6 +6190,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             apply_object_change,
             maintenance_kinds,
             maintenance_plan,
+            duplicate_table_plan,
             principal_actions,
             preview_principal_change,
             apply_principal_change,

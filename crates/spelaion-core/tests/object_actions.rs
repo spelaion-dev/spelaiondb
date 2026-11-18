@@ -21,6 +21,7 @@ use spelaion_core::{
     new_table_element_sql, object_actions, search_objects, set_active_schema,
     supports_added_checks, table_structure,
 };
+use spelaion_core::{DuplicateTable, TablePart, duplicate_options, duplicate_plan};
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, NameFilter, ObjectKind, SchemaObject, SchemaObjectKind,
     Secret, TlsMode, Value,
@@ -2293,6 +2294,228 @@ async fn maintenance_statements_are_refused_on_read_only_connections_on_each_eng
         let writable = read_only.with_read_only(false);
         let cleanup = format!("DROP TABLE IF EXISTS {schema}.{table}");
         run(label, &writable, &[cleanup.as_str()], true).await;
+        tested.push(label);
+    }
+    eprintln!("tested on {tested:?}");
+}
+
+/// What a table holds, as the comparison of a copy reads it: its columns, primary key, other
+/// indexes, checks, the default of `v`, and its rows.
+#[derive(Debug, PartialEq)]
+struct Shape {
+    columns: Vec<String>,
+    primary_key: Vec<String>,
+    indexes: usize,
+    /// A row that breaks the check is refused.
+    check_enforced: bool,
+    default: bool,
+    rows: String,
+}
+
+async fn shape(label: &str, session: &Session, schema: &str, table: &str) -> Shape {
+    let info = session
+        .connection()
+        .describe_table(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {table}: {e}"));
+    let qualified = format!("{schema}.{table}");
+    Shape {
+        columns: info.columns.iter().map(|c| c.name.to_lowercase()).collect(),
+        primary_key: info.primary_key.iter().map(|c| c.to_lowercase()).collect(),
+        indexes: info.indexes.iter().filter(|i| !i.primary).count(),
+        check_enforced: {
+            let refused = session
+                .run_script(&format!("INSERT INTO {qualified} (id, v) VALUES (100, -1)"))
+                .collect::<Vec<CoreEvent>>()
+                .await
+                .iter()
+                .any(|e| matches!(e, CoreEvent::StatementFailed { .. }));
+            if !refused {
+                run(
+                    label,
+                    session,
+                    &[&format!("DELETE FROM {qualified} WHERE id = 100")],
+                    false,
+                )
+                .await;
+            }
+            refused
+        },
+        default: info
+            .columns
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case("v"))
+            .is_some_and(|c| c.default.is_some()),
+        rows: text(session, &format!("SELECT COUNT(*) FROM {qualified}")).await,
+    }
+}
+
+#[tokio::test]
+async fn duplicate_tables_keep_what_each_engine_says_on_every_engine() {
+    let mut tested = Vec::new();
+    for (label, session, schema) in engines().await {
+        let source = "dup_src";
+        let copy = "dup_copy";
+        let drop = |name: &str| match label {
+            "sqlserver" => {
+                format!("IF OBJECT_ID('{schema}.{name}') IS NOT NULL DROP TABLE {schema}.{name}")
+            }
+            _ => format!("DROP TABLE IF EXISTS {schema}.{name}"),
+        };
+        let setup = [
+            drop(copy),
+            drop(source),
+            format!(
+                "CREATE TABLE {schema}.{source} (id INT PRIMARY KEY, v INT DEFAULT 5, CHECK (v > 0))"
+            ),
+            match label {
+                // SQLite and DuckDB name the index's table bare, in its schema.
+                "sqlite" => format!("CREATE INDEX {schema}.dup_src_v ON {source} (v)"),
+                _ => format!("CREATE INDEX dup_src_v ON {schema}.{source} (v)"),
+            },
+            format!("INSERT INTO {schema}.{source} (id, v) VALUES (1, 10), (2, 20), (3, 30)"),
+        ];
+        let refs: Vec<&str> = setup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, false).await;
+        let original = shape(label, &session, schema, source).await;
+        assert_eq!(original.indexes, 1, "{label}: {original:?}");
+        assert!(original.check_enforced, "{label}: {original:?}");
+        let index_choices: &[bool] = if duplicate_options(match label {
+            "mariadb" => "mysql",
+            other => other,
+        })
+        .indexes_optional
+        {
+            &[true, false]
+        } else {
+            &[true]
+        };
+        for &with_indexes in index_choices {
+            for with_data in [false, true] {
+                let request = DuplicateTable {
+                    schema: schema.into(),
+                    name: source.into(),
+                    new_schema: schema.into(),
+                    new_name: copy.into(),
+                    with_data,
+                    with_indexes,
+                };
+                let what = format!("{label} (data: {with_data}, indexes: {with_indexes})");
+                let plan = duplicate_plan(&session, &request, false)
+                    .await
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                // Every part is either kept or said not to be.
+                for part in [
+                    TablePart::PrimaryKey,
+                    TablePart::Indexes,
+                    TablePart::Checks,
+                    TablePart::Defaults,
+                ] {
+                    assert!(
+                        plan.kept.contains(&part) != plan.not_kept.contains(&part),
+                        "{what}: {part:?} in {plan:?}"
+                    );
+                }
+                let mut events = session.run_script(&plan.sql);
+                while let Some(event) = events.next().await {
+                    match event {
+                        CoreEvent::StatementFailed { error, .. } => {
+                            panic!("{what}: {}\n→ {}", plan.sql, error.message)
+                        }
+                        CoreEvent::ResultStarted { result, .. } => {
+                            session.results().remove(result);
+                        }
+                        _ => {}
+                    }
+                }
+                let duplicate = shape(label, &session, schema, copy).await;
+                let keeps = |part: TablePart| plan.kept.contains(&part);
+                assert_eq!(duplicate.columns, original.columns, "{what}");
+                assert_eq!(
+                    duplicate.primary_key,
+                    if keeps(TablePart::PrimaryKey) {
+                        original.primary_key.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    "{what}: {}",
+                    plan.sql
+                );
+                assert_eq!(
+                    duplicate.indexes,
+                    if keeps(TablePart::Indexes) {
+                        original.indexes
+                    } else {
+                        0
+                    },
+                    "{what}: {}",
+                    plan.sql
+                );
+                assert_eq!(
+                    duplicate.check_enforced,
+                    keeps(TablePart::Checks),
+                    "{what}: {}",
+                    plan.sql
+                );
+                assert_eq!(
+                    duplicate.default,
+                    keeps(TablePart::Defaults),
+                    "{what}: {}",
+                    plan.sql
+                );
+                assert_eq!(duplicate.rows, if with_data { "3" } else { "0" }, "{what}");
+                assert_eq!(plan.kept.contains(&TablePart::Rows), with_data, "{what}");
+                // The source is untouched.
+                assert_eq!(
+                    shape(label, &session, schema, source).await,
+                    original,
+                    "{what}"
+                );
+                let cleanup = drop(copy);
+                run(label, &session, &[cleanup.as_str()], false).await;
+            }
+        }
+        // Refused before anything is read on a read-only connection, and the statements as
+        // shown are refused by a read-only session too.
+        let request = DuplicateTable {
+            schema: schema.into(),
+            name: source.into(),
+            new_schema: schema.into(),
+            new_name: copy.into(),
+            with_data: true,
+            with_indexes: true,
+        };
+        assert_eq!(
+            duplicate_plan(&session, &request, true).await,
+            Err(ObjectError::ReadOnly),
+            "{label}"
+        );
+        let sql = duplicate_plan(&session, &request, false).await.unwrap().sql;
+        assert_eq!(
+            duplicate_plan(
+                &session,
+                &DuplicateTable {
+                    new_name: source.into(),
+                    ..request.clone()
+                },
+                false
+            )
+            .await,
+            Err(ObjectError::SameName),
+            "{label}"
+        );
+        let read_only = session.with_read_only(true);
+        assert!(
+            matches!(
+                check_run(&read_only, &sql, &Safeguards::default(), true),
+                Err(RunRefused::ReadOnly(_))
+            ),
+            "{label}: {sql}"
+        );
+        let session = read_only.with_read_only(false);
+        let cleanup = [drop(copy), drop(source)];
+        let refs: Vec<&str> = cleanup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, true).await;
         tested.push(label);
     }
     eprintln!("tested on {tested:?}");

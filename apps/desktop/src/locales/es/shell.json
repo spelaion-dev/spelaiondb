@@ -851,5 +851,33 @@
     "runsInTab": "Se ejecuta tal como se muestra en una pestaña nueva, donde aparece su salida.",
     "failed": "No se pudo preparar: {{detail}}",
     "run": "Ejecutar en una pestaña nueva"
+  },
+  "duplicate": {
+    "menu": "Duplicar la tabla…",
+    "title": "Duplicar {{name}}",
+    "newName": "Nombre nuevo",
+    "schema": "Esquema",
+    "withData": "Copiar también sus filas",
+    "withIndexes": "Conservar sus índices y restricciones",
+    "kept": "La copia conserva: {{parts}}.",
+    "notKept": "No se copia: {{parts}}.",
+    "runsInTab": "Se ejecuta tal como se muestra en una pestaña nueva; el servidor copia las filas.",
+    "failed": "No se pudo preparar la copia: {{detail}}",
+    "run": "Duplicar en una pestaña nueva",
+    "parts": {
+      "columns": "columnas y tipos",
+      "notNull": "NOT NULL",
+      "defaults": "valores por defecto",
+      "primaryKey": "la clave primaria",
+      "unique": "restricciones únicas",
+      "checks": "comprobaciones (CHECK)",
+      "indexes": "índices",
+      "foreignKeys": "claves ajenas",
+      "identity": "columnas de identidad / autoincremento",
+      "identityPosition": "por dónde sigue la identidad (vuelve a empezar)",
+      "comments": "comentarios",
+      "triggers": "disparadores",
+      "rows": "filas"
+    }
   }
 }

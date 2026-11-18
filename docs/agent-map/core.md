@@ -227,6 +227,8 @@
   refresh, TRUNCATE options, triggers, CHECK / REPAIR / OPTIMIZE, rebuilds, integrity checks),
   each run as shown in a tab of its own; `tests/object_actions.rs` runs each and refuses each on a
   read-only connection.
+  `objects/duplicate.rs` (SDB-394) writes the copy of a table in each engine's own form and says
+  what it keeps; `tests/object_actions.rs` checks what it keeps on every engine.
   `objects/users.rs` (ADR-048) creates roles, users and logins, changes their password, locks
   and drops them: the script shown and compared has `'***'` for the password, the real one is
   written only into the statement that runs (never recorded) and scrubbed from its errors; any
