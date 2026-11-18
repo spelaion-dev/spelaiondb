@@ -534,6 +534,18 @@ export const commands = {
 	 */
 	referencingKeys: (session: string, schema: string, table: string) => typedError<TableKeyItem[], string>(__TAURI_INVOKE("referencing_keys", { session, schema, table })),
 	/**
+	 *  A relation's comment and its properties from the catalog: owner, tablespace, storage
+	 *  engine… (SDB-393).
+	 */
+	objectProperties: (session: string, schema: string, table: string) => typedError<ObjectPropertiesItem_Serialize, string>(__TAURI_INVOKE("object_properties", { session, schema, table })),
+	/**
+	 *  How a table is partitioned and its partitions; `None` for a table that is not, or an engine
+	 *  that does not tell (SDB-393).
+	 */
+	tablePartitions: (session: string, schema: string, table: string) => typedError<PartitioningItem_Serialize | null, string>(__TAURI_INVOKE("table_partitions", { session, schema, table })),
+	/**  What a relation uses and what uses it; `None` when the engine cannot tell (SDB-393). */
+	objectDependencies: (session: string, schema: string, table: string) => typedError<DependenciesItem_Serialize | null, string>(__TAURI_INVOKE("object_dependencies", { session, schema, table })),
+	/**
 	 *  Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
 	 *  of `schema.table`): the core finds the key in the catalog again, reads the row's typed
 	 *  values and writes the filter of the table data tab it leads to.
@@ -2222,6 +2234,51 @@ export type DataSearchSummaryItem = {
 	/**  It stopped at the most hits a search returns. */
 	stopped: boolean,
 };
+
+/**
+ *  What a relation uses and what uses it; `untracked` are the kinds the engine does not record
+ *  (SDB-393).
+ */
+export type DependenciesItem = DependenciesItem_Serialize | DependenciesItem_Deserialize;
+
+/**
+ *  What a relation uses and what uses it; `untracked` are the kinds the engine does not record
+ *  (SDB-393).
+ */
+export type DependenciesItem_Deserialize = {
+	uses: DependencyItem_Deserialize[],
+	usedBy: DependencyItem_Deserialize[],
+	untracked: DependencyKindItem[],
+};
+
+/**
+ *  What a relation uses and what uses it; `untracked` are the kinds the engine does not record
+ *  (SDB-393).
+ */
+export type DependenciesItem_Serialize = {
+	uses: DependencyItem_Serialize[],
+	usedBy: DependencyItem_Serialize[],
+	untracked: DependencyKindItem[],
+};
+
+export type DependencyItem = DependencyItem_Serialize | DependencyItem_Deserialize;
+
+export type DependencyItem_Deserialize = {
+	schema: string,
+	name: string,
+	kind: DependencyKindItem,
+	detail?: string | null,
+};
+
+export type DependencyItem_Serialize = {
+	schema: string,
+	name: string,
+	kind: DependencyKindItem,
+	detail: string | null,
+};
+
+/**  What a dependency is. */
+export type DependencyKindItem = "table" | "view" | "materializedView" | "function" | "procedure" | "trigger" | "foreignKey" | "sequence" | "type" | "index" | "other";
 
 export type DiagramColumnsItem = "all" | "keys" | "none";
 
@@ -4262,6 +4319,31 @@ export type ObjectPathItem = {
 	names: string[],
 };
 
+/**  A relation's comment and its properties (SDB-393). */
+export type ObjectPropertiesItem = ObjectPropertiesItem_Serialize | ObjectPropertiesItem_Deserialize;
+
+/**  A relation's comment and its properties (SDB-393). */
+export type ObjectPropertiesItem_Deserialize = {
+	comment?: string | null,
+	properties: ObjectPropertyItem[],
+};
+
+/**  A relation's comment and its properties (SDB-393). */
+export type ObjectPropertiesItem_Serialize = {
+	comment: string | null,
+	properties: ObjectPropertyItem[],
+};
+
+/**
+ *  A foreign key seen from a table: its own (outgoing) or another table's that points to it
+ *  A property of a relation from the catalog (SDB-393): `name` is one of the driver contract's
+ *  `property` names (`owner`, `tablespace`, `engine`…) or the engine's own word.
+ */
+export type ObjectPropertyItem = {
+	name: string,
+	value: string,
+};
+
 /**
  *  An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
  *  writes the statements.
@@ -4351,6 +4433,41 @@ export type OutlineItem = {
 	entries: OutlineEntryItem[],
 	/**  How many statements the script has. */
 	total: number,
+};
+
+export type PartitionItem = PartitionItem_Serialize | PartitionItem_Deserialize;
+
+export type PartitionItem_Deserialize = {
+	schema: string,
+	name: string,
+	bound?: string | null,
+	estimatedRows?: number | null,
+	subpartitioned: boolean,
+};
+
+export type PartitionItem_Serialize = {
+	schema: string,
+	name: string,
+	bound: string | null,
+	estimatedRows: number | null,
+	subpartitioned: boolean,
+};
+
+/**  How a table is partitioned, and its partitions (SDB-393). */
+export type PartitioningItem = PartitioningItem_Serialize | PartitioningItem_Deserialize;
+
+/**  How a table is partitioned, and its partitions (SDB-393). */
+export type PartitioningItem_Deserialize = {
+	method: string,
+	key: string,
+	partitions: PartitionItem_Deserialize[],
+};
+
+/**  How a table is partitioned, and its partitions (SDB-393). */
+export type PartitioningItem_Serialize = {
+	method: string,
+	key: string,
+	partitions: PartitionItem_Serialize[],
 };
 
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
@@ -5975,6 +6092,11 @@ export type TableAlterationItem_Deserialize = {
 	table: string,
 	columns: ColumnEditItem_Deserialize[],
 	drop: DroppedConstraintItem[],
+	/**
+	 *  The table's comment as the form holds it (null or empty: none); the core changes it only
+	 *  when it differs from the catalog's (SDB-393).
+	 */
+	comment?: string | null,
 };
 
 /**  What a structure form asks for on one table; the core writes the SQL. */
@@ -5983,6 +6105,11 @@ export type TableAlterationItem_Serialize = {
 	table: string,
 	columns: ColumnEditItem_Serialize[],
 	drop: DroppedConstraintItem[],
+	/**
+	 *  The table's comment as the form holds it (null or empty: none); the core changes it only
+	 *  when it differs from the catalog's (SDB-393).
+	 */
+	comment: string | null,
 };
 
 export type TableDetails = TableDetails_Serialize | TableDetails_Deserialize;
@@ -6039,10 +6166,7 @@ export type TableFiltersItem_Serialize = {
 	refusedDefault: RefusedFilterItem | null,
 };
 
-/**
- *  A foreign key seen from a table: its own (outgoing) or another table's that points to it
- *  (incoming). `schema` and `table` are the other table.
- */
+/**  (incoming). `schema` and `table` are the other table. */
 export type TableKeyItem = {
 	direction: KeyDirectionItem,
 	name: string,
@@ -6112,6 +6236,8 @@ export type TableStructureItem = TableStructureItem_Serialize | TableStructureIt
 /**  A table's columns for its structure form, and what the engine does with a change. */
 export type TableStructureItem_Deserialize = {
 	columns: EditableColumnItem_Deserialize[],
+	/**  The table's comment (SDB-393). */
+	comment?: string | null,
 	comments: boolean,
 	transactional: boolean,
 	rebuilds: boolean,
@@ -6120,6 +6246,8 @@ export type TableStructureItem_Deserialize = {
 /**  A table's columns for its structure form, and what the engine does with a change. */
 export type TableStructureItem_Serialize = {
 	columns: EditableColumnItem_Serialize[],
+	/**  The table's comment (SDB-393). */
+	comment: string | null,
 	comments: boolean,
 	transactional: boolean,
 	rebuilds: boolean,

@@ -50,6 +50,11 @@ import {
   type SchemaItem,
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
+  type PartitioningItem_Serialize,
+  type DependenciesItem_Serialize,
+  type DependencyKindItem,
+  type ObjectPropertyItem,
+  type ObjectPropertiesItem_Serialize,
   type TableKeyItem,
   type KeyTargetItem,
   type KeyRefItem,
@@ -179,6 +184,10 @@ export type { SchemaObjectKindItem, ServerObjectKindItem };
 // The channel delivers the deserialization variant (optional fields).
 export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
+export type PartitioningItem = PartitioningItem_Serialize;
+export type DependenciesItem = DependenciesItem_Serialize;
+export type ObjectPropertiesItem = ObjectPropertiesItem_Serialize;
+export type { DependencyKindItem, ObjectPropertyItem };
 export type { TableKeyItem, KeyTargetItem, KeyRefItem };
 export type RowReferenceItem = RowReferenceItem_Serialize;
 export type SelectionStatsItem = SelectionStatsItem_Serialize;

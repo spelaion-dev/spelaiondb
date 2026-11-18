@@ -171,7 +171,10 @@
     "constraints": "Restricciones",
     "foreignKeys": "Claves foráneas",
     "references": "Referencias",
-    "indexes": "Índices"
+    "indexes": "Índices",
+    "properties": "Propiedades",
+    "partitions": "Particiones",
+    "dependencies": "Dependencias"
   },
   "tableDetails": {
     "title": "{{section}} de {{table}}",
@@ -201,7 +204,22 @@
     "close": "Cerrar",
     "referencingTable": "Tabla que referencia",
     "openData": "Abrir datos",
-    "referencesHint": "Claves foráneas de otras tablas que apuntan a {{table}}"
+    "referencesHint": "Claves foráneas de otras tablas que apuntan a {{table}}",
+    "property": "Propiedad",
+    "value": "Valor",
+    "bound": "Filas que guarda",
+    "rows": "Filas (estimación)",
+    "subpartitioned": "Subparticionada",
+    "direction": "Dirección",
+    "kind": "Tipo",
+    "detail": "Detalle",
+    "uses": "Usa",
+    "usedBy": "Lo usa",
+    "defaultPartition": "Partición por defecto",
+    "partitionedBy": "Particionada por {{method}} sobre {{key}}.",
+    "notPartitioned": "Esta tabla no está particionada, o el motor de esta conexión aún no lista particiones.",
+    "dependenciesUnknown": "El motor de esta conexión no puede decir qué usa este objeto ni qué lo usa.",
+    "untracked": "El motor no registra todas las dependencias de estos tipos, así que puede faltar alguna: {{kinds}}."
   },
   "newTableElement": {
     "title": "Añadir a {{section}} de {{table}}",
@@ -522,7 +540,9 @@
     "apply": "Aplicar cambios",
     "applying": "Aplicando…",
     "failed": "No se pudieron aplicar los cambios: {{detail}}",
-    "loadFailed": "No se pudieron leer las columnas: {{detail}}"
+    "loadFailed": "No se pudieron leer las columnas: {{detail}}",
+    "tableComment": "Comentario de la tabla",
+    "editComment": "Editar comentario…"
   },
   "create": {
     "table": "Nueva tabla…",
@@ -892,5 +912,30 @@
       "triggers": "disparadores",
       "rows": "filas"
     }
+  },
+  "properties": {
+    "comment": "Comentario",
+    "owner": "Propietario",
+    "tablespace": "Tablespace",
+    "engine": "Motor",
+    "collation": "Intercalación",
+    "charset": "Juego de caracteres",
+    "created": "Creada",
+    "updated": "Modificada",
+    "options": "Opciones",
+    "persistence": "Persistencia"
+  },
+  "dependencyKinds": {
+    "table": "Tabla",
+    "view": "Vista",
+    "materializedView": "Vista materializada",
+    "function": "Función",
+    "procedure": "Procedimiento",
+    "trigger": "Trigger",
+    "foreignKey": "Clave foránea",
+    "sequence": "Secuencia",
+    "type": "Tipo",
+    "index": "Índice",
+    "other": "Otro"
   }
 }

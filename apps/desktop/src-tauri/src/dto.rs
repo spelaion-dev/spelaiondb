@@ -526,6 +526,8 @@ pub struct EditableColumnItem {
 #[serde(rename_all = "camelCase")]
 pub struct TableStructureItem {
     pub columns: Vec<EditableColumnItem>,
+    /// The table's comment (SDB-393).
+    pub comment: Option<String>,
     pub comments: bool,
     pub transactional: bool,
     pub rebuilds: bool,
@@ -546,6 +548,7 @@ impl From<spelaion_core::TableStructure> for TableStructureItem {
                     generated: c.generated,
                 })
                 .collect(),
+            comment: structure.comment,
             comments: structure.comments,
             transactional: structure.transactional,
             rebuilds: structure.rebuilds,
@@ -584,6 +587,9 @@ pub struct TableAlterationItem {
     pub table: String,
     pub columns: Vec<ColumnEditItem>,
     pub drop: Vec<DroppedConstraintItem>,
+    /// The table's comment as the form holds it (null or empty: none); the core changes it only
+    /// when it differs from the catalog's (SDB-393).
+    pub comment: Option<String>,
 }
 
 impl From<TableAlterationItem> for spelaion_core::TableAlteration {
@@ -614,6 +620,7 @@ impl From<TableAlterationItem> for spelaion_core::TableAlteration {
                     }
                 })
                 .collect(),
+            comment: Some(item.comment),
         }
     }
 }
@@ -2552,6 +2559,142 @@ impl From<KeyDirectionItem> for spelaion_core::KeyDirection {
 }
 
 /// A foreign key seen from a table: its own (outgoing) or another table's that points to it
+/// A property of a relation from the catalog (SDB-393): `name` is one of the driver contract's
+/// `property` names (`owner`, `tablespace`, `engine`…) or the engine's own word.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectPropertyItem {
+    pub name: String,
+    pub value: String,
+}
+
+impl From<spelaion_driver_api::ObjectProperty> for ObjectPropertyItem {
+    fn from(p: spelaion_driver_api::ObjectProperty) -> Self {
+        Self {
+            name: p.name,
+            value: p.value,
+        }
+    }
+}
+
+/// A relation's comment and its properties (SDB-393).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectPropertiesItem {
+    pub comment: Option<String>,
+    pub properties: Vec<ObjectPropertyItem>,
+}
+
+/// How a table is partitioned, and its partitions (SDB-393).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitioningItem {
+    pub method: String,
+    pub key: String,
+    pub partitions: Vec<PartitionItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionItem {
+    pub schema: String,
+    pub name: String,
+    pub bound: Option<String>,
+    pub estimated_rows: Option<f64>,
+    pub subpartitioned: bool,
+}
+
+impl From<spelaion_driver_api::Partitioning> for PartitioningItem {
+    fn from(p: spelaion_driver_api::Partitioning) -> Self {
+        Self {
+            method: p.method,
+            key: p.key,
+            partitions: p
+                .partitions
+                .into_iter()
+                .map(|part| PartitionItem {
+                    schema: part.schema,
+                    name: part.name,
+                    bound: part.bound,
+                    estimated_rows: part.estimated_rows.map(|n| n as f64),
+                    subpartitioned: part.subpartitioned,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What a dependency is.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum DependencyKindItem {
+    Table,
+    View,
+    MaterializedView,
+    Function,
+    Procedure,
+    Trigger,
+    ForeignKey,
+    Sequence,
+    Type,
+    Index,
+    Other,
+}
+
+impl From<spelaion_driver_api::DependencyKind> for DependencyKindItem {
+    fn from(kind: spelaion_driver_api::DependencyKind) -> Self {
+        use spelaion_driver_api::DependencyKind as K;
+        match kind {
+            K::Table => Self::Table,
+            K::View => Self::View,
+            K::MaterializedView => Self::MaterializedView,
+            K::Function => Self::Function,
+            K::Procedure => Self::Procedure,
+            K::Trigger => Self::Trigger,
+            K::ForeignKey => Self::ForeignKey,
+            K::Sequence => Self::Sequence,
+            K::Type => Self::Type,
+            K::Index => Self::Index,
+            K::Other => Self::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencyItem {
+    pub schema: String,
+    pub name: String,
+    pub kind: DependencyKindItem,
+    pub detail: Option<String>,
+}
+
+/// What a relation uses and what uses it; `untracked` are the kinds the engine does not record
+/// (SDB-393).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DependenciesItem {
+    pub uses: Vec<DependencyItem>,
+    pub used_by: Vec<DependencyItem>,
+    pub untracked: Vec<DependencyKindItem>,
+}
+
+impl From<spelaion_driver_api::Dependencies> for DependenciesItem {
+    fn from(d: spelaion_driver_api::Dependencies) -> Self {
+        let item = |d: spelaion_driver_api::DependencyInfo| DependencyItem {
+            schema: d.schema,
+            name: d.name,
+            kind: d.kind.into(),
+            detail: d.detail,
+        };
+        Self {
+            uses: d.uses.into_iter().map(item).collect(),
+            used_by: d.used_by.into_iter().map(item).collect(),
+            untracked: d.untracked.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 /// (incoming). `schema` and `table` are the other table.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

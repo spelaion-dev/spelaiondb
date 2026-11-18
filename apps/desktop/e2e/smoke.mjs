@@ -3558,6 +3558,25 @@ try {
     (await panel.locator(".cm-content").innerText()).trimEnd(),
     "DROP VIEW IF EXISTS big_orders;\nCREATE VIEW big_orders as select * from orders where total > 500;",
   );
+  // A view's dependencies (SDB-393): SQLite reads the tables it uses from the program it
+  // compiles for the view, and says what it does not record.
+  {
+    const viewRow = page.getByRole("button", { name: "Expand or collapse big_orders", exact: true });
+    const viewNode = page.locator(".node", { has: viewRow }).last();
+    await viewRow.locator(".twisty").click();
+    await viewNode.getByRole("button", { name: "Dependencies", exact: true }).click();
+    const dependencies = page.getByRole("region", { name: "Dependencies of big_orders" });
+    await dependencies.locator("tbody tr", { hasText: "orders" }).waitFor();
+    assert.deepEqual(
+      (await dependencies.locator("tbody tr").first().locator("td").allInnerTexts()).slice(0, 4),
+      ["Uses", "Table", "orders", "—"],
+    );
+    await dependencies.getByText("The engine does not record every dependency of these kinds", { exact: false }).waitFor();
+    await shot("sdb-393-dependencies");
+    await page.keyboard.press("Control+w");
+    await dependencies.waitFor({ state: "detached" });
+    await viewRow.locator(".twisty").click();
+  }
   // A trigger's definition, as SQLite keeps it, opens in a new tab and does not run.
   await page.getByRole("button", { name: "Expand or collapse Triggers", exact: true }).click();
   const triggerNode = page.getByRole("button", { name: "product_stock_check: open its definition", exact: true });
@@ -5888,6 +5907,54 @@ try {
     await page.waitForFunction(() => !document.querySelector(".tab-panel:not([hidden]) .editor-action-cancel"));
     await ranPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
     await page.keyboard.press("Control+w");
+  }
+
+  step("object details: a partitioned table's Partitions tab and node in the explorer (SDB-393)");
+  {
+    const created = await newQuery(
+      "Postgres (Docker)",
+      "drop table if exists smoke_part;\n" +
+        "create table smoke_part (id int, at date) partition by range (at);\n" +
+        "create table smoke_part_2025 partition of smoke_part for values from ('2025-01-01') to ('2026-01-01');",
+    );
+    await run(created);
+    await page.getByRole("button", { name: "Run anyway" }).click();
+    await created.getByText("Statement 3: OK", { exact: false }).first().waitFor();
+    // The test PostgreSQL is shared: a failure below still drops the table, as far as it can.
+    const dropPart = async () => {
+      await replaceQuery(created, "drop table if exists smoke_part;");
+      await run(created);
+      await page.getByRole("button", { name: "Run anyway" }).click();
+      await created.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    };
+    try {
+      await (await connectionMenu("Postgres (Docker)")).getByRole("menuitem", { name: "Refresh all schemas" }).click();
+      const pgNode = page.locator('.node:has(> .connection-row:has-text("Postgres (Docker)"))');
+      const partRow = pgNode.getByRole("button", { name: "Expand or collapse smoke_part", exact: true });
+      const publicSchema = pgNode.getByRole("button", { name: "Expand or collapse schema public", exact: true });
+      if ((await publicSchema.getAttribute("aria-expanded")) !== "true") await publicSchema.click();
+      const tables = pgNode.getByRole("button", { name: "Expand or collapse Tables", exact: true }).first();
+      if ((await tables.getAttribute("aria-expanded")) !== "true") await tables.click();
+      await partRow.waitFor();
+      await partRow.locator(".twisty").click();
+      // A partitioned table always has its Partitions: listed when the engine tells them. It is the
+      // only partitioned table open in the explorer.
+      const partitionsFolder = pgNode.getByRole("button", { name: "Expand or collapse Partitions", exact: true });
+      await partitionsFolder.dblclick();
+      const partitions = page.getByRole("region", { name: "Partitions of smoke_part" });
+      // The pinned plugin may not list partitions yet (its protocol is older than 1.2): it says so.
+      await partitions.getByText("smoke_part_2025").or(partitions.getByText("does not list partitions yet", { exact: false })).first().waitFor();
+      await shot("sdb-393-partitions");
+      await page.keyboard.press("Control+w");
+      await partitions.waitFor({ state: "detached" });
+      await partRow.locator(".twisty").click();
+    } catch (error) {
+      await page.keyboard.press("Escape").catch(() => {});
+      await created.locator(".cm-content").click({ timeout: 5_000 }).then(dropPart, () => {}).catch(() => {});
+      throw error;
+    }
+    await dropPart();
+    await page.locator(".tabbar .tab.active .close").click();
   }
 
   step("backup and restore: the vendor's tools found or reported missing, a live log, a confirmed restore (ADR-049)");
