@@ -439,7 +439,9 @@ try {
     await visibleText('[role="dialog"] .import-sql', "visits_from_clipboard");
     await wd.click(await button("Import", '[role="dialog"]'));
     await visibleText('[role="dialog"]', "Imported 3 rows into visits_from_clipboard");
-    await wd.press("Escape");
+    // Use the completed import's Close button without depending on focus during the transition
+    // from the running import's controls.
+    await wd.click(await button("Close", ".import-dialog"));
     await wd.waitDetached(d, { what: "the import dialog to close" });
     // The editor's own paste (the paste event), with the text another program copied: the row
     // is only found if "ñ" arrived intact.
