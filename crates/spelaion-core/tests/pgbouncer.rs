@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use futures_util::StreamExt;
 use spelaion_config::{ConnectionId, Resolver, Source, SystemBackend, TrustStore, load};
 use spelaion_core::{
-    CoreEvent, Engines, OpenConnection, OpenOptions, ReadLimits, ResultStore, TunnelPool,
-    open_connection, set_active_schema,
+    CoreEvent, Engines, OpenConnection, OpenOptions, ReadLimits, ResultStore, SessionReadOnlyError,
+    TunnelPool, open_connection, set_active_schema, set_session_read_only,
 };
 use spelaion_driver_api::{ExecEvent, ExecOptions, InsertTarget, Secret, TextRows, Value};
 use spelaion_ssh::{KnownHosts, NonInteractive};
@@ -137,11 +137,11 @@ async fn bound(open: &OpenConnection, sql: &str, params: &[&str]) -> Result<Stri
         .map_err(|e| e.to_string())?;
     let mut first = None;
     while let Some(event) = events.next().await {
-        if let ExecEvent::Batch(batch) = event.map_err(|e| e.to_string())? {
-            if first.is_none() && batch.num_rows() > 0 {
-                first =
-                    Some(arrow::util::display::array_value_to_string(batch.column(0), 0).unwrap());
-            }
+        if let ExecEvent::Batch(batch) = event.map_err(|e| e.to_string())?
+            && first.is_none()
+            && batch.num_rows() > 0
+        {
+            first = Some(arrow::util::display::array_value_to_string(batch.column(0), 0).unwrap());
         }
     }
     first.ok_or_else(|| "no row".into())
@@ -252,6 +252,13 @@ async fn the_session_s_schema_is_refused_with_why_behind_a_transaction_pooler() 
         .await
         .unwrap_err();
     assert!(error.to_string().contains("transaction mode"), "{error}");
+    // "Read-only for this session" would hold for one transaction: refused, nothing changed.
+    let refused = set_session_read_only(&open, true).await.unwrap_err();
+    assert!(
+        matches!(&refused, SessionReadOnlyError::ServerRefuses(why) if why.contains("transaction mode")),
+        "{refused}"
+    );
+    assert!(!open.session.is_session_read_only());
     open.close().await;
 
     // In session mode the pooler keeps the session: the schema can be set.

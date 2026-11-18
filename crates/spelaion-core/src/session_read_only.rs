@@ -75,6 +75,15 @@ pub async fn set_session_read_only(
     {
         return Err(SessionReadOnlyError::ServerRefuses(reason));
     }
+    // Behind a pooler in transaction mode (SDB-396) the engine's session mode would hold for
+    // one transaction only: refused, as a read-only connection is refused there.
+    if read_only && session.is_transaction_pooled() {
+        return Err(SessionReadOnlyError::ServerRefuses(
+            "this connection goes through a pooler in transaction mode, which keeps no session \
+             settings: use a read-only database user, or connect through the pooler in session mode"
+                .into(),
+        ));
+    }
     if session.transaction_status().in_transaction() {
         return Err(SessionReadOnlyError::TransactionOpen);
     }
