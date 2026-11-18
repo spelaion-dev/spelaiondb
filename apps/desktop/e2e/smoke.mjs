@@ -4264,6 +4264,16 @@ try {
   assert.equal(await ordersNode.getAttribute("aria-expanded"), "false");
   await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
   const range = panel.locator(".table-range");
+  // What reads the tab's page again (a page button, a header click) replaces its grid: the one
+  // shown goes away and another is mounted when the page arrives, and Apply is disabled until
+  // then. A click sent in between reaches no grid, so wait for the new one (SDB-423).
+  const tablePageReloadedBy = async (action) => {
+    const shownGrid = await panel.locator(".grid-scroller").elementHandle();
+    await action();
+    await page.waitForFunction((grid) => !grid.isConnected, shownGrid);
+    await panel.locator(".grid-scroller").waitFor();
+    await page.waitForFunction(() => !document.querySelector('.tab-panel:not([hidden]) .table-bar button[type="submit"]')?.disabled);
+  };
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   await panel.getByText("This page only", { exact: true }).waitFor();
   const beforeRefresh = await panel.locator(".result-tab-item.active").getAttribute("data-result");
@@ -4384,7 +4394,7 @@ try {
     await shot("05j-transposed-row");
     await panel.getByRole("button", { name: "Show rows" }).click();
     await transposed.waitFor({ state: "detached" });
-    await pages.getByRole("button", { name: "First page" }).click();
+    await tablePageReloadedBy(() => pages.getByRole("button", { name: "First page" }).click());
     await range.filter({ hasText: "rows 1–500" }).waitFor();
   }
   // A header click sorts in the server: ORDER BY written with the engine's quoting.
@@ -4395,8 +4405,11 @@ try {
       box = await panel.locator(".grid-scroller").boundingBox();
       if (!box) await page.waitForTimeout(100);
     }
-    await page.mouse.click(box.x + 52 + 20, box.y + 18);
-    await page.mouse.click(box.x + 52 + 20, box.y + 18);
+    // Each click reads the page again, which replaces the grid: the second click waits for the
+    // new one, or it lands on the grid going away and is lost (SDB-423).
+    await tablePageReloadedBy(() => page.mouse.click(box.x + 52 + 20, box.y + 18));
+    await panel.locator('.grid-scroller[aria-label$="sorted by id, ascending"]').waitFor();
+    await tablePageReloadedBy(() => page.mouse.click(box.x + 52 + 20, box.y + 18));
     await panel.locator('.grid-scroller[aria-label$="sorted by id, descending"]').waitFor();
     assert.equal(await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue(), "id DESC");
     await range.filter({ hasText: "rows 1–500" }).waitFor();
