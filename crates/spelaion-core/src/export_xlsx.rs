@@ -51,6 +51,10 @@ const STYLE_HEADER: u8 = 1;
 const STYLE_DATE: u8 = 2;
 const STYLE_TIMESTAMP: u8 = 3;
 const STYLE_TIME: u8 = 4;
+/// A timestamp or a time with a fraction of a second: shown with milliseconds, so Excel does
+/// not round the seconds it shows (the cell keeps the microseconds).
+const STYLE_TIMESTAMP_MS: u8 = 5;
+const STYLE_TIME_MS: u8 = 6;
 
 /// How a column's cells are written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,13 +67,18 @@ enum Kind {
     Time,
     Timestamp,
     Text,
+    /// Text that holds dates of this type, read by its native type (`temporal.rs`: MySQL's
+    /// `DATE` and `DATETIME`, SQL Server's `datetime2`, `datetimeoffset` and `time`).
+    TextDate(LogicalType),
 }
 
 impl Kind {
     fn of(field: &Field) -> (Kind, LogicalType) {
-        let logical = ColumnMeta::from_field(field)
-            .map(|m| m.logical)
-            .unwrap_or(LogicalType::Text);
+        let meta = ColumnMeta::from_field(field);
+        if let Some(dates) = meta.as_ref().and_then(crate::temporal::text_temporal) {
+            return (Kind::TextDate(dates), LogicalType::Text);
+        }
+        let logical = meta.map(|m| m.logical).unwrap_or(LogicalType::Text);
         let kind = match logical {
             LogicalType::Int => Kind::Int,
             LogicalType::Float => Kind::Float,
@@ -89,6 +98,44 @@ impl Kind {
         };
         (kind, logical)
     }
+
+    /// The width a column of dates or booleans needs to show them, in characters; `None`:
+    /// Excel's.
+    fn width(self) -> Option<u8> {
+        match self {
+            Kind::Date | Kind::TextDate(LogicalType::Date) => Some(11),
+            Kind::Timestamp | Kind::TextDate(LogicalType::Timestamp | LogicalType::TimestampTz) => {
+                Some(24)
+            }
+            Kind::Time | Kind::TextDate(LogicalType::Time) => Some(13),
+            // `VERDADERO`, `FALSCH`: Excel shows a boolean in its own language.
+            Kind::Bool => Some(11),
+            Kind::Int | Kind::Float | Kind::Decimal | Kind::Text | Kind::TextDate(_) => None,
+        }
+    }
+}
+
+/// A date column's text as the date it holds, and how it is written; `None` for text that is no
+/// date (MySQL's `0000-00-00`) or that keeps more than a cell does (SQL Server's 100 ns).
+fn text_date(text: &str, dates: LogicalType) -> Option<(Kind, Value)> {
+    let clock = text
+        .split(' ')
+        .nth(if dates == LogicalType::Time { 0 } else { 1 });
+    let fraction = clock
+        .and_then(|c| c.split_once('.'))
+        .map(|(_, f)| f.trim_end_matches('0').len())
+        .unwrap_or(0);
+    if fraction > 6 {
+        return None;
+    }
+    let value = crate::temporal::parse(text, dates)?;
+    let kind = match value {
+        Value::Date(_) => Kind::Date,
+        Value::Timestamp(_) | Value::TimestampTz(_) => Kind::Timestamp,
+        Value::Time(_) => Kind::Time,
+        _ => return None,
+    };
+    Some((kind, value))
 }
 
 /// The columns of the sheet being written.
@@ -222,8 +269,22 @@ impl XlsxBook {
              xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\
              <sheetViews><sheetView workbookViewId=\"0\">\
              <pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/>\
-             </sheetView></sheetViews><sheetData><row r=\"1\">",
+             </sheetView></sheetViews>",
         );
+        if sheet.kinds.iter().any(|k| k.width().is_some()) {
+            head.push_str("<cols>");
+            for (i, kind) in sheet.kinds.iter().enumerate() {
+                if let Some(width) = kind.width() {
+                    let n = i + 1;
+                    let _ = write!(
+                        head,
+                        "<col min=\"{n}\" max=\"{n}\" width=\"{width}\" customWidth=\"1\"/>"
+                    );
+                }
+            }
+            head.push_str("</cols>");
+        }
+        head.push_str("<sheetData><row r=\"1\">");
         for (name, letter) in sheet.names.iter().zip(&sheet.letters) {
             let _ = write!(
                 head,
@@ -261,17 +322,17 @@ impl XlsxBook {
             let number = sheet.rows + 1;
             let _ = write!(self.line, "<row r=\"{number}\">");
             for (i, &column) in sheet.columns.iter().enumerate() {
-                let value =
+                let mut value =
                     Value::from_array(batch.column(column).as_ref(), row, sheet.logicals[i])
                         .unwrap_or(Value::Null);
-                cell(
-                    &mut self.line,
-                    &sheet.letters[i],
-                    number,
-                    sheet.kinds[i],
-                    &value,
-                )
-                .map_err(|e| {
+                let mut kind = sheet.kinds[i];
+                if let (Kind::TextDate(dates), Value::Text(text)) = (kind, &value) {
+                    kind = Kind::Text;
+                    if let Some((date_kind, date)) = text_date(text, dates) {
+                        (kind, value) = (date_kind, date);
+                    }
+                }
+                cell(&mut self.line, &sheet.letters[i], number, kind, &value).map_err(|e| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("{}: {e}", sheet.names[i]),
@@ -368,13 +429,23 @@ fn cell(out: &mut String, letter: &str, row: u64, kind: Kind, value: &Value) -> 
         }
         (Kind::Timestamp, Value::Timestamp(us) | Value::TimestampTz(us)) => {
             if let Some(serial) = timestamp_serial(*us) {
-                number(out, Some(STYLE_TIMESTAMP), &format!("{serial:?}"));
+                let style = if us % 1_000_000 == 0 {
+                    STYLE_TIMESTAMP
+                } else {
+                    STYLE_TIMESTAMP_MS
+                };
+                number(out, Some(style), &format!("{serial:?}"));
                 return Ok(());
             }
         }
         (Kind::Time, Value::Time(us)) if (0..MICROS_PER_DAY).contains(us) => {
             let fraction = *us as f64 / MICROS_PER_DAY as f64;
-            number(out, Some(STYLE_TIME), &format!("{fraction:?}"));
+            let style = if us % 1_000_000 == 0 {
+                STYLE_TIME
+            } else {
+                STYLE_TIME_MS
+            };
+            number(out, Some(style), &format!("{fraction:?}"));
             return Ok(());
         }
         // Anything else is written as the text CSV would hold.
@@ -631,13 +702,15 @@ fn workbook_rels(sheets: usize) -> String {
 }
 
 /// Fonts: normal and bold (the header). Cell formats, by the `STYLE_*` indexes: none, the
-/// header, a date, a timestamp and a time.
+/// header, a date, a timestamp, a time, and a timestamp and a time with milliseconds.
 const STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
     <styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\
-    <numFmts count=\"3\">\
+    <numFmts count=\"5\">\
     <numFmt numFmtId=\"164\" formatCode=\"yyyy\\-mm\\-dd\"/>\
     <numFmt numFmtId=\"165\" formatCode=\"yyyy\\-mm\\-dd\\ hh:mm:ss\"/>\
     <numFmt numFmtId=\"166\" formatCode=\"hh:mm:ss\"/>\
+    <numFmt numFmtId=\"167\" formatCode=\"yyyy\\-mm\\-dd\\ hh:mm:ss.000\"/>\
+    <numFmt numFmtId=\"168\" formatCode=\"hh:mm:ss.000\"/>\
     </numFmts>\
     <fonts count=\"2\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font>\
     <font><b/><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>\
@@ -645,12 +718,14 @@ const STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\
     <fill><patternFill patternType=\"gray125\"/></fill></fills>\
     <borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>\
     <cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>\
-    <cellXfs count=\"5\">\
+    <cellXfs count=\"7\">\
     <xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>\
     <xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>\
     <xf numFmtId=\"164\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>\
     <xf numFmtId=\"165\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>\
     <xf numFmtId=\"166\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>\
+    <xf numFmtId=\"167\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>\
+    <xf numFmtId=\"168\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>\
     </cellXfs>\
     <cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>\
     </styleSheet>";
@@ -728,6 +803,30 @@ mod tests {
         assert_eq!(timestamp_serial(-MICROS_PER_DAY / 4), Some(25_568.75));
         assert_eq!(timestamp_serial(i64::MAX), None);
         assert_eq!(timestamp_serial(i64::MIN), None);
+    }
+
+    #[test]
+    fn date_text_becomes_dates_only_when_a_cell_holds_it() {
+        assert_eq!(
+            text_date("2024-03-04", LogicalType::Date),
+            Some((Kind::Date, Value::Date(19_786)))
+        );
+        assert_eq!(
+            text_date("2024-03-04 10:00:00.500", LogicalType::Timestamp),
+            Some((Kind::Timestamp, Value::Timestamp(1_709_546_400_500_000)))
+        );
+        assert_eq!(
+            text_date("10:00:00.1200000", LogicalType::Time),
+            Some((Kind::Time, Value::Time(36_000_120_000)))
+        );
+        // A zero date is no date; 100 ns are more than a cell keeps.
+        assert_eq!(text_date("0000-00-00", LogicalType::Date), None);
+        assert_eq!(
+            text_date("2024-03-04 10:00:00.1234567", LogicalType::Timestamp),
+            None
+        );
+        assert_eq!(Kind::TextDate(LogicalType::Timestamp).width(), Some(24));
+        assert_eq!(Kind::Text.width(), None);
     }
 
     #[test]
