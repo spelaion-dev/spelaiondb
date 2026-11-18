@@ -6995,15 +6995,21 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   }
   // A typed value that does not fit the column is refused by the core; nothing is applied.
   {
-    const box = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 34 + 12);
+    const grid = panel.getByRole("grid");
+    // Wait for the new grid to report the selected cell before asking it to start editing.
+    const editQty = async () => {
+      await grid.click({ position: { x: 52 + 270 + 20, y: 34 + 12 } });
+      await grid.getByRole("gridcell", { name: /^Row 1, qty \(/ }).waitFor();
+      await grid.press("F2");
+    };
+    await editQty();
     // The grid's own editor: the open cell viewer has an edit box with the same name.
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for qty" }));
     await editor.fill("123");
     await editor.press("Enter");
     await page.keyboard.press("Control+z");
     await panel.getByText("No pending changes").waitFor();
-    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 34 + 12);
+    await editQty();
     await editor.fill("lots");
     await editor.press("Enter");
     await panel.getByRole("button", { name: "Save changes" }).click();
