@@ -31,6 +31,7 @@ import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
 import { saveHistoryPreference } from "../historyPreference";
 import { fieldList } from "../fieldNames";
+import { ObjectMenu } from "./ObjectMenu";
 import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
@@ -58,6 +59,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
    *  PostgreSQL connection, SDB-169): it names the form, the connection is `engine`'s. */
   const [kind, setKind] = useState<EngineItem | null>(null);
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
+  const [openImportMenu, setOpenImportMenu] = useState(dialog.kind === "add" && dialog.openImportMenu === true);
   const [importing, setImporting] = useState<ImportClientId | null>(null);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
@@ -174,7 +176,11 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : (
           <EnginePicker
             engines={engines}
-            onImport={(client) => setImporting(client)}
+            openImportMenu={openImportMenu}
+            onImport={(client) => {
+              setOpenImportMenu(false);
+              setImporting(client);
+            }}
             onPick={(picked, fields) => {
               const base = connectionEngine(engines, picked);
               if (!base) return;
@@ -203,6 +209,71 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   );
 }
 
+function ImportMenu({ openInitially, onPick }: { openInitially: boolean; onPick(client: ImportClientId): void }) {
+  const { t } = useTranslation("connections");
+  const button = useRef<HTMLButtonElement>(null);
+  const row = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const items = () => Array.from(row.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? []);
+  const open = useCallback(() => {
+    const rect = button.current?.getBoundingClientRect();
+    if (rect) setAt({ x: rect.left, y: rect.bottom });
+  }, []);
+
+  useEffect(() => { if (openInitially) open(); }, [openInitially, open]);
+  useEffect(() => { if (at) items()[0]?.focus(); }, [at]);
+
+  return (
+    <div
+      ref={row}
+      className="import-row"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setAt(null);
+      }}
+      onKeyDown={(e) => {
+        if (!at) return;
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          setAt(null);
+          button.current?.focus();
+        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const choices = items();
+          const current = choices.indexOf(document.activeElement as HTMLButtonElement);
+          const next = e.key === "ArrowDown" ? current + 1 : current < 0 ? choices.length - 1 : current - 1;
+          choices[(next + choices.length) % choices.length]?.focus();
+        }
+      }}
+    >
+      <button
+        ref={button}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={at !== null}
+        onClick={() => at ? setAt(null) : open()}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !at) {
+            e.preventDefault();
+            open();
+          }
+        }}
+      >
+        {t("importer.open")}
+      </button>
+      {at && (
+        <ObjectMenu at={at} label={t("importer.open")}>
+          {IMPORT_CLIENTS.map((client) => (
+            <button key={client.id} role="menuitem" type="button" tabIndex={-1} onClick={() => onPick(client.id)}>
+              {client.label}
+            </button>
+          ))}
+        </ObjectMenu>
+      )}
+    </div>
+  );
+}
+
 function EngineBadge({ engine }: { engine: EngineItem }) {
   return (
     <EngineIcon engine={engine.id} fallback={engine.engine} />
@@ -218,10 +289,12 @@ function connectionEngine(engines: EngineItem[], picked: EngineItem): EngineItem
 
 function EnginePicker({
   engines,
+  openImportMenu,
   onPick,
   onImport,
 }: {
   engines: EngineItem[];
+  openImportMenu: boolean;
   onPick(engine: EngineItem, fields?: UrlFields): void;
   onImport(client: ImportClientId): void;
 }) {
@@ -286,14 +359,7 @@ function EnginePicker({
           {urlError}
         </p>
       )}
-      <div className="import-row">
-        <span className="muted small">{t("importer.or")}</span>
-        {IMPORT_CLIENTS.map((client) => (
-          <button key={client.id} onClick={() => onImport(client.id)}>
-            {t("importer.button", { client: client.label })}
-          </button>
-        ))}
-      </div>
+      <ImportMenu openInitially={openImportMenu} onPick={onImport} />
       <div className="engine-groups">
         {CATEGORIES.map((category) => {
           const items = visible.filter((e) => e.category === category);

@@ -373,8 +373,7 @@
     "unsupported": "This app has no driver for that database yet."
   },
   "importer": {
-    "or": "Or bring your connections from another client:",
-    "button": "Import from {{client}}…",
+    "open": "Import connections from another client…",
     "title": "Import from {{client}}",
     "from": "From",
     "defaultFolder": "{{client}}'s folders",
