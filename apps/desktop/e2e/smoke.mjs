@@ -3850,6 +3850,44 @@ try {
       assert.equal(bytes.subarray(bytes.length - 4).toString("latin1"), "PAR1", name);
     }
   }
+  // The same tables as one Excel workbook, a sheet each (SDB-390).
+  {
+    const folder = join(userDir, "xlsx");
+    mkdirSync(folder, { recursive: true });
+    const today = () => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    };
+    const before = today();
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
+    await ordersNode.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Export 2 tables\u2026" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export 2 tables" });
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("xlsx");
+    await dialog.getByText("One workbook in the folder you choose", { exact: false }).waitFor();
+    await dialog.locator(".export-file summary").click();
+    await dialog.locator('input[name="export-name-pattern"]').fill("workbook_{date}");
+    // A workbook is a zip already: no gzip.
+    assert.equal(await dialog.getByRole("checkbox", { name: "Compress with gzip" }).isDisabled(), true);
+    await shot("sdb-390-export-xlsx-light");
+    const themeBefore = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
+    await shot("sdb-390-export-xlsx-dark");
+    await page.evaluate((value) => {
+      if (value === null) document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.dataset.theme = value;
+      window.dispatchEvent(new Event("spelaion-themechange"));
+    }, themeBefore);
+    await dialog.getByRole("button", { name: "Export\u2026" }).click();
+    await dialog.locator(".export-result", { hasText: "a sheet each" }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+    const written = readdirSync(folder);
+    const dates = [...new Set([before, today()])];
+    assert.ok(dates.some((date) => JSON.stringify(written) === JSON.stringify([`workbook_${date}.xlsx`])), written.join(", "));
+    const bytes = readFileSync(join(folder, written[0]));
+    assert.equal(bytes.subarray(0, 4).toString("latin1"), "PK\x03\x04");
+  }
   // A plain click forgets the choice without expanding the table.
   await ordersNode.click();
   assert.equal(await customerRow.getAttribute("aria-selected"), "false");
@@ -6220,6 +6258,30 @@ try {
     await dropImported.waitFor({ state: "detached" });
     await check.getByText("Statement 1: OK", { exact: false }).first().waitFor();
     await page.locator(".tabbar .tab.active .close").click();
+
+    // The workbook exported above: its sheets are offered, and the chosen one is read (SDB-390).
+    const workbookDir = join(userDir, "xlsx");
+    const workbook = join(workbookDir, readdirSync(workbookDir)[0]);
+    await mainSchema.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Import data into a new table…" }).click();
+    const sheets = page.getByRole("dialog", { name: "Import data" });
+    await sheets.waitFor();
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, workbook);
+    await sheets.getByRole("button", { name: "Choose file…" }).click();
+    const sheetPreview = sheets.getByRole("region", { name: "Preview" });
+    await sheetPreview.locator("tbody tr").first().waitFor();
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    await sheets.locator(".import-options summary").click();
+    const sheetSelect = sheets.locator('select[name="import-sheet"]');
+    // A sheet per table, in the order they were chosen; the first one is read.
+    assert.deepEqual(await sheetSelect.locator("option").allTextContents(), ["orders", "customer"]);
+    await sheetPreview.locator("th", { hasText: "customer_id" }).waitFor();
+    await sheets.getByText("Types detected from the first 1,000 rows", { exact: false }).waitFor();
+    await shot("sdb-390-import-sheet");
+    await sheetSelect.selectOption("customer");
+    await sheetPreview.locator("th", { hasText: "customer_id" }).waitFor({ state: "detached" });
+    await sheets.getByRole("button", { name: "Close", exact: true }).click();
+    await sheets.waitFor({ state: "detached" });
   }
 
   step("MySQL and MariaDB: password, TLS, types and the schema explorer");

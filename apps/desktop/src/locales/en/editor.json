@@ -66,7 +66,8 @@
       "html": "HTML table",
       "ndjson": "NDJSON (one JSON object per line)",
       "parquet": "Parquet",
-      "arrowIpc": "Arrow IPC file"
+      "arrowIpc": "Arrow IPC file",
+      "xlsx": "Excel (XLSX)"
     },
     "sortAsc": "Sort ascending",
     "sortDesc": "Sort descending",
@@ -752,7 +753,11 @@
     "upsertTableOnly": "Upserts need a table: export every row of a table to write them.",
     "jsonOptions": "JSON options",
     "isoDates": "Timestamps in ISO 8601",
-    "jsonAsJson": "JSON columns as JSON, not as text"
+    "jsonAsJson": "JSON columns as JSON, not as text",
+    "tablesWorkbookHint": "One workbook in the folder you choose, a sheet per table, named by the file name pattern ({table} is the database). An existing file is kept: a new name is used instead.",
+    "workbookDone_one": "{{rows}} rows of {{formattedCount}} table written to {{path}}.",
+    "workbookDone_other": "{{rows}} rows of {{formattedCount}} tables written to {{path}}, a sheet each.",
+    "gzipWorkbook": "A workbook is compressed already."
   },
   "import": {
     "title": "Import data",
@@ -778,7 +783,8 @@
       "csv": "CSV",
       "tsv": "TSV (tab-separated)",
       "json": "JSON array",
-      "markdown": "Markdown table"
+      "markdown": "Markdown table",
+      "xlsx": "Excel workbook (XLSX)"
     },
     "encoding": "Encoding",
     "encodingAuto": "Detect ({{found}})",
@@ -864,7 +870,8 @@
     "cancelled_one": "Import cancelled: {{formattedCount}} row was committed before; the rest of its batch was rolled back.",
     "cancelled_other": "Import cancelled: {{formattedCount}} rows were committed before; the rest of their batch was rolled back.",
     "failed": "Could not import: {{reason}}",
-    "openTable": "Open table"
+    "openTable": "Open table",
+    "sheet": "Sheet"
   },
   "maximizeResults": "Maximize results (Ctrl+Alt+M)",
   "restoreResults": "Restore the editor (Ctrl+Alt+M)",
