@@ -185,8 +185,9 @@ pub use objects::{
     supports_added_checks, table_structure,
 };
 pub use objects::{
-    CheckMode, IndexCleanup, MaintenanceKind, MaintenanceOptions, MaintenancePlan,
-    MaintenanceRequest, maintenance_kinds, maintenance_plan, maintenance_statement,
+    CheckMode, DuplicateOptions, DuplicatePlan, DuplicateTable, IndexCleanup, MaintenanceKind,
+    MaintenanceOptions, MaintenancePlan, MaintenanceRequest, TablePart, duplicate_options,
+    duplicate_plan, maintenance_kinds, maintenance_plan, maintenance_statement,
 };
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,

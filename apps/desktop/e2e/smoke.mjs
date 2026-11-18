@@ -3429,6 +3429,45 @@ try {
   assert.equal(await mainSchemaNode.evaluate((el) => getComputedStyle(el).cursor), "pointer");
   await mainSchemaNode.click();
 
+  step("duplicate a table: its statements and what the copy keeps shown first, run in a tab of its own (SDB-394)");
+  {
+    // The Tables folder, opened here and closed again for the steps after it.
+    const tables = page.getByRole("button", { name: "Expand or collapse Tables", exact: true });
+    await tables.click();
+    const customer = page.getByRole("button", { name: "Expand or collapse customer", exact: true });
+    await customer.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Duplicate table…" }).click();
+    const duplicate = page.getByRole("dialog", { name: "Duplicate customer" });
+    await duplicate.getByLabel("SQL that will run").filter({ hasText: "CREATE TABLE customer_copy (" }).waitFor();
+    await duplicate.getByText("The copy keeps:", { exact: false }).waitFor();
+    await duplicate.getByLabel("Copy its rows too").check();
+    await duplicate.getByLabel("SQL that will run").filter({ hasText: "INSERT INTO customer_copy (" }).waitFor();
+    await shot("sdb-394-duplicate-table");
+    await duplicate.getByRole("button", { name: "Duplicate in a new tab", exact: true }).click();
+    await duplicate.waitFor({ state: "detached" });
+    const duplicatePanel = page.locator(".tab-panel:not([hidden])");
+    assert.match(await duplicatePanel.locator(".cm-content").innerText(), /^CREATE TABLE customer_copy \(/);
+    await page.waitForTimeout(500);
+    await page.waitForFunction(() => !document.querySelector(".tab-panel:not([hidden]) .editor-action-cancel"));
+    await duplicatePanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
+    assert.equal(await duplicatePanel.locator(".message-error").count(), 0, "the copy ran without an error");
+    await replaceQuery(duplicatePanel, "select (select count(*) from main.customer_copy) = (select count(*) from main.customer) as same;");
+    await run(duplicatePanel);
+    await duplicatePanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await duplicatePanel.getByRole("grid").focus();
+    await duplicatePanel.getByRole("grid").getByRole("gridcell", { name: /^Row 1, same \(.*\): 1$/ }).waitFor();
+    await replaceQuery(duplicatePanel, "drop table main.customer_copy;");
+    await run(duplicatePanel);
+    const dropRisk = page.getByRole("dialog", { name: "Run these statements?" });
+    await dropRisk.getByRole("button", { name: "Run anyway", exact: true }).click();
+    await dropRisk.waitFor({ state: "detached" });
+    await page.waitForTimeout(500);
+    await page.waitForFunction(() => !document.querySelector(".tab-panel:not([hidden]) .editor-action-cancel"));
+    await page.keyboard.press("Control+w");
+    await tables.click();
+    await customer.waitFor({ state: "detached" });
+  }
+
   step("connection menu: every action once, from a right click or the keyboard, and no row buttons");
   {
     const shopRow = page.locator('.connection-row:has-text("Shop (SQLite)")');

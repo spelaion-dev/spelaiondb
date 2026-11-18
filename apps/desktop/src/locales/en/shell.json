@@ -851,5 +851,33 @@
     "runsInTab": "It runs as shown in a new tab, where its output appears.",
     "failed": "Could not prepare it: {{detail}}",
     "run": "Run in a new tab"
+  },
+  "duplicate": {
+    "menu": "Duplicate table…",
+    "title": "Duplicate {{name}}",
+    "newName": "New name",
+    "schema": "Schema",
+    "withData": "Copy its rows too",
+    "withIndexes": "Keep its indexes and constraints",
+    "kept": "The copy keeps: {{parts}}.",
+    "notKept": "Not copied: {{parts}}.",
+    "runsInTab": "It runs as shown in a new tab; the rows are copied by the server.",
+    "failed": "Could not prepare the copy: {{detail}}",
+    "run": "Duplicate in a new tab",
+    "parts": {
+      "columns": "columns and types",
+      "notNull": "NOT NULL",
+      "defaults": "defaults",
+      "primaryKey": "the primary key",
+      "unique": "unique constraints",
+      "checks": "checks",
+      "indexes": "indexes",
+      "foreignKeys": "foreign keys",
+      "identity": "identity / auto-increment columns",
+      "identityPosition": "where the identity goes on from (it restarts)",
+      "comments": "comments",
+      "triggers": "triggers",
+      "rows": "rows"
+    }
   }
 }

@@ -9,6 +9,7 @@
 mod alter;
 mod create;
 mod ddl;
+mod duplicate;
 mod maintenance;
 mod privileges;
 mod rebuild;
@@ -21,6 +22,9 @@ pub use alter::{
 };
 pub use create::{
     NewColumn, NewForeignKey, NewIndex, NewTable, apply_create_table, create_table_plan,
+};
+pub use duplicate::{
+    DuplicateOptions, DuplicatePlan, DuplicateTable, TablePart, duplicate_options, duplicate_plan,
 };
 pub use maintenance::{
     CheckMode, IndexCleanup, MaintenanceKind, MaintenanceOptions, MaintenancePlan,
