@@ -54,6 +54,26 @@ own for a whole session.
 5. A read-only database user is still the only real guarantee, as ADR-008 says, and the
    documentation keeps saying so.
 
+## Read-only for one session (2026-11-18, SDB-395)
+An editor tab's session can be made read-only on request ("Read-only for this session"), for a
+demo or a careful look at production, with this ADR's barrier and no lighter one:
+
+- **The same check.** `Session::is_read_only` is the connection's read-only or the session's own
+  mark; points 1 to 3 read it, and so does every write path the app gives the read-only flag
+  (table edits, object actions, imports, ending processes). The refusal names the connection,
+  as `guard.rs` writes it.
+- **The engine's own mode where it can be taken back**: PostgreSQL's `SET SESSION
+  CHARACTERISTICS AS TRANSACTION READ ONLY` and MySQL's and MariaDB's `SET SESSION TRANSACTION
+  READ ONLY`, read back afterwards as point 4 reads them (a server that stays writable refuses
+  the mode). ClickHouse's `readonly` cannot be undone in a session, SQL Server has no mode, and
+  SQLite and DuckDB opened their file once: there the core's check is the barrier.
+- **Only stricter.** Turning it off never makes a read-only connection's session writable; an
+  engine without a read barrier of ours (`Engine::has_read_barrier`) gets no read-only mode this
+  way either, nor does a server whose read-only sessions are not enforced; and nothing changes
+  while a transaction is open (its work is the user's to commit or roll back first).
+- **For the session's life.** A reconnect is a new session, which starts as its connection says.
+  `session_read_only.rs`; `tests/session_read_only.rs` tries to get around it on every engine.
+
 ## Alternatives
 - **Only the engines' read-only mode.** SQL Server has none, and on the others a user can turn
   it off with one statement (`SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE`).

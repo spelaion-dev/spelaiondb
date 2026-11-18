@@ -839,6 +839,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
   // nothing while those buttons are disabled.
   const actionState = useRef({ running: false, runBlocked: false });
   const resultCommand = useRef<(command: ResultTabCommand) => void>(() => undefined);
+  /** The tab's session commands, as the latest render wrote them. */
+  const sessionCommand = useRef({ reconnect: async () => {}, readOnly: async () => {} });
+  sessionCommand.current = { reconnect: reconnectNow, readOnly: () => setSessionReadOnly(!tab.sessionReadOnly) };
   useEffect(() => {
     const onCommand = (e: Event) => {
       const { tab: target, command } = (e as CustomEvent<{ tab: string; command: EditorCommand }>).detail;
@@ -859,6 +862,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
           break;
         case "variables":
           setVariablesOpen(true);
+          break;
+        case "reconnect":
+          if (!running) void sessionCommand.current.reconnect();
+          break;
+        case "sessionReadOnly":
+          if (!running) void sessionCommand.current.readOnly();
           break;
         case "format":
           editor.current?.format();
@@ -1070,6 +1079,36 @@ export function EditorTab({ tab }: { tab: Tab }) {
       return false;
     }
   }
+
+  /** "Reconnect" on request (SDB-395), for a session that still looks alive: the session closes
+   *  (asking first if a transaction is open, ADR-031) and a new one opens, as the connection
+   *  says. Nothing is run again (ADR-028), and "Read-only for this session" ends with it. */
+  async function reconnectNow() {
+    if (!tab.connectionId) return;
+    if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
+    await call(commands.disconnect(tab.id)).catch(() => undefined);
+    updateTab(tab.id, { status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined, sessionReadOnly: undefined });
+    if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
+  }
+
+  /** "Read-only for this session" (SDB-395): the core puts the session behind a read-only
+   *  connection's barrier (ADR-053), or takes it away; it refuses with a transaction open, and
+   *  never loosens a read-only connection. */
+  async function setSessionReadOnly(on: boolean) {
+    if (on && !(await ensureConnected())) return;
+    try {
+      await call(commands.setSessionReadOnly(tab.id, on));
+      updateTab(tab.id, { sessionReadOnly: on || undefined });
+      setNotice({ text: t(on ? "session.readOnlyOn" : "session.readOnlyOff"), error: false });
+    } catch (e) {
+      setNotice({ text: t("session.readOnlyFailed", { detail: message(e) }), error: true });
+    }
+  }
+  // A new session starts as its connection says: the mark goes with the old one.
+  useEffect(() => {
+    if (tab.sessionReadOnly && (tab.status !== "connected" || tab.lost)) updateTab(tab.id, { sessionReadOnly: undefined });
+  }, [tab.id, tab.status, tab.lost, tab.sessionReadOnly]);
 
   /** Opens a new session for a tab whose session was lost. Nothing is run: the user runs
    *  the statement again. */
@@ -1532,6 +1571,18 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
         )}
         {kind && <TypeBadge type={kind} />}
         {!tab.table && tab.status === "connected" && <TransactionControls tab={tab} running={running} onNotice={setNotice} />}
+        {tab.sessionReadOnly && tab.status === "connected" && (
+          <button
+            type="button"
+            className="session-read-only"
+            aria-pressed="true"
+            title={t("session.readOnlyHint")}
+            disabled={running}
+            onClick={() => void setSessionReadOnly(false)}
+          >
+            {t("session.readOnlyChip")}
+          </button>
+        )}
         {notice && (
           <span className={`small format-error ${notice.error ? "error" : "muted"}`} role={notice.error ? "alert" : "status"}>
             {notice.text}

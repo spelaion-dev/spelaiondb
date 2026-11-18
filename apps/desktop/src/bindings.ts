@@ -963,6 +963,17 @@ export const commands = {
 	 */
 	transposeRows: (result: number, rows: number[], firstNumber: number, columnLabel: string, typeLabel: string) => typedError<TransposedItem, string>(__TAURI_INVOKE("transpose_rows", { result, rows, firstNumber, columnLabel, typeLabel })),
 	/**
+	 *  The warning the add / edit connection form shows while it is filled in (SDB-395): the core
+	 *  decides it from what is typed, and the network profile named.
+	 */
+	draftTlsWarning: (draft: ConnectionDraftItem_Deserialize) => typedError<TlsWarningItem | null, string>(__TAURI_INVOKE("draft_tls_warning", { draft })),
+	/**
+	 *  "Read-only for this session" (SDB-395): the tab's session refuses every write, as a
+	 *  read-only connection's does, until it reconnects or this turns it off. Turning it off never
+	 *  makes a read-only connection writable; the core refuses with a transaction open.
+	 */
+	setSessionReadOnly: (session: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_session_read_only", { session, readOnly })),
+	/**
 	 *  How many rows "Load every row" would load and roughly how much memory they take: the rows
 	 *  counted on the server, the memory from what a loaded row of `result` takes now.
 	 */
@@ -1920,6 +1931,8 @@ export type ConnectionItem_Deserialize = {
 	 *  its own language: what the app writes SQL for is not offered on it.
 	 */
 	sql: boolean,
+	/**  Its TLS does not check its server (SDB-395), from the file as written. */
+	tlsWarning?: TlsWarningItem | null,
 };
 
 export type ConnectionItem_Serialize = {
@@ -1947,6 +1960,8 @@ export type ConnectionItem_Serialize = {
 	 *  its own language: what the app writes SQL for is not offered on it.
 	 */
 	sql: boolean,
+	/**  Its TLS does not check its server (SDB-395), from the file as written. */
+	tlsWarning: TlsWarningItem | null,
 };
 
 /**
@@ -1959,7 +1974,9 @@ export type ConnectionTestOutcome = ConnectionTestOutcome_Serialize | Connection
  *  What testing a connection from its form gives (ADR-032). The steps arrive as they change
  *  through the command's channel; this is the end.
  */
-export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize } | 
+export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize; 
+/**  The connection's TLS does not check its server (SDB-395), from its resolved form. */
+tlsWarning?: TlsWarningItem | null } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" } | 
 /**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
@@ -1971,7 +1988,9 @@ export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestRe
  *  What testing a connection from its form gives (ADR-032). The steps arrive as they change
  *  through the command's channel; this is the end.
  */
-export type ConnectionTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize } | 
+export type ConnectionTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize; 
+/**  The connection's TLS does not check its server (SDB-395), from its resolved form. */
+tlsWarning: TlsWarningItem | null } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" } | 
 /**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
@@ -5894,6 +5913,17 @@ export type TextSpan = {
 };
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
+
+/**  A connection whose TLS does not check its server (SDB-395), as the core decided it. */
+export type TlsWarningItem = {
+	/**  `unencrypted` (`disable`) or `unverified` (`prefer`, `require`). */
+	risk: string,
+	/**  The TLS mode as the connection file writes it. */
+	mode: string,
+	host: string,
+	/**  Through an SSH tunnel, AWS SSM or a Kubernetes forward: the calmer warning. */
+	tunneled: boolean,
+};
 
 /**  The tone of a connection type's badge, from the app's fixed palette (ADR-029). */
 export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";

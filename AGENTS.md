@@ -494,6 +494,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   asks and whatever was confirmed, the session refuses it again (`Session::with_read_only`, set
   by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's
   own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine.
+  `session_read_only.rs` (SDB-395) puts one editor session behind the same barrier on request,
+  only ever stricter (`tests/session_read_only.rs`). `tls_warning.rs` decides the warning about a
+  TLS mode that does not check the server on a host that is not this machine, for the form, the
+  connection test and the explorer (`tests/tls_warning.rs`).
   A MySQL/MariaDB statement with executable comments (`/*!50001 … */`, `/*M! … */`) is
   checked by the guard with their bodies both run and skipped, as the server's version decides.
   A MySQL/MariaDB session whose `sql_mode` reads quotes otherwise (`NO_BACKSLASH_ESCAPES`,

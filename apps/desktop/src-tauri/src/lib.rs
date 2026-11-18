@@ -776,11 +776,15 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
     let connections = config.connections.clone();
+    let tls_warnings: Vec<Option<TlsWarningItem>> = connections
+        .iter()
+        .map(|c| spelaion_core::file_tls_warning(&config, c).map(TlsWarningItem::from))
+        .collect();
     let types = spelaion_config::ConnectionTypes::load(&config, &trust);
     let workspace = history_workspace(&config, Source::Workspace);
     drop(config);
     let mut items = Vec::with_capacity(connections.len());
-    for c in connections {
+    for (c, tls_warning) in connections.into_iter().zip(tls_warnings) {
         let scope = match c.id.source {
             Source::User => String::new(),
             Source::Workspace => workspace.clone(),
@@ -811,6 +815,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             history_enabled,
             read_only: c.file.read_only,
             sql: c.file.engine.is_sql(),
+            tls_warning,
         });
     }
     Ok(items)
@@ -1103,6 +1108,11 @@ async fn test_connection(
             other => other,
         }
     };
+    let tls_warning = resolved
+        .as_ref()
+        .ok()
+        .and_then(spelaion_core::connection_tls_warning)
+        .map(TlsWarningItem::from);
     let options = spelaion_core::TestOptions {
         scope: if network_only {
             spelaion_core::TestScope::Network
@@ -1123,7 +1133,20 @@ async fn test_connection(
     state.tests.end(test);
     Ok(ConnectionTestOutcome::Tested {
         report: report.into(),
+        tls_warning,
     })
+}
+
+/// The warning the add / edit connection form shows while it is filled in (SDB-395): the core
+/// decides it from what is typed, and the network profile named.
+#[command]
+async fn draft_tls_warning(
+    draft: ConnectionDraftItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<TlsWarningItem>> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let config = state.config.read().await;
+    Ok(spelaion_core::connection_draft_tls_warning(&config, &draft).map(TlsWarningItem::from))
 }
 
 /// Stops a running connection or network profile test: the running step is dropped and
@@ -2345,7 +2368,8 @@ async fn control_process(
         &open.session,
         &target,
         terminate,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         confirmed,
     )
     .await
@@ -2922,6 +2946,21 @@ async fn script_risks(
 async fn cancel(session: String, state: State<'_, AppState>) -> CmdResult<()> {
     let open = state.session(&session).await?;
     open.session.cancel().await.map_err(|e| e.to_string())
+}
+
+/// "Read-only for this session" (SDB-395): the tab's session refuses every write, as a
+/// read-only connection's does, until it reconnects or this turns it off. Turning it off never
+/// makes a read-only connection writable; the core refuses with a transaction open.
+#[command]
+async fn set_session_read_only(
+    session: String,
+    read_only: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let open = state.session(&session).await?;
+    spelaion_core::set_session_read_only(&open, read_only)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Most rows copied to the clipboard at once; bigger selections are exported to a file.
@@ -4889,7 +4928,8 @@ async fn editable_query_table(
         &open.session,
         ResultId(result.into()),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
     )
     .await?;
     Ok(table.map(|table| EditableTableItem {
@@ -5350,7 +5390,8 @@ async fn apply_object_change(
     let ran = spelaion_core::apply_change(
         &open.session,
         &change,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         confirmed,
     )
     .await
@@ -5407,7 +5448,8 @@ async fn apply_principal_change(
         &change.into(),
         password.as_ref(),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         &open.resolved.safeguards(),
         confirmed,
     )
@@ -5501,7 +5543,8 @@ async fn apply_privilege_change(
         &open.session,
         &change.into(),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         &open.resolved.safeguards(),
         confirmed,
     )
@@ -5575,7 +5618,8 @@ async fn apply_table_alteration(
         &open.session,
         &alteration.into(),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         &open.resolved.safeguards(),
         confirmed,
     )
@@ -5617,7 +5661,8 @@ async fn apply_create_table(
         &open.session,
         &table.into(),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         &open.resolved.safeguards(),
         confirmed,
     )
@@ -5702,7 +5747,8 @@ async fn apply_table_edits(
 ) -> CmdResult<u32> {
     let open = state.session(&session).await?;
     spelaion_core::check_edit_policy(
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         open.resolved.safeguards().confirm_data_changes,
         confirmed,
     )
@@ -5789,7 +5835,8 @@ async fn load_value_file(
 ) -> CmdResult<u32> {
     let open = state.session(&session).await?;
     spelaion_core::check_edit_policy(
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         open.resolved.safeguards().confirm_data_changes,
         confirmed,
     )
@@ -6164,6 +6211,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             append_query_page,
             count_query_rows,
             transpose_rows,
+            draft_tls_warning,
+            set_session_read_only,
             load_estimate,
             load_query_rows,
             cancel_load_rows,

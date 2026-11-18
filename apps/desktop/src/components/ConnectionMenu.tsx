@@ -6,6 +6,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ConnectionItem } from "../api";
 import { useApp } from "../store";
+import { disconnectAll, hasSessions } from "../connectionControl";
 
 /** The actions that need the explorer node's own state; the rest only need the store. */
 export interface ConnectionMenuActions {
@@ -137,6 +138,14 @@ export function ConnectionMenu({
         <>
           <hr />
           {item(t("editor:runFile.menu"), actions.runFile)}
+        </>
+      )}
+      {hasSessions(null) && (
+        <>
+          <hr />
+          {/* Every connection's sessions at once (SDB-395), asking first what would be lost. */}
+          {item(t("connections:control.disconnectAll"), () => void disconnectAll(null))}
+          {hasSessions(connection.id) && item(t("connections:control.disconnectOthersHere"), () => void disconnectAll(connection.id))}
         </>
       )}
       <hr />

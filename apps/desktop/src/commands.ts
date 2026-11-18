@@ -9,6 +9,7 @@ import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./comma
 import { closeQueryTab, connectTabFromExplorer, explorerDatabase, newQueryOnConnection } from "./connect";
 import { readClipboardText } from "./clipboardText";
 import { duplicateConnection } from "./connectionCopies";
+import { disconnectAll, hasSessions } from "./connectionControl";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
 import { openDiagram } from "./diagramTabs";
@@ -258,6 +259,24 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     },
   },
   "editor.variables": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("variables") },
+  "editor.reconnect": {
+    enabled: (c) => Boolean(editorTab(c)?.connectionId) && !editorTab(c)?.run?.running,
+    run: editorCommand("reconnect"),
+  },
+  "editor.sessionReadOnly": {
+    enabled: (c) => editorTab(c)?.status === "connected" && !editorTab(c)?.run?.running,
+    label: (c) => (editorTab(c)?.sessionReadOnly ? "editor:session.readWrite" : "editor:session.readOnly"),
+    run: editorCommand("sessionReadOnly"),
+  },
+  "connections.disconnectAll": {
+    enabled: () => hasSessions(null),
+    run: () => void disconnectAll(null),
+  },
+  // All but the active tab's connection.
+  "connections.disconnectOthers": {
+    enabled: (c) => Boolean(tabOf(c)?.connectionId) && hasSessions(tabOf(c)?.connectionId ?? null),
+    run: (c) => void disconnectAll(tabOf(c)?.connectionId ?? null),
+  },
   "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
   "editor.lineComment": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("lineComment") },

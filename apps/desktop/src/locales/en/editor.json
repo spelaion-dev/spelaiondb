@@ -1555,5 +1555,15 @@
     "placeholder": "Row number",
     "of": "of {{total}}",
     "past": "The result has {{rows}} rows: row {{row}} is past its end."
+  },
+  "session": {
+    "reconnect": "Reconnect",
+    "readOnly": "Read-only for this session",
+    "readWrite": "End read-only for this session",
+    "readOnlyOn": "This session is read-only: writes are refused until it reconnects or you turn it off.",
+    "readOnlyOff": "This session can write again.",
+    "readOnlyFailed": "Could not change the session's read-only mode: {{detail}}",
+    "readOnlyChip": "Read-only session",
+    "readOnlyHint": "This tab's session refuses writes, as a read-only connection does. Click to end it."
   }
 }

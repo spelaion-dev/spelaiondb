@@ -56,6 +56,7 @@ mod selection_stats;
 mod server_family;
 mod server_settings;
 mod session;
+mod session_read_only;
 mod session_setup;
 mod sort;
 mod sql_file;
@@ -67,6 +68,7 @@ mod table_stats;
 mod temporal;
 #[cfg(all(test, unix))]
 mod test_files;
+mod tls_warning;
 mod transaction;
 mod transpose;
 mod value_pick;
@@ -219,6 +221,7 @@ pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
     ScriptSummary, Session, StatementError,
 };
+pub use session_read_only::{SessionReadOnlyError, set_session_read_only};
 pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
     isolation_statement, read_only_statement, setup_is_restricted,
@@ -248,6 +251,10 @@ pub use table_data::{
 };
 pub use table_filters::{RefusedFilter, TableFilterError, TableFilters};
 pub use table_stats::{TableStats, table_stats};
+pub use tls_warning::{
+    TlsRisk, TlsRoute, TlsWarning, connection_draft_tls_warning, connection_tls_warning,
+    draft_tls_warning, file_tls_warning, is_local_host, tls_warning,
+};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use transpose::{MAX_TRANSPOSED_ROWS, TransposeError, Transposed, transpose};
 pub use value_pick::{

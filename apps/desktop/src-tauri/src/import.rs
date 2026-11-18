@@ -438,7 +438,8 @@ pub async fn import_plan(
         &open.session,
         &request,
         &open.resolved.safeguards(),
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -532,7 +533,7 @@ pub async fn run_import(
     // The new session finds names where the explorer's does (its database or schema).
     let context = spelaion_core::follow_session_context(&source_open.session, &open.session).await;
     let safeguards = source_open.resolved.safeguards();
-    let read_only = source_open.resolved.params.read_only;
+    let read_only = source_open.session.is_read_only();
     drop(source_open);
     let progress = move |p: spelaion_core::ImportProgress| {
         let _ = on_progress.send(ImportProgressItem {
