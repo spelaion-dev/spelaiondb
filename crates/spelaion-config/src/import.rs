@@ -155,9 +155,25 @@ impl ImportedConnection {
         }
     }
 
-    /// Whether a password comes with it (read already, or from the keychain on import).
+    /// Whether a database password comes with it (read already, or from the keychain on import).
     pub fn has_password(&self) -> bool {
         self.password.is_some() || self.stored_password.is_some()
+    }
+
+    /// Whether importing this connection can save a database, SSH or SOCKS password.
+    pub fn has_importable_password(&self) -> bool {
+        let Ok(engine) = &self.engine else {
+            return false;
+        };
+        (!engine.is_file() && self.has_password())
+            || self.ssh.as_ref().is_some_and(|ssh| {
+                matches!(ssh.auth, SshAuth::Password | SshAuth::KeyboardInteractive)
+                    && ssh.password.is_some()
+            })
+            || self
+                .proxy
+                .as_ref()
+                .is_some_and(|proxy| !proxy.user.is_empty() && proxy.password.is_some())
     }
 }
 
