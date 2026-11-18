@@ -243,6 +243,14 @@
   referenced table (never all of it), its filter written like "filter by this value". A pick is
   only a cell edit's text, applied by `edit.rs`; `tests/value_pickers.rs` reads every pick back
   on every engine, and searches a million-row table.
+  `copy_in.rs` (SDB-162) sends the data after a script's `COPY … FROM STDIN`
+  (`Dialect::copy_data`) as a plain `pg_dump` file has it: the session gives only the statement
+  to the guard, the read-only checks and the history, and loads the rows through
+  `Connection::insert_rows` a chunk at a time (COPY's default text format only, its column list
+  required), in a transaction of its own unless the user's is open, so a cancel half-way leaves
+  nothing. `cursor.rs` keeps a `COPY`'s data with it when a selection runs. `tests/copy_from_stdin.rs`
+  restores a `pg_dump` of every common type and dumps it again identically, streams a million rows
+  and cancels half-way.
   `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads), and
   `xlsx.rs` a sheet of an XLSX file (SDB-390): every part's declared size, compression and

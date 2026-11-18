@@ -12,6 +12,7 @@ mod classify;
 pub mod cleartext;
 mod column_stats;
 mod conn_test;
+mod copy_in;
 mod cursor;
 mod data_search;
 pub mod diagnostics;

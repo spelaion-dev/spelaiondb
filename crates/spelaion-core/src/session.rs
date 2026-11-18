@@ -959,7 +959,22 @@ impl Session {
                     None
                 };
                 let mut created: Vec<ResultId> = Vec::new();
+                // The rows after a `COPY … FROM STDIN` (SDB-162): loaded through the import's
+                // path, never read as SQL. Only the statement went through the checks above.
+                let copy_data = match plan_mode {
+                    None => language.copy_data(&script, &span),
+                    Some(_) => None,
+                };
                 let execute = async {
+                    if let Some(data) = copy_data.clone() {
+                        return crate::copy_in::load(&*connection, text, &script[data], &cancelled, &options)
+                            .await
+                            .map(|rows| -> spelaion_driver_api::EventStream {
+                                Box::pin(futures_util::stream::iter([Ok(ExecEvent::Done {
+                                    rows_affected: Some(rows),
+                                })]))
+                            });
+                    }
                     match plan_mode {
                         Some(mode) => connection.execute_plan(text, mode).await,
                         None => match request_of(&*language, &*connection, text).await {
