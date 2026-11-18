@@ -1,0 +1,295 @@
+# Core
+
+- `crates/spelaion-core`: `open_connection` (resolved configuration → tunnel from the
+  `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts: stop,
+  continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
+  ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
+  IPC windows).
+  `catalog.rs` lists the engines of the "add connection" picker (planned ones included); a
+  server that speaks another engine's protocol is a kind of that engine's connection there
+  (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169; TiDB, OceanBase
+  and SingleStore are MySQL connections, SDB-170, and so is GreptimeDB, SDB-344, whose rows the
+  MySQL plugin keys by primary key and time index, and an append-only table by nothing), and
+  `server_family.rs` reads which server a PostgreSQL or MySQL session reached from the server:
+  one that does not enforce its engine's read-only transaction or session mode gets no agents,
+  streaming reads or read-only connections (unchecked PostgreSQL forks neither), and a
+  read-only connection's session mode is read back from the server after it is set (a MySQL
+  fork that names itself as MySQL, StarRocks, is caught there). A MySQL transaction's read-only
+  mode cannot be read back, so a fork that accepts it and writes anyway must be recognised by
+  its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350).
+  Like `readonly.rs`, any change
+  there needs tests that try to get around it (`tests/postgres_family.rs` and
+  `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`, and GreptimeDB
+  in the main project's `warehouse` profile, which CI runs).
+  `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
+  there needs tests that try to get around them. `guard.rs` lists the statements the app
+  must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
+  connection's type asks for: data changes on Production, every run where it confirms
+  execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
+  decides it. A read-only connection runs only reads, session settings and transaction control
+  (ADR-053, `classify_read_only_connection`): `check_run` refuses anything else before the guard
+  asks and whatever was confirmed, the session refuses it again (`Session::with_read_only`, set
+  by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's
+  own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine.
+  `session_read_only.rs` (SDB-395) puts one editor session behind the same barrier on request,
+  only ever stricter (`tests/session_read_only.rs`). `tls_warning.rs` decides the warning about a
+  TLS mode that does not check the server on a host that is not this machine, for the form, the
+  connection test and the explorer (`tests/tls_warning.rs`).
+  A MySQL/MariaDB statement with executable comments (`/*!50001 … */`, `/*M! … */`) is
+  checked by the guard with their bodies both run and skipped, as the server's version decides.
+  A MySQL/MariaDB session whose `sql_mode` reads quotes otherwise (`NO_BACKSLASH_ESCAPES`,
+  `ANSI_QUOTES`) has each statement also read as that mode reads it (`sql_mode::as_default_mode`,
+  from `Dialect::sql_mode`): the guard asks if any reading is risky and a read-only connection
+  refuses unless every reading passes; the default reading is always one of them.
+  A SQL Server batch the parser cannot read (T-SQL needs no `;`) is read token by token: a
+  `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word in it asks. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  closes the ones a connection type says are idle too long, never with a transaction open
+  (ADR-029): every use goes through its `Tracked` connection, and
+  nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's
+  transaction: the state always comes from the driver (`Connection::transaction_state`, read
+  after every statement), manual commit opens one with the engine's `BEGIN`, smart commit is a
+  connection type safeguard, and `Session::close_needs_confirmation` is the check before
+  closing a tab, disconnecting or quitting; core-written statements use `run_generated`, never
+  the manual-commit `BEGIN`; `tests/transactions.rs` runs it on every engine. `sort.rs` orders stored results
+  (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
+  one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
+  `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
+  only, stopped by a newer one or a cancel; `group.rs` is the grouping panel the same way:
+  the rows of that view counted by some columns (NULL a group of its own, a masked column by its
+  mask, a bounded answer), and "filter to a group" written as column filters of `filter.rs`
+  from one row of the group; `chart.rs` prepares a chart's points from that view,
+  ADR-040: at most `MAX_CHART_POINTS`, rows combined by X, and it writes the saved PNG or SVG;
+  `er/` is the ER diagram, ADR-046: the model read from the explorer's catalog, its layered layout
+  computed once per model and display options, and its Mermaid and DBML text, which must parse
+  with their own tools: `tests/er_diagram.rs` writes `apps/desktop/scripts/fixtures/er` and
+  `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again)
+  and `cursor.rs` finds the statement under the editor's cursor, says what Run will send
+  (`run_target`, the Run button's label) and writes the text of the statements picked from a
+  selection or from the cursor to the end (`pick_statements`, `from_cursor`): the rest written
+  over with spaces, and returned only if the engine's splitter reads in it exactly those
+  statements (`tests/run_from_cursor.rs`, on every dialect); its `outline` (one entry per
+  statement, bounded) and `neighbour_statement` are the editor's outline panel and its next /
+  previous statement, from the same splitter. `progress.rs` thins a run's row
+  counts to a few a second for the app (a big result streams hundreds of batches a second;
+  every other event and the final count go through as they come). `table_data.rs` writes and checks
+  the paged SELECT of the table data tab (the filter typed by the user cannot change it, and the
+  primary key orders it after the user's order, ADR-054), writes the `ORDER BY` of its header
+  sort from the table's own columns (`table_order_by`: the UI names columns, never writes SQL),
+  and writes "filter by this value"
+  conditions into its WHERE from the typed cell. `query_page.rs` pages an editor query only when
+  each page can be fetched exactly (ADR-054): one table, its primary key in the result, keyset
+  pages after the last row shown, never OFFSET; anything else runs once as written. The grid's
+  sort of a paged query (a list of `SortKey`s, as the stored result's) is read again from the
+  server the same way: its columns order the pages first and may hold NULLs, which the core
+  writes last in both directions on every engine, in the `ORDER BY` and in the comparison that
+  fetches the next page alike.
+  `tests/query_pages.rs` writes between pages on every engine.
+  `load_rows.rs` is "Load every row" and a page or row past the ones loaded (SDB-386): keyset
+  pages of a paged query in order, cancellable with whole pages kept, after an estimate of the
+  rows and memory; a table data tab's page N is its numbered page and its last page is counted
+  (`table_data.rs`). `transpose.rs` makes the transposed view, rows shown as columns, a result
+  of its own. `tests/result_jumps.rs` runs both paths on every engine.
+  `variables.rs` (SDB-383) writes the editor's `${name}` variables into a script before
+  anything else reads it, so the guard, the read-only checks and masking see the text that
+  runs: values are written in as they are, only in code (`Dialect::code_ranges`), one
+  statement at a time after splitting, and a value that ends its statement, starts another or
+  opens a string or a comment it does not close is refused. A name is only looked up in the
+  values given (the tab's, over its connection's in `spelaion-store`'s `connection_variables`):
+  never the environment, and `${env:…}` is not a name. Agents have no variables. Like
+  `classify.rs`, any change there needs tests that try to get around it (`tests/variables.rs`,
+  on every dialect).
+  `result_tabs.rs` (SDB-378) is each editor tab's result tabs over the `ResultStore`: which
+  results a run replaces is decided there, never in the UI. A run frees the results that are
+  not pinned, a run into a new tab frees none, a re-run of one result takes its place when
+  its new rows start, and past the user's limit the oldest unpinned result of an earlier run
+  is closed; a result with unsaved edits is never freed by a run. A pin is only an entry no
+  run frees: closing the tab frees it. A tab's name is the user's, else its statement's first
+  `--` comment line as the engine's dialect reads comments (`statement_title`). The app's run
+  commands place every result through `begin_run` and `RunResults::observe`
+  (`tests/kept_results.rs` runs it against a real session).
+  `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
+  read from the catalog again each time (the UI only names one), the values come from the
+  stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
+  composite, multi-level and self-referencing keys on every engine.
+  `data_search.rs` (ADR-043) searches a value in the tables the user chose: one `SELECT` per
+  table written from the catalog and the columns' types, the value always bound as a parameter
+  (`Connection::execute_bound`), each a read in the engine's read-only transaction in a session
+  of its own, bounded (rows per table, total hits) and cancellable; `tests/data_search.rs` runs
+  it on every engine, 50 tables cancelled mid-way included. Metadata search is the app's
+  (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
+  `column_stats.rs` counts a table data tab column's statistics on the server: statements
+  written from the catalog's names, the tab's filter checked like a page, each one a read in
+  the engine's read-only transaction (the export barrier) in a session of its own, sampled past
+  100,000 rows; `tests/column_stats.rs` runs it on every engine. `column_top_values` is the same
+  count of the most frequent values alone, for the custom filter's value picker: a masked
+  column is refused before anything is read (`tests/masking.rs`).
+  `table_filters.rs` is what a table data tab remembers (the filters used on a table, and the
+  default one its tab opens with): local data in the store, so every filter is checked like a
+  page's before it is kept and again each time it is read, and a stored default that no longer
+  passes is handed back as refused, never as a filter. Like `table_data.rs`, any change there
+  needs tests that try to get around it.
+  Server observation (the process monitor's other views): `observe.rs` runs each statement
+  only after `classify_read_only` accepts it, as session metadata; `locks.rs` reads each
+  engine's locks and waits and builds the blocking tree (ending a blocker always goes through
+  `processes.rs`'s `control_process`), `server_settings.rs` the settings, variables and status,
+  `table_stats.rs` a table's sizes and row estimate from the catalog; `tests/server_observation.rs`
+  makes one session wait for another's row lock on every engine and checks the pair.
+  `geometry.rs` (ADR-045) reads geometry values into GeoJSON for the cell panel's map: PostGIS's
+  EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs and
+  DuckDB's WKB, as untrusted bytes (counts checked before allocating, bounded nesting, read to
+  the last byte); `column_map` puts a column of the current view on one map, bounded.
+  `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
+  PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
+  (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
+  `display.rs` (SDB-385) is how the grid shows values: `strftime` patterns for dates, times
+  and timestamps, a number's marks, a display time zone (jiff; values without a zone are never
+  converted) and how binary reads. Display only: `window_ipc` serves each cell as the database
+  prints it and, next to it, as it is shown, and the grid draws the second; copies, exports,
+  filters, value pickers, edits and Ctrl+F keep the database's text (`displayed_text` is the
+  one copy of what is shown, asked for explicitly). A masked column is never formatted.
+  `tests/value_display.rs` formats every engine's types and writes a filter from a formatted
+  cell.
+  `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
+  runs those conditions, lists and names on every engine.
+  "Copy special…" (SDB-388) is `export.rs`'s `copy_special` (delimiter, quote, row delimiter,
+  NULL text, header, row numbers; the choices are the copy defaults, `History::copy_defaults`,
+  checked before they are saved), and copy as UPDATE is its `copy_updates`, through an
+  `UpdateTable` only `edit.rs`'s `update_copy_table` makes, by the rule of edits (ADR-014:
+  the table and its primary key from the catalog, rows read through this session, a query
+  only as a plain SELECT of one table, an engine without transactions refused); a masked
+  column in the key or the selection is refused, never written from the mask.
+  `tests/copy_updates.rs` runs the copied UPDATEs on every engine and reads the rows back.
+  `export.rs` also holds the CSV options and formula escaping of files;
+  `export_stream.rs` streams a query, a table data tab or explorer tables to a file
+  (ADR-034): only a single read is ever run again, in its own session and inside the engine's
+  read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
+  tests that try to get around it (`tests/export_stream.rs`).
+  `pending.rs` keeps a table data page's pending edits (ADR-044): cells typed or changed in
+  bulk, rows to delete and rows to insert, in the core with the stored result they refer to,
+  each change a step undo and redo restore exactly; the stored result refuses to sort or filter
+  while edits are pending, so a position keeps naming the same row (`tests/bulk_edits.rs`).
+  `generate.rs` writes the explorer's "Generate SQL" for a table (SELECT by key or keys,
+  INSERT, upsert or MERGE where the engine has one, UPDATE, DELETE) with the engine's quoting
+  and `:named` placeholders; UPDATE and DELETE always carry a WHERE on what identifies a row
+  (the primary key, else a unique constraint, else every column) (`tests/generated_sql.rs`).
+  `plan/` is Visual EXPLAIN: each engine's reader (`postgres.rs`, `mysql.rs`, `sqlserver.rs`,
+  `sqlite.rs`, `duckdb.rs`) turns its plan into one tree, analysed the same way; the plan's
+  run (`run.rs`) is serialized and cancellable; `ANALYZE`, which runs the statement, needs a
+  confirmation of its own and is off on a read-only connection; explicit runs are recorded in
+  history; raw plan rows stay in the core, the page receives a bounded projection
+  (`tests/plans*.rs`).
+  `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
+  database, one transaction, one row per statement). Each stored result remembers the session
+  that read it and that session's database (`ResultSource`; a statement that changed database
+  leaves none), and edit statements are written only through an `EditTarget` from
+  `Session::edit_target`, which refuses rows read through another session (another connection,
+  a reconnected tab) or in another database; `tests/edit_source.rs` tries it on every engine.
+  `masking.rs` is column masking (ADR-051): the session compiles the connection's rules
+  (`spelaion-config::masking` combines its `[masking]`, the user's `user.toml` and its type's
+  `mask_columns`; required patterns only add up) and `ResultStore` masks every batch as it
+  arrives, keeping the originals aside for `StoredResult::reveal` only. Paths that skip the
+  store (streaming exports, column statistics, the data search, `run_read_only`) apply
+  `Session::masking` themselves; core reads it parses go through `run_parsed`. Like
+  `classify.rs`, any change there needs tests that try to get around it (`tests/masking.rs`).
+  Rules also match each column's origin (`ColumnMeta::origin`, ADR-052): PostgreSQL resolves
+  it in the catalog when `ExecOptions::origins` asks, MySQL/MariaDB and SQLite report it
+  directly; SQL Server, DuckDB and remote SQLite do not (a known limit).
+  `value_view.rs` is the cell viewer's value, read from the stored result when the viewer opens
+  (past `VIEW_LIMIT` only with "load anyway"): images recognised by their bytes (PNG, JPEG, GIF,
+  WebP only, handed over as a `data:` URL; never SVG or HTML), XML pretty-printed as text, a value
+  saved to a file byte for byte, and a file loaded into a cell as one `edit.rs` UPDATE by primary
+  key; `tests/value_files.rs` runs it on every engine.
+  `value_pick.rs` is the cell panel's value pickers (SDB-58): a date and time written with the
+  column's precision as the grid shows it (UTC `+00` for a time zone, except SQL Server's
+  `datetimeoffset`, written with its offset and up to seven digits like its `datetime2` and
+  `time`; its `datetime` and `smalldatetime` rounded as the server does), the allowed values of an enum, a `SET` or a
+  `CHECK (… IN (…))` read from the catalog (SQLite's from its `CREATE TABLE` text) only when
+  exactly one list can be read reliably, and a foreign key's search: a checked page of the
+  referenced table (never all of it), its filter written like "filter by this value". A pick is
+  only a cell edit's text, applied by `edit.rs`; `tests/value_pickers.rs` reads every pick back
+  on every engine, and searches a million-row table.
+  `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
+  arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
+  `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
+  the DDL, checks read-only and the guard, and loads the rows in transactions through
+  `Connection::insert_rows`, which takes them as columns of text (`TextRows`: Arrow, read as
+  `&str`, never one `String` per cell, so they reach a plugin as they are) and binds every value (`COPY` on PostgreSQL, prepared inserts on
+  MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
+  `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
+  to get around it.
+  `objects/` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
+  create, new index…) and the structure forms (ADR-047): `alter.rs` turns a form's columns into
+  one script from the catalog read again each time, applied only as it was shown; `rebuild.rs`
+  is SQLite's table rebuild; `create.rs` is the create table form; `source.rs` writes a view's or routine's
+  definition as the statement that replaces it; `ddl.rs` edits the `CREATE TABLE` text SQLite and MySQL keep.
+  `tests/object_actions.rs` runs each engine's statements on that engine.
+  `objects/users.rs` (ADR-048) creates roles, users and logins, changes their password, locks
+  and drops them: the script shown and compared has `'***'` for the password, the real one is
+  written only into the statement that runs (never recorded) and scrubbed from its errors; any
+  change there needs tests that try to leak the password (`tests/users.rs`).
+  `objects/privileges.rs` grants and revokes privileges globally, on a database, a schema, an
+  object or a role's membership (only the privilege names the core lists for that scope, never
+  typed SQL), and reads what an account has (PostgreSQL's ACLs, MySQL's `SHOW GRANTS`, SQL
+  Server's permissions); `tests/privileges.rs` tries each grant by logging in as the account.
+  `backup/` (ADR-049) runs the vendors' own tools against a connection's route
+  (`open::open_route`: the shared tunnel's or Kubernetes forward's local end, no session):
+  `tools.rs` finds `pg_dump`, `pg_restore`, `psql`, `mysqldump` and `mysql` (a chosen folder,
+  else `PATH` and the installers' places) and reads their version, `args.rs` writes each tool's
+  argument list (never the password: it goes in `PGPASSWORD` / `MYSQL_PWD`), `process.rs` starts
+  the tool without a shell, writes its output to `<name>.part` (renamed when it succeeds), feeds
+  a restore's file to it and passes every log line through the connection test's `Redactor`.
+  A restore is refused on a read-only connection and unless confirmed. `embedded.rs` is SQLite's
+  `VACUUM INTO` and DuckDB's `EXPORT` / `IMPORT DATABASE` in a session of their own, and
+  `run_file.rs` runs an `.sql` file there (ADR-036's decoding, the engine's splitter, statements
+  done of the total, cancel; refused read-only or unconfirmed), tested in `tests/backup_files.rs`.
+  `tests/backup.rs` dumps
+  and restores PostgreSQL, MySQL and MariaDB through the two hops of `testing/docker` with the
+  tools of the official images (`docker run`), or those in `SPELAION_TEST_DB_TOOLS`; any change
+  there needs tests that try to leak the password.
+  `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
+  hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
+  `Tunnel::probe`, login), its own tunnel, Stop that closes what it opened, failures classified
+  there and a `Redactor` every label, message and the diagnostics text pass through: any change
+  there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
+  `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
+  `open.rs`); a tunnel file's is per SSH hop.
+  `panics.rs` (SDB-163): a panic is a bug, never swallowed. `install_panic_log` (the app and
+  `spelaiondb mcp`) writes where each one happened to the app log, its message redacted and cut
+  short; `catch_panic` turns one into an error for whoever waited. A run whose stream panics,
+  or whose driver's stream ends without `Done` (an actor that died halfway), ends as a failed
+  statement and the session is lost (ADR-028), never as a finished one (`tests/panics.rs`); an
+  import whose reader panicked commits nothing more; an MCP tool call that panics answers an
+  error and is audited as failed.
+  `startup.rs` is what the desktop app says when it cannot start (SDB-283): no personal folder,
+  a local store it cannot open (a newer version's is never started over: it says to update) or
+  no window; the app shows it in a native dialog (`apps/desktop/src-tauri/src/startup.rs`, never
+  a panic on the way to the window) and writes it to `app_log.rs`'s log
+  (`<personal folder>/logs/spelaion.log`). "Start with a new local store" is
+  `spelaion-store::set_aside`: the store and its `-wal`/`-shm` renamed to
+  `state.db.broken-<date>`, never deleted or overwritten.
+  `save_name.rs` keeps a save dialog's file name in step with the chosen file type (Linux's
+  GTK dialogs, `apps/desktop/src-tauri/src/file_dialog.rs`).
+  `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a
+  BOM, UTF-16, Windows-1252, the file's line ending, temp file + rename through
+  `spelaion-config::atomic_file`, which keeps the mode and follows links, a content hash that
+  refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
+  writes them at most a second after a change) and checks them before they come back
+  (`restore_tabs`): never results, secrets or session state, and nothing is run.
+  `session_setup.rs` (ADR-037) applies a connection's `[session]` table every time a session
+  opens (isolation level, default schema, setup statements), from `open_connection`; on a
+  read-only connection, a Production type and sessions that only read
+  (`OpenOptions::read_only_session`), every setup statement must first pass
+  `classify_session_setup` in `classify.rs`: like `classify.rs`, any change there needs tests
+  that try to get around it (`tests/session_setup.rs`).
+  `file_folder.rs` (SDB-316) is a folder of CSV, TSV and Parquet files as a DuckDB connection
+  (`file_folder = true`): the resolver makes it an in-memory database, always read-only, and
+  `open_connection` (and the connection test) set its session up before anything else runs:
+  `allowed_directories` is the folder alone, external access off, a view per file DuckDB's
+  `glob` lists (names quoted by the dialect, paths as literals), then `lock_configuration`.
+  Writing to the folder is refused by the read-only barrier, and agents never see it
+  (`AgentView::FileFolder`). Any change there needs tests that try to read outside the folder
+  or write to it (`tests/file_folder.rs`).
+  `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
+  statement, never destructive, only the kinds on its allow list). Each engine's read barrier
+  is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
+  `classify.rs`, any change there needs tests that try to get around it.
