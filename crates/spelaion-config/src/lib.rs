@@ -20,6 +20,7 @@ mod dbeaver;
 mod draft;
 mod edit;
 mod engine_change;
+pub mod engine_options;
 mod error;
 mod heidisql;
 mod import;
@@ -78,9 +79,9 @@ pub use masking::{MASK_EVERYTHING, MaskingRules, check_pattern, check_patterns};
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{
     ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, HopConfig, IsolationLevel,
-    KubernetesConfig, KubernetesProfileConfig, MaskingConfig, McpConfig, ProxyConfig, ProxyType,
-    SCHEMA_VERSION, SecretSpec, SessionConfig, SshAuth, SsmConfig, TlsConfig, TlsModeConfig, Tone,
-    TunnelFile, TunnelPreferences, UserFile, UserMasking, WritePolicy,
+    KubernetesConfig, KubernetesProfileConfig, MaskingConfig, McpConfig, PoolerMode, ProxyConfig,
+    ProxyType, SCHEMA_VERSION, SecretSpec, SessionConfig, SshAuth, SsmConfig, TlsConfig,
+    TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile, UserMasking, WritePolicy,
 };
 pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,

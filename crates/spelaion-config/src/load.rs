@@ -598,6 +598,63 @@ pub(crate) fn validate_connection(
             ));
         }
     }
+    // SDB-396: a pooler is PostgreSQL's, the cleartext password plugin MySQL's and MariaDB's.
+    if let Some(pooler) = file.pooler {
+        if file.engine != Engine::Postgres {
+            return Err(ConfigError::new(
+                path,
+                "pooler is for PostgreSQL: a PgBouncer (or another pooler) in front of the server",
+            ));
+        }
+        // Session state is not kept from one transaction to the next: what relies on it is
+        // refused, never quietly lost.
+        if pooler == crate::model::PoolerMode::Transaction {
+            if !file.session.is_default() {
+                return Err(ConfigError::new(
+                    path,
+                    "a pooler in transaction mode does not keep session settings: remove `[session]` (setup statements, schema and isolation level would apply to one transaction only)",
+                ));
+            }
+            if file.read_only {
+                return Err(ConfigError::new(
+                    path,
+                    "a pooler in transaction mode does not keep the session's read-only mode (ADR-053): remove `read_only`, or connect through the pooler in session mode",
+                ));
+            }
+        }
+    }
+    if file.cleartext_password && !matches!(file.engine, Engine::Mysql | Engine::Mariadb) {
+        return Err(ConfigError::new(
+            path,
+            "cleartext_password is for MySQL and MariaDB: the mysql_clear_password authentication plugin",
+        ));
+    }
+    if let Some(databases) = &file.databases {
+        if !file.engine.chooses_databases() {
+            let label = engine_label(file.engine);
+            return Err(ConfigError::new(
+                path,
+                format!("{label} has no database list to choose from: remove `databases`"),
+            ));
+        }
+        if databases.is_empty()
+            || databases.len() > crate::model::MAX_SHOWN_DATABASES
+            || databases.iter().any(|name| {
+                name.trim().is_empty()
+                    || name.chars().count() > crate::model::MAX_DATABASE_NAME
+                    || name.chars().any(char::is_control)
+            })
+        {
+            return Err(ConfigError::new(
+                path,
+                format!(
+                    "databases names at most {} databases, each of 1 to {} characters on one line",
+                    crate::model::MAX_SHOWN_DATABASES,
+                    crate::model::MAX_DATABASE_NAME
+                ),
+            ));
+        }
+    }
     // ADR-059, point 2: Oracle's read-only mode waits for a barrier that stands up to tests
     // that try to get around it (a function with an autonomous transaction writes from inside
     // a SELECT, even in a read-only transaction).

@@ -417,6 +417,9 @@ pub fn import_plan(
             database: connection.database.clone(),
             // No client this imports from has a folder of files as a connection.
             file_folder: false,
+            pooler: None,
+            cleartext_password: false,
+            databases: Vec::new(),
             user: if file {
                 String::new()
             } else {

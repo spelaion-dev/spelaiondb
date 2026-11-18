@@ -14,7 +14,7 @@ use crate::load::{
     Config, ConnectionEntry, ConnectionId, Source, validate_connection, workspace_dir,
 };
 use crate::model::{
-    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, MaskingConfig, McpConfig,
+    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, MaskingConfig, McpConfig, PoolerMode,
     SCHEMA_VERSION, SecretSpec, SessionConfig, TlsConfig, TlsModeConfig, WritePolicy,
 };
 use crate::secrets::{SecretBackend, SecretRef};
@@ -119,6 +119,12 @@ pub struct ConnectionDraft {
     pub database: String,
     /// DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316).
     pub file_folder: bool,
+    /// PostgreSQL behind a pooler (SDB-396); `None` for a direct connection.
+    pub pooler: Option<PoolerMode>,
+    /// MySQL and MariaDB: allow the cleartext password plugin (SDB-396).
+    pub cleartext_password: bool,
+    /// The databases the connection shows (SDB-396); empty for all of them.
+    pub databases: Vec<String>,
     pub user: String,
     pub password: PasswordChoice,
     pub tls_mode: TlsModeConfig,
@@ -149,6 +155,18 @@ pub struct ConnectionDraft {
     pub session: SessionDraft,
     /// Columns masked on this connection (ADR-051): patterns as typed, one per entry.
     pub masking: MaskingConfig,
+}
+
+/// The databases a connection shows, as typed: trimmed, blank ones left out, each once
+/// (ignoring case); `None` for all of them.
+fn tidy_databases(names: &[String]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+        if !out.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            out.push(name.to_string());
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Masking patterns as typed: trimmed, blank ones left out, each once.
@@ -522,6 +540,10 @@ impl ConnectionDraft {
                 | Engine::Impala => d,
             }),
             file_folder: self.file_folder && self.engine == Engine::Duckdb,
+            pooler: self.pooler.filter(|_| self.engine == Engine::Postgres),
+            cleartext_password: self.cleartext_password
+                && matches!(self.engine, Engine::Mysql | Engine::Mariadb),
+            databases: tidy_databases(&self.databases).filter(|_| self.engine.chooses_databases()),
             user: non_empty(&self.user).filter(|_| network),
             password: password
                 .filter(|_| network)
@@ -650,6 +672,9 @@ impl ConnectionDraft {
             port: file.port,
             database: file.database.clone().unwrap_or_default(),
             file_folder: file.file_folder,
+            pooler: file.pooler,
+            cleartext_password: file.cleartext_password,
+            databases: file.databases.clone().unwrap_or_default(),
             user: file.user.clone().unwrap_or_default(),
             password,
             tls_mode: file.tls.mode,
@@ -947,6 +972,29 @@ pub fn update_connection(
             &mut doc,
             &["read_only"],
             new.read_only.then(|| Value::from(true)),
+        );
+    }
+    if old.pooler != new.pooler {
+        put(
+            &mut doc,
+            &["pooler"],
+            new.pooler.map(|mode| Value::from(mode.as_str())),
+        );
+    }
+    if old.cleartext_password != new.cleartext_password {
+        put(
+            &mut doc,
+            &["cleartext_password"],
+            new.cleartext_password.then(|| Value::from(true)),
+        );
+    }
+    if old.databases != new.databases {
+        put(
+            &mut doc,
+            &["databases"],
+            new.databases
+                .as_ref()
+                .map(|names| Value::Array(names.iter().map(|name| name.as_str()).collect())),
         );
     }
     if old.file_folder != new.file_folder {

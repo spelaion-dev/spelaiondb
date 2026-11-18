@@ -76,6 +76,7 @@ async fn open(engine: Engine, path: &Path, read_only: bool) -> OpenConnection {
         kubernetes: None,
         sqlite3: None,
         file_folder: None,
+        databases: None,
         local_port: LocalPort::Any,
         keepalive: None,
         statement_timeout: Some(Duration::from_secs(5)),
