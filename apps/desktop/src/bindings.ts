@@ -380,6 +380,12 @@ export const commands = {
 	 *  without a line break after it.
 	 */
 	copyRows: (result: number, session: string, range: CellRange_Deserialize, format: TextFormat, header: boolean, displayed: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header, displayed })),
+	/**
+	 *  The file name an export suggests (SDB-391): `names` rendered by the core for `table` (or
+	 *  `result` for a query), with the format's extension. Never a path: the save dialog picks
+	 *  the folder.
+	 */
+	exportFileName: (session: string, names: FileNamePatternItem, format: TextFormat, gzip: boolean, table: RelationRefItem | null) => typedError<string, string>(__TAURI_INVOKE("export_file_name", { session, names, format, gzip, table })),
 	/**  The copy defaults (SDB-388): what "Copy special…" chose last. */
 	copyDefaults: () => typedError<CopySpecialItem, string>(__TAURI_INVOKE("copy_defaults")),
 	/**
@@ -565,7 +571,7 @@ export const commands = {
 	 *  Streams explorer tables and views, one file each, into `folder`, never over an existing
 	 *  file. Stops at a cancel or an error; the files written before stay.
 	 */
-	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, extension: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportTablesOutcome_Serialize, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, extension, options, onProgress })),
+	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, names: FileNamePatternItem, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportTablesOutcome_Serialize, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, names, options, onProgress })),
 	/**  Stops a running streaming export: its statement and its writer; no file is left. */
 	cancelExport: (exportId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_export", { exportId })),
 	/**
@@ -2786,6 +2792,10 @@ export type ExportFileOptions_Deserialize = {
 	encoding: TextEncodingItem,
 	/**  Columns of the result by position, in order (the shown ones); `None`: all. */
 	columns?: number[] | null,
+	/**  The file compressed with gzip (Parquet: its column chunks). */
+	gzip?: boolean,
+	sql?: SqlOptionsItem,
+	json?: JsonOptionsItem,
 };
 
 /**  How an export writes its file (ADR-034). The core checks the delimiter. */
@@ -2800,6 +2810,10 @@ export type ExportFileOptions_Serialize = {
 	encoding: TextEncodingItem,
 	/**  Columns of the result by position, in order (the shown ones); `None`: all. */
 	columns: number[] | null,
+	/**  The file compressed with gzip (Parquet: its column chunks). */
+	gzip: boolean,
+	sql: SqlOptionsItem,
+	json: JsonOptionsItem,
 };
 
 /**  How a streaming export ended. */
@@ -2906,6 +2920,15 @@ export type FileEncodingItem = "utf8" | "utf8Bom" | "utf16Le" | "utf16Be" | "win
 export type FileFormatItem = {
 	encoding: FileEncodingItem,
 	lineEnding: LineEndingItem,
+};
+
+/**
+ *  How export files are named (SDB-391): `{table}`, `{schema}`, `{database}`, `{date}`,
+ *  `{time}` and `{timestamp}` (with `timestamp_format`). The core checks and renders it.
+ */
+export type FileNamePatternItem = {
+	pattern: string,
+	timestampFormat: string,
 };
 
 /**  What the confirmation of a file run shows. */
@@ -3489,6 +3512,12 @@ export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; 
 export type InteractionRequest = {
 	id: number,
 	request: InteractionKind,
+};
+
+/**  How JSON and NDJSON write values (SDB-391). */
+export type JsonOptionsItem = {
+	isoDates: boolean,
+	jsonAsJson: boolean,
 };
 
 /**  Which way a foreign key goes from a table (see `spelaion_core::KeyDirection`). */
@@ -5890,6 +5919,17 @@ export type SqlFileItem = {
 	hash: string,
 };
 
+/**  How a SQL export writes its statements (SDB-391); the core checks it. */
+export type SqlOptionsItem = {
+	rowsPerInsert: number,
+	omitSchema: boolean,
+	/**  `upper` or `lower`. */
+	keywordCase: string,
+	/**  `asIs`, `lower` or `upper`. */
+	nameCase: string,
+	upsert: boolean,
+};
+
 /**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */
 export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" | "insert" | "upsert" | "merge" | "update" | "updateFrom" | "delete" | "deleteUsing";
 
@@ -6171,7 +6211,9 @@ export type TestStepStatusItem = "pending" | "running" | "ok" | "failed" | "skip
 export type TextEncodingItem = "utf8" | "utf8Bom" | "utf16Le" | "windows1252";
 
 /**  Text format to copy or export rows in. */
-export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList" | "html";
+export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList" | "html" | 
+/**  Files only (SDB-391). */
+"ndjson" | "parquet" | "arrowIpc";
 
 /**  A piece of a script, in UTF-8 bytes like every position the core gives. */
 export type TextSpan = {

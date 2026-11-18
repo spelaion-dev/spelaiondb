@@ -4577,6 +4577,19 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .export-dialog .export-result {
   word-break: break-word;
 }
+/* The file's name and gzip (SDB-391): advanced, so it starts collapsed. */
+.export-dialog .export-file {
+  display: grid;
+  gap: var(--space-sm);
+}
+.export-dialog .export-file[open] {
+  padding-bottom: var(--space-xs);
+}
+.export-dialog .export-file summary {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  cursor: pointer;
+}
 
 /* Backup and restore dialog (BackupDialog.tsx, ADR-049). */
 .modal.backup-dialog {

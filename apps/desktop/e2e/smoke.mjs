@@ -3808,6 +3808,48 @@ try {
     assert.ok(orders[0].startsWith("\ufeffid,"), orders[0]);
     assert.ok(readFileSync(join(folder, "customer.csv"), "utf8").startsWith("\ufeffid,"));
   }
+  // The same tables as Parquet, named by a pattern the core renders (SDB-391).
+  {
+    const folder = join(userDir, "parquet");
+    mkdirSync(folder, { recursive: true });
+    const today = () => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    };
+    const before = today();
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
+    await ordersNode.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Export 2 tables\u2026" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export 2 tables" });
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("parquet");
+    await dialog.locator(".export-file summary").click();
+    await dialog.locator('input[name="export-name-pattern"]').fill("{schema}_{table}_{date}");
+    await shot("05e2-export-parquet-light");
+    // The settings dialog cannot open over this one: the screenshot switches the theme directly.
+    const themeBefore = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
+    await shot("05e2-export-parquet-dark");
+    await page.evaluate((value) => {
+      if (value === null) document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.dataset.theme = value;
+      window.dispatchEvent(new Event("spelaion-themechange"));
+    }, themeBefore);
+    await dialog.getByRole("button", { name: "Export\u2026" }).click();
+    await dialog.locator(".export-result", { hasText: "2 files" }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+    const written = readdirSync(folder).sort();
+    const dates = [...new Set([before, today()])];
+    assert.ok(
+      dates.some((date) => JSON.stringify(written) === JSON.stringify([`main_customer_${date}.parquet`, `main_orders_${date}.parquet`])),
+      written.join(", "),
+    );
+    for (const name of written) {
+      const bytes = readFileSync(join(folder, name));
+      assert.equal(bytes.subarray(0, 4).toString("latin1"), "PAR1", name);
+      assert.equal(bytes.subarray(bytes.length - 4).toString("latin1"), "PAR1", name);
+    }
+  }
   // A plain click forgets the choice without expanding the table.
   await ordersNode.click();
   assert.equal(await customerRow.getAttribute("aria-selected"), "false");

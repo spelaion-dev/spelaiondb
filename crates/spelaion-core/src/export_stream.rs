@@ -470,6 +470,11 @@ impl FileNamePattern {
         Ok(())
     }
 
+    /// [`FileNamePattern::render`] at this moment, in this computer's time zone.
+    pub fn render_now(&self, parts: &NameParts<'_>) -> Result<String, String> {
+        self.render(parts, chrono::Local::now())
+    }
+
     /// The file name (without its extension) for `parts` at `now`, made safe ([`file_name`]).
     pub fn render(
         &self,
