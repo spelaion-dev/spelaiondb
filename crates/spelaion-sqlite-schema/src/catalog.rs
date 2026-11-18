@@ -7,10 +7,13 @@ use crate::SqlValue;
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, Dialect, DriverError, ForeignKeyInfo, IndexInfo,
     LikeFilter, ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaColumn, SchemaInfo,
-    SchemaObject, SchemaObjectKind, TableInfo, terminated,
+    SchemaObject, SchemaObjectKind, TableInfo, check_definition, terminated,
 };
 
 use spelaion_dialect::sqlite::SqliteDialect;
+use sqlparser::ast::{CheckConstraint, ColumnOption, Statement, TableConstraint};
+use sqlparser::dialect::SQLiteDialect;
+use sqlparser::parser::Parser;
 
 /// One row of a catalog query, as the transport read it.
 pub type Row = Vec<SqlValue>;
@@ -67,29 +70,100 @@ pub fn schemas(rows: &[Row]) -> Vec<SchemaInfo> {
         .collect()
 }
 
+const USER_RELATIONS: &str = r"type in ('table', 'view') and name not like 'sqlite\_%' escape '\'";
+
 pub fn objects_sql(schema: &str, like: &LikeFilter) -> String {
     format!(
-        r"select name, type from {} where type in ('table', 'view') and name not like 'sqlite\_%' escape '\'{} order by name",
+        "select name, type from {} where {USER_RELATIONS}{} order by name",
         schema_table(schema),
         like.sql("name", literal)
     )
 }
 
 pub fn objects(schema: &str, rows: &[Row]) -> Vec<ObjectInfo> {
-    rows.iter()
-        .map(|row| ObjectInfo {
-            schema: schema.to_string(),
-            name: text(row, 0),
-            kind: if text(row, 1) == "view" {
-                ObjectKind::View
-            } else {
-                ObjectKind::Table
-            },
-            // SQLite keeps no cheap estimates (only with ANALYZE, in sqlite_stat1).
-            estimated_rows: None,
-            comment: None,
-        })
-        .collect()
+    rows.iter().map(|row| object(schema, row)).collect()
+}
+
+fn object(schema: &str, row: &Row) -> ObjectInfo {
+    ObjectInfo {
+        schema: schema.to_string(),
+        name: text(row, 0),
+        kind: if text(row, 1) == "view" {
+            ObjectKind::View
+        } else {
+            ObjectKind::Table
+        },
+        // SQLite keeps no cheap estimates (only with ANALYZE, in sqlite_stat1).
+        estimated_rows: None,
+        comment: None,
+    }
+}
+
+/// The described table or view and the SQL SQLite stores for it.
+pub fn described_object_sql(schema: &str, name: &str) -> String {
+    format!(
+        "select name, type, sql from {} where {USER_RELATIONS} and name = {}",
+        schema_table(schema),
+        literal(name)
+    )
+}
+
+pub fn described_object(
+    schema: &str,
+    name: &str,
+    rows: &[Row],
+) -> Result<(ObjectInfo, Vec<ConstraintInfo>)> {
+    let row = rows
+        .first()
+        .ok_or_else(|| DriverError::Other(format!("{schema}.{name} does not exist")))?;
+    let info = object(schema, row);
+    let checks = if info.kind == ObjectKind::Table {
+        optional_text(row, 2).map_or_else(Vec::new, |ddl| table_checks(&ddl))
+    } else {
+        Vec::new()
+    };
+    Ok((info, checks))
+}
+
+/// SQLite keeps CHECK constraints in the table DDL. Unknown syntax must leave the other
+/// catalog information usable.
+fn table_checks(ddl: &str) -> Vec<ConstraintInfo> {
+    let Ok(statements) = Parser::parse_sql(&SQLiteDialect {}, ddl) else {
+        return Vec::new();
+    };
+    let [Statement::CreateTable(table)] = statements.as_slice() else {
+        return Vec::new();
+    };
+    let column_checks = table
+        .columns
+        .iter()
+        .flat_map(|column| &column.options)
+        .filter_map(|option| match &option.option {
+            ColumnOption::Check(check) => Some(check_info(check, option.name.as_ref())),
+            _ => None,
+        });
+    let table_checks = table
+        .constraints
+        .iter()
+        .filter_map(|constraint| match constraint {
+            TableConstraint::Check(check) => Some(check_info(check, None)),
+            _ => None,
+        });
+    column_checks.chain(table_checks).collect()
+}
+
+fn check_info(
+    check: &CheckConstraint,
+    column_constraint_name: Option<&sqlparser::ast::Ident>,
+) -> ConstraintInfo {
+    ConstraintInfo {
+        name: column_constraint_name
+            .or(check.name.as_ref())
+            .map(|name| name.value.clone()),
+        kind: ConstraintKind::Check,
+        columns: Vec::new(),
+        definition: check_definition(&check.expr.to_string()),
+    }
 }
 
 /// Triggers are all a SQLite schema holds besides its tables and views (ADR-024).
