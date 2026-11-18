@@ -4553,6 +4553,16 @@ try {
     const where = panel.getByRole("textbox", { name: "WHERE" });
     const suggestions = panel.getByRole("listbox", { name: "Filters used on this table and its columns" });
     const offered = () => suggestions.getByRole("option").locator("code").allInnerTexts();
+    // A filter is remembered once its page has loaded: the box asks the store then, and the
+    // list shows it when the store answers, which a busy disk can make later than the page
+    // and the keys that follow it (SDB-424). The open list takes the answer as it arrives.
+    const offeredBecomes = async (expected) => {
+      for (let i = 0; i < 50; i++) {
+        if (JSON.stringify(await offered()) === JSON.stringify(expected)) return;
+        await page.waitForTimeout(100);
+      }
+      assert.deepEqual(await offered(), expected);
+    };
     await openOrders();
     await range.filter({ hasText: "rows 1–500" }).waitFor();
     assert.equal(await where.inputValue(), "", "no default filter yet");
@@ -4582,7 +4592,7 @@ try {
     await where.fill("");
     await page.keyboard.press("ArrowDown");
     await suggestions.waitFor();
-    assert.deepEqual(await offered(), ["total > 1990", "id > 49900"]);
+    await offeredBecomes(["total > 1990", "id > 49900"]);
     // Typing narrows the list and offers the table's columns; Enter takes the one chosen.
     await where.fill("tot");
     await page.waitForFunction(() => document.querySelectorAll(".tab-panel:not([hidden]) .table-filter-suggestions li").length === 2);
