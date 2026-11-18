@@ -8366,8 +8366,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("heading", { name: "Edit MariaDB (copy)" }).waitFor();
   await wizard.getByRole("status").filter({ hasText: "was pasted as a personal connection" }).waitFor();
   await shot("13f-pasted-connection");
-  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
-  await wizard.waitFor({ state: "detached" });
+  // Activate Cancel itself after the edit form is ready. Its footer can move as the
+  // asynchronously loaded form settles, so avoid a pointer aimed at an earlier layout.
+  const dismissPastedEditor = async () => {
+    const cancel = wizard.getByRole("button", { name: "Cancel", exact: true }).and(wizard.locator("button:enabled"));
+    await cancel.press("Space");
+    await wizard.waitFor({ state: "detached" });
+  };
+  await dismissPastedEditor();
   const pastedFile = join(userDir, "connections", "mariadb-copy.toml");
   const pastedText = readFileSync(pastedFile, "utf8");
   assert.match(pastedText, /engine = "mariadb"/);
@@ -8387,8 +8393,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("menuitem", { name: "Paste connection" }).click();
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("heading", { name: "Edit MariaDB (copy) (copy)" }).waitFor();
-  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
-  await wizard.waitFor({ state: "detached" });
+  await dismissPastedEditor();
   // The pasted connection connects like the original, asking for its password.
   panel = await newQuery("MariaDB (copy) (copy)", "select version() as v;");
   await run(panel);
