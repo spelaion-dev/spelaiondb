@@ -62,6 +62,9 @@ jobs:
     timeout-minutes: 60
     env:
       SPELAION_TEST_PG: 127.0.0.1:15432
+      # PgBouncer in transaction mode in front of that PostgreSQL (SDB-396), through the pinned
+      # PostgreSQL plugin.
+      SPELAION_TEST_PGBOUNCER: 127.0.0.1:16432
       SPELAION_TEST_MYSQL: 127.0.0.1:13306
       SPELAION_TEST_MARIADB: 127.0.0.1:13307
       SPELAION_TEST_MSSQL: 127.0.0.1:11433
