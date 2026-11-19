@@ -25,6 +25,68 @@ use crate::sort::{MAX_SORT_KEYS, SortKey, ViewError, sorted_instants, sorted_row
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ResultId(pub u64);
 
+/// How far a stored result got (SDB-367): still loading, whole, or cut short with the reason.
+/// The one answer to "is this every row?": nothing else holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultEnd {
+    /// Rows may still arrive.
+    Loading,
+    /// The statement finished: these are all its rows.
+    Whole,
+    /// The statement stopped before its last row. The rows that arrived are kept and shown
+    /// (SDB-275), but they are not the whole answer.
+    Partial(PartialReason),
+}
+
+impl ResultEnd {
+    /// No more rows will arrive (the result is whole or was cut short).
+    pub fn has_ended(self) -> bool {
+        match self {
+            Self::Loading => false,
+            Self::Whole | Self::Partial(_) => true,
+        }
+    }
+
+    /// The reason the result was cut short, if it was.
+    pub fn partial(self) -> Option<PartialReason> {
+        match self {
+            Self::Partial(reason) => Some(reason),
+            Self::Loading | Self::Whole => None,
+        }
+    }
+}
+
+/// Why a result stopped before its last row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartialReason {
+    /// The user cancelled the statement.
+    Cancelled,
+    /// The statement failed while its rows arrived.
+    Failed,
+    /// The statement ran longer than its timeout and was cancelled.
+    TimedOut,
+    /// The connection stopped in the middle of the statement.
+    ConnectionLost,
+}
+
+impl PartialReason {
+    /// A stable code for agents and logs.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+            Self::TimedOut => "timed_out",
+            Self::ConnectionLost => "connection_lost",
+        }
+    }
+}
+
+/// The result is no longer kept: its tab was closed, or a later run replaced it. Run its query
+/// again to read the rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the result was freed: run its query again")]
+pub struct ResultFreed;
+
 /// A result that may keep growing while batches arrive.
 #[derive(Debug)]
 pub struct StoredResult {
@@ -33,7 +95,8 @@ pub struct StoredResult {
     /// Index of the first row of each batch.
     starts: Vec<usize>,
     rows: usize,
-    complete: bool,
+    /// Whether more rows may arrive, and if not, whether these are all of them.
+    end: ResultEnd,
     /// The sort's keys and the original rows in their order.
     sort: Option<(Vec<SortKey>, Vec<u32>)>,
     /// The filter text and, per original row, whether it matches.
@@ -120,7 +183,7 @@ impl StoredResult {
             batches: Vec::new(),
             starts: Vec::new(),
             rows: 0,
-            complete: false,
+            end: ResultEnd::Loading,
             sort: None,
             filter: None,
             column_filters: None,
@@ -183,9 +246,9 @@ impl StoredResult {
         self.rows
     }
 
-    /// No more rows will arrive.
-    pub fn is_complete(&self) -> bool {
-        self.complete
+    /// Whether more rows may arrive and, once none will, whether these are all of them.
+    pub fn end(&self) -> ResultEnd {
+        self.end
     }
 
     /// Bytes the received rows take in memory: their Arrow arrays, and the originals a masked
@@ -374,7 +437,9 @@ impl StoredResult {
     }
 
     fn check_viewable(&self) -> Result<(), ViewError> {
-        if !self.complete {
+        // A partial result is sorted, filtered and charted as the rows it has; the page says
+        // they are partial.
+        if !self.end.has_ended() {
             return Err(ViewError::Incomplete);
         }
         if u32::try_from(self.rows).is_err() {
@@ -758,11 +823,11 @@ impl ResultStore {
         source: ResultId,
         offset: usize,
     ) -> Result<usize, String> {
-        let page = self.get(source).ok_or("page was freed")?;
+        let page = self.stored(source).map_err(|e| e.to_string())?;
         let page = page.read().map_err(|_| "page lock poisoned")?;
-        let target = self.get(target).ok_or("result was freed")?;
+        let target = self.stored(target).map_err(|e| e.to_string())?;
         let mut target = target.write().map_err(|_| "result lock poisoned")?;
-        if !target.complete || target.view.is_some() || target.rows != offset {
+        if !target.end.has_ended() || target.view.is_some() || target.rows != offset {
             return Err("the result changed while fetching more rows".into());
         }
         if target.schema.columns != page.schema.columns {
@@ -786,9 +851,15 @@ impl ResultStore {
         Ok(added)
     }
 
+    /// Ends a result whole: every row arrived.
     pub(crate) fn complete(&self, id: ResultId) {
+        self.end(id, ResultEnd::Whole);
+    }
+
+    /// Records how a result ended (SDB-367): no more rows arrive after this.
+    pub(crate) fn end(&self, id: ResultId, end: ResultEnd) {
         if let Some(result) = self.get(id) {
-            result.write().expect("result lock poisoned").complete = true;
+            result.write().expect("result lock poisoned").end = end;
         }
     }
 
@@ -801,6 +872,11 @@ impl ResultStore {
 
     pub fn get(&self, id: ResultId) -> Option<Arc<RwLock<StoredResult>>> {
         self.lock().get(&id).cloned()
+    }
+
+    /// The result, or [`ResultFreed`] when it is no longer kept.
+    pub fn stored(&self, id: ResultId) -> Result<Arc<RwLock<StoredResult>>, ResultFreed> {
+        self.get(id).ok_or(ResultFreed)
     }
 
     /// Frees a result (for example, when its tab is closed).

@@ -14,7 +14,7 @@ use spelaion_driver_api::{
 
 use crate::health::{Health, SessionHealth, Tracked};
 use crate::masking::MaskPolicy;
-use crate::results::{ResultId, ResultSource, ResultStore};
+use crate::results::{PartialReason, ResultEnd, ResultId, ResultSource, ResultStore};
 pub use crate::script::{
     AnswerError, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop, ScriptSummary,
 };
@@ -41,6 +41,14 @@ pub enum CoreEvent {
         index: usize,
         result: ResultId,
         total_rows: usize,
+    },
+    /// No more rows arrive for this result (SDB-367): it is whole, or it was cut short and
+    /// says why. Sent before its statement's [`CoreEvent::StatementFinished`] or
+    /// [`CoreEvent::StatementFailed`]; `end` is never [`ResultEnd::Loading`].
+    ResultEnded {
+        index: usize,
+        result: ResultId,
+        end: ResultEnd,
     },
     Notice {
         index: usize,
@@ -961,6 +969,11 @@ impl Session {
                     None
                 };
                 let mut created: Vec<ResultId> = Vec::new();
+                // The result the statement stopped in the middle of (SDB-367), and whether the
+                // connection was lost under it; its reason is known once the cancel and the
+                // timeout are read below.
+                let mut cut: Option<ResultId> = None;
+                let mut lost = false;
                 // The rows after a `COPY … FROM STDIN` (SDB-162): loaded through the import's
                 // path, never read as SQL. Only the statement went through the checks above.
                 let copy_data = match plan_mode {
@@ -1024,9 +1037,7 @@ impl Session {
                             };
                             let Some(event) = event else {
                                 if !finished {
-                                    if let Some(result) = current.take() {
-                                        results.complete(result);
-                                    }
+                                    cut = current.take();
                                     if cancelled() || timed_out {
                                         failure = Some(StatementError::from_driver(
                                             DriverError::Cancelled,
@@ -1034,6 +1045,7 @@ impl Session {
                                             span,
                                         ));
                                     } else {
+                                        lost = true;
                                         losing_in_run.lose(format!(
                                             "the connection stopped in the middle of a statement: {}",
                                             crate::panics::INTERNAL_ERROR
@@ -1050,7 +1062,12 @@ impl Session {
                                 Ok(ExecEvent::Columns(schema)) => {
                                     // A batch may return several result sets (SQL Server).
                                     if let Some(previous) = current {
-                                        results.complete(previous);
+                                        results.end(previous, ResultEnd::Whole);
+                                        yield CoreEvent::ResultEnded {
+                                            index,
+                                            result: previous,
+                                            end: ResultEnd::Whole,
+                                        };
                                     }
                                     let (result, schema) = match &masking {
                                         Some(policy) => results.create_masked(schema, policy),
@@ -1075,15 +1092,19 @@ impl Session {
                                 Ok(ExecEvent::Notice(notice)) => notices.push(notice),
                                 Ok(ExecEvent::Done { rows_affected: rows }) => {
                                     if let Some(result) = current.take() {
-                                        results.complete(result);
+                                        results.end(result, ResultEnd::Whole);
+                                        yield CoreEvent::ResultEnded {
+                                            index,
+                                            result,
+                                            end: ResultEnd::Whole,
+                                        };
                                     }
                                     rows_affected = rows;
                                     finished = true;
                                 }
                                 Err(e) => {
-                                    if let Some(result) = current.take() {
-                                        results.complete(result);
-                                    }
+                                    cut = current.take();
+                                    lost = matches!(e, DriverError::Connection(_));
                                     failure = Some(StatementError::from_driver(e, &script, span));
                                     break;
                                 }
@@ -1123,6 +1144,21 @@ impl Session {
                             error.message
                         );
                     }
+                }
+                // The result cut short says why (SDB-367): its rows stay kept and shown.
+                if let Some(result) = cut {
+                    let reason = if user_cancelled {
+                        PartialReason::Cancelled
+                    } else if timed_out {
+                        PartialReason::TimedOut
+                    } else if lost {
+                        PartialReason::ConnectionLost
+                    } else {
+                        PartialReason::Failed
+                    };
+                    let end = ResultEnd::Partial(reason);
+                    results.end(result, end);
+                    yield CoreEvent::ResultEnded { index, result, end };
                 }
                 for notice in notices {
                     yield CoreEvent::Notice { index, notice };
@@ -1240,7 +1276,7 @@ impl Session {
                 summary,
             };
         });
-        end_on_panic(run, losing, total_statements)
+        end_on_panic(run, losing, total_statements, self.results.clone())
     }
 }
 
@@ -1263,16 +1299,19 @@ fn internal_statement_error(what: &str) -> StatementError {
 /// `run`, ending as a failed run if it panics (SDB-163): the statement that was running fails
 /// with an internal error, the run finishes, and the session is lost (ADR-028: what state the
 /// connection was left in is unknown, so it is never used again; nothing is re-run). Without
-/// this the app would wait for the end of the run forever.
+/// this the app would wait for the end of the run forever. A result still loading then ends
+/// cut short, as its connection stopped (SDB-367).
 fn end_on_panic(
     run: BoxStream<'static, CoreEvent>,
     health: Health,
     statements: usize,
+    results: Arc<ResultStore>,
 ) -> BoxStream<'static, CoreEvent> {
     Box::pin(async_stream::stream! {
         let mut run = std::panic::AssertUnwindSafe(run).catch_unwind();
         let mut summary = ScriptSummary { statements, ..Default::default() };
         let mut running = None;
+        let mut loading: Option<(usize, ResultId)> = None;
         while let Some(event) = run.next().await {
             match event {
                 Ok(event) => {
@@ -1290,8 +1329,11 @@ fn end_on_panic(
                             running = None;
                         }
                         CoreEvent::ScriptFinished { .. } => running = None,
-                        CoreEvent::ResultStarted { .. }
-                        | CoreEvent::Rows { .. }
+                        CoreEvent::ResultStarted { index, result, .. } => {
+                            loading = Some((*index, *result));
+                        }
+                        CoreEvent::ResultEnded { .. } => loading = None,
+                        CoreEvent::Rows { .. }
                         | CoreEvent::Notice { .. }
                         | CoreEvent::ErrorPaused { .. }
                         | CoreEvent::HistoryWarning { .. } => {}
@@ -1300,6 +1342,11 @@ fn end_on_panic(
                 }
                 Err(_) => {
                     health.lose(format!("a run was stopped by {}", crate::panics::INTERNAL_ERROR));
+                    if let Some((index, result)) = loading {
+                        let end = ResultEnd::Partial(PartialReason::ConnectionLost);
+                        results.end(result, end);
+                        yield CoreEvent::ResultEnded { index, result, end };
+                    }
                     if let Some(index) = running {
                         summary.failed += 1;
                         summary.stop = Some(ScriptStop::Failed { index });

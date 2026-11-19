@@ -10,6 +10,7 @@ import {
   type CellRange,
   type CopySpecialItem,
   type UpdateSourceItem,
+  type WindowErrorItem,
   type ColumnItem,
   type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
@@ -148,6 +149,7 @@ export type TableStatusItem = TableStatusItem_Deserialize;
 export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, SchemaColumnItem, SearchTableItem };
 export type { ImportReport, KubernetesDraftItem, SsmDraftItem };
 export type { BlockItem, BulkActionItem, CellInputItem };
+export type { WindowErrorItem };
 export type { CopySpecialItem, UpdateSourceItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
@@ -234,6 +236,16 @@ export async function call<T>(promise: Promise<Typed<T>>): Promise<T> {
 }
 
 /** Rows [start, start + len) of a result, already converted to text by the core. */
+/** A `fetch_window` failure as the core typed it (SDB-367); anything else (a panic caught by the
+ *  invoke handler) is a failure with its text. */
+export function windowError(error: unknown): WindowErrorItem {
+  if (typeof error === "object" && error !== null && "kind" in error && "message" in error) {
+    const { kind, message } = error as { kind: unknown; message: unknown };
+    if ((kind === "freed" || kind === "failed") && typeof message === "string") return { kind, message };
+  }
+  return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+}
+
 export async function fetchWindow(result: number, start: number, len: number): Promise<Table> {
   const buffer = await invoke<ArrayBuffer>("fetch_window", { result, start, len });
   return tableFromIPC(new Uint8Array(buffer));

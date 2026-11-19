@@ -5,7 +5,7 @@ import type { EditorActionId } from "./editorActions";
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFormatItem, OnErrorItem, RestoreNoteItem, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
-import type { DiagramScopeItem_Deserialize, RestoredTabItem } from "./bindings";
+import type { DiagramScopeItem_Deserialize, RestoredTabItem, ResultEndItem } from "./bindings";
 
 export interface ResultMeta {
   id: number;
@@ -20,7 +20,9 @@ export interface ResultMeta {
   pinned?: boolean;
   columns: ColumnItem[];
   rows: number;
-  complete: boolean;
+  /** Whether rows may still arrive and, once none will, whether these are all of them or the
+   *  statement stopped before its last row (SDB-367), as the core said it. */
+  end: ResultEndItem;
   /** The result came from a completed run of exactly one statement. */
   refreshable?: boolean;
   /** Original single statement, before variables and parameters were substituted. */

@@ -31,6 +31,7 @@ import { FOCUS_EXPLORER_FILTER_EVENT } from "./components/Sidebar";
 import { FOCUS_SEARCH_EVENT } from "./components/SearchPanel";
 import { openFound } from "./components/OpenObjectDialog";
 import { useImport } from "./components/ImportDialog";
+import { ended } from "./resultEnd";
 
 export interface CommandContext {
   /** The tab the command acts on: the menu's tab, or the active one (none behind Settings). */
@@ -237,7 +238,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   // The active result's tab (SDB-378). What a run replaces, the pin and the name are the
   // core's; a re-run is a new run, through the guard like any other.
   "results.rerun": {
-    enabled: (c) => Boolean(activeResult(c)?.complete && (activeResult(c)?.paging?.sql ?? activeResult(c)?.sql)) && !editorTab(c)?.run?.running,
+    enabled: (c) => Boolean(ended(activeResult(c)) && (activeResult(c)?.paging?.sql ?? activeResult(c)?.sql)) && !editorTab(c)?.run?.running,
     run: editorCommand("resultRerun"),
   },
   "results.pin": {
@@ -249,7 +250,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   // Only a name the user gave can be taken off: the tab shows its comment's name or "Result N"
   // again, as the core answers (SDB-407).
   "results.resetName": { enabled: (c) => Boolean(activeResult(c)?.renamed), run: editorCommand("resultResetName") },
-  "results.close": { enabled: (c) => Boolean(activeResult(c)?.complete), run: editorCommand("resultClose") },
+  "results.close": { enabled: (c) => Boolean(ended(activeResult(c))), run: editorCommand("resultClose") },
   "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
   "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },
   // The active result's grid opens its "Go to row" (SDB-386).

@@ -518,6 +518,7 @@ pub async fn explain(
             }
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ErrorPaused { .. }
@@ -526,7 +527,9 @@ pub async fn explain(
         // Plans own their data; do not publish Arrow handles as query-result tabs.
         if !matches!(
             event,
-            CoreEvent::ResultStarted { .. } | CoreEvent::Rows { .. }
+            CoreEvent::ResultStarted { .. }
+                | CoreEvent::Rows { .. }
+                | CoreEvent::ResultEnded { .. }
         ) {
             observer(event);
         }

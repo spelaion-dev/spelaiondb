@@ -4,7 +4,7 @@
 // shows it. Only drawing uses the second; everything else keeps the database's text.
 
 import type { Table, Vector } from "apache-arrow";
-import { fetchWindow } from "../api";
+import { fetchWindow, windowError, type WindowErrorItem } from "../api";
 
 export const BLOCK = 500;
 const MAX_BLOCKS = 80;
@@ -28,6 +28,11 @@ interface Block {
 export class RowCache {
   private blocks = new Map<number, Block>();
   private pending = new Set<number>();
+  /** Blocks the core could not give, with its reason: not asked again at every paint (SDB-367),
+   *  only when the result grows or the cache is made again. */
+  private failed = new Map<number, string>();
+  /** The core no longer keeps the result: nothing is asked any more. */
+  private freed = false;
   private revisions = new Map<number, number>();
   private loadedRows = 0;
   private columns: ColumnShown[] = [];
@@ -35,15 +40,17 @@ export class RowCache {
   constructor(
     readonly resultId: number,
     private readonly onLoaded: () => void,
+    /** A window could not be read, or the core no longer keeps the result (SDB-367). */
+    private readonly onFailed: (error: WindowErrorItem) => void = () => undefined,
   ) {}
 
   /** Cell text as the database prints it; `null` if it is NULL; `undefined` if its block has
-   *  not arrived yet. */
+   *  not arrived yet, or could not be read ([`RowCache.failure`] says why). */
   get(row: number, col: number): string | null | undefined {
     const b = Math.floor(row / BLOCK);
     const block = this.blocks.get(b);
     if (!block) {
-      this.request(b);
+      if (!this.freed && !this.failed.has(b)) this.request(b);
       return undefined;
     }
     const value = block.stored[col]?.get(row - b * BLOCK) as string | null | undefined;
@@ -60,6 +67,11 @@ export class RowCache {
     return shown ?? stored;
   }
 
+  /** Why the row's block could not be read, if it could not. */
+  failure(row: number): string | undefined {
+    return this.failed.get(Math.floor(row / BLOCK));
+  }
+
   /** What the core said of a column with the last window; `undefined` until one arrives. */
   column(col: number): ColumnShown | undefined {
     return this.columns[col];
@@ -70,6 +82,7 @@ export class RowCache {
     if (rows === this.loadedRows) return;
     const last = Math.floor(this.loadedRows / BLOCK);
     this.blocks.delete(last);
+    this.failed.delete(last);
     this.revisions.set(last, (this.revisions.get(last) ?? 0) + 1);
     this.loadedRows = rows;
   }
@@ -105,7 +118,24 @@ export class RowCache {
         }
         this.onLoaded();
       })
-      .catch((e: unknown) => console.error("fetch_window", e))
+      .catch((e: unknown) => {
+        if ((this.revisions.get(b) ?? 0) !== revision) return;
+        const error = windowError(e);
+        switch (error.kind) {
+          case "freed":
+            this.freed = true;
+            break;
+          case "failed":
+            this.failed.set(b, error.message);
+            this.onLoaded();
+            break;
+          default: {
+            const unknown: never = error;
+            return unknown;
+          }
+        }
+        this.onFailed(error);
+      })
       .finally(() => {
         this.pending.delete(b);
         if ((this.revisions.get(b) ?? 0) !== revision) this.onLoaded();

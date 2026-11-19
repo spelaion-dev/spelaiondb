@@ -243,6 +243,7 @@ async fn read_rows(
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }

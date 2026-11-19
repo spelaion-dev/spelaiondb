@@ -95,6 +95,7 @@ async fn run(session: &Session, sql: &str) -> Vec<String> {
             }
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ErrorPaused { .. }

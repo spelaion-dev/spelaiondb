@@ -29,6 +29,7 @@ import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES, PageControls } from "./TableDataBar";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
+import { ended, partialText } from "../resultEnd";
 
 /** No sort: one list, so an unsorted result keeps the same value between renders. */
 const NO_SORT: SortState[] = [];
@@ -297,6 +298,7 @@ export function ResultGrid({
   onLoadRows,
   onCancelLoad,
   onSelectedRows,
+  onRunAgain,
   onTranspose,
 }: {
   result: ResultMeta;
@@ -349,6 +351,8 @@ export function ResultGrid({
   onSelectedRows?(rows: number[]): void;
   /** "Transpose selected rows": these rows of the view shown as columns. */
   onTranspose?(rows: number[]): void;
+  /** Runs the query of a result the core no longer keeps (SDB-367). */
+  onRunAgain?(): void;
 }) {
   // The sort the headers show: the table data tab's, else the core's sort of the loaded rows,
   // else the one a paged query's pages were read with.
@@ -413,6 +417,8 @@ export function ResultGrid({
   const [copySpecial, setCopySpecial] = useState<CellRange | null>(null);
   /** `slow`: a sentence to read, kept on screen as long as an error. */
   const [notice, setNotice] = useState<{ text: string; error: boolean; slow?: boolean } | null>(null);
+  /** The result the core said it no longer keeps (SDB-367). */
+  const [freed, setFreed] = useState<number | null>(null);
   const dragging = useRef(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
   /** A table data tab's foreign keys: its own and those of other tables that point to it. */
@@ -662,7 +668,26 @@ export function ResultGrid({
   const filtersKey = JSON.stringify(result.columnFilters ?? []);
   const view = `${localSort.map((key) => `${key.column}:${key.descending}`).join(",")}|${result.filter ?? ""}|${filtersKey}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw, displayRevision]);
+  const cache = useMemo(
+    () =>
+      new RowCache(result.id, () => redraw(), (error) => {
+        // The core said why the rows could not be read (SDB-367): a freed result is shown where
+        // the grid is, with Run again; any other failure in the grid's notice, once.
+        switch (error.kind) {
+          case "freed":
+            setFreed(result.id);
+            break;
+          case "failed":
+            setNotice({ text: t("results.rowsFailed", { detail: error.message }), error: true });
+            break;
+          default: {
+            const unknown: never = error;
+            return unknown;
+          }
+        }
+      }),
+    [result.id, view, redraw, displayRevision],
+  );
   if (viewChanges.current.key !== `${view}|${result.rows}`) viewChanges.current = { key: `${view}|${result.rows}`, count: viewChanges.current.count + 1 };
   cache.grewTo(result.rows);
 
@@ -1259,7 +1284,7 @@ export function ResultGrid({
 
   /** Shown columns inside a selection, in order (hidden ones are left out of copies). */
   const shownIn = (b: Bounds) => visibleCols.filter((c) => c >= b.c0 && c <= b.c1);
-  const calcBounds = selection && result.complete && result.rows > 0 ? bounds(selection) : null;
+  const calcBounds = selection && ended(result) && result.rows > 0 ? bounds(selection) : null;
   const calcColumns = calcBounds ? shownIn(calcBounds).join(",") : "";
   const calcRange = useMemo<CellRange | null>(
     () =>
@@ -1325,7 +1350,7 @@ export function ResultGrid({
       }
       return;
     }
-    if (!result.complete) {
+    if (!ended(result)) {
       setFound({ count: 0, truncated: false, busy: false, error: t("results.findWhenComplete") });
       return;
     }
@@ -1347,7 +1372,7 @@ export function ResultGrid({
     return () => clearTimeout(timer);
     // A sort, a filter or more rows move the matches: the same search runs again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [find, result.id, result.complete, result.rows, view, shownKey]);
+  }, [find, result.id, ended(result), result.rows, view, shownKey]);
 
   /** Moves to the next or previous match, or with "first" to the first one from the active
    *  cell on; the active cell follows the match. */
@@ -1444,7 +1469,7 @@ export function ResultGrid({
   /** Every different value of one column (all its rows) as an IN list, written by the core. */
   async function copyColumnInList(col: number) {
     setMenu(null);
-    if (!result.complete) {
+    if (!ended(result)) {
       setNotice({ text: t("results.filterWhenComplete"), error: true });
       return;
     }
@@ -1472,7 +1497,7 @@ export function ResultGrid({
     setMenu(null);
     setCustomFilter(null);
     if (restoringView || result.paging?.loading) return;
-    if (!result.complete) {
+    if (!ended(result)) {
       setNotice({ text: t("results.filterWhenComplete"), error: true });
       return;
     }
@@ -1582,7 +1607,7 @@ export function ResultGrid({
       serverSort.onSort(sort);
       return;
     }
-    if (!result.complete) {
+    if (!ended(result)) {
       setNotice({ text: t("results.sortWhenComplete"), error: true });
       return;
     }
@@ -2118,7 +2143,7 @@ export function ResultGrid({
       e.preventDefault();
       e.stopPropagation();
       if (mod) void duplicateRow();
-      else if (result.complete) setInserting({ values: [] });
+      else if (ended(result)) setInserting({ values: [] });
     } else if (e.altKey && !mod && !e.shiftKey && key === "delete") {
       e.preventDefault();
       e.stopPropagation();
@@ -2214,6 +2239,17 @@ export function ResultGrid({
     )}
     <div className="grid-host">
       <canvas ref={canvasRef} className="grid-canvas" style={{ width: size.w, height: size.h }} />
+      {freed === result.id && (
+        <div className="grid-freed" role="status">
+          <strong>{t("results.freed.title")}</strong>
+          <p>{t("results.freed.body")}</p>
+          {onRunAgain && (
+            <button type="button" className="primary" onClick={onRunAgain}>
+              {t("results.freed.rerun")}
+            </button>
+          )}
+        </div>
+      )}
       <div
         ref={scrollerRef}
         className="grid-scroller"
@@ -2599,7 +2635,7 @@ export function ResultGrid({
               {t("results.copySpecial")}
             </button>
           </GridSubmenu>
-          {selection && !selection.rows && result.complete && (
+          {selection && !selection.rows && ended(result) && (
             <button
               role="menuitem"
               onClick={() => {
@@ -2831,7 +2867,7 @@ export function ResultGrid({
         <div className="result-edit-toolbar" role="toolbar" aria-label={t(editing ? "edit.toolbar" : "queryPaging.label")}>
           {editing && <>
             <div className="result-row-actions" role="group" aria-label={t("edit.toolbar")}>
-              <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !result.complete} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
+              <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !ended(result)} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
               <button className="ghost" title={t("edit.shortcutDuplicate")} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /><span>{t("edit.duplicateAction")}</span></button>
               <button className="ghost" title={t("edit.shortcutDelete")} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /><span>{t("edit.deleteAction")}</span></button>
               <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="revert" /><span>{t("edit.revertAction")}</span></button>
@@ -2931,7 +2967,7 @@ export function ResultGrid({
         grouped={grouped.filter((column) => column < result.columns.length)}
         onGrouped={setGrouped}
         view={String(viewChanges.current.count)}
-        waiting={!result.complete}
+        waiting={!ended(result)}
         scope={serverSort ? "page" : result.paging?.hasMore ? "loaded" : undefined}
         dropping={headerGhost !== null}
         locked={!!result.paging?.loading || hasPendingEdits}
@@ -2946,7 +2982,8 @@ export function ResultGrid({
       <CalcPanel
         resultId={result.id}
         range={calcRange}
-        waiting={!!selection && !result.complete}
+        waiting={!!selection && !ended(result)}
+        partial={partialText(result.end, result.total ?? result.rows, t, numbers)}
         view={`${view}|${result.rows}`}
         modes={<ViewerModes modes={viewerModes} mode={shownMode} onMode={(mode) => { setViewerMode(mode); scrollerRef.current?.focus(); }} />}
         onClose={() => {

@@ -147,6 +147,7 @@ async fn run_one(
             }
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ErrorPaused { .. }
             | CoreEvent::ScriptFinished { .. }

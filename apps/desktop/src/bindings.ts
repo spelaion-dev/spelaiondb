@@ -4512,6 +4512,9 @@ export type OutlineItem = {
 	total: number,
 };
 
+/**  Why a result was cut short. */
+export type PartialReasonItem = "cancelled" | "failed" | "timedOut" | "connectionLost";
+
 export type PartitionItem = PartitionItem_Serialize | PartitionItem_Deserialize;
 
 export type PartitionItem_Deserialize = {
@@ -5511,6 +5514,18 @@ export type RestoredTabsItem_Serialize = {
 	reconnect: boolean,
 };
 
+/**
+ *  How far a stored result got (SDB-367), as the core says it: the page shows it and never
+ *  works it out from the statement's messages.
+ */
+export type ResultEndItem = 
+/**  Rows may still arrive. */
+{ kind: "loading" } | 
+/**  Every row of the statement. */
+{ kind: "whole" } | 
+/**  The statement stopped before its last row: the rows shown are not the whole answer. */
+{ kind: "partial"; reason: PartialReasonItem };
+
 /**  Where a run's results go (SDB-378). */
 export type ResultPlacementItem = 
 /**  In place of every result that is not pinned. */
@@ -5775,7 +5790,12 @@ export type ScriptEvent_Deserialize =
  */
 { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name?: string | null; 
 /**  `name` is the one the user gave the tab it replaces (SDB-407). */
-renamed: boolean; pinned: boolean; replaces?: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
+renamed: boolean; pinned: boolean; replaces?: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | 
+/**
+ *  No more rows arrive for this result (SDB-367): whole, or cut short and why. Comes
+ *  before its statement's end.
+ */
+{ kind: "resultEnded"; index: number; result: number; end: ResultEndItem } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */
@@ -5802,7 +5822,12 @@ export type ScriptEvent_Serialize =
  */
 { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name: string | null; 
 /**  `name` is the one the user gave the tab it replaces (SDB-407). */
-renamed: boolean; pinned: boolean; replaces: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
+renamed: boolean; pinned: boolean; replaces: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | 
+/**
+ *  No more rows arrive for this result (SDB-367): whole, or cut short and why. Comes
+ *  before its statement's end.
+ */
+{ kind: "resultEnded"; index: number; result: number; end: ResultEndItem } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */
@@ -6797,6 +6822,13 @@ export type VariableItem = {
 	name: string,
 	value: string,
 };
+
+/**  Why a window of rows could not be read (`fetch_window`, SDB-367). */
+export type WindowErrorItem = 
+/**  The result is no longer kept: its query must run again. */
+{ kind: "freed"; message: string } | 
+/**  Anything else, as the core said it. */
+{ kind: "failed"; message: string };
 
 export type WorkspaceInfo = WorkspaceInfo_Serialize | WorkspaceInfo_Deserialize;
 

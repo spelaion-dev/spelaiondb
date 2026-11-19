@@ -6,7 +6,7 @@ mod engines;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use spelaion_core::{CoreEvent, ResultStore, Session};
+use spelaion_core::{CoreEvent, ResultEnd, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Secret};
 
 async fn session() -> Option<Session> {
@@ -199,7 +199,7 @@ async fn runs_a_script_statement_by_statement() {
     let first = session.results().get(results[0]).unwrap();
     let first = first.read().unwrap();
     assert_eq!(first.rows(), 3);
-    assert!(first.is_complete());
+    assert_eq!(first.end(), ResultEnd::Whole);
     assert_eq!(
         first
             .schema()

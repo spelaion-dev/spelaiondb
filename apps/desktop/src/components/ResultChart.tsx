@@ -18,6 +18,7 @@ import {
 import { chooseSavePath } from "../dialogs";
 import type { ResultMeta } from "../store";
 import { CHART_SERIES, numericColumns, type ChartSettings } from "../chartDefaults";
+import { ended, partialText } from "../resultEnd";
 
 export { CHART_SERIES, defaultChart, numericColumns, type ChartSettings } from "../chartDefaults";
 
@@ -65,9 +66,11 @@ export function ResultChart({
   const numeric = useMemo(() => numericColumns(columns), [columns]);
   const request = settings ? JSON.stringify(settings) : null;
   const view = JSON.stringify([result.rows, result.sort, result.filter, result.columnFilters]);
+  // A result cut short (SDB-367): the chart shows only the rows that arrived.
+  const partial = partialText(result.end, result.total ?? result.rows, t, new Intl.NumberFormat(i18n.language));
 
   useEffect(() => {
-    if (!settings || !result.complete) {
+    if (!settings || !ended(result)) {
       setLoad({ kind: "idle" });
       return;
     }
@@ -91,7 +94,7 @@ export function ResultChart({
     };
     // `request` and `view` stand for `settings` and the result's view.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result.id, result.complete, request, view]);
+  }, [result.id, ended(result), request, view]);
 
   useEffect(() => () => void call(commands.cancelChart(result.id)).catch(() => undefined), [result.id]);
 
@@ -182,8 +185,9 @@ export function ResultChart({
         </div>
       </div>
       {points && <p className="chart-note" role="status">{describe(points, settings, xName, scope, t, i18n.language)}</p>}
+      {partial && <p className="chart-note partial-note" role="note">{t("results.partialChart", { partial })}</p>}
       <div className="chart-plot">
-        {!result.complete ? (
+        {!ended(result) ? (
           <div className="empty">{t("chart.waiting")}</div>
         ) : load.kind === "error" ? (
           <div className="empty status-error" role="alert">{t("chart.failed", { detail: load.message })}</div>

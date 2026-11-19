@@ -156,6 +156,7 @@ pub async fn run_sql_file(
             }),
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::ErrorPaused { .. }
             | CoreEvent::ScriptFinished { .. }
             | CoreEvent::HistoryWarning { .. } => {}

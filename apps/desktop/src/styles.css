@@ -2000,6 +2000,12 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A result cut short (SDB-367): the words say it, the colour only marks it. */
+.status-partial {
+  color: var(--warning-fg);
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 .grid-host {
   position: relative;
@@ -2007,6 +2013,33 @@ select {
   min-width: 0;
   min-height: 0;
   user-select: none;
+}
+/* A result the core no longer keeps (SDB-367): an empty state where the grid is. */
+.grid-freed {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  padding: var(--space-2xl);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: var(--text-md);
+  line-height: var(--leading-md);
+  text-align: center;
+  user-select: text;
+}
+.grid-freed strong {
+  font-weight: 600;
+}
+.grid-freed p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
 }
 .grid-canvas {
   position: absolute;
@@ -3606,6 +3639,11 @@ span.pick-key {
 .references-body > .error {
   padding: var(--space-md) var(--space-lg);
   margin: 0;
+}
+/* A note that a panel works on a partial result (SDB-367): written out, the colour only marks it. */
+.reference-note.partial-note,
+.chart-note.partial-note {
+  color: var(--warning-fg);
 }
 .reference-fields {
   display: grid;

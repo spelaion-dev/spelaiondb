@@ -26,6 +26,8 @@ export function CalcPanel(props: {
   view: string;
   /** There is a selection but the result is still arriving: nothing is calculated yet. */
   waiting: boolean;
+  /** The result's strip when it was cut short (SDB-367): the numbers cover only its rows. */
+  partial: string | null;
   modes: ReactNode;
   onClose(): void;
 }) {
@@ -108,6 +110,7 @@ export function CalcPanel(props: {
         <div className="cell-viewer-controls">{props.modes}</div>
       </header>
       <div className="references-body calc-body" aria-busy={busy}>
+        {props.partial && <p className="reference-note partial-note" role="note">{t("results.partialCalc", { partial: props.partial })}</p>}
         {!range && <p className="reference-note">{t(props.waiting ? "calc.waiting" : "calc.selectCells")}</p>}
         {range && busy && (
           <div className="calc-busy" role="status">
