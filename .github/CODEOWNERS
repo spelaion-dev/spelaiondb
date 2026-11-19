@@ -53,6 +53,7 @@
 
 # Automatic updates and their signing (ADR-021).
 /apps/desktop/src-tauri/src/update.rs           @petilolz @frglez
+/apps/desktop/src-tauri/src/update_state.rs     @petilolz @frglez
 /apps/desktop/src-tauri/tauri.release.conf.json @petilolz @frglez
 
 # The plugin catalogue's signing and publishing (ADR-055). Also under /.github/workflows/
