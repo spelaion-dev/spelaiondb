@@ -281,8 +281,7 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> ImportedC
         port: port(config.get("port")),
         database,
         user,
-        password,
-        stored_password: None,
+        password: password.into(),
         env: closest_type(&text(config.get("type")), None),
         read_only: config.get("read-only").and_then(Json::as_bool) == Some(true),
         ssh: ssh_of(config, credentials),
@@ -601,7 +600,7 @@ mod tests {
             (pg.user.as_str(), pg.env.as_str(), pg.folder.as_str()),
             ("app", "prod", "Prod")
         );
-        assert_eq!(pg.password.as_ref().map(Secret::expose), Some("s3cret"));
+        assert_eq!(pg.password.secret().map(Secret::expose), Some("s3cret"));
         assert_eq!(
             pg.description,
             "Orders of the EU shop.\nAsk #data before heavy queries."

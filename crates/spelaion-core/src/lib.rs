@@ -253,14 +253,14 @@ pub use session_setup::{
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};
 pub use spelaion_store::{
     AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
-    HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
+    HistoryOutcome, HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
 };
 pub use spelaion_store::{
-    BackupPreferences, Bookmark, DEFAULT_EDITOR_ZOOM, DEFAULT_INTERFACE_SIZE, EDITOR_ZOOMS,
-    EditorPreferences, EditorSnippet, ExplorerFilter, ExplorerPreferences, FilterKind,
-    FilteredTable, GridPreferences, INTERFACE_SIZES, MapPreferences, RecentFile, SavedFile,
-    SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX,
-    TILE_URL_MAX, TileServerError, check_tile_server,
+    BackupPreferences, Bookmark, BookmarkKind, DEFAULT_EDITOR_ZOOM, DEFAULT_INTERFACE_SIZE,
+    EDITOR_ZOOMS, EditorPreferences, EditorSnippet, ExplorerFilter, ExplorerPreferences,
+    FilterKind, FilteredTable, GridPreferences, INTERFACE_SIZES, MapPreferences, RecentFile,
+    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX,
+    TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,

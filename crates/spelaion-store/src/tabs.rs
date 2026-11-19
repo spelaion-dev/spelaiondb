@@ -219,6 +219,7 @@ impl Store {
             ))
         })?;
         let mut saved = SavedTabs::default();
+        let mut actives = 0;
         for row in rows {
             let (active, mut tab, file) = row?;
             if let Some((path, hash, encoding, line_ending, modified)) = file {
@@ -233,9 +234,15 @@ impl Store {
                 });
             }
             if active {
+                actives += 1;
                 saved.active = Some(saved.tabs.len());
             }
             saved.tabs.push(tab);
+        }
+        // One active tab per workspace (a trigger keeps it so since SDB-376). Rows from before
+        // that mark several do not say which one was: none is taken for it.
+        if actives > 1 {
+            saved.active = None;
         }
         Ok(saved)
     }

@@ -62,7 +62,8 @@
       "ok": "OK",
       "error": "Error",
       "refused": "Rechazada",
-      "cleared": "Registro vaciado"
+      "cleared": "Registro vaciado",
+      "unknown": "Desconocido"
     },
     "refresh": "Actualizar",
     "loading": "Cargando…",

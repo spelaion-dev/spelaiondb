@@ -60,10 +60,89 @@ pub struct BookmarkItem {
     /// The schema the object is in, or the schema itself (with an empty `name`).
     pub schema: String,
     pub name: String,
-    /// `table`, `view`… for a relation, `function`, `sequence`… for another object, `schema`.
-    pub kind: String,
+    pub kind: BookmarkKindItem,
     /// A function's arguments…; empty if nothing tells it apart from others of its name.
     pub detail: String,
+}
+
+/// What a bookmark points at: `schema`, a relation's kind or another object's, as the drivers
+/// name them. Any other word is refused when the command is called (SDB-376).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BookmarkKindItem {
+    Schema,
+    Table,
+    PartitionedTable,
+    View,
+    MaterializedView,
+    ForeignTable,
+    Collection,
+    NodeLabel,
+    RelationshipType,
+    Function,
+    Procedure,
+    Aggregate,
+    Sequence,
+    Trigger,
+    Enum,
+    Domain,
+    Type,
+    Event,
+    Synonym,
+}
+
+impl From<spelaion_core::BookmarkKind> for BookmarkKindItem {
+    fn from(kind: spelaion_core::BookmarkKind) -> Self {
+        use spelaion_core::BookmarkKind as K;
+        match kind {
+            K::Schema => Self::Schema,
+            K::Table => Self::Table,
+            K::PartitionedTable => Self::PartitionedTable,
+            K::View => Self::View,
+            K::MaterializedView => Self::MaterializedView,
+            K::ForeignTable => Self::ForeignTable,
+            K::Collection => Self::Collection,
+            K::NodeLabel => Self::NodeLabel,
+            K::RelationshipType => Self::RelationshipType,
+            K::Function => Self::Function,
+            K::Procedure => Self::Procedure,
+            K::Aggregate => Self::Aggregate,
+            K::Sequence => Self::Sequence,
+            K::Trigger => Self::Trigger,
+            K::Enum => Self::Enum,
+            K::Domain => Self::Domain,
+            K::Type => Self::Type,
+            K::Event => Self::Event,
+            K::Synonym => Self::Synonym,
+        }
+    }
+}
+
+impl From<BookmarkKindItem> for spelaion_core::BookmarkKind {
+    fn from(kind: BookmarkKindItem) -> Self {
+        use BookmarkKindItem as K;
+        match kind {
+            K::Schema => Self::Schema,
+            K::Table => Self::Table,
+            K::PartitionedTable => Self::PartitionedTable,
+            K::View => Self::View,
+            K::MaterializedView => Self::MaterializedView,
+            K::ForeignTable => Self::ForeignTable,
+            K::Collection => Self::Collection,
+            K::NodeLabel => Self::NodeLabel,
+            K::RelationshipType => Self::RelationshipType,
+            K::Function => Self::Function,
+            K::Procedure => Self::Procedure,
+            K::Aggregate => Self::Aggregate,
+            K::Sequence => Self::Sequence,
+            K::Trigger => Self::Trigger,
+            K::Enum => Self::Enum,
+            K::Domain => Self::Domain,
+            K::Type => Self::Type,
+            K::Event => Self::Event,
+            K::Synonym => Self::Synonym,
+        }
+    }
 }
 
 impl From<spelaion_core::Bookmark> for BookmarkItem {
@@ -79,7 +158,7 @@ impl From<spelaion_core::Bookmark> for BookmarkItem {
             connection,
             schema,
             name,
-            kind,
+            kind: kind.into(),
             detail,
         }
     }
@@ -98,7 +177,7 @@ impl From<BookmarkItem> for spelaion_core::Bookmark {
             connection,
             schema,
             name,
-            kind,
+            kind: kind.into(),
             detail,
         }
     }
@@ -1588,10 +1667,33 @@ pub struct HistoryItem {
     pub duration_ms: i64,
     #[specta(type = specta_typescript::Number)]
     pub rows: i64,
-    pub error: Option<String>,
-    pub cancelled: bool,
+    pub outcome: HistoryOutcomeItem,
     pub database: Option<String>,
     pub pinned: bool,
+}
+
+/// How a statement of the history ended (`spelaion_core::HistoryOutcome`).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum HistoryOutcomeItem {
+    Succeeded,
+    Failed { error: String },
+    Cancelled,
+}
+
+impl From<spelaion_core::HistoryOutcome> for HistoryOutcomeItem {
+    fn from(outcome: spelaion_core::HistoryOutcome) -> Self {
+        use spelaion_core::HistoryOutcome;
+        match outcome {
+            HistoryOutcome::Succeeded => Self::Succeeded,
+            HistoryOutcome::Failed { error } => Self::Failed { error },
+            HistoryOutcome::Cancelled => Self::Cancelled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
@@ -1699,14 +1801,13 @@ impl From<spelaion_core::Snippet> for SnippetItem {
 impl From<spelaion_core::HistoryEntry> for HistoryItem {
     fn from(entry: spelaion_core::HistoryEntry) -> Self {
         Self {
+            outcome: entry.outcome().into(),
             id: entry.id,
             at_ms: entry.at_ms,
             connection: entry.connection,
             statement: entry.statement,
             duration_ms: entry.duration_ms,
             rows: entry.rows,
-            error: entry.error,
-            cancelled: entry.cancelled,
             database: entry.database,
             pinned: entry.pinned,
         }
@@ -4219,6 +4320,35 @@ mod tests {
         let postgres = spelaion_core::dialect_of(spelaion_config::Engine::Postgres).expect("SQL");
         assert_eq!(postgres.browse_statement(&object), None);
     }
+
+    /// Every bookmark kind the page sends is the store's own word for it, and a word the
+    /// store does not know is refused, never taken for another kind (SDB-376).
+    #[test]
+    fn every_bookmark_kind_is_the_store_s_and_an_unknown_one_is_refused() {
+        use super::BookmarkKindItem;
+        for kind in spelaion_core::BookmarkKind::ALL {
+            let item: BookmarkKindItem = serde_json::from_str(&format!("\"{}\"", kind.as_str()))
+                .unwrap_or_else(|e| panic!("{}: {e}", kind.as_str()));
+            assert_eq!(spelaion_core::BookmarkKind::from(item), kind);
+            assert_eq!(BookmarkKindItem::from(kind), item);
+        }
+        for unknown in ["dictionary", "Table", ""] {
+            assert!(
+                serde_json::from_str::<BookmarkKindItem>(&format!("\"{unknown}\"")).is_err(),
+                "{unknown:?}"
+            );
+        }
+    }
+
+    /// A record whose decision this build does not know stays unknown on the page.
+    #[test]
+    fn an_unknown_audit_decision_is_shown_as_unknown() {
+        use super::AuditStatusItem;
+        assert_eq!(
+            AuditStatusItem::from(spelaion_core::AuditDecision::Unknown),
+            AuditStatusItem::Unknown
+        );
+    }
 }
 
 /// What changing a connection's engine does to its settings (ADR-030), by the file's field
@@ -5805,6 +5935,8 @@ pub enum AuditStatusItem {
     Error,
     Refused,
     Cleared,
+    /// A record whose decision this build does not know (SDB-376).
+    Unknown,
 }
 
 impl From<spelaion_core::AuditDecision> for AuditStatusItem {
@@ -5815,6 +5947,7 @@ impl From<spelaion_core::AuditDecision> for AuditStatusItem {
             AuditDecision::Failed => Self::Error,
             AuditDecision::Rejected => Self::Refused,
             AuditDecision::Cleared => Self::Cleared,
+            AuditDecision::Unknown => Self::Unknown,
         }
     }
 }
@@ -5826,6 +5959,7 @@ impl From<AuditStatusItem> for spelaion_core::AuditDecision {
             AuditStatusItem::Error => Self::Failed,
             AuditStatusItem::Refused => Self::Rejected,
             AuditStatusItem::Cleared => Self::Cleared,
+            AuditStatusItem::Unknown => Self::Unknown,
         }
     }
 }

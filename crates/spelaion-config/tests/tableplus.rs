@@ -62,7 +62,7 @@ fn every_engine_comes_with_its_address_and_user() {
             assert_eq!(c.database, db, "{name}");
             assert_eq!(c.user, user, "{name}");
             assert!(
-                c.password.is_none() && c.stored_password.is_none(),
+                c.password.is_none() && c.password.keychain_item().is_none(),
                 "{name}"
             );
             assert!(c.description.is_empty() && c.tags.is_empty(), "{name}");
@@ -416,7 +416,7 @@ fn the_export_gives_the_same_connections_with_the_passwords_it_holds() {
     assert_eq!(orders.folder, "Prod");
     assert_eq!(orders.env, "prod");
     assert_eq!(
-        orders.password.as_ref().map(|p| p.expose().to_string()),
+        orders.password.secret().map(|p| p.expose().to_string()),
         Some("fake-password-123".to_string())
     );
     // Only Orders PG had one.

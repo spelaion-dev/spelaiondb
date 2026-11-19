@@ -577,8 +577,7 @@ fn connection_of(c: &Dictionary, id: String, folder: String, origin: Origin) -> 
         port,
         database,
         user,
-        password,
-        stored_password: None,
+        password: password.into(),
         // TablePlus's misspelled key, on every system.
         env: crate::dbeaver::closest_type(&text(c, "Enviroment"), None),
         read_only: text(c, "DatabaseType").eq_ignore_ascii_case("read_only"),

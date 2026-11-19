@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use spelaion_driver_api::Secret;
 
 use crate::datagrip::{Node, parse_text, shown};
-use crate::import::{ImportedConnection, ImportedSsh, ImportedTls, KeychainItem};
+use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls, KeychainItem};
 use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
@@ -477,8 +477,10 @@ fn connection_of(
         port,
         database: settings.text("schema"),
         user,
-        password,
-        stored_password,
+        password: match stored_password {
+            Some(item) => ImportedPassword::InKeychain(item),
+            None => password.into(),
+        },
         env: String::new(),
         read_only: false,
         ssh,

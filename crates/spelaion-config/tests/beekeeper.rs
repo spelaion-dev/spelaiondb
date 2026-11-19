@@ -253,10 +253,10 @@ fn saved_passwords_are_decrypted_with_the_installs_key() {
     let all = with_saved_passwords(&fx, true);
     let orders = named(&all, "Orders TLS");
     assert_eq!(
-        orders.password.as_ref().map(|s| s.expose().to_string()),
+        orders.password.secret().map(|s| s.expose().to_string()),
         Some("fake-password-123".to_string())
     );
-    assert!(orders.stored_password.is_none());
+    assert!(orders.password.keychain_item().is_none());
     assert_eq!(orders.unmapped, ["Colour: green"]);
     // An SSH password tunnel: its password too.
     let mariadb = named(&all, "Shop MariaDB");
@@ -267,7 +267,7 @@ fn saved_passwords_are_decrypted_with_the_installs_key() {
         ssh.password.as_ref().map(|s| s.expose().to_string()),
         Some("fake-ssh-password".to_string())
     );
-    assert!(mariadb.password.is_some());
+    assert!(mariadb.password.secret().is_some());
     // A key's passphrase is never decrypted: SpelaionDB asks for it when connecting.
     let bastion = named(&all, "PG via bastion");
     assert!(bastion.ssh.as_ref().unwrap().password.is_none());
