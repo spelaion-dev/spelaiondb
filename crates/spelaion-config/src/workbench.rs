@@ -472,6 +472,7 @@ fn connection_of(
         tags: Vec::new(),
         folder,
         engine,
+        engine_kind: None,
         host,
         port,
         database: settings.text("schema"),

@@ -28,6 +28,9 @@ pub struct ConnectionFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub engine: Engine,
+    /// A named protocol-compatible server chosen in the picker. For display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_kind: Option<String>,
     /// Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type
     /// in `connection-types.toml`; its badge and safeguards apply. Any other text is a plain
     /// label with no behaviour.
@@ -174,7 +177,28 @@ pub const MAX_SHOWN_DATABASES: usize = 500;
 /// The longest database name it accepts, in characters.
 pub const MAX_DATABASE_NAME: usize = 128;
 
+/// Base engine for a picker kind. This is presentation metadata, never a server capability.
+pub fn engine_kind_base(kind: &str) -> Option<Engine> {
+    match kind {
+        "tidb" | "oceanbase" | "singlestore" | "greptimedb" => Some(Engine::Mysql),
+        "cockroachdb" | "yugabytedb" | "timescaledb" => Some(Engine::Postgres),
+        "influxdb" => Some(Engine::Flightsql),
+        "valkey" => Some(Engine::Redis),
+        "scylladb" => Some(Engine::Cassandra),
+        _ => None,
+    }
+}
+
 impl ConnectionFile {
+    /// Identifier used by the engine-mark catalogue.
+    pub fn engine_mark(&self) -> &str {
+        if self.file_folder {
+            "file-folder"
+        } else {
+            self.engine_kind.as_deref().unwrap_or(self.engine.as_str())
+        }
+    }
+
     /// What the connection form suggests for new connections.
     pub const SUGGESTED_KEEPALIVE: u32 = 300;
     /// Longest keep-alive interval accepted: a day.

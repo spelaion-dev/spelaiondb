@@ -26,7 +26,7 @@ export function ProcessSidebar({ selected, onSelect }: { selected: string | null
       {connections.map((connection) => <button key={connection.id} type="button" className={`process-connection ${connection.id === selected ? "active" : ""}`}
         disabled={!supported(connection.engine)} title={supported(connection.engine) ? connection.name : t("processMonitor.unsupported")}
         aria-pressed={connection.id === selected} onClick={() => onSelect(connection.id)}>
-        <EngineIcon engine={connection.engine} /><span className="process-connection-name">{connection.name}</span>
+        <EngineIcon engine={connection.engineMark} fallback={connection.engine} /><span className="process-connection-name">{connection.name}</span>
         {!supported(connection.engine) && <span className="muted small">{t("processMonitor.soon")}</span>}
       </button>)}
     </div>
@@ -223,7 +223,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
 
   return <section className="process-monitor" aria-label={t("processMonitor.title")}>
     <header className="process-heading">
-      <div><div className="process-eyebrow">{t("processMonitor.title")}</div><h1><EngineIcon engine={connection.engine} />{connection.name}</h1></div>
+      <div><div className="process-eyebrow">{t("processMonitor.title")}</div><h1><EngineIcon engine={connection.engineMark} fallback={connection.engine} />{connection.name}</h1></div>
       <div className="process-heading-actions">
         <div className="segmented" role="radiogroup" aria-label={t("processMonitor.view")}>
           {VIEWS.map((name) => <button key={name} type="button" role="radio" aria-checked={view === name} className={view === name ? "active" : ""} onClick={() => setView(name)}>{t(`processMonitor.views.${name}`)}</button>)}

@@ -348,7 +348,10 @@ mod tests {
         let kinds: Vec<_> = catalog
             .iter()
             .filter(|e| e.is_kind() && e.access == EngineAccess::Network)
-            .map(|e| (e.id, e.engine, e.default_port))
+            .map(|e| {
+                assert_eq!(spelaion_config::engine_kind_base(e.id), e.engine);
+                (e.id, e.engine, e.default_port)
+            })
             .collect();
         assert_eq!(
             kinds,

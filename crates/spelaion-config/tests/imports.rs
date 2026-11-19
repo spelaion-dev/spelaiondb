@@ -37,6 +37,7 @@ fn imported(name: &str) -> ImportedConnection {
         tags: Vec::new(),
         folder: String::new(),
         engine: Ok(Engine::Postgres),
+        engine_kind: None,
         host: "db.internal".into(),
         port: Some(5432),
         database: "orders".into(),

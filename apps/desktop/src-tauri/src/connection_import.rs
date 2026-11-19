@@ -233,6 +233,7 @@ pub struct ImportItem {
     /// `postgres`, `mysql`, `mariadb`, `sqlserver`, `sqlite`, `duckdb`; `None` when SpelaionDB
     /// cannot open it.
     pub engine: Option<String>,
+    pub engine_kind: Option<String>,
     /// Why it cannot be imported, if it cannot.
     pub unsupported: Option<String>,
     /// `host:port/database`, or the file for SQLite and DuckDB.
@@ -269,6 +270,7 @@ fn item(config: &Config, c: &ImportedConnection) -> ImportItem {
         name: c.name.clone(),
         folder: c.folder.clone(),
         engine: c.engine.as_ref().ok().map(|e| e.as_str().to_string()),
+        engine_kind: c.engine_kind.clone(),
         unsupported: c.engine.as_ref().err().cloned(),
         target: if file {
             c.database.clone()

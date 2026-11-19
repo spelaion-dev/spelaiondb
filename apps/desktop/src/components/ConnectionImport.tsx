@@ -287,7 +287,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
                       }}
                       aria-label={c.name}
                     />
-                    <EngineIcon engine={c.engine} />
+                    <EngineIcon engine={c.engineKind ?? c.engine} fallback={c.engine} />
                     <span className="conn-import-main">
                       <span>
                         <strong>{c.name}</strong>

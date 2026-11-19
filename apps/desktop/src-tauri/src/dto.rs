@@ -1451,6 +1451,8 @@ pub struct ConnectionItem {
     /// Short labels to find the connection; filtered on in the explorer.
     pub tags: Vec<String>,
     pub engine: String,
+    /// Presentation identifier. The base engine still drives commands.
+    pub engine_mark: String,
     pub env: Option<String>,
     /// The type `env` names (ADR-029); `None` for no label or a plain one.
     pub kind: Option<ConnectionTypeItem>,
@@ -1736,6 +1738,7 @@ pub enum FromSessionOutcome {
 pub enum ConnectOutcome {
     Connected {
         server_version: String,
+        engine_mark: Option<String>,
         /// Session setup statements that failed and were skipped (ADR-037): the connection
         /// ignores setup errors, and the tab says which.
         setup_skipped: Vec<SkippedSetupItem>,
@@ -3370,6 +3373,7 @@ pub struct ConnectionDraftItem {
     pub tags: Vec<String>,
     /// An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…).
     pub engine: String,
+    pub engine_kind: Option<String>,
     pub env: String,
     pub host: String,
     pub port: Option<u16>,
@@ -3440,6 +3444,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             description: item.description,
             tags: item.tags,
             engine,
+            engine_kind: item.engine_kind,
             env: item.env,
             host: item.host,
             port: item.port,
@@ -3526,6 +3531,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             description: draft.description,
             tags: draft.tags,
             engine: draft.engine.as_str().into(),
+            engine_kind: draft.engine_kind,
             env: draft.env,
             host: draft.host,
             port: draft.port,

@@ -112,6 +112,7 @@ pub struct ConnectionDraft {
     /// As typed: [`normalize_tags`] cleans them up before they are validated.
     pub tags: Vec<String>,
     pub engine: Engine,
+    pub engine_kind: Option<String>,
     pub env: String,
     pub host: String,
     pub port: Option<u16>,
@@ -501,6 +502,7 @@ impl ConnectionDraft {
             description: normalize_description(&self.description),
             tags: normalize_tags(&self.tags),
             engine: self.engine,
+            engine_kind: self.engine_kind.clone(),
             env: non_empty(&self.env),
             host: non_empty(&self.host).filter(|_| network),
             // The engine's default port is implied: the file only says what differs.
@@ -671,6 +673,7 @@ impl ConnectionDraft {
             host: file.host.clone().unwrap_or_default(),
             port: file.port,
             database: file.database.clone().unwrap_or_default(),
+            engine_kind: file.engine_kind.clone(),
             file_folder: file.file_folder,
             pooler: file.pooler,
             cleartext_password: file.cleartext_password,
@@ -996,6 +999,9 @@ pub fn update_connection(
                 .as_ref()
                 .map(|names| Value::Array(names.iter().map(|name| name.as_str()).collect())),
         );
+    }
+    if old.engine_kind != new.engine_kind {
+        put(&mut doc, &["engine_kind"], text(&new.engine_kind));
     }
     if old.file_folder != new.file_folder {
         put(

@@ -546,6 +546,7 @@ fn connection(path: String, fields: Fields) -> ImportedConnection {
         tags: vec![],
         folder: folder.replace('\\', "/"),
         engine,
+        engine_kind: None,
         host: raw_host.to_string(),
         port: database_port,
         database,

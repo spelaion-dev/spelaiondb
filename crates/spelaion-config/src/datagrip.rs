@@ -532,7 +532,11 @@ fn connection_of(
     keychain: KeychainMode,
 ) -> ImportedConnection {
     let url = source.value("jdbc-url");
-    let engine = engine_of(&source.value("driver-ref"), &url);
+    let driver = source.value("driver-ref");
+    let engine = engine_of(&driver, &url);
+    let engine_kind = crate::engine_kind_base(&driver)
+        .filter(|base| engine.as_ref() == Ok(base))
+        .map(|_| driver);
     let mut unmapped = Vec::new();
     let parsed = if url.is_empty() {
         None
@@ -637,6 +641,7 @@ fn connection_of(
         tags: Vec::new(),
         folder: source.attr("group").unwrap_or_default().trim().to_string(),
         engine,
+        engine_kind,
         host: parsed.as_ref().map(|p| p.host.clone()).unwrap_or_default(),
         port: parsed.as_ref().and_then(|p| p.port),
         database,

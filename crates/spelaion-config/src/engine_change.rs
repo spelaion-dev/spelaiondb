@@ -145,6 +145,7 @@ impl ConnectionDraft {
         if from == to {
             return (next, report);
         }
+        next.engine_kind = None;
         let (server_from, server_to) = (!from.is_file(), !to.is_file());
         let tunnel = filled(&self.tunnel);
         let remote_sqlite = from == Engine::Sqlite && tunnel.is_some();

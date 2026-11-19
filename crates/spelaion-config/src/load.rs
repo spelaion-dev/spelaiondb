@@ -446,6 +446,14 @@ pub(crate) fn validate_connection(
     file: ConnectionFile,
 ) -> Result<ConnectionFile, ConfigError> {
     check_version(path, file.schema_version)?;
+    if let Some(kind) = file.engine_kind.as_deref()
+        && crate::engine_kind_base(kind) != Some(file.engine)
+    {
+        return Err(ConfigError::new(
+            path,
+            "engine_kind must name a kind of the connection engine",
+        ));
+    }
     let missing: Vec<&str> = match file.engine {
         // Through Kubernetes the host is only a name for TLS: it may be left out. A network
         // profile may be a Kubernetes one (ADR-050): the resolver asks for the host otherwise.

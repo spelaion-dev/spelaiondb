@@ -166,7 +166,8 @@ export async function openSession(session: string, connectionId: string): Promis
 async function openSessionInner(session: string, connectionId: string): Promise<string | null> {
   const app = useApp.getState();
   const dialogs = useDialogs.getState();
-  const name = app.connections.find((c) => c.id === connectionId)?.name ?? connectionId;
+  const connection = app.connections.find((c) => c.id === connectionId);
+  const name = connection?.name ?? connectionId;
   const editor = isEditorSession(session);
 
   const connect = () => call(commands.connect(session, connectionId, null, false, editor));
@@ -192,6 +193,13 @@ async function openSessionInner(session: string, connectionId: string): Promise<
   if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables" || outcome.kind === "cancelled") return null;
   // Setup statements the connection skipped (ADR-037) are said in the tab until dismissed.
   useApp.getState().updateTab(session, { setupSkipped: outcome.setupSkipped.length > 0 ? outcome.setupSkipped : undefined });
+  const mark = outcome.engineMark;
+  if (connection && connection.engineMark === connection.engine && mark) {
+    const current = useApp.getState();
+    if (current.connections.includes(connection)) {
+      current.setConnections(current.connections.map((c) => c === connection ? { ...c, engineMark: mark } : c));
+    }
+  }
   return outcome.serverVersion;
 }
 

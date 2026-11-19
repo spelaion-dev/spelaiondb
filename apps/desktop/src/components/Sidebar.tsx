@@ -1934,7 +1934,7 @@ function ConnectionNode({
         >
           {open ? "▾" : "▸"}
         </button>
-        <EngineIcon engine={connection.engine} />
+        <EngineIcon engine={connection.engineMark} fallback={connection.engine} />
         <span
           className="label"
           // The description, then the marks after the name, which may not fit.

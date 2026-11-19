@@ -84,6 +84,7 @@ pub use model::{
     KubernetesConfig, KubernetesProfileConfig, MaskingConfig, McpConfig, PoolerMode, ProxyConfig,
     ProxyType, SCHEMA_VERSION, SecretSpec, SessionConfig, SshAuth, SsmConfig, TlsConfig,
     TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile, UserMasking, WritePolicy,
+    engine_kind_base,
 };
 pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
