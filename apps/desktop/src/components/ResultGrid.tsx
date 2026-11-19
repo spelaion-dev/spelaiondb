@@ -31,6 +31,7 @@ import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES, PageControls } from "./TableDataBar";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 import { ended, partialText } from "../resultEnd";
+import { errorText, type Loaded } from "../dialogState";
 
 /** No sort: one list, so an unsorted result keeps the same value between renders. */
 const NO_SORT: SortState[] = [];
@@ -404,7 +405,7 @@ export function ResultGrid({
   useEffect(() => { void useDisplayFormat.getState().load(); }, []);
   /** The find bar (Ctrl+F): what is searched, and what the core found. */
   const [find, setFind] = useState<{ text: string; matchCase: boolean } | null>(null);
-  const [found, setFound] = useState<{ count: number; truncated: boolean; busy: boolean; error?: string } | null>(null);
+  const [found, setFound] = useState<Loaded<{ count: number; truncated: boolean }>>({ kind: "idle" });
   const [findCurrent, setFindCurrent] = useState<{ index: number; row: number; col: number } | null>(null);
   const [findCache, setFindCache] = useState<FindCache | null>(null);
   const findInput = useRef<HTMLInputElement>(null);
@@ -1345,7 +1346,7 @@ export function ResultGrid({
     // Highlights of the previous search would point at rows that may have moved.
     setFindCache(null);
     if (!find || !text) {
-      setFound(null);
+      setFound({ kind: "idle" });
       if (searched.current !== null) {
         void call(commands.clearFind(searched.current)).catch(() => undefined);
         searched.current = null;
@@ -1353,22 +1354,22 @@ export function ResultGrid({
       return;
     }
     if (!ended(result)) {
-      setFound({ count: 0, truncated: false, busy: false, error: t("results.findWhenComplete") });
+      setFound({ kind: "failed", message: t("results.findWhenComplete") });
       return;
     }
-    setFound((current) => ({ count: current?.count ?? 0, truncated: current?.truncated ?? false, busy: true }));
+    setFound({ kind: "loading" });
     // Typing fast searches once, for the last text.
     const timer = setTimeout(() => {
       searched.current = result.id;
       call(commands.findInResult(result.id, text, find.matchCase, visibleCols))
         .then(async (outcome) => {
           if (run !== findRun.current || !outcome) return;
-          setFound({ count: outcome.count, truncated: outcome.truncated, busy: false });
+          setFound({ kind: "ready", value: { count: outcome.count, truncated: outcome.truncated } });
           setFindCache(new FindCache(result.id, result.columns.length, () => redraw()));
           if (outcome.count > 0) await goToMatch("first", run);
         })
         .catch((e) => {
-          if (run === findRun.current) setFound({ count: 0, truncated: false, busy: false, error: e instanceof Error ? e.message : String(e) });
+          if (run === findRun.current) setFound({ kind: "failed", message: errorText(e) });
         });
     }, 200);
     return () => clearTimeout(timer);
@@ -1423,12 +1424,24 @@ export function ResultGrid({
   }
 
   function findStatus(): string {
-    if (!found) return "";
-    if (found.error) return found.error;
-    if (found.busy) return t("results.findSearching");
-    if (found.count === 0) return t("results.findNone");
-    const total = `${numbers.format(found.count)}${found.truncated ? "+" : ""}`;
-    return findCurrent ? t("results.findOf", { current: numbers.format(findCurrent.index + 1), total }) : t("results.findCount", { count: found.count, total });
+    switch (found.kind) {
+      case "idle":
+        return "";
+      case "failed":
+        return found.message;
+      case "loading":
+        return t("results.findSearching");
+      case "ready":
+        break;
+      default: {
+        const unexpected: never = found;
+        return unexpected;
+      }
+    }
+    const { count, truncated } = found.value;
+    if (count === 0) return t("results.findNone");
+    const total = `${numbers.format(count)}${truncated ? "+" : ""}`;
+    return findCurrent ? t("results.findOf", { current: numbers.format(findCurrent.index + 1), total }) : t("results.findCount", { count, total });
   }
 
   /** A table data tab filters in the server: the core writes the condition from the typed
@@ -2772,7 +2785,7 @@ export function ResultGrid({
           text={find.text}
           matchCase={find.matchCase}
           status={findStatus()}
-          canStep={!!found && !found.busy && found.count > 0}
+          canStep={found.kind === "ready" && found.value.count > 0}
           onText={(text) => setFind({ ...find, text })}
           onMatchCase={(matchCase) => setFind({ ...find, matchCase })}
           onNext={() => void goToMatch("next")}

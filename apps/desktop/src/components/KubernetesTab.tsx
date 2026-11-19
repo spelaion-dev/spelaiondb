@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type KubeEditor, type KubePort, type KubernetesDraftItem, type TunnelItem } from "../api";
+import { errorText, type Loaded } from "../dialogState";
 
 const KINDS = ["svc", "pod", "deployment"] as const;
 type Kind = (typeof KINDS)[number];
@@ -42,12 +43,9 @@ function splitResource(resource: string): [Kind, string] {
   }
 }
 
-/** A list from kubectl: loading, loaded, or kubectl's error. */
-type Loaded<T> = { kind: "idle" } | { kind: "loading" } | { kind: "ok"; items: T[] } | { kind: "error"; message: string };
-
 /** Runs `load` whenever `key` changes (and `enabled`), dropping answers to older keys. */
-function useKubectl<T>(enabled: boolean, key: string, load: () => Promise<T[]>): Loaded<T> {
-  const [state, setState] = useState<Loaded<T>>({ kind: "idle" });
+function useKubectl<T>(enabled: boolean, key: string, load: () => Promise<T[]>): Loaded<T[]> {
+  const [state, setState] = useState<Loaded<T[]>>({ kind: "idle" });
   useEffect(() => {
     if (!enabled) {
       setState({ kind: "idle" });
@@ -56,8 +54,8 @@ function useKubectl<T>(enabled: boolean, key: string, load: () => Promise<T[]>):
     let current = true;
     setState({ kind: "loading" });
     load().then(
-      (items) => current && setState({ kind: "ok", items }),
-      (e: unknown) => current && setState({ kind: "error", message: e instanceof Error ? e.message : String(e) }),
+      (items) => current && setState({ kind: "ready", value: items }),
+      (e: unknown) => current && setState({ kind: "failed", message: errorText(e) }),
     );
     return () => {
       current = false;
@@ -68,8 +66,8 @@ function useKubectl<T>(enabled: boolean, key: string, load: () => Promise<T[]>):
 }
 
 /** Options for a select: the loaded items plus the current value, so it always shows. */
-function withCurrent(state: Loaded<string>, current: string): string[] {
-  const items = state.kind === "ok" ? state.items : [];
+function withCurrent(state: Loaded<string[]>, current: string): string[] {
+  const items = state.kind === "ready" ? state.value : [];
   return current && !items.includes(current) ? [current, ...items] : items;
 }
 
@@ -142,13 +140,13 @@ export function KubernetesTab(
   const currentPort = connection ? (connection.port ?? connection.defaultPort) : null;
   const onPort = connection?.onPort;
   useEffect(() => {
-    if (ports.kind !== "ok" || !picked.current || !onPort) return;
+    if (ports.kind !== "ready" || !picked.current || !onPort) return;
     picked.current = false;
-    const first = ports.items[0];
-    if (first && !ports.items.some((p) => p.port === currentPort)) onPort(first.port);
+    const first = ports.value[0];
+    if (first && !ports.value.some((p) => p.port === currentPort)) onPort(first.port);
   }, [ports, currentPort, onPort]);
 
-  const error = [contexts, namespaces, names, ports].find((s) => s.kind === "error");
+  const error = [contexts, namespaces, names, ports].find((s) => s.kind === "failed");
   const loading = [contexts, namespaces, names, ports].some((s) => s.kind === "loading");
   const portLabel = (p: KubePort) => {
     const detail = [p.name, p.container].filter(Boolean).join(" · ");
@@ -208,10 +206,10 @@ export function KubernetesTab(
             </option>
           ))}
         </Select>
-        {!connection || (ports.kind === "ok" && ports.items.length === 0) ? null : (
+        {!connection || (ports.kind === "ready" && ports.value.length === 0) ? null : (
           <Select label={t("kubernetes.port")} value={currentPort ? String(currentPort) : ""} disabled={!enabled || !resource} className="port" onChange={(p) => connection.onPort(Number(p))}>
-            {currentPort && !(ports.kind === "ok" && ports.items.some((p) => p.port === currentPort)) && <option value={String(currentPort)}>{currentPort}</option>}
-            {(ports.kind === "ok" ? ports.items : []).map((p) => (
+            {currentPort && !(ports.kind === "ready" && ports.value.some((p) => p.port === currentPort)) && <option value={String(currentPort)}>{currentPort}</option>}
+            {(ports.kind === "ready" ? ports.value : []).map((p) => (
               <option key={`${p.container ?? ""}:${p.port}`} value={String(p.port)}>
                 {portLabel(p)}
               </option>
@@ -219,7 +217,7 @@ export function KubernetesTab(
           </Select>
         )}
       </div>
-      {connection && ports.kind === "ok" && ports.items.length === 0 && <p className="muted small">{t("kubernetes.noPorts")}</p>}
+      {connection && ports.kind === "ready" && ports.value.length === 0 && <p className="muted small">{t("kubernetes.noPorts")}</p>}
       <div className="form-pair">
         <label className="field grow">
           <span>{t("kubernetes.kubeconfig")}</span>
@@ -238,7 +236,7 @@ export function KubernetesTab(
         </label>
       </div>
       <div role="status">
-        {error?.kind === "error" ? (
+        {error?.kind === "failed" ? (
           <p className="error small">{error.message}</p>
         ) : (
           loading && <p className="muted small">{t("kubernetes.loading")}</p>

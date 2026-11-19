@@ -13,9 +13,9 @@ import type {
   PrincipalTargetItem,
 } from "../bindings";
 import { connectTabFromExplorer } from "../connect";
-import { useApp, useDialogs } from "../store";
-
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { scriptText } from "../dialogState";
+import { useApp } from "../store";
+import { confirmShown, usePreviewThenApply } from "../useDialogState";
 
 /** What the dialog does: create an account of a kind, or act on one the explorer lists. */
 export type AccountAction =
@@ -72,10 +72,6 @@ export function AccountDialog({ session, connectionId, request, logins, onClose,
   /** Lock: the state read from the server (null when unknown), and the one chosen. */
   const [locked, setLocked] = useState<boolean | null>(null);
   const [lock, setLock] = useState(true);
-  const [preview, setPreview] = useState<{ key: string; value: AlterationPreviewItem } | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const ids = useId();
   const previousFocus = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   useEffect(() => () => { if (previousFocus.current?.isConnected) previousFocus.current.focus(); }, []);
@@ -127,44 +123,29 @@ export function AccountDialog({ session, connectionId, request, logins, onClose,
   }, [request, kind, name, host, withPassword, canLogin, superuser, createDb, createRole, defaultDatabase, checkPolicy, login, defaultSchema, lock]);
   const key = JSON.stringify(change);
 
-  useEffect(() => {
-    let current = true;
-    const timer = window.setTimeout(() => {
-      call(commands.previewPrincipalChange(session, JSON.parse(key) as PrincipalChangeItem))
-        .then((value) => { if (current) { setPreview({ key, value }); setPreviewError(null); } })
-        .catch((e: unknown) => { if (current) { setPreview(null); setPreviewError(message(e)); } });
-    }, 150);
-    return () => { current = false; window.clearTimeout(timer); };
-  }, [session, key]);
-
-  const ready = preview !== null && preview.key === key && passwordReady;
+  const flow = usePreviewThenApply<AlterationPreviewItem>(session, key, 150, (asked) =>
+    call(commands.previewPrincipalChange(session, JSON.parse(asked) as PrincipalChangeItem)));
+  const { preview, busy } = flow;
+  const ready = preview.kind === "ready" && passwordReady;
+  const error = flow.apply.kind === "failed" ? flow.apply.message : null;
   const readOnly = connection?.readOnly ?? false;
   const production = connection?.kind?.safeguards.confirmDataChanges ?? false;
   const drop = request.action === "drop";
 
   async function apply() {
-    if (!ready || !preview) return;
+    if (!ready || preview.kind !== "ready") return;
     const shown = preview.value;
-    let confirmed = drop;
-    if (!drop && shown.risks.length > 0) {
-      const statements = shown.risks.map((r) => ({ sql: shown.statements[r.statement] ?? shown.sql, risk: r.risk }));
-      if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
-      confirmed = true;
-    }
-    setBusy(true);
-    setError(null);
-    try {
+    // A drop is confirmed by this dialog itself.
+    const confirmed = drop ? true : await confirmShown(connection?.name ?? "", shown);
+    if (confirmed === null) return;
+    await flow.run(async () => {
       await call(commands.applyPrincipalChange(session, change, withPassword ? password : null, shown.sql, confirmed));
       onDone();
-    } catch (e) {
-      setError(t("accounts.failed", { detail: message(e) }));
-    } finally {
-      setBusy(false);
-    }
+    }, (detail) => t("accounts.failed", { detail }));
   }
 
   function openInEditor() {
-    if (!ready || !preview || withPassword) return;
+    if (!ready || preview.kind !== "ready" || withPassword) return;
     const tab = useApp.getState().addTab(connectionId, preview.value.sql);
     connectTabFromExplorer(tab, session);
     onClose();
@@ -264,7 +245,7 @@ export function AccountDialog({ session, connectionId, request, logins, onClose,
         )}
         <span className="muted small">{t("objectChange.sql")}</span>
         <pre className="object-change-sql mono" aria-label={t("objectChange.sql")} aria-live="polite">
-          {preview?.key === key ? preview.value.sql : previewError ?? "…"}
+          {scriptText(preview)}
         </pre>
         {withPassword && <p className="muted small">{t("accounts.masked")}</p>}
         {production && <p className="warn small">{t("objectChange.production")}</p>}
