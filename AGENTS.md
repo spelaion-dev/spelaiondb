@@ -88,10 +88,16 @@ outside the team.
 - No `unsafe` except justified FFI with a comment.
 - Errors with `thiserror` in libraries and `anyhow` only in binaries.
 - Exhaustive `match` over our own enums: no `_ =>` that hides new variants.
+- A lifecycle is one enum owned by the core, with its transitions in one place: no flags or
+  `Option`s that together mean a state, no status as text; jobs share one cancel and one ending
+  (ADR-060).
 
 ## Frontend style
 - React + strict TypeScript. Types that cross from Rust are generated, not handwritten.
 - Result data never goes into React state: it lives in the core and is requested in windows.
+- A state the core has is read as its generated type, never rebuilt from events or flags; one
+  that exists only in the page is a discriminated union whose `switch` ends in a `never` check
+  (ADR-060).
 - Read `docs/ui-guidelines.md` before any UI change: use its tokens (never literal colors,
   sizes, radii or shadows), its components, its places for actions and its shortcut map (a new
   shortcut goes into it), its wording for dialogs and errors, and its verification steps.

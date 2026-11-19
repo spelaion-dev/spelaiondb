@@ -368,3 +368,10 @@
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
   `classify.rs`, any change there needs tests that try to get around it.
+- Lifecycles (ADR-060): a state the core has (a session's health, run and transaction, a
+  tunnel, a stored result's end, a job's cancel and ending) is one enum with its transitions in
+  the type or actor that owns it, published on a watch when something follows it, and passed
+  to the adapters as is. Already explicit, leave as they are: `SessionHealth`, `ScriptStop`,
+  `StepStatus`, `TableStatus`, `HostFile`, `InstallState`, `AgentAccess`, `StartupAction`.
+  The implicit ones are SDB-366 to SDB-377, one pull request each, in the ADR's order; each
+  starts with a test that pins today's behaviour.
