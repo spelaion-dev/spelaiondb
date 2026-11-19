@@ -288,6 +288,23 @@ enum Request {
         read_only: bool,
         reply: Reply<()>,
     },
+    McpConnectionReadOnly {
+        workspace: String,
+        connection: String,
+        reply: Reply<bool>,
+    },
+    SetMcpConnectionReadOnly {
+        workspace: String,
+        connection: String,
+        read_only: bool,
+        reply: Reply<()>,
+    },
+    StageMcpConnectionMove {
+        workspace: String,
+        from: String,
+        to: String,
+        reply: Reply<()>,
+    },
     SetMcpOutput {
         format: ToolOutput,
         reply: Reply<()>,
@@ -569,6 +586,35 @@ impl QueryHistory {
                         }
                         Request::SetMcpReadOnly { read_only, reply } => {
                             let _ = reply.send(store.set_mcp_read_only(read_only));
+                        }
+                        Request::McpConnectionReadOnly {
+                            workspace,
+                            connection,
+                            reply,
+                        } => {
+                            let _ =
+                                reply.send(store.mcp_connection_read_only(&workspace, &connection));
+                        }
+                        Request::SetMcpConnectionReadOnly {
+                            workspace,
+                            connection,
+                            read_only,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.set_mcp_connection_read_only(
+                                &workspace,
+                                &connection,
+                                read_only,
+                            ));
+                        }
+                        Request::StageMcpConnectionMove {
+                            workspace,
+                            from,
+                            to,
+                            reply,
+                        } => {
+                            let _ =
+                                reply.send(store.stage_mcp_connection_move(&workspace, &from, &to));
                         }
                         Request::SetMcpOutput { format, reply } => {
                             let _ = reply.send(store.set_mcp_output_format(format));
@@ -1159,6 +1205,49 @@ impl QueryHistory {
     pub async fn set_mcp_read_only(&self, read_only: bool) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetMcpReadOnly { read_only, reply })
             .await
+    }
+
+    pub async fn mcp_connection_read_only(
+        &self,
+        workspace: String,
+        connection: String,
+    ) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::McpConnectionReadOnly {
+            workspace,
+            connection,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn set_mcp_connection_read_only(
+        &self,
+        workspace: String,
+        connection: String,
+        read_only: bool,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetMcpConnectionReadOnly {
+            workspace,
+            connection,
+            read_only,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn stage_mcp_connection_move(
+        &self,
+        workspace: String,
+        from: String,
+        to: String,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::StageMcpConnectionMove {
+            workspace,
+            from,
+            to,
+            reply,
+        })
+        .await
     }
 
     pub async fn set_mcp_output_format(&self, format: ToolOutput) -> Result<(), HistoryError> {

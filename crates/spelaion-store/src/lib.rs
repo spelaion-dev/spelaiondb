@@ -227,6 +227,12 @@ const MIGRATIONS: &[&str] = &["create table audit (
         primary key (workspace, connection, name)
     );",
     table_filters::MIGRATION,
+    // A local MCP write restriction. A row means read-only; there is no writable override.
+    "create table mcp_read_only_connections (
+        workspace  text not null,
+        connection text not null,
+        primary key (workspace, connection)
+    );",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -1180,6 +1186,7 @@ impl Store {
             "explorer_filters",
             "explorer_bookmarks",
             "history_preferences",
+            "mcp_read_only_connections",
             "table_filter_history",
             "table_filter_defaults",
         ] {
@@ -1785,6 +1792,53 @@ impl Store {
 
     pub fn set_mcp_read_only(&self, read_only: bool) -> Result<(), StoreError> {
         self.set_flag("mcp.read_only", read_only)
+    }
+
+    /// A local restriction on one connection. Every read error is handled as read-only by
+    /// the caller, and an absent row is the default for newly migrated stores.
+    pub fn mcp_connection_read_only(
+        &self,
+        workspace: &str,
+        connection: &str,
+    ) -> Result<bool, StoreError> {
+        Ok(self.conn.query_row(
+            "select exists(select 1 from mcp_read_only_connections
+                           where workspace = ?1 and connection = ?2)",
+            params![workspace, connection],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn set_mcp_connection_read_only(
+        &self,
+        workspace: &str,
+        connection: &str,
+        read_only: bool,
+    ) -> Result<(), StoreError> {
+        let sql = if read_only {
+            "insert or ignore into mcp_read_only_connections (workspace, connection) values (?1, ?2)"
+        } else {
+            "delete from mcp_read_only_connections where workspace = ?1 and connection = ?2"
+        };
+        self.conn.execute(sql, params![workspace, connection])?;
+        Ok(())
+    }
+
+    /// Keep both IDs restricted during a move. The new file may be seen by an MCP server
+    /// as soon as it is written, before the old one and its settings are removed.
+    pub fn stage_mcp_connection_move(
+        &self,
+        workspace: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "insert or ignore into mcp_read_only_connections (workspace, connection)
+             select workspace, ?3 from mcp_read_only_connections
+             where workspace = ?1 and connection = ?2",
+            params![workspace, from, to],
+        )?;
+        Ok(())
     }
 
     /// The default output of the MCP server's query tools (ADR-033): JSON until changed.
@@ -3066,6 +3120,39 @@ mod tests {
                 .unwrap()
                 .confirm_delay_seconds,
             0
+        );
+    }
+
+    #[test]
+    fn an_agent_restriction_covers_both_connection_ids_while_it_moves() {
+        let path = temp("stage-mcp-restriction");
+        let store = Store::open(&path).unwrap();
+        store
+            .set_mcp_connection_read_only("/repo", "notes", true)
+            .unwrap();
+        store
+            .stage_mcp_connection_move("/repo", "notes", "new/notes")
+            .unwrap();
+        assert!(store.mcp_connection_read_only("/repo", "notes").unwrap());
+        assert!(
+            store
+                .mcp_connection_read_only("/repo", "new/notes")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .mcp_connection_read_only("/other", "new/notes")
+                .unwrap()
+        );
+
+        store
+            .move_connection_settings(Some("/repo"), "notes", "new/notes")
+            .unwrap();
+        assert!(!store.mcp_connection_read_only("/repo", "notes").unwrap());
+        assert!(
+            store
+                .mcp_connection_read_only("/repo", "new/notes")
+                .unwrap()
         );
     }
 

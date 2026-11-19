@@ -5631,6 +5631,7 @@ pub enum McpAccessKindItem {
 #[serde(rename_all = "camelCase")]
 pub enum McpReadOnlyReasonItem {
     AllAgents,
+    ConnectionOverride,
     Connection,
     WritesDenied,
     ConfirmUnsupported,
@@ -5650,6 +5651,9 @@ pub struct McpAccessItem {
     /// For a visible connection.
     pub access: Option<McpAccessKindItem>,
     pub reason: Option<McpReadOnlyReasonItem>,
+    /// Scope of the local write restriction and whether it was read successfully.
+    pub restriction_workspace: Option<String>,
+    pub read_only_override: Option<bool>,
     pub kind: Option<ConnectionTypeItem>,
 }
 
@@ -5658,6 +5662,8 @@ impl McpAccessItem {
         entry: &spelaion_config::ConnectionEntry,
         view: spelaion_core::AgentView,
         kind: Option<ConnectionTypeItem>,
+        restriction_workspace: Option<String>,
+        read_only_override: Option<bool>,
     ) -> Self {
         use spelaion_core::{AgentAccess, AgentView, ReadOnlyBecause};
         let (visibility, access, reason) = match view {
@@ -5676,6 +5682,9 @@ impl McpAccessItem {
                 Some(McpAccessKindItem::ReadOnly),
                 Some(match because {
                     ReadOnlyBecause::AllAgents => McpReadOnlyReasonItem::AllAgents,
+                    ReadOnlyBecause::ConnectionOverride => {
+                        McpReadOnlyReasonItem::ConnectionOverride
+                    }
                     ReadOnlyBecause::Connection => McpReadOnlyReasonItem::Connection,
                     ReadOnlyBecause::WritesDenied => McpReadOnlyReasonItem::WritesDenied,
                     ReadOnlyBecause::ConfirmUnsupported => {
@@ -5696,6 +5705,8 @@ impl McpAccessItem {
             access,
             reason,
             kind,
+            restriction_workspace,
+            read_only_override,
         }
     }
 }

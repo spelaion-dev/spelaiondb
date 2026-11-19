@@ -41,8 +41,8 @@ use spelaion_config::{
 };
 use spelaion_core::{
     AgentAccess, AgentView, Engines, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits,
-    ResultStore, SessionHealth, ToolOutput, TunnelPool, WriteError, WriteLimits, agent_access,
-    agent_view, open_connection,
+    ResultStore, SessionHealth, ToolOutput, TunnelPool, WriteError, WriteLimits,
+    agent_access_with_override, agent_view, agent_workspace, open_connection,
 };
 use spelaion_driver_api::Connection;
 use spelaion_ssh::{KnownHosts, NonInteractive, TunnelState};
@@ -528,6 +528,33 @@ impl SpelaionMcp {
         }
     }
 
+    fn connection_read_only(&self, config: &Config, entry: &ConnectionEntry) -> bool {
+        let Some(workspace) = agent_workspace(config, entry.id.source) else {
+            return true;
+        };
+        match self.state.store.lock() {
+            Ok(store) => store.as_ref().is_none_or(|store| {
+                store
+                    .mcp_connection_read_only(&workspace, &entry.id.to_string())
+                    .unwrap_or(true)
+            }),
+            Err(_) => true,
+        }
+    }
+
+    fn write_access(
+        &self,
+        snapshot: &Snapshot,
+        entry: &ConnectionEntry,
+        all_read_only: bool,
+    ) -> AgentAccess {
+        agent_access_with_override(
+            &entry.file,
+            all_read_only,
+            self.connection_read_only(&snapshot.config, entry),
+        )
+    }
+
     /// The user's default for a query's rows; JSON if it cannot be read.
     fn default_output(&self) -> ToolOutput {
         match self.state.store.lock() {
@@ -712,13 +739,14 @@ impl SpelaionMcp {
             tool_error(message)
         };
         let view = self.begin().await;
-        let access = match exposed_entry(&view, connection) {
-            Ok((_, entry)) => agent_access(&entry.file, self.all_read_only()),
+        let (snapshot, entry) = match exposed_entry(&view, connection) {
+            Ok(found) => found,
             Err(message) => return refuse(message),
         };
-        match access {
-            AgentAccess::ReadWrite => {}
-            AgentAccess::ReadOnly(because) => return refuse(because.refusal(connection)),
+        if let AgentAccess::ReadOnly(because) =
+            self.write_access(snapshot, entry, self.all_read_only())
+        {
+            return refuse(because.refusal(connection));
         }
         let (open, _) = match self.session_for(&view, connection, Use::Write).await {
             Ok(found) => found,
@@ -729,6 +757,12 @@ impl SpelaionMcp {
         };
         let (result, lost) = {
             let open = open.lock().await;
+            // The override may have changed while opening or waiting for this session.
+            if let AgentAccess::ReadOnly(because) =
+                self.write_access(snapshot, entry, self.all_read_only())
+            {
+                return refuse(because.refusal(connection));
+            }
             let result = open.session.run_write(sql, &limits).await;
             (result, lost(&open))
         };
@@ -1049,7 +1083,7 @@ impl SpelaionMcp {
         for c in exposed {
             out.push_str(&format::connection_entry(
                 c,
-                agent_access(&c.file, all_read_only),
+                self.write_access(snapshot, c, all_read_only),
             ));
         }
         text(out)

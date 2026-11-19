@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use spelaion_config::{ConnectionEntry, ConnectionFile, Engine, Source, WritePolicy};
+use spelaion_config::{Config, ConnectionEntry, ConnectionFile, Engine, Source, WritePolicy};
 use spelaion_driver_api::{Dialect, DriverError, ExecEvent, ExecOptions};
 use sqlparser::ast::{AlterTableOperation, Statement, visit_statements};
 use sqlparser::parser::Parser;
@@ -71,6 +71,8 @@ pub enum ReadOnlyBecause {
     /// The user's read-only mode for every agent (ADR-033): it wins over any connection
     /// file, a trusted repository's and Production's included.
     AllAgents,
+    /// A personal read-only restriction on this connection.
+    ConnectionOverride,
     /// The connection is `read_only`, for the user too.
     Connection,
     /// `[mcp] writes = "deny"`, the default.
@@ -85,8 +87,21 @@ pub enum ReadOnlyBecause {
 /// What agents may do on the connection in `file`. `all_read_only` is the user's read-only
 /// mode for every agent (or `spelaiondb mcp --read-only`); it can only take writes away.
 pub fn agent_access(file: &ConnectionFile, all_read_only: bool) -> AgentAccess {
+    agent_access_with_override(file, all_read_only, false)
+}
+
+/// The same policy with a local connection restriction. An unreadable override must be
+/// passed as read-only by the caller.
+pub fn agent_access_with_override(
+    file: &ConnectionFile,
+    all_read_only: bool,
+    connection_read_only: bool,
+) -> AgentAccess {
     if all_read_only {
         return AgentAccess::ReadOnly(ReadOnlyBecause::AllAgents);
+    }
+    if connection_read_only {
+        return AgentAccess::ReadOnly(ReadOnlyBecause::ConnectionOverride);
     }
     if file.read_only {
         return AgentAccess::ReadOnly(ReadOnlyBecause::Connection);
@@ -98,6 +113,19 @@ pub fn agent_access(file: &ConnectionFile, all_read_only: bool) -> AgentAccess {
         WritePolicy::Allow => AgentAccess::ReadWrite,
         WritePolicy::Deny => AgentAccess::ReadOnly(ReadOnlyBecause::WritesDenied),
         WritePolicy::Confirm => AgentAccess::ReadOnly(ReadOnlyBecause::ConfirmUnsupported),
+    }
+}
+
+/// Workspace key for personal MCP preferences. Personal connections share their settings
+/// across folders. An unresolved repository root is an unreadable preference, never the
+/// personal namespace.
+pub fn agent_workspace(config: &Config, source: Source) -> Option<String> {
+    match source {
+        Source::User => Some(String::new()),
+        Source::Workspace => {
+            let root = std::fs::canonicalize(config.workspace_root.as_ref()?).ok()?;
+            root.to_str().map(str::to_owned)
+        }
     }
 }
 
@@ -153,6 +181,16 @@ pub fn agent_view(
     repository_trusted: bool,
     all_read_only: bool,
 ) -> AgentView {
+    agent_view_with_override(entry, repository_trusted, all_read_only, false)
+}
+
+/// What agents see and may do, including a local connection restriction.
+pub fn agent_view_with_override(
+    entry: &ConnectionEntry,
+    repository_trusted: bool,
+    all_read_only: bool,
+    connection_read_only: bool,
+) -> AgentView {
     if !has_read_barrier(entry.file.engine) {
         return AgentView::EngineWithoutBarrier;
     }
@@ -164,9 +202,11 @@ pub fn agent_view(
     }
     match entry.id.source {
         Source::Workspace if !repository_trusted => AgentView::UntrustedRepository,
-        Source::Workspace | Source::User => {
-            AgentView::Visible(agent_access(&entry.file, all_read_only))
-        }
+        Source::Workspace | Source::User => AgentView::Visible(agent_access_with_override(
+            &entry.file,
+            all_read_only,
+            connection_read_only,
+        )),
     }
 }
 
@@ -176,6 +216,9 @@ impl ReadOnlyBecause {
         match self {
             ReadOnlyBecause::AllAgents => format!(
                 "connection {connection:?} is read-only: the user made every agent read-only (SpelaionDB's MCP server page)"
+            ),
+            ReadOnlyBecause::ConnectionOverride => format!(
+                "connection {connection:?} is read-only for agents under its local MCP restriction"
             ),
             ReadOnlyBecause::Connection => {
                 format!("connection {connection:?} is read-only, for agents and for the user")

@@ -291,5 +291,6 @@ pub use variables::{
 };
 pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
-    agent_view, check_write, has_read_barrier, runs_agent_writes,
+    agent_access_with_override, agent_view, agent_view_with_override, agent_workspace, check_write,
+    has_read_barrier, runs_agent_writes,
 };

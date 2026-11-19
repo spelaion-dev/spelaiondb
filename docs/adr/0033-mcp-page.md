@@ -52,6 +52,16 @@ servers, so the app must change them without breaking anything and only with the
    user edits by hand; this is a switch the app flips, read by a process that already holds
    the store open.
 
+### Per-connection read-only override (SDB-62)
+
+The Security tab can set a personal read-only restriction for one connection, even when a
+trusted repository allows writes. The store keys it by the canonical workspace root and the
+connection ID. Personal connections share their settings across workspaces. An unreadable
+scope or preference restricts that connection. The server checks this setting before writes
+and when listing connections. The core combines it with the global switch and the file's
+policy, so clearing the override can never grant writes the other checks refuse. Before the
+app moves a connection, it stages its restriction at the destination as well.
+
 ### Compact output
 6. **Query rows come as JSON or TOON**, for `run_query` and `explain_query`:
    - **JSON** (the default): one object with `columns` (name and type), `rows` (one array of
