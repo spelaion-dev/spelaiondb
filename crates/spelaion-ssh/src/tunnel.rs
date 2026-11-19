@@ -123,13 +123,197 @@ impl RemoteSignals {
     }
 }
 
+/// Where a tunnel is in its life. It only moves forward: opening, then up, then down or
+/// closed; nothing ever reopens it on its own (ADR-007): the UI decides whether to reconnect.
+/// Every change goes through [`TunnelState::open`], [`TunnelState::lose`] and
+/// [`TunnelState::close`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TunnelState {
+    /// Its hops (for Kubernetes, its first forward) are still opening: nothing goes through
+    /// it yet.
+    Opening,
+    /// It carries connections.
     Up,
-    /// Down or closed. It is never reopened on its own: the UI decides whether to reconnect.
-    Down {
-        reason: String,
+    /// It was lost: a hop, a session or a forward ended on its own. The first reason is kept.
+    Down { reason: String },
+    /// It was closed on purpose.
+    Closed,
+}
+
+impl TunnelState {
+    /// Opening → up. False if it is not opening any more: it was lost or closed meanwhile.
+    pub fn open(&mut self) -> bool {
+        match self {
+            TunnelState::Opening => {
+                *self = TunnelState::Up;
+                true
+            }
+            TunnelState::Up | TunnelState::Down { .. } | TunnelState::Closed => false,
+        }
+    }
+
+    /// Opening or up → down, with `reason`. The first reason wins: a tunnel already down or
+    /// closed stays as it is. Whether it changed.
+    pub fn lose(&mut self, reason: String) -> bool {
+        match self {
+            TunnelState::Opening | TunnelState::Up => {
+                *self = TunnelState::Down { reason };
+                true
+            }
+            TunnelState::Down { .. } | TunnelState::Closed => false,
+        }
+    }
+
+    /// Opening or up → closed. A tunnel already down keeps the reason it went down. Whether
+    /// it changed.
+    pub fn close(&mut self) -> bool {
+        match self {
+            TunnelState::Opening | TunnelState::Up => {
+                *self = TunnelState::Closed;
+                true
+            }
+            TunnelState::Down { .. } | TunnelState::Closed => false,
+        }
+    }
+}
+
+/// What took a tunnel down, kept as an error for an opening it ends.
+#[derive(Debug, Clone)]
+enum Loss {
+    /// A hop's session ended.
+    Hop {
+        hop: usize,
+        host: String,
+        detail: String,
     },
+    /// An AWS SSM session ended (to the first hop, or to a target, ADR-050).
+    Ssm(String),
+}
+
+impl Loss {
+    /// The reason a tunnel down for it shows.
+    fn reason(&self) -> String {
+        match self {
+            Loss::Hop { hop, host, detail } => format!("hop {} ({host}): {detail}", hop + 1),
+            Loss::Ssm(reason) => format!("the AWS SSM session ended: {reason}"),
+        }
+    }
+
+    /// Whether it comes before `hop` in the chain: an earlier hop, or the AWS SSM session that
+    /// leads to the first one.
+    fn before(&self, hop: usize) -> bool {
+        match self {
+            Loss::Hop { hop: lost, .. } => *lost < hop,
+            Loss::Ssm(_) => true,
+        }
+    }
+
+    fn into_error(self) -> SshError {
+        match self {
+            Loss::Hop { hop, host, detail } => SshError::Hop {
+                hop,
+                host,
+                message: detail,
+            },
+            Loss::Ssm(reason) => SshError::Ssm {
+                message: format!("the session ended: {reason}"),
+                failure: crate::SsmFailure::Exited,
+            },
+        }
+    }
+}
+
+/// A tunnel's state, shared with the handlers that notice it was lost.
+#[derive(Clone)]
+struct Lifecycle {
+    state: Arc<watch::Sender<TunnelState>>,
+    /// What took it down: set in the same change that makes it [`TunnelState::Down`].
+    loss: Arc<Mutex<Option<Loss>>>,
+}
+
+impl Lifecycle {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(watch::Sender::new(TunnelState::Opening)),
+            loss: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Opening → up; false if it was lost (or closed) while it opened.
+    fn opened(&self) -> bool {
+        self.state.send_if_modified(TunnelState::open)
+    }
+
+    /// Down for `loss`, unless it already is down or closed (the first reason wins).
+    fn lose(&self, loss: Loss) {
+        self.state.send_if_modified(|state| {
+            let changed = state.lose(loss.reason());
+            if changed {
+                *self.loss.lock().expect("lock poisoned") = Some(loss);
+            }
+            changed
+        });
+    }
+
+    fn close(&self) {
+        self.state.send_if_modified(TunnelState::close);
+    }
+
+    fn loss(&self) -> Option<Loss> {
+        self.loss.lock().expect("lock poisoned").clone()
+    }
+
+    /// The loss of a part of the chain before `hop`, if one was lost.
+    fn lost_before(&self, hop: usize) -> Option<Loss> {
+        self.loss().filter(|loss| loss.before(hop))
+    }
+
+    /// Waits until a part of the chain before `hop` is lost; never ends otherwise.
+    async fn wait_lost_before(&self, hop: usize) -> Loss {
+        let mut state = self.state.subscribe();
+        loop {
+            if let Some(loss) = self.lost_before(hop) {
+                return loss;
+            }
+            if state.changed().await.is_err() {
+                return std::future::pending().await;
+            }
+        }
+    }
+
+    /// Opens `hop` with `work`, unless a part of the chain before it is lost first: then the
+    /// opening fails at once with that part's reason, whatever `hop` was waiting for (a person
+    /// may take minutes to answer). An error of `hop` that the loss caused gives way to the
+    /// loss too, except a changed host key, which is never hidden.
+    async fn unless_lost<T>(
+        &self,
+        hop: usize,
+        work: impl std::future::Future<Output = Result<T, SshError>>,
+    ) -> Result<T, SshError> {
+        let done = tokio::select! {
+            // The hop's own result first when both are ready: what follows sorts it out.
+            biased;
+            done = work => done,
+            loss = self.wait_lost_before(hop) => return Err(loss.into_error()),
+        };
+        match done {
+            Ok(value) => Ok(value),
+            Err(changed @ SshError::HostKeyChanged { .. }) => Err(changed),
+            Err(error) => Err(self.lost_before(hop).map_or(error, Loss::into_error)),
+        }
+    }
+
+    /// Why nothing can go through the tunnel, if it cannot.
+    fn usable(&self) -> Result<(), SshError> {
+        match &*self.state.borrow() {
+            TunnelState::Up => Ok(()),
+            TunnelState::Down { reason } => {
+                Err(SshError::Other(format!("the tunnel is down: {reason}")))
+            }
+            TunnelState::Closed => Err(SshError::Other("the tunnel is closed".into())),
+            TunnelState::Opening => Err(SshError::Other("the tunnel is still opening".into())),
+        }
+    }
 }
 
 /// Session handler for a hop: verifies the server key and reports if it goes down.
@@ -140,7 +324,7 @@ pub(crate) struct HopHandler {
     known: Arc<KnownHosts>,
     ui: Arc<dyn Interaction>,
     outcome: Arc<Mutex<Option<crate::SshError>>>,
-    state: Arc<watch::Sender<TunnelState>>,
+    lifecycle: Lifecycle,
 }
 
 impl client::Handler for HopHandler {
@@ -150,16 +334,21 @@ impl client::Handler for HopHandler {
         &mut self,
         key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        Ok(hostkeys::verify(
-            &self.known,
-            &self.ui,
-            self.hop,
-            &self.host,
-            self.port,
-            key,
-            &self.outcome,
-        )
-        .await)
+        // A part of the chain before this hop lost while the person compares the fingerprint
+        // gives the question up (its dialog closes): the opening has failed, and the key is
+        // not accepted. The check itself does not change.
+        tokio::select! {
+            trusted = hostkeys::verify(
+                &self.known,
+                &self.ui,
+                self.hop,
+                &self.host,
+                self.port,
+                key,
+                &self.outcome,
+            ) => Ok(trusted),
+            _ = self.lifecycle.wait_lost_before(self.hop) => Ok(false),
+        }
     }
 
     async fn disconnected(
@@ -172,14 +361,10 @@ impl client::Handler for HopHandler {
             }
             DisconnectReason::Error(e) => e.to_string(),
         };
-        self.state.send_if_modified(|state| match state {
-            TunnelState::Up => {
-                *state = TunnelState::Down {
-                    reason: format!("hop {} ({}): {detail}", self.hop + 1, self.host),
-                };
-                true
-            }
-            TunnelState::Down { .. } => false,
+        self.lifecycle.lose(Loss::Hop {
+            hop: self.hop,
+            host: self.host.clone(),
+            detail,
         });
         match reason {
             DisconnectReason::ReceivedDisconnect(_) => Ok(()),
@@ -188,16 +373,38 @@ impl client::Handler for HopHandler {
     }
 }
 
+impl Drop for HopHandler {
+    /// The hop's session task owns its handler: dropped, the session has ended, however it
+    /// ended. russh does not always call `disconnected` (a connection reset makes it give up
+    /// before), so this is the one notice that never fails. A reason already given wins, and a
+    /// tunnel closed on purpose stays closed.
+    fn drop(&mut self) {
+        self.lifecycle.lose(Loss::Hop {
+            hop: self.hop,
+            host: self.host.clone(),
+            detail: "the connection ended".into(),
+        });
+    }
+}
+
+/// How a tunnel reaches its targets.
+enum Shape {
+    /// A chain of SSH sessions; forwards go through the last one.
+    Hops {
+        earlier: Vec<Arc<Handle<HopHandler>>>,
+        last: Arc<Handle<HopHandler>>,
+    },
+    /// The proxy alone (ADR-027), its password already asked if it needed one.
+    Proxy(Arc<ProxySpec>, Duration),
+    /// AWS SSM alone, one session per target (ADR-050).
+    Ssm(Arc<SsmSpec>, Duration),
+}
+
 /// An open chain of SSH sessions. Forwards to one or more targets are requested on it
 /// ([`Tunnel::forward`]) and share the same sessions. Dropping it closes everything.
 pub struct Tunnel {
-    state: Arc<watch::Sender<TunnelState>>,
-    sessions: Vec<Arc<Handle<HopHandler>>>,
-    /// A tunnel without hops: the proxy reaches the targets (ADR-027), its password already
-    /// asked if it needed one.
-    proxy_only: Option<(Arc<ProxySpec>, Duration)>,
-    /// A tunnel without hops: AWS SSM reaches the targets, one session per target (ADR-050).
-    ssm_only: Option<(Arc<SsmSpec>, Duration)>,
+    lifecycle: Lifecycle,
+    shape: Shape,
     /// The AWS SSM sessions it started (to the first hop, or to each target), and where each
     /// leads. Stopped with the tunnel.
     ssm_sessions: Mutex<Vec<(Target, SsmSession)>>,
@@ -305,9 +512,7 @@ impl Tunnel {
             })
         };
         let known = Arc::new(known_hosts.clone());
-        let state = Arc::new(watch::Sender::new(TunnelState::Down {
-            reason: "opening".into(),
-        }));
+        let lifecycle = Lifecycle::new();
         let mut sessions: Vec<Arc<Handle<HopHandler>>> = Vec::new();
         let mut child = None;
         // AWS SSM to the first hop (ADR-050): its session leads there from a local port.
@@ -319,13 +524,13 @@ impl Tunnel {
                 host: first.host.clone(),
                 port: first.port,
             };
-            let down = state.clone();
+            let lost = lifecycle.clone();
             let session = SsmSession::start(
                 ssm,
                 &to.host,
                 to.port,
                 spec.options.connect_timeout,
-                move |reason| ssm_ended(&down, reason),
+                move |reason| ssm_ended(&lost, reason),
             )
             .await?;
             ssm_first = Some(session.local);
@@ -353,7 +558,7 @@ impl Tunnel {
                 known: known.clone(),
                 ui: timed_ui.clone(),
                 outcome: outcome.clone(),
-                state: state.clone(),
+                lifecycle: lifecycle.clone(),
             };
             let timeout = spec.options.connect_timeout;
             let handshake = async {
@@ -433,44 +638,85 @@ impl Tunnel {
                     ),
                 }
             };
-            let connected = match within_network_time(timeout, &asking, handshake).await {
-                Some(result) => result?,
-                None => {
-                    return Err(SshError::Timeout {
-                        hop,
-                        host: hop_spec.host.clone(),
-                        after: timeout,
-                    });
-                }
+            let open_hop = async {
+                let connected = match within_network_time(timeout, &asking, handshake).await {
+                    Some(result) => result?,
+                    None => {
+                        return Err(SshError::Timeout {
+                            hop,
+                            host: hop_spec.host.clone(),
+                            after: timeout,
+                        });
+                    }
+                };
+                let mut session = match connected {
+                    Ok(session) => session,
+                    Err(message) => {
+                        // The detailed reason (changed key, rejected…) is left by the handler.
+                        let detailed = outcome.lock().expect("lock poisoned").take();
+                        return Err(detailed.unwrap_or(SshError::Connect {
+                            hop,
+                            host: hop_spec.host.clone(),
+                            message,
+                        }));
+                    }
+                };
+                authenticate(&mut session, hop, hop_spec, &ui).await?;
+                Ok(session)
             };
-            let mut session = match connected {
+            // Boxed: the handshake is a large future, and callers that wait on a tunnel deep in
+            // their own futures overflowed the stack of a debug build.
+            let session = match lifecycle.unless_lost(hop, Box::pin(open_hop)).await {
                 Ok(session) => session,
-                Err(message) => {
-                    // The detailed reason (changed key, rejected…) is left by the handler.
-                    let detailed = outcome.lock().expect("lock poisoned").take();
-                    return Err(detailed.unwrap_or(SshError::Connect {
-                        hop,
-                        host: hop_spec.host.clone(),
-                        message,
-                    }));
+                Err(error) => {
+                    // A changed key the handler found is never hidden behind another reason.
+                    let changed = outcome
+                        .lock()
+                        .expect("lock poisoned")
+                        .take()
+                        .filter(|e| matches!(e, SshError::HostKeyChanged { .. }));
+                    return Err(changed.unwrap_or(error));
                 }
             };
-            authenticate(&mut session, hop, hop_spec, &ui).await?;
             sessions.push(Arc::new(session));
         }
 
-        state.send_replace(TunnelState::Up);
-        Ok(Tunnel {
-            state,
-            sessions,
-            proxy_only: None,
-            ssm_only: None,
+        // A hop (or the AWS SSM session) lost after its own opening, while a later one opened.
+        if !lifecycle.opened() {
+            return Err(lifecycle.loss().map_or_else(
+                || SshError::Other("the tunnel was closed while it opened".into()),
+                Loss::into_error,
+            ));
+        }
+        let Some(last) = sessions.pop() else {
+            return Err(SshError::Other("the tunnel has no hops".into()));
+        };
+        Ok(Tunnel::new(
+            lifecycle,
+            Shape::Hops {
+                earlier: sessions,
+                last,
+            },
+            ssm_sessions,
+            child,
+        ))
+    }
+
+    fn new(
+        lifecycle: Lifecycle,
+        shape: Shape,
+        ssm_sessions: Vec<(Target, SsmSession)>,
+        child: Option<Child>,
+    ) -> Tunnel {
+        Tunnel {
+            lifecycle,
+            shape,
             ssm_sessions: Mutex::new(ssm_sessions),
             forwards: Mutex::new(Vec::new()),
             forward_gate: Semaphore::new(1),
             primary: std::sync::OnceLock::new(),
             child: Mutex::new(child),
-        })
+        }
     }
 
     /// A tunnel that is only a proxy: its password is asked now (once), and the proxy is
@@ -489,17 +735,14 @@ impl Tunnel {
             );
         }
         crate::proxy::check(&proxy, timeout).await?;
-        Ok(Tunnel {
-            state: Arc::new(watch::Sender::new(TunnelState::Up)),
-            sessions: Vec::new(),
-            proxy_only: Some((Arc::new(proxy), timeout)),
-            ssm_only: None,
-            ssm_sessions: Mutex::new(Vec::new()),
-            forwards: Mutex::new(Vec::new()),
-            forward_gate: Semaphore::new(1),
-            primary: std::sync::OnceLock::new(),
-            child: Mutex::new(None),
-        })
+        Ok(Self::without_hops(Shape::Proxy(Arc::new(proxy), timeout)))
+    }
+
+    /// A tunnel with nothing left to open: up at once.
+    fn without_hops(shape: Shape) -> Tunnel {
+        let lifecycle = Lifecycle::new();
+        lifecycle.opened();
+        Tunnel::new(lifecycle, shape, Vec::new(), None)
     }
 
     /// A tunnel that is only AWS SSM (ADR-050): each target gets its own session when it is
@@ -509,17 +752,10 @@ impl Tunnel {
         let ssm = spec.ssm.clone().expect("an SSM-only tunnel has SSM");
         crate::ssm::find_tools(&ssm)?;
         crate::ssm::ssm_arguments(&ssm, "localhost", 1, 1)?;
-        Ok(Tunnel {
-            state: Arc::new(watch::Sender::new(TunnelState::Up)),
-            sessions: Vec::new(),
-            proxy_only: None,
-            ssm_only: Some((Arc::new(ssm), spec.options.connect_timeout)),
-            ssm_sessions: Mutex::new(Vec::new()),
-            forwards: Mutex::new(Vec::new()),
-            forward_gate: Semaphore::new(1),
-            primary: std::sync::OnceLock::new(),
-            child: Mutex::new(None),
-        })
+        Ok(Self::without_hops(Shape::Ssm(
+            Arc::new(ssm),
+            spec.options.connect_timeout,
+        )))
     }
 
     /// The local end of this SSM-only tunnel's session to `target`, starting it the first time.
@@ -539,9 +775,9 @@ impl Tunnel {
         {
             return Ok(local);
         }
-        let down = self.state.clone();
+        let lost = self.lifecycle.clone();
         let session = SsmSession::start(ssm, &target.host, target.port, timeout, move |reason| {
-            ssm_ended(&down, reason)
+            ssm_ended(&lost, reason)
         })
         .await?;
         let local = session.local;
@@ -557,13 +793,14 @@ impl Tunnel {
     /// ADR-018). Its standard error is merged into the output. The bastions of a chain only
     /// forward; the last hop must allow commands, or the output says it refused.
     pub async fn exec(&self, command: &str) -> Result<RemoteExec, SshError> {
-        if let TunnelState::Down { reason } = &*self.state.borrow() {
-            return Err(SshError::Other(format!("the tunnel is down: {reason}")));
-        }
-        let Some(session) = self.sessions.last() else {
-            return Err(SshError::Other(
-                "a tunnel with only a proxy cannot run commands: add an SSH hop".into(),
-            ));
+        self.lifecycle.usable()?;
+        let session = match &self.shape {
+            Shape::Hops { last, .. } => last,
+            Shape::Proxy(..) | Shape::Ssm(..) => {
+                return Err(SshError::Other(
+                    "a tunnel with only a proxy cannot run commands: add an SSH hop".into(),
+                ));
+            }
         };
         let channel = session
             .channel_open_session()
@@ -613,33 +850,30 @@ the server refused to run a command (it may allow only port forwarding)
     /// (or through the proxy alone) and closes it at once, within `timeout`. Nothing is sent
     /// to the target. The connection test's "reach the database" step (ADR-032).
     pub async fn probe(&self, target: &Target, timeout: Duration) -> Result<(), SshError> {
-        if let TunnelState::Down { reason } = &*self.state.borrow() {
-            return Err(SshError::Other(format!("the tunnel is down: {reason}")));
-        }
+        self.lifecycle.usable()?;
         let failed = |message: String, timed_out: bool| SshError::Target {
             host: target.host.clone(),
             port: target.port,
             message,
             timed_out,
         };
-        if let Some((ssm, start)) = &self.ssm_only {
-            // The session itself is the check: AWS accepted it and the node forwards.
-            let local = self.ssm_session(ssm, *start, target).await?;
-            return match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(local)).await
-            {
-                Ok(Ok(_)) => Ok(()),
-                Ok(Err(e)) => Err(failed(e.to_string(), false)),
-                Err(_) => Err(failed(format!("no answer in {}", seconds(timeout)), true)),
-            };
-        }
-        match (&self.proxy_only, self.sessions.last()) {
-            (Some((proxy, _)), _) => {
+        match &self.shape {
+            Shape::Ssm(ssm, start) => {
+                // The session itself is the check: AWS accepted it and the node forwards.
+                let local = self.ssm_session(ssm, *start, target).await?;
+                match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(local)).await {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(e)) => Err(failed(e.to_string(), false)),
+                    Err(_) => Err(failed(format!("no answer in {}", seconds(timeout)), true)),
+                }
+            }
+            Shape::Proxy(proxy, _) => {
                 // Its password was asked when the tunnel opened.
                 let ui: Arc<dyn Interaction> = Arc::new(crate::NonInteractive);
                 crate::proxy::connect(proxy, &target.host, target.port, timeout, &ui).await?;
                 Ok(())
             }
-            (None, Some(last)) => {
+            Shape::Hops { last, .. } => {
                 let open = last.channel_open_direct_tcpip(
                     target.host.clone(),
                     target.port.into(),
@@ -655,7 +889,6 @@ the server refused to run a command (it may allow only port forwarding)
                     Err(_) => Err(failed(format!("no answer in {}", seconds(timeout)), true)),
                 }
             }
-            (None, None) => Err(SshError::Other("the tunnel has no hops".into())),
         }
     }
 
@@ -678,9 +911,7 @@ the server refused to run a command (it may allow only port forwarding)
             .acquire()
             .await
             .expect("forward gate is never closed");
-        if let TunnelState::Down { reason } = &*self.state.borrow() {
-            return Err(SshError::Other(format!("the tunnel is down: {reason}")));
-        }
+        self.lifecycle.usable()?;
         if let Some(addr) = self.existing(&target, port) {
             return Ok(addr);
         }
@@ -688,13 +919,12 @@ the server refused to run a command (it may allow only port forwarding)
         let addr = listener
             .local_addr()
             .map_err(|e| SshError::Other(e.to_string()))?;
-        let route = match (&self.ssm_only, &self.proxy_only, self.sessions.last()) {
-            (Some((ssm, timeout)), _, _) => {
+        let route = match &self.shape {
+            Shape::Ssm(ssm, timeout) => {
                 Route::Local(self.ssm_session(ssm, *timeout, &target).await?)
             }
-            (None, Some((proxy, timeout)), _) => Route::Proxy(proxy.clone(), *timeout),
-            (None, None, Some(last)) => Route::Ssh(last.clone()),
-            (None, None, None) => return Err(SshError::Other("the tunnel has no hops".into())),
+            Shape::Proxy(proxy, timeout) => Route::Proxy(proxy.clone(), *timeout),
+            Shape::Hops { last, .. } => Route::Ssh(last.clone()),
         };
         // A proxy-only HTTP profile cannot authenticate until CONNECT has a target. Check it
         // here, where its error can reach the caller, rather than losing it in the relay task.
@@ -702,12 +932,7 @@ the server refused to run a command (it may allow only port forwarding)
             let ui: Arc<dyn Interaction> = Arc::new(crate::NonInteractive);
             crate::proxy::connect(proxy, &target.host, target.port, *timeout, &ui).await?;
         }
-        let task = tokio::spawn(forward(
-            listener,
-            route,
-            target.clone(),
-            self.state.subscribe(),
-        ));
+        let task = tokio::spawn(forward(listener, route, target.clone(), self.state()));
         self.forwards
             .lock()
             .expect("lock poisoned")
@@ -738,19 +963,20 @@ the server refused to run a command (it may allow only port forwarding)
 
     /// Current state and change notifications.
     pub fn state(&self) -> watch::Receiver<TunnelState> {
-        self.state.subscribe()
+        self.lifecycle.state.subscribe()
     }
 
-    /// Closes the tunnel in an orderly way (also for whoever shares it).
+    /// Closes the tunnel in an orderly way (also for whoever shares it). A tunnel already
+    /// lost keeps the reason it went down.
     pub async fn close(&self) {
-        self.state.send_replace(TunnelState::Down {
-            reason: "closed".into(),
-        });
+        self.lifecycle.close();
         self.abort_forwards();
-        for session in self.sessions.iter().rev() {
-            let _ = session
-                .disconnect(russh::Disconnect::ByApplication, "", "es")
-                .await;
+        if let Shape::Hops { earlier, last } = &self.shape {
+            for session in std::iter::once(last).chain(earlier.iter().rev()) {
+                let _ = session
+                    .disconnect(russh::Disconnect::ByApplication, "", "es")
+                    .await;
+            }
         }
         let child = self.child.lock().expect("lock poisoned").take();
         if let Some(mut child) = child {
@@ -777,15 +1003,7 @@ the server refused to run a command (it may allow only port forwarding)
 impl Drop for Tunnel {
     fn drop(&mut self) {
         self.abort_forwards();
-        self.state.send_if_modified(|state| match state {
-            TunnelState::Up => {
-                *state = TunnelState::Down {
-                    reason: "closed".into(),
-                };
-                true
-            }
-            TunnelState::Down { .. } => false,
-        });
+        self.lifecycle.close();
         // The external command has kill_on_drop; sessions close when their Handle is dropped.
     }
 }
@@ -834,9 +1052,12 @@ async fn forward(
     loop {
         let accepted = tokio::select! {
             accepted = listener.accept() => accepted,
-            // If the tunnel goes down, stop listening: the driver gets "connection refused"
-            // immediately instead of waiting.
-            _ = state.wait_for(|s| matches!(s, TunnelState::Down { .. })) => return,
+            // If the tunnel goes down or is closed, stop listening: the driver gets
+            // "connection refused" immediately instead of waiting.
+            _ = state.wait_for(|s| match s {
+                TunnelState::Down { .. } | TunnelState::Closed => true,
+                TunnelState::Opening | TunnelState::Up => false,
+            }) => return,
         };
         let Ok((mut tcp, _)) = accepted else { return };
         let route = route.clone();
@@ -878,17 +1099,9 @@ async fn forward(
 }
 
 /// An SSM session that ended on its own takes the tunnel down with the AWS CLI's message; it
-/// is never restarted (ADR-007).
-fn ssm_ended(state: &watch::Sender<TunnelState>, reason: String) {
-    state.send_if_modified(|current| match current {
-        TunnelState::Up => {
-            *current = TunnelState::Down {
-                reason: format!("the AWS SSM session ended: {reason}"),
-            };
-            true
-        }
-        TunnelState::Down { .. } => false,
-    });
+/// is never restarted (ADR-007). While the tunnel opens, it fails the opening.
+fn ssm_ended(lifecycle: &Lifecycle, reason: String) {
+    lifecycle.lose(Loss::Ssm(reason));
 }
 
 /// `15 s`, or `1.5 s` for a fraction.
@@ -1056,6 +1269,108 @@ mod tests {
         // A pinned type russh does not offer is not added.
         let dsa = preferred_key_types(&[Algorithm::Dsa], defaults);
         assert_eq!(dsa, defaults.to_vec());
+    }
+
+    #[test]
+    fn a_tunnel_moves_only_forward_and_the_first_reason_wins() {
+        let mut state = TunnelState::Opening;
+        assert!(state.open());
+        assert_eq!(state, TunnelState::Up);
+        assert!(!state.open(), "up is not opening");
+        assert!(state.lose("hop 1 (a): gone".into()));
+        assert!(!state.lose("hop 2 (b): gone too".into()));
+        assert!(!state.close(), "closing keeps why it went down");
+        assert!(!state.open(), "nothing reopens it");
+        assert_eq!(
+            state,
+            TunnelState::Down {
+                reason: "hop 1 (a): gone".into()
+            }
+        );
+
+        // Lost while opening: down, never up.
+        let mut state = TunnelState::Opening;
+        assert!(state.lose("hop 1 (a): gone".into()));
+        assert!(!state.open());
+        assert!(matches!(state, TunnelState::Down { .. }));
+
+        // Closed: a later loss does not change it.
+        let mut state = TunnelState::Up;
+        assert!(state.close());
+        assert!(!state.lose("hop 1 (a): gone".into()));
+        assert!(!state.open());
+        assert_eq!(state, TunnelState::Closed);
+    }
+
+    #[tokio::test]
+    async fn an_opening_gives_way_only_to_a_loss_before_its_hop() {
+        let hop = |hop| Loss::Hop {
+            hop,
+            host: "bastion".into(),
+            detail: "early eof".into(),
+        };
+        // Its own hop lost: its own, more detailed error stands.
+        let lifecycle = Lifecycle::new();
+        lifecycle.lose(hop(1));
+        let own: Result<(), SshError> = lifecycle
+            .unless_lost(1, async { Err(SshError::Cancelled) })
+            .await;
+        assert!(matches!(own, Err(SshError::Cancelled)), "{own:?}");
+
+        // An earlier hop lost: that hop's reason, at once, whatever this one waits for.
+        let lifecycle = Lifecycle::new();
+        let waiting = lifecycle.unless_lost(1, std::future::pending::<Result<(), SshError>>());
+        lifecycle.lose(hop(0));
+        let lost = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("the loss ends the wait");
+        assert!(
+            matches!(&lost, Err(e @ SshError::Hop { hop: 0, .. }) if e.to_string() == "hop 1 (bastion): early eof"),
+            "{lost:?}"
+        );
+        assert_eq!(
+            *lifecycle.state.borrow(),
+            TunnelState::Down {
+                reason: "hop 1 (bastion): early eof".into()
+            }
+        );
+
+        // An error the loss caused gives way to it, except a changed host key.
+        let lifecycle = Lifecycle::new();
+        lifecycle.lose(Loss::Ssm("TargetNotConnected".into()));
+        let caused: Result<(), SshError> = lifecycle
+            .unless_lost(0, async {
+                Err(SshError::Connect {
+                    hop: 0,
+                    host: "bastion".into(),
+                    message: "early eof".into(),
+                })
+            })
+            .await;
+        assert!(
+            matches!(
+                &caused,
+                Err(SshError::Ssm {
+                    failure: crate::SsmFailure::Exited,
+                    ..
+                })
+            ),
+            "{caused:?}"
+        );
+        let changed: Result<(), SshError> = lifecycle
+            .unless_lost(0, async {
+                Err(SshError::HostKeyChanged {
+                    hop: 0,
+                    host: "bastion".into(),
+                    file: "known_hosts".into(),
+                    line: 1,
+                })
+            })
+            .await;
+        assert!(
+            matches!(changed, Err(SshError::HostKeyChanged { .. })),
+            "{changed:?}"
+        );
     }
 
     /// Work that takes `before` of network time, then asks the person for `answer`, then

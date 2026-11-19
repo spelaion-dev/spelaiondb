@@ -142,23 +142,27 @@ impl Health {
         }
     }
 
-    /// Marks the session lost when its tunnel goes down. The watch ends with the tunnel, and
-    /// does nothing once the session is gone.
+    /// Marks the session lost when its tunnel goes down or is closed. The watch ends with the
+    /// tunnel, and does nothing once the session is gone.
     pub(crate) fn watch_tunnel(&self, mut tunnel: watch::Receiver<TunnelState>) {
         let health = Arc::downgrade(&self.0);
         tokio::spawn(async move {
             let reason = match tunnel
-                .wait_for(|s| matches!(s, TunnelState::Down { .. }))
+                .wait_for(|s| match s {
+                    TunnelState::Down { .. } | TunnelState::Closed => true,
+                    TunnelState::Opening | TunnelState::Up => false,
+                })
                 .await
             {
                 Ok(state) => match &*state {
-                    TunnelState::Down { reason } => reason.clone(),
-                    TunnelState::Up => return,
+                    TunnelState::Down { reason } => format!("the tunnel went down: {reason}"),
+                    TunnelState::Closed => "the tunnel was closed".to_string(),
+                    TunnelState::Opening | TunnelState::Up => return,
                 },
                 Err(_) => return,
             };
             if let Some(health) = health.upgrade() {
-                Health(health).lose(format!("the tunnel went down: {reason}"));
+                Health(health).lose(reason);
             }
         });
     }
