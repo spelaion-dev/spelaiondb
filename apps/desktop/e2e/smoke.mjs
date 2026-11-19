@@ -812,6 +812,8 @@ try {
   await run(panel);
   await panel.locator(".statusline", { hasText: "6 rows" }).waitFor();
   step("results: elapsed time, cancellation and toolbar Refresh (SDB-430)");
+  // Its runs stay out of the history, which the history step counts.
+  await setHistorySaving("Shop (SQLite)", false);
   {
     const tabStrip = page.locator(".tabbar");
     const previousTab = await tabStrip.locator(".tab.active").elementHandle();
@@ -881,6 +883,7 @@ try {
     await busy.locator(".statusline", { hasText: /^1 row · \d+ ms$/ }).waitFor();
     await page.keyboard.press("Control+w");
   }
+  await setHistorySaving("Shop (SQLite)", true);
   step("SQL syntax remains legible when switching themes");
   const originalSql = await panel.locator(".cm-content").innerText();
   await replaceQuery(panel, "SELECT 'soft red', 42 AS n;");
