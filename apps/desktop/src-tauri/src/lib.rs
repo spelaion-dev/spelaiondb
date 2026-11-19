@@ -12,6 +12,7 @@ mod file_dialog;
 mod files;
 mod import;
 mod interaction;
+mod jobs;
 mod launch;
 mod library;
 mod mcp;
@@ -81,18 +82,11 @@ struct AppState {
     pending: Pending,
     /// Where quitting stands (ADR-031, SDB-377): one phase, changed only by `Quit`'s methods.
     quit: app_lifecycle::Quit,
-    tests: ConnectionTests,
-    /// Streaming exports running, by the id the UI gave them (ADR-034).
-    exports: std::sync::Mutex<HashMap<u32, Arc<JobCancel>>>,
-    /// Imports running, by the id the UI gave them (ADR-038).
-    imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::JobCancel>>>,
-    /// Backups and restores running, by the id the UI gave them (ADR-049).
-    backups: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::JobCancel>>>,
+    /// Every job running (exports, imports, backups, tests, row loads, plugin installs…),
+    /// under ids the registry makes, each listed while its command runs (SDB-369, `jobs.rs`).
+    jobs: jobs::Jobs,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
-    /// Loads of query rows running ("Load every row", page and row jumps; SDB-386), by the id
-    /// the UI gave them.
-    loads: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::LoadCancel>>>,
 }
 
 struct DesktopSession {
@@ -143,33 +137,6 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
         (spelaion_config::engine_kind_base(mark) == Some(open.resolved.engine))
             .then(|| mark.to_owned())
     })
-}
-
-/// Connection tests running now, by the id the UI gave them, to stop them (ADR-032).
-#[derive(Default)]
-struct ConnectionTests(std::sync::Mutex<HashMap<u32, Arc<JobCancel>>>);
-
-impl ConnectionTests {
-    /// Registers a test; the future completes when it is stopped (never, if it ends first).
-    fn start(&self, test: u32) -> impl std::future::Future<Output = ()> + Send + 'static {
-        let cancel = Arc::new(JobCancel::new());
-        self.0
-            .lock()
-            .expect("lock poisoned")
-            .insert(test, cancel.clone());
-        async move { cancel.cancelled().await }
-    }
-
-    fn stop(&self, test: u32) {
-        let cancel = self.0.lock().expect("lock poisoned").remove(&test);
-        if let Some(cancel) = cancel {
-            tauri::async_runtime::spawn(async move { cancel.cancel().await });
-        }
-    }
-
-    fn end(&self, test: u32) {
-        self.0.lock().expect("lock poisoned").remove(&test);
-    }
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -1132,7 +1099,7 @@ async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkPr
 }
 
 /// Tests a connection that may not be saved yet, step by step (ADR-032): every change to its
-/// steps goes through `on_step`, and `stop_connection_test(test)` stops it. Nothing is
+/// steps goes through `on_step`, its ticket to `job`, and `cancel_job` stops it. Nothing is
 /// written: neither the file nor the keychain. `editing` is the connection being edited, if
 /// any: its stored password is used when none is typed. `network_only` stops before logging
 /// in. The steps, their errors and the diagnostics come from the core, redacted.
@@ -1143,7 +1110,7 @@ async fn test_connection(
     password: Option<String>,
     editing: Option<String>,
     network_only: bool,
-    test: u32,
+    job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1188,13 +1155,17 @@ async fn test_connection(
         password: password.filter(|p| !p.is_empty()).map(Secret::new),
         name,
     };
-    let stop = state.tests.start(test);
+    let running = jobs::start(&state, jobs::JobKind::ConnectionTest, &job);
+    let stop = {
+        let cancel = running.cancel().clone();
+        async move { cancel.cancelled().await }
+    };
     let observer = |steps: &[spelaion_core::TestStep]| {
         let _ = on_step.send(steps.iter().map(TestStepItem::from).collect());
     };
     let report =
         spelaion_core::test_connection(resolved, &state.engines(), options, &observer, stop).await;
-    state.tests.end(test);
+    drop(running);
     Ok(ConnectionTestOutcome::Tested {
         report: report.into(),
         tls_warning,
@@ -1211,13 +1182,6 @@ async fn draft_tls_warning(
     let draft = ConnectionDraft::try_from(draft)?;
     let config = state.config.read().await;
     Ok(spelaion_core::connection_draft_tls_warning(&config, &draft).map(TlsWarningItem::from))
-}
-
-/// Stops a running connection or network profile test: the running step is dropped and
-/// whatever it opened is closed. Nothing is retried.
-#[command]
-fn stop_connection_test(test: u32, state: State<'_, AppState>) {
-    state.tests.stop(test);
 }
 
 /// Saves a new connection file (and, for `keychain`, its password) and reloads the
@@ -1666,7 +1630,7 @@ async fn tunnel_draft(
 
 /// Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
 /// again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
-/// are used when none is typed. Steps go through `on_step`; `stop_connection_test(test)`
+/// are used when none is typed. Steps go through `on_step`, its ticket to `job`; `cancel_job`
 /// stops it.
 #[command]
 #[allow(clippy::too_many_arguments)]
@@ -1674,7 +1638,7 @@ async fn test_tunnel(
     draft: TunnelDraftItem,
     passwords: Vec<Option<String>>,
     proxy_password: Option<String>,
-    test: u32,
+    job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1690,7 +1654,11 @@ async fn test_tunnel(
             other => other,
         }
     };
-    let stop = state.tests.start(test);
+    let running = jobs::start(&state, jobs::JobKind::ConnectionTest, &job);
+    let stop = {
+        let cancel = running.cancel().clone();
+        async move { cancel.cancelled().await }
+    };
     let observer = |steps: &[spelaion_core::TestStep]| {
         let _ = on_step.send(steps.iter().map(TestStepItem::from).collect());
     };
@@ -1703,7 +1671,7 @@ async fn test_tunnel(
         stop,
     )
     .await;
-    state.tests.end(test);
+    drop(running);
     Ok(TunnelTestOutcome::Tested {
         report: report.into(),
     })
@@ -2433,7 +2401,9 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     if state.quit.phase() == app_lifecycle::QuitPhase::Quitting {
         return;
     }
-    // A command holding the sessions means there are some: the UI decides.
+    // A command holding the sessions means there are some: the UI decides. A lost session
+    // counts here too: its tab may hold row edits not applied, which only the UI knows, and the
+    // UI asks about those (its transaction is gone with its connection: `open_transactions`).
     let no_sessions = state
         .sessions
         .try_lock()
@@ -2846,13 +2816,13 @@ async fn load_estimate(
 
 /// Loads keyset pages of a paged query (ADR-054) into `result`, which holds `offset` rows,
 /// until it holds `until` rows (every row without it) or the query has no more. The rows held
-/// go to `on_progress` after each page; `cancel_load_rows` with the same `load_id` stops it,
-/// keeping the pages loaded before.
+/// go to `on_progress` after each page; its ticket goes to `job` at once, and `cancel_job` with
+/// it stops the load, keeping the pages loaded before.
 #[allow(clippy::too_many_arguments)]
 #[command]
 async fn load_query_rows(
     session: String,
-    load_id: u32,
+    job: Channel<jobs::JobTicket>,
     result: u32,
     sql: String,
     offset: u32,
@@ -2862,49 +2832,37 @@ async fn load_query_rows(
     state: State<'_, AppState>,
 ) -> CmdResult<LoadedRowsItem> {
     let open = state.session(&session).await?;
+    let running = jobs::start(&state, jobs::JobKind::RowLoad, &job);
     let cancel = Arc::new(spelaion_core::LoadCancel::new());
-    state
-        .loads
-        .lock()
-        .expect("lock poisoned")
-        .insert(load_id, cancel.clone());
     let progress = move |rows: u64| {
         let _ = on_progress.send(u32::try_from(rows).unwrap_or(u32::MAX));
     };
-    let outcome = spelaion_core::load_query_rows(
+    let sort = sort_keys(sort);
+    let load = spelaion_core::load_query_rows(
         &open.session,
         ResultId(result.into()),
         &sql,
         offset.into(),
-        &sort_keys(sort),
+        &sort,
         until.map(u64::from),
         spelaion_core::LOAD_PAGE_ROWS,
         &cancel,
         &progress,
-    )
-    .await;
-    state.loads.lock().expect("lock poisoned").remove(&load_id);
-    Ok(outcome?.into())
-}
-
-/// Stops a load of query rows: the page being read and every page after it.
-#[command]
-async fn cancel_load_rows(
-    session: String,
-    load_id: u32,
-    state: State<'_, AppState>,
-) -> CmdResult<()> {
-    let cancel = state
-        .loads
-        .lock()
-        .expect("lock poisoned")
-        .get(&load_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        let open = state.session(&session).await?;
+    );
+    // A cancel of the job stops the load as the core does: no page after it, the one being
+    // read through the session (SDB-266). The load then ends as cancelled, with its pages.
+    let stop = async {
+        running.cancel().cancelled().await;
         cancel.cancel(&open.session).await;
-    }
-    Ok(())
+        std::future::pending::<()>().await
+    };
+    let outcome = tokio::select! {
+        biased;
+        outcome = load => outcome,
+        () = stop => unreachable!("the stop never ends"),
+    };
+    drop(running);
+    Ok(outcome?.into())
 }
 
 /// Every row of a table data tab's table that its filter keeps, in its pages' order: "Load
@@ -3475,14 +3433,21 @@ async fn export_file_name(
 }
 
 /// A new session for an export (ADR-034), opened like `connect_from_session` from the
-/// `source` session's resolved connection and in-memory password, and registered under
-/// `export_id` so `cancel_export` can stop it. Never the tab's own session.
+/// `source` session's resolved connection and in-memory password, for a job of `kind` whose
+/// ticket goes to `job` at once, so `cancel_job` can stop it while the session still opens.
+/// Never the tab's own session.
 async fn open_export_session(
     state: &AppState,
     app: &AppHandle,
     source: &str,
-    export_id: u32,
-) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<JobCancel>)> {
+    kind: jobs::JobKind,
+    job: &Channel<jobs::JobTicket>,
+) -> CmdResult<(
+    Arc<OpenConnection>,
+    Arc<OpenConnection>,
+    Arc<JobCancel>,
+    jobs::Job,
+)> {
     let (source_open, password) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -3490,14 +3455,8 @@ async fn open_export_session(
             .ok_or("the connection of this export is closed")?;
         (source.open.clone(), source.password.clone())
     };
-    let cancel = Arc::new(JobCancel::new());
-    {
-        let mut exports = state.exports.lock().expect("lock poisoned");
-        if exports.contains_key(&export_id) {
-            return Err("an export with this id is already running".into());
-        }
-        exports.insert(export_id, cancel.clone());
-    }
+    let running = jobs::start(state, kind, job);
+    let cancel = running.cancel().clone();
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
@@ -3514,25 +3473,14 @@ async fn open_export_session(
     )
     .await
     {
-        Ok(open) => Ok((source_open, Arc::new(open), cancel)),
-        Err(e) => {
-            state
-                .exports
-                .lock()
-                .expect("lock poisoned")
-                .remove(&export_id);
-            Err(e.to_string())
-        }
+        Ok(open) => Ok((source_open, Arc::new(open), cancel, running)),
+        Err(e) => Err(e.to_string()),
     }
 }
 
-/// Closes an export's session and forgets its cancel.
-async fn close_export_session(state: &AppState, export_id: u32, open: Arc<OpenConnection>) {
-    state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .remove(&export_id);
+/// Ends an export's job and closes its session.
+async fn close_export_session(running: jobs::Job, open: Arc<OpenConnection>) {
+    drop(running);
     if let Ok(open) = Arc::try_unwrap(open) {
         open.close().await;
     }
@@ -3557,7 +3505,7 @@ fn progress_sender(
 #[allow(clippy::too_many_arguments)]
 async fn export_query(
     source: String,
-    export_id: u32,
+    job: Channel<jobs::JobTicket>,
     sql: String,
     path: String,
     options: ExportFileOptions,
@@ -3575,7 +3523,8 @@ async fn export_query(
             return Ok(ExportOutcome::NotARead { message });
         }
     }
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::Export, &job).await?;
     // The tab is only asked where it finds unqualified names; it is not held during the export.
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     let safeguards = tab.resolved.safeguards();
@@ -3596,7 +3545,7 @@ async fn export_query(
             .await
         }
     };
-    close_export_session(&state, export_id, open).await;
+    close_export_session(running, open).await;
     Ok(outcome.into())
 }
 
@@ -3606,7 +3555,7 @@ async fn export_query(
 #[allow(clippy::too_many_arguments)]
 async fn export_table_data(
     source: String,
-    export_id: u32,
+    job: Channel<jobs::JobTicket>,
     view: TableExportItem,
     path: String,
     options: ExportFileOptions,
@@ -3615,7 +3564,8 @@ async fn export_table_data(
     state: State<'_, AppState>,
 ) -> CmdResult<ExportOutcome> {
     let settings = stream_export(&options, &view.name)?;
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::Export, &job).await?;
     drop(tab);
     let table = spelaion_core::TableSource {
         schema: view.schema,
@@ -3632,7 +3582,7 @@ async fn export_table_data(
         &progress_sender(on_progress, None),
     )
     .await;
-    close_export_session(&state, export_id, open).await;
+    close_export_session(running, open).await;
     Ok(outcome.into())
 }
 
@@ -3642,7 +3592,7 @@ async fn export_table_data(
 #[allow(clippy::too_many_arguments)]
 async fn export_tables(
     source: String,
-    export_id: u32,
+    job: Channel<jobs::JobTicket>,
     tables: Vec<RelationRefItem>,
     folder: String,
     names: FileNamePatternItem,
@@ -3654,7 +3604,8 @@ async fn export_tables(
     let names: spelaion_core::FileNamePattern = names.into();
     names.check()?;
     let settings = stream_export(&options, "")?;
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::Export, &job).await?;
     drop(tab);
     // `{database}` in the names: the export session's, which follows the tab's connection.
     let database = open
@@ -3683,27 +3634,12 @@ async fn export_tables(
         &progress,
     )
     .await;
-    close_export_session(&state, export_id, open).await;
+    close_export_session(running, open).await;
     Ok(ExportTablesOutcome::from_end(
         result.into(),
         |files| files.into_iter().map(ExportedFileItem::from).collect(),
         TablesStoppedItem::from,
     ))
-}
-
-/// Stops a running streaming export: its statement and its writer; no file is left.
-#[command]
-async fn cancel_export(export_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .get(&export_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
 }
 
 /// Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form.
@@ -4219,13 +4155,13 @@ async fn save_chart_image(
 /// A table data tab column's statistics (the column header's "Column statistics"): counted by
 /// the server in a new session of the tab's connection, every statement a read inside the
 /// engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
-/// type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
-/// `stats_id` stops it.
+/// type come from the tab's page (`result`, `column`). Its ticket goes to `job`; `cancel_job`
+/// stops it.
 #[command]
 #[allow(clippy::too_many_arguments)]
 async fn column_stats(
     source: String,
-    stats_id: u32,
+    job: Channel<jobs::JobTicket>,
     table: ColumnStatsTarget,
     result: u32,
     column: u32,
@@ -4261,7 +4197,8 @@ async fn column_stats(
         spelaion_core::column_stats_sql(tab.session.dialect().as_ref(), &request, false)
             .map_err(|e| e.to_string())?;
     }
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, stats_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::ColumnStats, &job).await?;
     // The tab's database (MySQL, SQL Server) or schema, as for exports.
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     drop(tab);
@@ -4275,19 +4212,19 @@ async fn column_stats(
             |()| (),
         ),
     };
-    close_export_session(&state, stats_id, open).await;
+    close_export_session(running, open).await;
     Ok(outcome)
 }
 
 /// A table data tab column's most frequent values, to pick a filter's value from: counted by
 /// the server like `column_stats` (a new session of the tab's connection, every statement a
 /// read), with the tab's filter. The core refuses a masked column before anything is read
-/// (ADR-051). `cancel_column_stats` with the same `stats_id` stops it.
+/// (ADR-051). Its ticket goes to `job`; `cancel_job` stops it.
 #[command]
 #[allow(clippy::too_many_arguments)]
 async fn column_top_values(
     source: String,
-    stats_id: u32,
+    job: Channel<jobs::JobTicket>,
     table: ColumnStatsTarget,
     result: u32,
     column: u32,
@@ -4330,7 +4267,8 @@ async fn column_top_values(
         spelaion_core::column_stats_sql(tab.session.dialect().as_ref(), &request, false)
             .map_err(|e| e.to_string())?;
     }
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, stats_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::ColumnStats, &job).await?;
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     drop(tab);
     let outcome = match context {
@@ -4353,7 +4291,7 @@ async fn column_top_values(
             Err(e) => Err(e.to_string()),
         },
     };
-    close_export_session(&state, stats_id, open).await;
+    close_export_session(running, open).await;
     outcome
 }
 
@@ -4492,11 +4430,11 @@ fn data_search_limits() -> DataSearchLimitsItem {
 /// Searches a value in the chosen tables of `source`'s connection (ADR-043): the core writes
 /// one read per table with the value bound as a parameter, in a new session opened for reads
 /// only, each table inside the engine's read-only transaction. Each table's start and end go to
-/// `on_event`; `cancel_data_search` with the same `search_id` stops it.
+/// `on_event`, its ticket to `job`; `cancel_job` stops it.
 #[command]
 async fn data_search(
     source: String,
-    search_id: u32,
+    job: Channel<jobs::JobTicket>,
     request: DataSearchRequestItem,
     on_event: Channel<DataSearchEventItem>,
     app: AppHandle,
@@ -4511,7 +4449,8 @@ async fn data_search(
             return Err(spelaion_core::DataSearchError::Unsupported.to_string());
         }
     }
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, search_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::DataSearch, &job).await?;
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     drop(tab);
     let progress = move |event: spelaion_core::DataSearchEvent| {
@@ -4530,38 +4469,8 @@ async fn data_search(
             })
             .map_err(|e| e.to_string()),
     };
-    close_export_session(&state, search_id, open).await;
+    close_export_session(running, open).await;
     outcome
-}
-
-/// Stops a data search: the running statement and every table after it.
-#[command]
-async fn cancel_data_search(search_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .get(&search_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
-}
-
-/// Stops a column's statistics while they are counted: the running statement and the rest.
-#[command]
-async fn cancel_column_stats(stats_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .get(&stats_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
 }
 
 /// A table data tab's filter with a condition the core wrote (one of the column statistics'
@@ -6328,7 +6237,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             import::import_preview,
             import::import_plan,
             import::run_import,
-            import::cancel_import,
+            jobs::cancel_job,
             backup::backup_preferences,
             backup::set_backup_preferences,
             backup::backup_tools,
@@ -6336,7 +6245,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             backup::run_backup,
             backup::preview_restore,
             backup::run_restore,
-            backup::cancel_backup,
             backup::preview_embedded_backup,
             backup::run_embedded_backup,
             backup::run_duckdb_import,
@@ -6392,7 +6300,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             diagnostics::open_issue_page,
             plugins::plugins_refresh_catalogue,
             plugins::plugins_install,
-            plugins::plugins_cancel_install,
             plugins::plugins_install_file,
             plugins::plugins_remove,
             plugins::plugin_processes,
@@ -6401,7 +6308,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             keychain_available,
             list_tunnels,
             test_connection,
-            stop_connection_test,
             add_connection,
             connection_editor_access,
             connection_draft,
@@ -6448,11 +6354,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             record_table_filter,
             forget_table_filter,
             set_table_default_filter,
-            cancel_column_stats,
             list_columns,
             data_search_limits,
             data_search,
-            cancel_data_search,
             add_table_condition,
             table_filter_condition,
             table_keys,
@@ -6467,7 +6371,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             export_query,
             export_table_data,
             export_tables,
-            cancel_export,
             cell_value,
             view_cell,
             reveal_cell,
@@ -6587,7 +6490,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_session_read_only,
             load_estimate,
             load_query_rows,
-            cancel_load_rows,
             table_rows_sql,
             last_table_page,
             cancel,
@@ -6887,11 +6789,7 @@ pub fn run() {
         tabs,
         pending: Pending::default(),
         quit: app_lifecycle::Quit::default(),
-        tests: ConnectionTests::default(),
-        exports: std::sync::Mutex::new(HashMap::new()),
-        loads: std::sync::Mutex::new(HashMap::new()),
-        imports: std::sync::Mutex::new(HashMap::new()),
-        backups: std::sync::Mutex::new(HashMap::new()),
+        jobs: jobs::Jobs::new(),
         diagrams: std::sync::Mutex::new(HashMap::new()),
     };
 

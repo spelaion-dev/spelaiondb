@@ -14,6 +14,7 @@ import { chooseFolder, chooseSavePath } from "../dialogs";
 import { errorText as message } from "../dialogState";
 import { useApp, useDialogs, type ResultMeta } from "../store";
 import { ended, partialText } from "../resultEnd";
+import { startJob } from "../jobs";
 import { useJobPhase } from "../useDialogState";
 
 /** What the dialog exports. */
@@ -68,9 +69,6 @@ type Scope = "loaded" | "all" | "selection";
 type Progress = { rows: number; bytes: number; table: number | null };
 /** A failed export, and the file its loaded rows can still be written to. */
 type Failure = { text: string; fallback: string | null };
-
-/** Ids the core keys running exports by (to cancel them). */
-let nextExport = Math.floor(Math.random() * 1_000_000);
 
 export function ExportDialog() {
   const request = useExport((s) => s.request);
@@ -271,13 +269,13 @@ function ExportForm({ request }: { request: ExportRequest }) {
       if (!(await useDialogs.getState().askRisks(connection.name, [{ sql, risk: "execution" }]))) return;
       confirmed = true;
     }
-    const id = ++nextExport;
+    const id = startJob();
     job.start(id, { rows: 0, bytes: 0, table: null });
     const channel = new Channel<ExportProgressItem>();
     channel.onmessage = (p) => job.progress(id, { rows: p.rows ?? 0, bytes: p.bytes ?? 0, table: p.table ?? null });
     try {
       if (request.kind === "tables" && request.tables.length > 1) {
-        const outcome = await call(commands.exportTables(request.session, id, request.tables, target, names, options(), channel));
+        const outcome = await call(commands.exportTables(request.session, id.channel, request.tables, target, names, options(), channel));
         // The files written stay, whichever way it ended.
         const files = outcome.kind === "done" || outcome.kind === "stoppedAtLimit" ? outcome.result : outcome.kind === "cancelled" || outcome.kind === "failed" ? outcome.kept.files : [];
         const rows = files.reduce((sum, f) => sum + (f.summary.rows ?? 0), 0);
@@ -319,11 +317,11 @@ function ExportForm({ request }: { request: ExportRequest }) {
       if (request.kind === "tables") {
         const table = request.tables[0];
         if (!table) return;
-        outcome = await call(commands.exportTableData(request.session, id, { ...table, filter: "", orderBy: "" }, target, options(), channel));
+        outcome = await call(commands.exportTableData(request.session, id.channel, { ...table, filter: "", orderBy: "" }, target, options(), channel));
       } else if (request.table) {
-        outcome = await call(commands.exportTableData(request.session, id, request.table, target, options(), channel));
+        outcome = await call(commands.exportTableData(request.session, id.channel, request.table, target, options(), channel));
       } else {
-        outcome = await call(commands.exportQuery(request.session, id, request.sql ?? "", target, options(), confirmed, channel));
+        outcome = await call(commands.exportQuery(request.session, id.channel, request.sql ?? "", target, options(), confirmed, channel));
       }
       const fallback = ended(result) ? target : null;
       switch (outcome.kind) {
@@ -568,7 +566,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
               {t("export.progress", { count: phase.progress.rows, formattedCount: numbers.format(phase.progress.rows), size: bytes(phase.progress.bytes) })}
             </p>
             <div className="modal-actions">
-              <button className="danger" disabled={exportId === null} onClick={() => exportId !== null && void call(commands.cancelExport(exportId)).catch(() => undefined)}>
+              <button className="danger" disabled={exportId === null} onClick={() => exportId?.cancel()}>
                 {t("export.cancel")}
               </button>
             </div>

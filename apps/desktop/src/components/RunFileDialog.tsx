@@ -8,6 +8,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { create } from "zustand";
 import { call, commands } from "../api";
+import { startJob, type Job } from "../jobs";
 import type { BackupEventItem, FilePlanItem, OnErrorItem } from "../bindings";
 import { chooseOpenFile, openFilters } from "../dialogs";
 import { errorText as message, loadedValue, type Loaded } from "../dialogState";
@@ -32,7 +33,6 @@ type Progress = { done: number; total: number };
 /** The failure lines kept: the newest. */
 const LOG_LINES = 500;
 
-let nextRun = Math.floor(Math.random() * 1_000_000);
 
 export function RunFileDialog() {
   const request = useRunFile((s) => s.request);
@@ -108,7 +108,7 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
     if (chosen) setPath(chosen);
   }
 
-  function onEvent(id: number, event: BackupEventItem) {
+  function onEvent(id: Job, event: BackupEventItem) {
     switch (event.kind) {
       case "statements":
         job.progress(id, { done: event.done ?? 0, total: event.total ?? 0 });
@@ -124,14 +124,14 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
 
   async function run() {
     setConfirming(false);
-    const id = ++nextRun;
+    const id = startJob();
     setLog([]);
     job.start(id, { done: 0, total: plan?.statements ?? 0 });
     setNow(Date.now());
     const channel = new Channel<BackupEventItem>();
     channel.onmessage = (event) => onEvent(id, event);
     try {
-      const outcome = await call(commands.runSqlFile(request.session, id, path, onError, true, channel));
+      const outcome = await call(commands.runSqlFile(request.session, id.channel, path, onError, true, channel));
       switch (outcome.kind) {
         case "done":
         case "stoppedAtLimit": {
@@ -234,7 +234,7 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
 
         <div className="modal-actions">
           {running ? (
-            <button disabled={runningId === null} onClick={() => runningId !== null && void call(commands.cancelBackup(runningId)).catch(() => undefined)}>
+            <button disabled={runningId === null} onClick={() => runningId?.cancel()}>
               {t("runFile.cancel")}
             </button>
           ) : (

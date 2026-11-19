@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { RiskKind } from "./bindings";
+import type { Job } from "./jobs";
 import {
   errorText,
   initialPreviewApply,
@@ -106,11 +107,11 @@ export function usePreviewThenApply<P>(
 }
 
 export interface JobControls<P, D, F> {
-  phase: JobPhase<P, D, F>;
+  phase: JobPhase<P, D, F, Job>;
   running: boolean;
-  /** A run starts, keyed by `id` in the core (null when it cannot be cancelled). */
-  start(id: number | null, progress: P): void;
-  progress(id: number | null, progress: P): void;
+  /** A run starts as `job` (`startJob()`, SDB-369; null when it cannot be cancelled). */
+  start(job: Job | null, progress: P): void;
+  progress(job: Job | null, progress: P): void;
   done(done: D): void;
   failed(failed: F): void;
   reset(): void;
@@ -118,11 +119,11 @@ export interface JobControls<P, D, F> {
 
 /** The phase of a job the dialog runs (an export, an import, a backup, a file run). */
 export function useJobPhase<P, D, F>(): JobControls<P, D, F> {
-  const [phase, dispatch] = useReducer(jobReducer<P, D, F>, { kind: "idle" } as JobPhase<P, D, F>);
+  const [phase, dispatch] = useReducer(jobReducer<P, D, F, Job>, { kind: "idle" } as JobPhase<P, D, F, Job>);
   const controls = useMemo(
     () => ({
-      start: (id: number | null, progress: P) => dispatch({ type: "started", id, started: Date.now(), progress }),
-      progress: (id: number | null, progress: P) => dispatch({ type: "progressed", id, progress }),
+      start: (id: Job | null, progress: P) => dispatch({ type: "started", id, started: Date.now(), progress }),
+      progress: (id: Job | null, progress: P) => dispatch({ type: "progressed", id, progress }),
       done: (done: D) => dispatch({ type: "done", done }),
       failed: (failed: F) => dispatch({ type: "failed", failed }),
       reset: () => dispatch({ type: "reset" }),

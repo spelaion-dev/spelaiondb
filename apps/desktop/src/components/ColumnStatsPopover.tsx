@@ -7,13 +7,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ColumnStatsItem, type StatStateItem } from "../api";
+import { startJob, type Job } from "../jobs";
 import { Icon } from "./Icons";
 
 /** Ids of statistics runs: far from the export dialog's, which share the core's cancel map. */
-let nextStatsId = 1_000_000_000;
 
 type State =
-  | { kind: "running"; id: number }
+  | { kind: "running"; job: Job }
   | { kind: "done"; stats: ColumnStatsItem }
   | { kind: "cancelled" }
   | { kind: "failed"; error: string };
@@ -39,14 +39,14 @@ export function ColumnStatsPopover(props: {
   const [state, setState] = useState<State | null>(null);
   const [run, setRun] = useState(0);
   const [filterError, setFilterError] = useState<string | null>(null);
-  const runningId = useRef<number | null>(null);
+  const runningJob = useRef<Job | null>(null);
 
   useEffect(() => {
     let active = true;
-    const id = ++nextStatsId;
-    runningId.current = id;
-    setState({ kind: "running", id });
-    call(commands.columnStats(session, id, table, resultId, column))
+    const job = startJob();
+    runningJob.current = job;
+    setState({ kind: "running", job });
+    call(commands.columnStats(session, job.channel, table, resultId, column))
       .then((outcome) => {
         if (!active) return;
         switch (outcome.kind) {
@@ -76,12 +76,12 @@ export function ColumnStatsPopover(props: {
       })
       .catch((e: unknown) => active && setState({ kind: "failed", error: e instanceof Error ? e.message : String(e) }))
       .finally(() => {
-        if (runningId.current === id) runningId.current = null;
+        if (runningJob.current === job) runningJob.current = null;
       });
     return () => {
       active = false;
       // Closed while counting: stop the statement and close its session.
-      if (runningId.current === id) void call(commands.cancelColumnStats(id)).catch(() => undefined);
+      if (runningJob.current === job) job.cancel();
     };
   }, [session, resultId, column, table.schema, table.name, table.filter, run]);
 
@@ -157,7 +157,7 @@ export function ColumnStatsPopover(props: {
       {state?.kind === "running" && (
         <div className="calc-busy" role="status">
           <span>{t("columnStats.counting")}</span>
-          <button type="button" onClick={() => void call(commands.cancelColumnStats(state.id)).catch(() => undefined)}>{t("columnStats.cancel")}</button>
+          <button type="button" onClick={() => state.job.cancel()}>{t("columnStats.cancel")}</button>
         </div>
       )}
       {state?.kind === "cancelled" && (

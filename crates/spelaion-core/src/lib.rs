@@ -182,7 +182,7 @@ pub use import::{
     SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import, preview,
     run_import, suggested_table, text_format,
 };
-pub use job::{JobCancel, JobEnd, Refusal, TablesStopped};
+pub use job::{CancelRefused, JobCancel, JobEnd, JobHandle, JobRegistry, Refusal, TablesStopped};
 pub use load_rows::{
     LOAD_PAGE_ROWS, LoadCancel, LoadEstimate, LoadOutcome, LoadedRows, MAX_LOADED_ROWS,
     estimate_query_load, estimate_table_load, load_query_rows,

@@ -25,6 +25,7 @@ import { readClipboardText } from "../clipboardText";
 import { chooseOpenFile } from "../dialogs";
 import { errorText as message, loadedValue, type Loaded } from "../dialogState";
 import { Icon } from "./Icons";
+import { startJob } from "../jobs";
 import { useApp, useDialogs } from "../store";
 import { confirmShown, useJobPhase } from "../useDialogState";
 
@@ -76,7 +77,6 @@ const DELIMITERS = [",", ";", "\t", "|"];
 const ENCODINGS: ImportOptionsItem["encoding"][] = ["auto", "utf8", "utf16Le", "utf16Be", "windows1252"];
 const FORMATS: ImportOptionsItem["format"][] = ["csv", "tsv", "json", "markdown", "xlsx"];
 
-let nextImport = Math.floor(Math.random() * 1_000_000);
 
 
 export function ImportDialog() {
@@ -307,12 +307,12 @@ function ImportForm({ request }: { request: ImportRequest }) {
       if (asked === null) return;
       confirmed = asked;
     }
-    const id = ++nextImport;
+    const id = startJob();
     job.start(id, { read: 0, committed: 0 });
     const channel = new Channel<ImportProgressItem>();
     channel.onmessage = (p) => job.progress(id, { read: p.read ?? 0, committed: p.committed ?? 0 });
     try {
-      const outcome = await call(commands.runImport(request.session, id, built, confirmed, channel));
+      const outcome = await call(commands.runImport(request.session, id.channel, built, confirmed, channel));
       switch (outcome.kind) {
         case "done":
         case "stoppedAtLimit": {
@@ -706,7 +706,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
             )}
             <div className="modal-actions">
               {phase.kind === "running" ? (
-                <button disabled={importId === null} onClick={() => importId !== null && void call(commands.cancelImport(importId)).catch(() => undefined)}>
+                <button disabled={importId === null} onClick={() => importId?.cancel()}>
                   {t("import.cancel")}
                 </button>
               ) : phase.kind === "done" ? (

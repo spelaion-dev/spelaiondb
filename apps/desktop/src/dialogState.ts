@@ -143,26 +143,26 @@ export function scriptText(preview: Loaded<{ sql: string }>): string {
 
 /**
  * The phase of a job a dialog runs in the core (an export, an import, a backup, a file run):
- * not started, running with the id the core keys it by (to cancel it; null when it cannot be
- * cancelled) and its progress, or ended. How it ended is read once from the core's `JobOutcome`
+ * not started, running with what tells it apart and cancels it (`I`: the dialogs use its job,
+ * SDB-369; null when it cannot be cancelled) and its progress, or ended. How it ended is read once from the core's `JobOutcome`
  * into what the dialog shows: `done` (`D`) or `failed` (`F`).
  */
-export type JobPhase<P, D, F> =
+export type JobPhase<P, D, F, I = number> =
   | { kind: "idle" }
-  | { kind: "running"; id: number | null; started: number; progress: P }
+  | { kind: "running"; id: I | null; started: number; progress: P }
   | ({ kind: "done" } & D)
   | ({ kind: "failed" } & F);
 
-export type JobAction<P, D, F> =
-  | { type: "started"; id: number | null; started: number; progress: P }
+export type JobAction<P, D, F, I = number> =
+  | { type: "started"; id: I | null; started: number; progress: P }
   /** Progress of the run `id`; dropped once it has ended. */
-  | { type: "progressed"; id: number | null; progress: P }
+  | { type: "progressed"; id: I | null; progress: P }
   | { type: "done"; done: D }
   | { type: "failed"; failed: F }
   /** Back to the form: a new run can start. */
   | { type: "reset" };
 
-export function jobReducer<P, D, F>(phase: JobPhase<P, D, F>, action: JobAction<P, D, F>): JobPhase<P, D, F> {
+export function jobReducer<P, D, F, I = number>(phase: JobPhase<P, D, F, I>, action: JobAction<P, D, F, I>): JobPhase<P, D, F, I> {
   switch (action.type) {
     case "started":
       return { kind: "running", id: action.id, started: action.started, progress: action.progress };

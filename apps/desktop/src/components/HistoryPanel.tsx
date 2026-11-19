@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type HistoryItem } from "../api";
 import type { HistoryFilterItem } from "../bindings";
 import { chooseSavePath, sqlFileFilters } from "../dialogs";
+import { startJob, type Job } from "../jobs";
 import { useApp } from "../store";
 import { Icon } from "./Icons";
 
@@ -14,7 +15,6 @@ const OUTCOME_LABEL: Record<HistoryItem["outcome"]["kind"], "history.ok" | "hist
   cancelled: "history.cancelled",
 };
 const errorText = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
-let exportSequence = 1_000_000;
 
 export function HistoryPanel() {
   const { t, i18n } = useTranslation("editor");
@@ -38,10 +38,10 @@ export function HistoryPanel() {
   const [notice, setNotice] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [pinning, setPinning] = useState<number | null>(null);
-  const [exportId, setExportId] = useState<number | null>(null);
+  const [exportJob, setExportJob] = useState<Job | null>(null);
   const generation = useRef(0);
   const throughId = useRef<number | null>(null);
-  const activeExport = useRef<number | null>(null);
+  const activeExport = useRef<Job | null>(null);
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const days = useMemo(() => new Intl.DateTimeFormat(i18n.language, { dateStyle: "full" }), [i18n.language]);
   const times = useMemo(() => new Intl.DateTimeFormat(i18n.language, { timeStyle: "medium" }), [i18n.language]);
@@ -52,8 +52,7 @@ export function HistoryPanel() {
   useEffect(() => { const timer = window.setTimeout(() => setQuery(search.trim()), 200); return () => window.clearTimeout(timer); }, [search]);
   useEffect(() => { setDatabase("all"); }, [workspace]);
   useEffect(() => () => {
-    const id = activeExport.current;
-    if (id !== null) void call(commands.cancelExport(id)).catch(() => undefined);
+    activeExport.current?.cancel();
     activeExport.current = null;
   }, [workspace]);
   useEffect(() => { throughId.current = null; setOffset(0); setNotice(null); }, [filter, revision, workspace, refresh]);
@@ -88,14 +87,14 @@ export function HistoryPanel() {
     try {
       const path = await chooseSavePath({ title: t("history.export"), defaultPath: "query-history.sql", filters: sqlFileFilters(t("files.sqlFiles"), t("files.allFiles")) });
       if (!path) return;
-      const id = ++exportSequence; activeExport.current = id; setExportId(id);
-      const count = await call(commands.exportHistory(id, { ...filter, throughId: throughId.current }, path));
-      if (activeExport.current === id) setNotice(t("history.exported", { count, path }));
-    } catch (reason) { if (generation.current === startedGeneration) setError(t("history.exportFailed", { reason: errorText(reason) })); } finally { activeExport.current = null; setExportId(null); }
+      const job = startJob(); activeExport.current = job; setExportJob(job);
+      const count = await call(commands.exportHistory(job.channel, { ...filter, throughId: throughId.current }, path));
+      if (activeExport.current === job) setNotice(t("history.exported", { count, path }));
+    } catch (reason) { if (generation.current === startedGeneration) setError(t("history.exportFailed", { reason: errorText(reason) })); } finally { activeExport.current = null; setExportJob(null); }
   }
   const dayKey = (entry: HistoryItem) => new Date(entry.atMs).toDateString();
   return (
-    <aside className="history-panel library-panel" id="query-history" aria-label={t("history.title")} onKeyDown={(event) => { if (event.key === "Escape" && exportId === null) close(); }}>
+    <aside className="history-panel library-panel" id="query-history" aria-label={t("history.title")} onKeyDown={(event) => { if (event.key === "Escape" && exportJob === null) close(); }}>
       <div className="history-header"><h2>{t("history.title")}</h2><button className="ghost" onClick={() => setRefresh((value) => value + 1)} disabled={busy}>{t("history.refresh")}</button><button className="ghost icon-button" onClick={close} aria-label={t("history.close")} title={t("history.close")}><Icon name="x" /></button></div>
       <div className="history-search library-filters">
         <input autoFocus type="text" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("history.searchPlaceholder")} aria-label={t("history.searchLabel")} />
@@ -103,7 +102,7 @@ export function HistoryPanel() {
         <details className="library-advanced"><summary>{t("history.timeAndPins")}</summary><div className="library-filter-row"><label>{t("history.from")}<input type="date" aria-label={t("history.from")} value={from} onChange={(event) => setFrom(event.target.value)} /></label><label>{t("history.until")}<input type="date" aria-label={t("history.until")} value={until} onChange={(event) => setUntil(event.target.value)} /></label></div><label className="check"><input type="checkbox" checked={pinned} onChange={(event) => setPinned(event.target.checked)} />{t("history.pinnedOnly")}</label></details>
         {invalidRange && <p className="error" role="alert">{t("history.invalidRange")}</p>}<p className="muted small">{t("history.privacyHelp")}</p>
       </div>
-      <div className="library-toolbar">{exportId === null ? <button onClick={() => void exportSql()} disabled={busy || invalidRange || entries.length === 0}>{t("history.export")}</button> : <><span role="status">{t("history.exporting")}</span><button onClick={() => void call(commands.cancelExport(exportId)).catch((reason: unknown) => setError(t("history.exportFailed", { reason: errorText(reason) })))}>{t("export.cancel")}</button></>}</div>
+      <div className="library-toolbar">{exportJob === null ? <button onClick={() => void exportSql()} disabled={busy || invalidRange || entries.length === 0}>{t("history.export")}</button> : <><span role="status">{t("history.exporting")}</span><button onClick={() => exportJob.cancel()}>{t("export.cancel")}</button></>}</div>
       {notice && <div className="banner" role="status">{notice}</div>}
       {error && <div className="history-fetch-error banner library-alert" role="alert"><p>{error}</p><button onClick={() => setRefresh((value) => value + 1)} disabled={busy}>{t("history.retry")}</button></div>}
       <div className="history-entries" aria-busy={busy}>

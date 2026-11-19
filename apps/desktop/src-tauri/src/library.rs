@@ -43,29 +43,19 @@ pub async fn pin_history(id: u32, pinned: bool, state: State<'_, AppState>) -> C
 }
 #[command]
 pub async fn export_history(
-    export_id: u32,
+    job: tauri::ipc::Channel<crate::jobs::JobTicket>,
     filter: HistoryFilterItem,
     path: String,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
-    let cancel = std::sync::Arc::new(spelaion_core::JobCancel::new());
-    {
-        let mut exports = state.exports.lock().expect("lock poisoned");
-        if exports.contains_key(&export_id) {
-            return Err("an export with this identifier is already running".into());
-        }
-        exports.insert(export_id, cancel.clone());
-    }
+    let running = crate::jobs::start(&state, crate::jobs::JobKind::Export, &job);
+    let cancel = running.cancel().clone();
     let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     let result = state
         .history
         .export_history(workspace, filter.into(), path.into(), cancel)
         .await;
-    state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .remove(&export_id);
+    drop(running);
     result
         .map(|count| u32::try_from(count).unwrap_or(u32::MAX))
         .map_err(|e| e.to_string())

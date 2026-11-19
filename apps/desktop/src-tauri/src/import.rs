@@ -19,6 +19,7 @@ use tauri::{AppHandle, State};
 
 use crate::dto::{JobOutcome, RiskKind};
 use crate::interaction::AppInteraction;
+use crate::jobs::{self, JobKind, JobTicket};
 use crate::{AppState, CmdResult};
 
 /// Where the rows come from.
@@ -459,14 +460,19 @@ pub async fn import_plan(
 }
 
 /// A new session for an import, opened from the `source` session's resolved connection and
-/// in-memory password, and registered under `import_id` so `cancel_import` can stop it. Never a
-/// tab's own session (ADR-031).
+/// in-memory password, for an import job whose ticket goes to `job` at once, so `cancel_job`
+/// can stop it while the session still opens. Never a tab's own session (ADR-031).
 async fn open_import_session(
     state: &AppState,
     app: &AppHandle,
     source: &str,
-    import_id: u32,
-) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<JobCancel>)> {
+    job: &Channel<JobTicket>,
+) -> CmdResult<(
+    Arc<OpenConnection>,
+    Arc<OpenConnection>,
+    Arc<JobCancel>,
+    jobs::Job,
+)> {
     let (source_open, password) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -474,14 +480,8 @@ async fn open_import_session(
             .ok_or("the connection of this import is closed")?;
         (source.open.clone(), source.password.clone())
     };
-    let cancel = Arc::new(JobCancel::new());
-    {
-        let mut imports = state.imports.lock().expect("lock poisoned");
-        if imports.contains_key(&import_id) {
-            return Err("an import with this id is already running".into());
-        }
-        imports.insert(import_id, cancel.clone());
-    }
+    let running = jobs::start(state, JobKind::Import, job);
+    let cancel = running.cancel().clone();
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
@@ -497,15 +497,8 @@ async fn open_import_session(
     )
     .await
     {
-        Ok(open) => Ok((source_open, Arc::new(open), cancel)),
-        Err(e) => {
-            state
-                .imports
-                .lock()
-                .expect("lock poisoned")
-                .remove(&import_id);
-            Err(e.to_string())
-        }
+        Ok(open) => Ok((source_open, Arc::new(open), cancel, running)),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -515,7 +508,7 @@ async fn open_import_session(
 #[command]
 pub async fn run_import(
     source: String,
-    import_id: u32,
+    job: Channel<JobTicket>,
     request: ImportRequestItem,
     confirmed: bool,
     on_progress: Channel<ImportProgressItem>,
@@ -523,7 +516,8 @@ pub async fn run_import(
     state: State<'_, AppState>,
 ) -> CmdResult<ImportOutcome> {
     let request: ImportRequest = request.try_into()?;
-    let (source_open, open, cancel) = open_import_session(&state, &app, &source, import_id).await?;
+    let (source_open, open, cancel, running) =
+        open_import_session(&state, &app, &source, &job).await?;
     // The new session finds names where the explorer's does (its database or schema).
     let context = spelaion_core::follow_session_context(&source_open.session, &open.session).await;
     let safeguards = source_open.resolved.safeguards();
@@ -550,11 +544,7 @@ pub async fn run_import(
             .await
         }
     };
-    state
-        .imports
-        .lock()
-        .expect("lock poisoned")
-        .remove(&import_id);
+    drop(running);
     if let Ok(open) = Arc::try_unwrap(open) {
         open.close().await;
     }
@@ -569,19 +559,4 @@ pub async fn run_import(
         },
         |committed| committed as f64,
     ))
-}
-
-/// Stops a running import: the batch it is in is rolled back; committed batches stay.
-#[command]
-pub async fn cancel_import(import_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .imports
-        .lock()
-        .expect("lock poisoned")
-        .get(&import_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
 }

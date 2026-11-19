@@ -292,7 +292,7 @@ export function TunnelEditor(props: {
   async function test() {
     setStatus({ kind: "idle" });
     try {
-      const attempt = () => log.run((id, onStep) => call(commands.testTunnel(draft, passwords, proxyPassword, id, onStep)));
+      const attempt = () => log.run((job, onStep) => call(commands.testTunnel(draft, passwords, proxyPassword, job, onStep)));
       let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {

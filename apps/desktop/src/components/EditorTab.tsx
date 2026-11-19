@@ -5,6 +5,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
+import { startJob, type Job } from "../jobs";
 import type { EditableTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
@@ -702,9 +703,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }, [firstResult?.id, ended(firstResult), tab.run?.running]);
 
   /** A load of many keyset pages of a paged query ("Load every row", or a page or a row past
-   *  the ones loaded; SDB-386), and its id for Cancel. */
-  const rowLoad = useRef<{ id: number; result: number } | null>(null);
-  const nextLoadId = useRef(1);
+   *  the ones loaded; SDB-386), and its job for Cancel (SDB-369). */
+  const rowLoad = useRef<{ job: Job; result: number } | null>(null);
 
   /** Loads a paged query's rows until the result holds `until` rows (every row when `null`,
    *  after asking), by keyset pages in order (ADR-054). Resolves to the rows held. */
@@ -718,16 +718,16 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (until === null && !(await confirmLoadAll(resultId, { kind: "query", sql: paging.sql }))) return null;
     if (queryPageBusy.current) return null;
     queryPageBusy.current = true;
-    const id = nextLoadId.current++;
-    rowLoad.current = { id, result: resultId };
+    const job = startJob();
+    rowLoad.current = { job, result: resultId };
     const setPaging = (patch: Partial<NonNullable<ResultMeta["paging"]>>, rows?: number) =>
       updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
         ? { ...item, ...(rows === undefined ? {} : { rows }), paging: { ...item.paging, ...patch } } : item) }));
     setPaging({ loading: true, progress: result.rows });
     const channel = new Channel<number>();
-    channel.onmessage = (rows) => { if (rowLoad.current?.id === id) setPaging({ progress: rows }); };
+    channel.onmessage = (rows) => { if (rowLoad.current?.job === job) setPaging({ progress: rows }); };
     try {
-      const loaded = await call(commands.loadQueryRows(tab.id, id, resultId, paging.sql, result.rows, paging.sort ?? [], until, channel));
+      const loaded = await call(commands.loadQueryRows(tab.id, job.channel, resultId, paging.sql, result.rows, paging.sort ?? [], until, channel));
       const outcome = loaded.outcome;
       setPaging({ hasMore: outcome.kind !== "complete" }, loaded.rows);
       if (outcome.kind === "cancelled") setNotice({ text: t("pages.loadCancelled", { rows: numbers.format(loaded.rows) }), error: false });
@@ -745,8 +745,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   /** Stops a load of query rows: the page being read and every page after it. */
   function cancelRowLoad() {
-    const load = rowLoad.current;
-    if (load) void call(commands.cancelLoadRows(tab.id, load.id)).catch(() => undefined);
+    rowLoad.current?.job.cancel();
   }
 
   /** "Go to row" past the rows of a paged query that are loaded: they are loaded up to it. */

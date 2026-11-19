@@ -9,6 +9,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { create } from "zustand";
 import { call, commands } from "../api";
+import { startJob, type Job } from "../jobs";
 import type {
   BackupEventItem,
   BackupOptionsItem,
@@ -73,7 +74,6 @@ const CONSISTENCY: MysqlConsistencyItem[] = ["singleTransaction", "lockAllTables
 const STATISTICS: ColumnStatisticsItem[] = ["auto", "off", "on"];
 const RESTORE_FORMATS: RestoreFormatItem[] = ["auto", "plain", "custom", "directory", "tar"];
 
-let nextRun = Math.floor(Math.random() * 1_000_000);
 
 export function BackupDialog() {
   const request = useBackup((s) => s.request);
@@ -342,7 +342,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
     void call(commands.setBackupPreferences(next)).catch(() => undefined);
   }
 
-  function onEvent(id: number, event: BackupEventItem) {
+  function onEvent(id: Job, event: BackupEventItem) {
     switch (event.kind) {
       case "started":
         setLog((now) => [...now, `$ ${event.commandLine}`].slice(-LOG_LINES));
@@ -360,14 +360,14 @@ function BackupForm({ request }: { request: BackupRequest }) {
 
   async function startBackup() {
     remember();
-    const id = ++nextRun;
+    const id = startJob();
     setLog([]);
     job.start(id, { bytes: 0, total: null });
     const channel = new Channel<BackupEventItem>();
     channel.onmessage = (event) => onEvent(id, event);
     try {
       const outcome = await call(
-        embedded ? commands.runEmbeddedBackup(request.session, id, embeddedRequest(), channel) : commands.runBackup(request.session, id, backupRequest(), channel),
+        embedded ? commands.runEmbeddedBackup(request.session, id.channel, embeddedRequest(), channel) : commands.runBackup(request.session, id.channel, backupRequest(), channel),
       );
       switch (outcome.kind) {
         case "done":
@@ -417,7 +417,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
   async function startRestore() {
     setConfirmation({ kind: "idle" });
     remember();
-    const id = ++nextRun;
+    const id = startJob();
     setLog([]);
     job.start(id, { bytes: 0, total: null });
     const channel = new Channel<BackupEventItem>();
@@ -425,8 +425,8 @@ function BackupForm({ request }: { request: BackupRequest }) {
     try {
       const outcome = await call(
         request.family === "duckdb"
-          ? commands.runDuckdbImport(request.session, id, input, true, channel)
-          : commands.runRestore(request.session, id, restoreRequest(), true, channel),
+          ? commands.runDuckdbImport(request.session, id.channel, input, true, channel)
+          : commands.runRestore(request.session, id.channel, restoreRequest(), true, channel),
       );
       switch (outcome.kind) {
         case "done":
@@ -847,7 +847,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
 
         <div className="modal-actions">
           {running ? (
-            <button disabled={runningId === null} onClick={() => runningId !== null && void call(commands.cancelBackup(runningId)).catch(() => undefined)}>
+            <button disabled={runningId === null} onClick={() => runningId?.cancel()}>
               {restoring ? t("restoreDb.cancel") : t("backup.cancel")}
             </button>
           ) : (

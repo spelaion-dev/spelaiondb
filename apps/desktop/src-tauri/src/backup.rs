@@ -14,13 +14,14 @@ use spelaion_core::backup::{
     MysqlDumpOptions, MysqlRestoreOptions, PgDumpOptions, PgFormat, PgRestoreOptions,
     RestoreFormat, RestoreOptions, RestoreRequest, ToolSource,
 };
-use spelaion_core::{BackupPreferences, JobCancel, RouteOptions};
+use spelaion_core::{BackupPreferences, RouteOptions};
 use spelaion_ssh::KnownHosts;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
 use crate::dto::{JobOutcome, TableRefItem};
 use crate::interaction::AppInteraction;
+use crate::jobs::{self, JobKind, JobTicket};
 use crate::{AppState, CmdResult};
 
 /// The dialog's remembered choices.
@@ -392,17 +393,6 @@ pub struct BackupDoneItem {
 /// How a backup ended (a partial backup is removed).
 pub type BackupOutcome = JobOutcome<BackupDoneItem, ()>;
 
-/// Registers a run so `cancel_backup` can stop it.
-fn register(state: &AppState, run_id: u32) -> CmdResult<Arc<JobCancel>> {
-    let cancel = Arc::new(JobCancel::new());
-    let mut runs = state.backups.lock().expect("lock poisoned");
-    if runs.contains_key(&run_id) {
-        return Err("a backup with this id is already running".into());
-    }
-    runs.insert(run_id, cancel.clone());
-    Ok(cancel)
-}
-
 fn route_options(state: &AppState, app: &AppHandle) -> RouteOptions {
     RouteOptions {
         tunnels: state.tunnels.clone(),
@@ -431,7 +421,7 @@ async fn source(
 #[command]
 pub async fn run_backup(
     session: String,
-    run_id: u32,
+    job: Channel<JobTicket>,
     request: BackupRequestItem,
     on_event: Channel<BackupEventItem>,
     app: AppHandle,
@@ -439,7 +429,8 @@ pub async fn run_backup(
 ) -> CmdResult<BackupOutcome> {
     let (open, password) = source(&state, &session).await?;
     let request: DumpRequest = request.into();
-    let cancel = register(&state, run_id)?;
+    let running = jobs::start(&state, JobKind::Backup, &job);
+    let cancel = running.cancel().clone();
     let events = move |e: BackupEvent| {
         let _ = on_event.send(e.into());
     };
@@ -453,7 +444,7 @@ pub async fn run_backup(
         &events,
     )
     .await;
-    state.backups.lock().expect("lock poisoned").remove(&run_id);
+    drop(running);
     Ok(BackupOutcome::from_end(
         outcome.into(),
         |summary| BackupDoneItem {
@@ -605,7 +596,7 @@ pub type RestoreOutcome = JobOutcome<RestoreDoneItem, ()>;
 #[command]
 pub async fn run_restore(
     session: String,
-    run_id: u32,
+    job: Channel<JobTicket>,
     request: RestoreRequestItem,
     confirmed: bool,
     on_event: Channel<BackupEventItem>,
@@ -614,7 +605,8 @@ pub async fn run_restore(
 ) -> CmdResult<RestoreOutcome> {
     let (open, password) = source(&state, &session).await?;
     let request: RestoreRequest = request.into();
-    let cancel = register(&state, run_id)?;
+    let running = jobs::start(&state, JobKind::Restore, &job);
+    let cancel = running.cancel().clone();
     let events = move |e: BackupEvent| {
         let _ = on_event.send(e.into());
     };
@@ -628,7 +620,7 @@ pub async fn run_restore(
         &events,
     )
     .await;
-    state.backups.lock().expect("lock poisoned").remove(&run_id);
+    drop(running);
     Ok(RestoreOutcome::from_end(
         outcome.into(),
         |summary| RestoreDoneItem {
@@ -637,21 +629,6 @@ pub async fn run_restore(
         },
         |()| (),
     ))
-}
-
-/// Stops a running backup or restore: the tool is killed and a partial backup removed.
-#[command]
-pub async fn cancel_backup(run_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .backups
-        .lock()
-        .expect("lock poisoned")
-        .get(&run_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
 }
 
 // ------------------------------------------------------------------ SQLite, DuckDB, .sql files
@@ -731,13 +708,14 @@ pub async fn preview_embedded_backup(
 #[command]
 pub async fn run_embedded_backup(
     session: String,
-    run_id: u32,
+    job: Channel<JobTicket>,
     request: EmbeddedBackupItem,
     on_event: Channel<BackupEventItem>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<BackupOutcome> {
-    let cancel = register(&state, run_id)?;
+    let running = jobs::start(&state, JobKind::Backup, &job);
+    let cancel = running.cancel().clone();
     let outcome = match open_run_session(&state, &app, &session, true).await {
         Ok(open) => {
             let events = move |e: BackupEvent| {
@@ -764,7 +742,7 @@ pub async fn run_embedded_backup(
         }
         Err(message) => BackupOutcome::failed(message),
     };
-    state.backups.lock().expect("lock poisoned").remove(&run_id);
+    drop(running);
     Ok(outcome)
 }
 
@@ -773,14 +751,15 @@ pub async fn run_embedded_backup(
 #[command]
 pub async fn run_duckdb_import(
     session: String,
-    run_id: u32,
+    job: Channel<JobTicket>,
     folder: String,
     confirmed: bool,
     on_event: Channel<BackupEventItem>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<RestoreOutcome> {
-    let cancel = register(&state, run_id)?;
+    let running = jobs::start(&state, JobKind::Restore, &job);
+    let cancel = running.cancel().clone();
     let outcome = match open_run_session(&state, &app, &session, false).await {
         Ok(open) => {
             let events = move |e: BackupEvent| {
@@ -807,7 +786,7 @@ pub async fn run_duckdb_import(
         }
         Err(message) => RestoreOutcome::failed(message),
     };
-    state.backups.lock().expect("lock poisoned").remove(&run_id);
+    drop(running);
     Ok(outcome)
 }
 
@@ -876,7 +855,7 @@ pub type FileRunOutcome = JobOutcome<FileRunDoneItem, ()>;
 #[allow(clippy::too_many_arguments)]
 pub async fn run_sql_file(
     session: String,
-    run_id: u32,
+    job: Channel<JobTicket>,
     path: String,
     on_error: crate::dto::OnErrorItem,
     confirmed: bool,
@@ -884,7 +863,8 @@ pub async fn run_sql_file(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<FileRunOutcome> {
-    let cancel = register(&state, run_id)?;
+    let running = jobs::start(&state, JobKind::FileRun, &job);
+    let cancel = running.cancel().clone();
     let outcome = match open_run_session(&state, &app, &session, false).await {
         Ok(open) => {
             let events = move |e: BackupEvent| {
@@ -914,6 +894,6 @@ pub async fn run_sql_file(
         }
         Err(message) => FileRunOutcome::failed(message),
     };
-    state.backups.lock().expect("lock poisoned").remove(&run_id);
+    drop(running);
     Ok(outcome)
 }
