@@ -97,7 +97,7 @@ enum Request {
         workspace: String,
         filter: HistoryFilter,
         path: PathBuf,
-        cancel: std::sync::Arc<crate::ExportCancel>,
+        cancel: std::sync::Arc<crate::JobCancel>,
         reply: Reply<usize>,
     },
     SnippetPage {
@@ -1596,7 +1596,7 @@ impl QueryHistory {
         workspace: String,
         filter: HistoryFilter,
         path: PathBuf,
-        cancel: std::sync::Arc<crate::ExportCancel>,
+        cancel: std::sync::Arc<crate::JobCancel>,
     ) -> Result<usize, HistoryError> {
         self.request(|reply| Request::ExportHistory {
             workspace,
@@ -1827,7 +1827,7 @@ fn export_history(
     workspace: &str,
     filter: &HistoryFilter,
     path: &std::path::Path,
-    cancel: &crate::ExportCancel,
+    cancel: &crate::JobCancel,
 ) -> Result<usize, StoreError> {
     use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
     use std::io::Write;
@@ -2928,7 +2928,7 @@ mod tests {
                 "/repo".into(),
                 HistoryFilter::default(),
                 output.clone(),
-                Arc::new(crate::ExportCancel::new()),
+                Arc::new(crate::JobCancel::new()),
             )
             .await
             .unwrap();
@@ -2940,7 +2940,7 @@ mod tests {
                 && !sql.contains("legacy-secret")
                 && !sql.contains("other-workspace")
         );
-        let cancel = Arc::new(crate::ExportCancel::new());
+        let cancel = Arc::new(crate::JobCancel::new());
         cancel.cancel().await;
         assert!(
             history
@@ -2972,7 +2972,7 @@ mod tests {
                         "/repo".into(),
                         HistoryFilter::default(),
                         path.to_path_buf(),
-                        Arc::new(crate::ExportCancel::new()),
+                        Arc::new(crate::JobCancel::new()),
                     ))
                 })
                 .unwrap();

@@ -75,7 +75,7 @@ import {
   type SearchHitItem_Deserialize,
   type SearchTableItem,
   type TableStatusItem_Deserialize,
-  type ColumnStatsOutcome_Serialize,
+  type JobOutcome,
   type ColumnStatsTarget,
   type TopValueItem_Serialize,
   type StatStateItem,
@@ -146,7 +146,9 @@ export type PluginRemoval = PluginRemoval_Serialize;
 export type DataSearchEventItem = DataSearchEventItem_Deserialize;
 export type SearchHitItem = SearchHitItem_Deserialize;
 export type TableStatusItem = TableStatusItem_Deserialize;
-export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, SchemaColumnItem, SearchTableItem };
+export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, JobOutcome, SchemaColumnItem, SearchTableItem };
+/** How a data search ended (ADR-060): whichever way, with what it read. */
+export type DataSearchOutcome = JobOutcome<DataSearchSummaryItem, DataSearchSummaryItem>;
 export type { ImportReport, KubernetesDraftItem, SsmDraftItem };
 export type { BlockItem, BulkActionItem, CellInputItem };
 export type { WindowErrorItem };
@@ -198,7 +200,7 @@ export type ChartPointsItem = ChartPointsItem_Serialize;
 export type { ChartAggregateItem, ChartKindItem, ChartLabelItem };
 export type ColumnStatsItem = ColumnStatsItem_Serialize;
 export type RevealedCellItem = RevealedCellItem_Serialize;
-export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize;
+export type ColumnStatsOutcome = JobOutcome<ColumnStatsItem_Serialize, null>;
 export type TopValueItem = TopValueItem_Serialize;
 export type { ColumnStatsTarget, StatStateItem };
 export type IndexDetails = TableDetails["indexes"][number];

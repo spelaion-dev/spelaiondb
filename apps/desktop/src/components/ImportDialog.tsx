@@ -12,7 +12,6 @@ import { call, commands } from "../api";
 import type {
   ColumnDetails_Serialize,
   ImportOptionsItem,
-  ImportOutcome,
   ImportPlanItem,
   ImportPreviewItem,
   ImportProgressItem,
@@ -314,17 +313,19 @@ function ImportForm({ request }: { request: ImportRequest }) {
     const channel = new Channel<ImportProgressItem>();
     channel.onmessage = (p) => setPhase((now) => (now.kind === "running" ? { kind: "running", read: p.read ?? 0, committed: p.committed ?? 0 } : now));
     try {
-      const outcome: ImportOutcome = await call(commands.runImport(request.session, id, built, confirmed, channel));
+      const outcome = await call(commands.runImport(request.session, id, built, confirmed, channel));
       switch (outcome.kind) {
-        case "done": {
-          const seconds = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 }).format((outcome.millis ?? 0) / 1000);
+        case "done":
+        case "stoppedAtLimit": {
+          const done = outcome.result;
+          const seconds = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 }).format((done.millis ?? 0) / 1000);
           setPhase({
             kind: "done",
-            text: t("import.done", { count: outcome.rows ?? 0, formattedCount: numbers.format(outcome.rows ?? 0), table: outcome.table, seconds }),
-            schema: outcome.schema,
-            table: outcome.table,
+            text: t("import.done", { count: done.rows ?? 0, formattedCount: numbers.format(done.rows ?? 0), table: done.table, seconds }),
+            schema: done.schema,
+            table: done.table,
           });
-          if (outcome.createdTable) window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: request.connectionId }));
+          if (done.createdTable) window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: request.connectionId }));
           break;
         }
         case "needsConfirmation":
@@ -334,12 +335,21 @@ function ImportForm({ request }: { request: ImportRequest }) {
         case "cancelled":
           setPhase({
             kind: "failed",
-            text: t("import.cancelled", { count: outcome.committed ?? 0, formattedCount: numbers.format(outcome.committed ?? 0) }),
+            text: t("import.cancelled", { count: outcome.kept ?? 0, formattedCount: numbers.format(outcome.kept ?? 0) }),
           });
           break;
         case "failed":
+        case "notARead":
           setPhase({ kind: "failed", text: t("import.failed", { reason: outcome.message }) });
           break;
+        // The import's session is opened from the tab's, with its password.
+        case "passwordRequired":
+          setPhase({ kind: "failed", text: t("import.failed", { reason: t("backup.passwordRequired") }) });
+          break;
+        default: {
+          const unexpected: never = outcome;
+          return unexpected;
+        }
       }
     } catch (e) {
       setPhase({ kind: "failed", text: t("import.failed", { reason: message(e) }) });

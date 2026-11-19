@@ -17,11 +17,11 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_config::{MaskingRules, Safeguards};
 use spelaion_core::{
-    ColumnMapping, CoreEvent, CsvOptions, ExportCancel, ExportFormat, FileNamePattern, IfExists,
-    ImportCancel, ImportError, ImportFormat, ImportRequest, ImportSource, ImportTarget,
-    JsonOptions, MASK, MaskPolicy, ParseOptions, ResultId, ResultStore, Session, SqlOptions,
-    StreamExport, TableSource, TextEncoding, export_query, export_table, export_tables,
-    guess_options, plan_import, preview, run_import,
+    ColumnMapping, CoreEvent, CsvOptions, ExportFormat, FileNamePattern, IfExists, ImportError,
+    ImportFormat, ImportRequest, ImportSource, ImportTarget, JobCancel, JsonOptions, MASK,
+    MaskPolicy, ParseOptions, ResultId, ResultStore, Session, SqlOptions, StreamExport,
+    TableSource, TextEncoding, export_query, export_table, export_tables, guess_options,
+    plan_import, preview, run_import,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
@@ -347,7 +347,7 @@ async fn a_table_goes_through_excel_and_back_on_every_engine() {
             &source,
             &path,
             &xlsx(2),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await
@@ -404,7 +404,7 @@ async fn a_table_goes_through_excel_and_back_on_every_engine() {
             &NONE,
             false,
             true,
-            &ImportCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await
@@ -428,7 +428,7 @@ async fn a_table_goes_through_excel_and_back_on_every_engine() {
             &source,
             &masked,
             &xlsx(2),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await
@@ -485,7 +485,7 @@ async fn a_million_rows_hold_one_batch_and_go_on_in_a_new_sheet() {
         false,
         &book,
         &xlsx(spelaion_core::DEFAULT_BATCH_ROWS),
-        &ExportCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await
@@ -566,7 +566,7 @@ async fn explorer_tables_become_one_workbook() {
         },
         None,
         &xlsx(100),
-        &ExportCancel::new(),
+        &JobCancel::new(),
         &|_, _| {},
     )
     .await

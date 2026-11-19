@@ -23,7 +23,7 @@ use spelaion_config::{
     ConnectionId, Resolver, Safeguards, Source, SystemBackend, TrustStore, load,
 };
 use spelaion_core::{
-    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportCancel, ExportError, ExportFormat,
+    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportError, ExportFormat, JobCancel,
     OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits, ResultStore, ServerFamily,
     StreamExport, TextEncoding, TunnelPool, export_query, open_connection,
 };
@@ -397,7 +397,7 @@ async fn checked_servers_keep_reads_from_writing() {
             false,
             &path,
             &csv(),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await
@@ -547,7 +547,7 @@ async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
             false,
             &path,
             &csv(),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await;

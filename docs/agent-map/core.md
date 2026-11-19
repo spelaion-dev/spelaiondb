@@ -383,3 +383,10 @@
   `StepStatus`, `TableStatus`, `HostFile`, `InstallState`, `AgentAccess`, `StartupAction`.
   The implicit ones are SDB-366 to SDB-377, one pull request each, in the ADR's order; each
   starts with a test that pins today's behaviour.
+- Jobs (`job.rs`, SDB-368): every job takes a `JobCancel`, made by its caller before the
+  session exists and bound by the job itself (`attach`, after requesting a session run, so the
+  run sees the cancel); a cancel always goes through `Session::cancel`. How a job's result reads
+  as a `JobEnd` (done, stopped at a limit, cancelled or failed with what it kept, refused) is
+  written once there, per job; the app answers with `JobOutcome::from_end`. A read run again in
+  a session of its own enters and ends the engine's read-only transaction through
+  `export_stream::read_only_transaction`. A new job adds its conversion, not new flags.

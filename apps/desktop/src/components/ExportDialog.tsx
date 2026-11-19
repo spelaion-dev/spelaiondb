@@ -9,7 +9,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { create } from "zustand";
 import { call, commands, type CellRange, type TextFormat } from "../api";
-import type { ExportDefaultsItem, ExportFileOptions, ExportOutcome, ExportProgressItem, FileNamePatternItem, JsonOptionsItem, RerunCheckItem, SqlOptionsItem } from "../bindings";
+import type { ExportDefaultsItem, ExportFileOptions, ExportSummaryItem, ExportProgressItem, FileNamePatternItem, JobOutcome, JsonOptionsItem, RerunCheckItem, SqlOptionsItem } from "../bindings";
 import { chooseFolder, chooseSavePath } from "../dialogs";
 import { useApp, useDialogs, type ResultMeta } from "../store";
 import { ended, partialText } from "../resultEnd";
@@ -280,19 +280,44 @@ function ExportForm({ request }: { request: ExportRequest }) {
     try {
       if (request.kind === "tables" && request.tables.length > 1) {
         const outcome = await call(commands.exportTables(request.session, id, request.tables, target, names, options(), channel));
-        const rows = outcome.files.reduce((sum, f) => sum + (f.summary.rows ?? 0), 0);
+        // The files written stay, whichever way it ended.
+        const files = outcome.kind === "done" || outcome.kind === "stoppedAtLimit" ? outcome.result : outcome.kind === "cancelled" || outcome.kind === "failed" ? outcome.kept.files : [];
+        const rows = files.reduce((sum, f) => sum + (f.summary.rows ?? 0), 0);
         // As XLSX the tables are the sheets of one workbook.
         const written = workbook
-          ? t("export.workbookDone", { count: outcome.files.length, formattedCount: numbers.format(outcome.files.length), rows: numbers.format(rows), path: outcome.files[0]?.path ?? target })
-          : t("export.tablesDone", { count: outcome.files.length, formattedCount: numbers.format(outcome.files.length), rows: numbers.format(rows), folder: target });
-        if (outcome.cancelled) setPhase({ kind: "done", text: `${t("export.cancelled")} ${written}` });
-        else if (outcome.error != null) {
-          const failed = request.tables[outcome.failedTable ?? 0]?.name ?? "";
-          setPhase({ kind: "failed", text: `${t("export.tableFailed", { table: failed, reason: outcome.error })} ${written}`, fallback: null });
-        } else setPhase({ kind: "done", text: written });
+          ? t("export.workbookDone", { count: files.length, formattedCount: numbers.format(files.length), rows: numbers.format(rows), path: files[0]?.path ?? target })
+          : t("export.tablesDone", { count: files.length, formattedCount: numbers.format(files.length), rows: numbers.format(rows), folder: target });
+        switch (outcome.kind) {
+          case "done":
+          case "stoppedAtLimit":
+            setPhase({ kind: "done", text: written });
+            break;
+          case "cancelled":
+            setPhase({ kind: "done", text: `${t("export.cancelled")} ${written}` });
+            break;
+          case "failed": {
+            const failed = request.tables[outcome.kept.table]?.name ?? "";
+            setPhase({ kind: "failed", text: `${t("export.tableFailed", { table: failed, reason: outcome.message })} ${written}`, fallback: null });
+            break;
+          }
+          // The core writes these reads itself: nothing is asked or refused before they run.
+          case "notARead":
+            setPhase({ kind: "failed", text: t("export.notARead", { reason: outcome.message }), fallback: null });
+            break;
+          case "needsConfirmation":
+            setPhase({ kind: "failed", text: t("export.failedAgain", { reason: t("runFile.notConfirmed") }), fallback: null });
+            break;
+          case "passwordRequired":
+            setPhase({ kind: "failed", text: t("export.failedAgain", { reason: t("backup.passwordRequired") }), fallback: null });
+            break;
+          default: {
+            const unexpected: never = outcome;
+            return unexpected;
+          }
+        }
         return;
       }
-      let outcome: ExportOutcome;
+      let outcome: JobOutcome<ExportSummaryItem, null>;
       if (request.kind === "tables") {
         const table = request.tables[0];
         if (!table) return;
@@ -305,7 +330,8 @@ function ExportForm({ request }: { request: ExportRequest }) {
       const fallback = ended(result) ? target : null;
       switch (outcome.kind) {
         case "done":
-          setPhase({ kind: "done", text: doneText(outcome.summary.rows ?? 0, target, outcome.summary.replaced ?? 0) });
+        case "stoppedAtLimit":
+          setPhase({ kind: "done", text: doneText(outcome.result.rows ?? 0, target, outcome.result.replaced ?? 0) });
           break;
         case "cancelled":
           setPhase({ kind: "done", text: t("export.cancelledNoFile") });
@@ -323,6 +349,14 @@ function ExportForm({ request }: { request: ExportRequest }) {
         case "failed":
           setPhase({ kind: "failed", text: t("export.failedAgain", { reason: outcome.message }), fallback });
           break;
+        // The export's session is opened from the tab's, with its password.
+        case "passwordRequired":
+          setPhase({ kind: "failed", text: t("export.failedAgain", { reason: t("backup.passwordRequired") }), fallback });
+          break;
+        default: {
+          const unexpected: never = outcome;
+          return unexpected;
+        }
       }
     } catch (e) {
       setPhase({ kind: "failed", text: message(e), fallback: null });

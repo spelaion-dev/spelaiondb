@@ -110,7 +110,7 @@ impl PlanStore {
         &self,
         id: u32,
         path: &Path,
-        cancel: &crate::ExportCancel,
+        cancel: &crate::JobCancel,
     ) -> Result<u32, PlanError> {
         let plan = self.get(id)?;
         atomic(path, cancel, |out| {
@@ -153,7 +153,7 @@ impl PlanStore {
         id: u32,
         view: &PlanView,
         path: &Path,
-        cancel: &crate::ExportCancel,
+        cancel: &crate::JobCancel,
     ) -> Result<u32, PlanError> {
         let plan = self.get(id)?;
         atomic(path, cancel, |out| plan.write_csv(view, out, cancel))?;
@@ -279,7 +279,7 @@ impl PlanDocument {
         &self,
         view: &PlanView,
         out: &mut dyn Write,
-        cancel: &crate::ExportCancel,
+        cancel: &crate::JobCancel,
     ) -> Result<(), PlanError> {
         use spelaion_driver_api::{ColumnMeta, LogicalType, Value};
         const NAMES: [&str; 31] = [
@@ -467,7 +467,7 @@ fn compare(a: &PlanNode, b: &PlanNode, view: &PlanView) -> std::cmp::Ordering {
     (if view.descending { ord.reverse() } else { ord }).then(a.id.cmp(&b.id))
 }
 
-fn check_cancel(cancel: &crate::ExportCancel) -> Result<(), PlanError> {
+fn check_cancel(cancel: &crate::JobCancel) -> Result<(), PlanError> {
     if cancel.is_cancelled() {
         Err(PlanError::Execution(
             "Plan export cancelled: no file was written".into(),
@@ -479,7 +479,7 @@ fn check_cancel(cancel: &crate::ExportCancel) -> Result<(), PlanError> {
 
 fn atomic(
     path: &Path,
-    cancel: &crate::ExportCancel,
+    cancel: &crate::JobCancel,
     write: impl FnOnce(&mut dyn Write) -> Result<(), PlanError>,
 ) -> Result<(), PlanError> {
     check_cancel(cancel)?;

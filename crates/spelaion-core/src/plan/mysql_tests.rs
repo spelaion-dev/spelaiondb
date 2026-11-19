@@ -344,7 +344,7 @@ async fn mysql_plan_files_keep_their_text_and_format() {
     assert_eq!(store.raw_window(summary.id, 0).unwrap().text, original);
     let saved = dir.join("plan.txt");
     store
-        .save_raw(summary.id, &saved, &crate::ExportCancel::new())
+        .save_raw(summary.id, &saved, &crate::JobCancel::new())
         .unwrap();
     assert_eq!(std::fs::read_to_string(&saved).unwrap(), original);
     assert_eq!(
@@ -357,7 +357,7 @@ async fn mysql_plan_files_keep_their_text_and_format() {
             summary.id,
             &PlanView::default(),
             &csv,
-            &crate::ExportCancel::new(),
+            &crate::JobCancel::new(),
         )
         .unwrap();
     let csv = std::fs::read_to_string(&csv).unwrap();

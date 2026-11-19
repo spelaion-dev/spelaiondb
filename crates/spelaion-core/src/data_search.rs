@@ -10,7 +10,7 @@
 //! - it is always bounded: the tables are the user's choice (at most [`MAX_SEARCH_TABLES`]),
 //!   each table returns at most `rows_per_table` rows, and the whole search stops at
 //!   [`MAX_SEARCH_HITS`] hits;
-//! - it can be cancelled at any point: [`ExportCancel::cancel`] stops the running statement and
+//! - it can be cancelled at any point: [`JobCancel::cancel`] stops the running statement and
 //!   no further table is read.
 //!
 //! Which columns are searched follows the options: text (and UUID) columns always, by a
@@ -25,9 +25,10 @@ use spelaion_driver_api::{
 };
 
 use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comments};
-use crate::export_stream::{ExportCancel, barrier, drain, enter};
+use crate::export_stream::read_only_transaction;
 use crate::filter::FilterOp;
 use crate::generate::qualified;
+use crate::job::JobCancel;
 use crate::masking::MaskPolicy;
 use crate::session::Session;
 use crate::table_data::{key_filter, value_condition};
@@ -677,39 +678,25 @@ async fn search_table(
     table: &SearchTable,
     request: &DataSearchRequest,
     limit: u32,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     statements: &mut Vec<String>,
 ) -> Searched {
     let dialect = session.dialect().clone();
-    let failed = |message: String| {
-        if cancel.is_cancelled() {
-            Searched::Cancelled
-        } else {
-            Searched::Done(TableStatus::Failed(message))
-        }
-    };
     let primary_key = match session
         .connection()
         .describe_table(&table.schema, &table.table)
         .await
     {
         Ok(info) => info.primary_key,
-        Err(e) => return failed(e.to_string()),
+        Err(e) => return ended(cancel, Err(TableFailure::failed(e))),
     };
-    let (begin, end) = match barrier(session) {
-        Ok(statements) => statements,
-        Err(e) => return failed(e.to_string()),
-    };
-    if let Err(e) = enter(session, begin).await {
-        return failed(e.to_string());
-    }
-    let outcome = async {
+    let read_rows = async {
         let probe = probe_sql(dialect.as_ref(), table);
-        checked(dialect.as_ref(), &probe).map_err(|e| e.to_string())?;
+        checked(dialect.as_ref(), &probe).map_err(TableFailure::failed)?;
         statements.push(probe.clone());
         let columns = read(session, &probe, Vec::new())
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(TableFailure::failed)?
             .columns;
         let options = DataSearchOptions {
             rows_per_table: limit,
@@ -723,18 +710,18 @@ async fn search_table(
             &request.value,
             &options,
         )
-        .map_err(|e| e.to_string())?
+        .map_err(TableFailure::failed)?
         else {
             return Ok(TableStatus::NoColumns);
         };
-        checked(dialect.as_ref(), &search.sql).map_err(|e| e.to_string())?;
+        checked(dialect.as_ref(), &search.sql).map_err(TableFailure::failed)?;
         if cancel.is_cancelled() {
-            return Err("cancelled".to_string());
+            return Err(TableFailure::Cancelled);
         }
         statements.push(search.sql.clone());
         let rows = read(session, &search.sql, search.params.clone())
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(TableFailure::failed)?
             .rows;
         Ok(TableStatus::Searched {
             columns: u32::try_from(search.columns.len()).unwrap_or(u32::MAX),
@@ -747,15 +734,44 @@ async fn search_table(
                 session.masking(),
             ),
         })
+    };
+    // The transaction is ended after a cancel too: the session is still used afterwards.
+    let outcome = read_only_transaction(session, read_rows, |_| false).await;
+    ended(cancel, outcome)
+}
+
+/// Why a table's search did not end with a [`TableStatus`].
+enum TableFailure {
+    Cancelled,
+    Failed(String),
+}
+
+impl TableFailure {
+    fn failed(error: impl ToString) -> Self {
+        Self::Failed(error.to_string())
     }
-    .await;
-    if let Some(end) = end {
-        // Read-only either way: nothing to keep or lose.
-        let _ = drain(session, end).await;
+}
+
+impl From<crate::ExportError> for TableFailure {
+    fn from(error: crate::ExportError) -> Self {
+        Self::failed(error)
     }
+}
+
+impl From<spelaion_driver_api::DriverError> for TableFailure {
+    fn from(error: spelaion_driver_api::DriverError) -> Self {
+        Self::failed(error)
+    }
+}
+
+/// How a table's search ended: a failure that came after a cancel is the cancel's (the engine
+/// reports a cancelled statement as an error).
+fn ended(cancel: &JobCancel, outcome: Result<TableStatus, TableFailure>) -> Searched {
     match outcome {
         Ok(status) => Searched::Done(status),
-        Err(message) => failed(message),
+        Err(TableFailure::Cancelled) => Searched::Cancelled,
+        Err(TableFailure::Failed(_)) if cancel.is_cancelled() => Searched::Cancelled,
+        Err(TableFailure::Failed(message)) => Searched::Done(TableStatus::Failed(message)),
     }
 }
 
@@ -766,7 +782,7 @@ async fn search_table(
 pub async fn data_search(
     session: &Session,
     request: &DataSearchRequest,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(DataSearchEvent) + Send + Sync),
 ) -> Result<DataSearchSummary, DataSearchError> {
     request.check()?;
@@ -781,6 +797,8 @@ pub async fn data_search(
         stopped: false,
         statements: Vec::new(),
     };
+    // A cancel that came before finds nothing bound, and the first table sees it.
+    let _attached = cancel.attach(session);
     for (index, table) in request.tables.iter().enumerate() {
         if cancel.is_cancelled() {
             summary.cancelled = true;
@@ -830,7 +848,8 @@ pub async fn data_search(
             status,
         }));
     }
-    if cancel.is_cancelled() {
+    // One ending: a search that stopped at the limit before it saw a cancel ended at the limit.
+    if cancel.is_cancelled() && !summary.stopped {
         summary.cancelled = true;
     }
     Ok(summary)

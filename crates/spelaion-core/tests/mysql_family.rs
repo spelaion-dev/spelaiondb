@@ -30,8 +30,8 @@ use spelaion_config::{
     ConnectionId, Resolver, Safeguards, Source, SystemBackend, TrustStore, load,
 };
 use spelaion_core::{
-    CellInput, CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, EditError, Engines, ExportCancel,
-    ExportError, ExportFormat, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits,
+    CellInput, CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, EditError, Engines, ExportError,
+    ExportFormat, JobCancel, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits,
     ResultId, ResultStore, RowChange, ServerFamily, StreamExport, TablePage, TextEncoding,
     TunnelPool, apply_edits, edit_statements, export_query, open_connection, query_pages_exactly,
     table_page_sql_by_key,
@@ -274,7 +274,7 @@ async fn export(open: &OpenConnection, sql: &str) -> Result<u64, ExportError> {
         false,
         &path,
         &csv(),
-        &ExportCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await;

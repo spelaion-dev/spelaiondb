@@ -9,15 +9,15 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_core::{
-    ColumnKind, ColumnMapping, IfExists, ImportCancel, ImportError, ImportFormat, ImportRequest,
-    ImportSource, ImportTarget, OpenConnection, OpenOptions, ParseOptions, SourceEncoding,
+    ColumnKind, ColumnMapping, IfExists, ImportError, ImportFormat, ImportRequest, ImportSource,
+    ImportTarget, JobCancel, OpenConnection, OpenOptions, ParseOptions, SourceEncoding,
     open_connection,
 };
 use spelaion_ssh::KnownHosts;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
-use crate::dto::RiskKind;
+use crate::dto::{JobOutcome, RiskKind};
 use crate::interaction::AppInteraction;
 use crate::{AppState, CmdResult};
 
@@ -362,32 +362,19 @@ pub struct ImportProgressItem {
     pub committed: f64,
 }
 
-/// How an import ended.
+/// What a finished import did.
 #[derive(Debug, Clone, Serialize, Type)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ImportOutcome {
-    Done {
-        schema: String,
-        table: String,
-        rows: f64,
-        created_table: bool,
-        millis: f64,
-    },
-    /// The plan needs a confirmation: ask, then run again with `confirmed`.
-    NeedsConfirmation,
-    Cancelled {
-        committed: f64,
-    },
-    Failed {
-        message: String,
-        /// Rows committed before the failure (they stay).
-        committed: f64,
-    },
+#[serde(rename_all = "camelCase")]
+pub struct ImportDoneItem {
+    pub schema: String,
+    pub table: String,
+    pub rows: f64,
+    pub created_table: bool,
+    pub millis: f64,
 }
+
+/// How an import ended. When it stops early, it kept the rows committed before (they stay).
+pub type ImportOutcome = JobOutcome<ImportDoneItem, f64>;
 
 /// Reads the start of the source and detects its columns' types for the engine of `session`.
 /// `options: None` guesses them from the source.
@@ -479,7 +466,7 @@ async fn open_import_session(
     app: &AppHandle,
     source: &str,
     import_id: u32,
-) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<ImportCancel>)> {
+) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<JobCancel>)> {
     let (source_open, password) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -487,7 +474,7 @@ async fn open_import_session(
             .ok_or("the connection of this import is closed")?;
         (source.open.clone(), source.password.clone())
     };
-    let cancel = Arc::new(ImportCancel::new());
+    let cancel = Arc::new(JobCancel::new());
     {
         let mut imports = state.imports.lock().expect("lock poisoned");
         if imports.contains_key(&import_id) {
@@ -510,10 +497,7 @@ async fn open_import_session(
     )
     .await
     {
-        Ok(open) => {
-            cancel.attach(&open.session);
-            Ok((source_open, Arc::new(open), cancel))
-        }
+        Ok(open) => Ok((source_open, Arc::new(open), cancel)),
         Err(e) => {
             state
                 .imports
@@ -574,35 +558,17 @@ pub async fn run_import(
     if let Ok(open) = Arc::try_unwrap(open) {
         open.close().await;
     }
-    Ok(match outcome {
-        Ok(summary) => ImportOutcome::Done {
+    Ok(ImportOutcome::from_end(
+        outcome.into(),
+        |summary| ImportDoneItem {
             schema: summary.schema,
             table: summary.table,
             rows: summary.rows as f64,
             created_table: summary.created_table,
             millis: summary.elapsed.as_millis() as f64,
         },
-        Err(ImportError::NeedsConfirmation) => ImportOutcome::NeedsConfirmation,
-        Err(ImportError::Cancelled { committed }) => ImportOutcome::Cancelled {
-            committed: committed as f64,
-        },
-        Err(e @ ImportError::Failed { committed, .. }) => ImportOutcome::Failed {
-            message: e.to_string(),
-            committed: committed as f64,
-        },
-        Err(
-            e @ (ImportError::Io { .. }
-            | ImportError::Source(_)
-            | ImportError::Invalid(_)
-            | ImportError::TableExists(_)
-            | ImportError::ReadOnly
-            | ImportError::Database(_)
-            | ImportError::Statement { .. }),
-        ) => ImportOutcome::Failed {
-            message: e.to_string(),
-            committed: 0.0,
-        },
-    })
+        |committed| committed as f64,
+    ))
 }
 
 /// Stops a running import: the batch it is in is rolled back; committed batches stay.

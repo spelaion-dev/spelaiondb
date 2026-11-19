@@ -6241,50 +6241,87 @@ pub struct ExportProgressItem {
     pub bytes: f64,
 }
 
-/// How a streaming export ended.
+/// How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
+/// export, an import, a backup, a restore, a file run, a data search, a column's statistics),
+/// read from `spelaion_core::JobEnd`. Generic over what the job returns (`T`) and what it
+/// leaves behind when it stops early (`K`: the rows an import committed, the files an export
+/// of several tables wrote, the tables a search read, or nothing).
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum ExportOutcome {
+pub enum JobOutcome<T, K> {
     Done {
-        summary: ExportSummaryItem,
+        result: T,
     },
-    Cancelled,
-    /// The connection's type confirms execution: ask, then export again with `confirmed`.
-    NeedsConfirmation,
-    /// Not a read: only the loaded rows can be exported.
-    NotARead {
-        message: String,
+    /// It stopped at a limit it was given, with what it found until then.
+    StoppedAtLimit {
+        result: T,
     },
+    /// What was already committed or written stays.
+    Cancelled {
+        kept: K,
+    },
+    /// What was already committed or written stays.
     Failed {
+        message: String,
+        kept: K,
+    },
+    /// The connection's type asks before it runs: ask, then run it again with `confirmed`.
+    NeedsConfirmation,
+    /// The connection's password must be asked first.
+    PasswordRequired,
+    /// Only a single read may run there (an export runs the query again).
+    NotARead {
         message: String,
     },
 }
 
+impl<T, K> JobOutcome<T, K> {
+    /// The job's ending, with what it returns and what it kept made into their items.
+    pub fn from_end<U, L>(
+        end: spelaion_core::JobEnd<U, L>,
+        result: impl FnOnce(U) -> T,
+        kept: impl FnOnce(L) -> K,
+    ) -> Self {
+        use spelaion_core::{JobEnd, Refusal};
+        match end {
+            JobEnd::Done(done) => Self::Done {
+                result: result(done),
+            },
+            JobEnd::StoppedAtLimit(done) => Self::StoppedAtLimit {
+                result: result(done),
+            },
+            JobEnd::Cancelled(left) => Self::Cancelled { kept: kept(left) },
+            JobEnd::Failed {
+                message,
+                kept: left,
+            } => Self::Failed {
+                message,
+                kept: kept(left),
+            },
+            JobEnd::Refused(Refusal::NeedsConfirmation) => Self::NeedsConfirmation,
+            JobEnd::Refused(Refusal::PasswordRequired) => Self::PasswordRequired,
+            JobEnd::Refused(Refusal::NotARead(message)) => Self::NotARead { message },
+        }
+    }
+}
+
+impl<T> JobOutcome<T, ()> {
+    /// A job that failed before the core ran it (its session could not be opened).
+    pub fn failed(message: String) -> Self {
+        Self::Failed { message, kept: () }
+    }
+}
+
+/// How a streaming export ended.
+pub type ExportOutcome = JobOutcome<ExportSummaryItem, ()>;
+
 impl From<Result<spelaion_core::FileSummary, spelaion_core::ExportError>> for ExportOutcome {
     fn from(result: Result<spelaion_core::FileSummary, spelaion_core::ExportError>) -> Self {
-        use spelaion_core::ExportError;
-        match result {
-            Ok(summary) => Self::Done {
-                summary: summary.into(),
-            },
-            Err(ExportError::Cancelled) => Self::Cancelled,
-            Err(ExportError::NeedsConfirmation) => Self::NeedsConfirmation,
-            Err(e @ ExportError::NotARead(_)) => Self::NotARead {
-                message: e.to_string(),
-            },
-            Err(
-                e @ (ExportError::Table(_)
-                | ExportError::Database(_)
-                | ExportError::Io { .. }
-                | ExportError::Invalid(_)),
-            ) => Self::Failed {
-                message: e.to_string(),
-            },
-        }
+        Self::from_end(result.into(), ExportSummaryItem::from, |()| ())
     }
 }
 
@@ -6316,16 +6353,37 @@ pub struct ExportedFileItem {
     pub summary: ExportSummaryItem,
 }
 
-/// How exporting several tables ended: the files written, and where it stopped if it did.
+impl From<spelaion_core::ExportedFile> for ExportedFileItem {
+    fn from(f: spelaion_core::ExportedFile) -> Self {
+        Self {
+            schema: f.schema,
+            name: f.name,
+            path: f.path.display().to_string(),
+            summary: f.summary.into(),
+        }
+    }
+}
+
+/// Where exporting several tables stopped: the files finished before, which stay, and the
+/// position of the table it stopped at.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct ExportTablesOutcome {
+pub struct TablesStoppedItem {
     pub files: Vec<ExportedFileItem>,
-    pub cancelled: bool,
-    /// Position of the table that failed, with why.
-    pub failed_table: Option<u32>,
-    pub error: Option<String>,
+    pub table: u32,
 }
+
+impl From<spelaion_core::TablesStopped> for TablesStoppedItem {
+    fn from(stopped: spelaion_core::TablesStopped) -> Self {
+        Self {
+            files: stopped.files.into_iter().map(Into::into).collect(),
+            table: u32::try_from(stopped.table).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// How exporting several tables ended: the files written, and where it stopped if it did.
+pub type ExportTablesOutcome = JobOutcome<Vec<ExportedFileItem>, TablesStoppedItem>;
 
 /// What the export dialog says before running a query again (see `spelaion_core::RerunCheck`).
 #[derive(Debug, Clone, Serialize, Type)]
@@ -6741,16 +6799,7 @@ impl ColumnStatsItem {
 }
 
 /// How asking for a column's statistics ended.
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ColumnStatsOutcome {
-    Done { stats: Box<ColumnStatsItem> },
-    Cancelled,
-}
+pub type ColumnStatsOutcome = JobOutcome<Box<ColumnStatsItem>, ()>;
 
 /// The kind of chart drawn from a result (ADR-040).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
@@ -7122,15 +7171,13 @@ impl From<spelaion_core::DataSearchEvent> for DataSearchEventItem {
     }
 }
 
-/// How a data search ended.
+/// What a data search read: the tables it read to the end and the hits it found. How it ended
+/// (done, cancelled, or stopped at the most hits a search returns) is its [`DataSearchOutcome`].
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DataSearchSummaryItem {
     pub tables: u32,
     pub hits: u32,
-    pub cancelled: bool,
-    /// It stopped at the most hits a search returns.
-    pub stopped: bool,
 }
 
 impl From<spelaion_core::DataSearchSummary> for DataSearchSummaryItem {
@@ -7138,11 +7185,12 @@ impl From<spelaion_core::DataSearchSummary> for DataSearchSummaryItem {
         Self {
             tables: u32::try_from(s.tables).unwrap_or(u32::MAX),
             hits: u32::try_from(s.hits).unwrap_or(u32::MAX),
-            cancelled: s.cancelled,
-            stopped: s.stopped,
         }
     }
 }
+
+/// How a data search ended: whichever way, with what it read.
+pub type DataSearchOutcome = JobOutcome<DataSearchSummaryItem, DataSearchSummaryItem>;
 
 /// What a cell panel's value picker writes (SDB-58): a date and time, one of the allowed values,
 /// or a row of the table a foreign key references. Exactly the field its `kind` names is set.

@@ -188,7 +188,7 @@ pub async fn export_plan(
     csv: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
-    let cancel = Arc::new(spelaion_core::ExportCancel::new());
+    let cancel = Arc::new(spelaion_core::JobCancel::new());
     {
         let mut exports = state.exports.lock().expect("exports lock poisoned");
         if exports.contains_key(&export_id) {

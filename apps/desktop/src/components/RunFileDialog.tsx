@@ -142,18 +142,21 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
       const outcome = await call(commands.runSqlFile(request.session, id, path, onError, true, channel));
       switch (outcome.kind) {
         case "done":
+        case "stoppedAtLimit": {
+          const ran = outcome.result;
           setPhase({
             kind: "done",
             text:
-              (outcome.failed ?? 0) > 0
+              (ran.failed ?? 0) > 0
                 ? t("runFile.doneWithFailures", {
-                    done: numbers.format(outcome.done ?? 0),
-                    failed: numbers.format(outcome.failed ?? 0),
-                    seconds: seconds.format((outcome.millis ?? 0) / 1000),
+                    done: numbers.format(ran.done ?? 0),
+                    failed: numbers.format(ran.failed ?? 0),
+                    seconds: seconds.format((ran.millis ?? 0) / 1000),
                   })
-                : t("runFile.done", { done: numbers.format(outcome.done ?? 0), seconds: seconds.format((outcome.millis ?? 0) / 1000) }),
+                : t("runFile.done", { done: numbers.format(ran.done ?? 0), seconds: seconds.format((ran.millis ?? 0) / 1000) }),
           });
           break;
+        }
         case "cancelled":
           setPhase({ kind: "failed", text: t("runFile.cancelled") });
           break;
@@ -161,8 +164,16 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
           setPhase({ kind: "failed", text: t("runFile.failed", { reason: t("runFile.notConfirmed") }) });
           break;
         case "failed":
+        case "notARead":
           setPhase({ kind: "failed", text: t("runFile.failed", { reason: outcome.message }) });
           break;
+        case "passwordRequired":
+          setPhase({ kind: "failed", text: t("runFile.failed", { reason: t("backup.passwordRequired") }) });
+          break;
+        default: {
+          const unexpected: never = outcome;
+          return unexpected;
+        }
       }
     } catch (e) {
       setPhase({ kind: "failed", text: t("runFile.failed", { reason: message(e) }) });

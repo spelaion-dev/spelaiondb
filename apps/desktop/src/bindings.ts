@@ -83,7 +83,7 @@ export const commands = {
 	 *  read-only connection and an unconfirmed plan that needs a confirmation, and loads the rows
 	 *  in transactions, reporting progress on `on_progress`.
 	 */
-	runImport: (source: string, importId: number, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<ImportOutcome, string>(__TAURI_INVOKE("run_import", { source, importId, request, confirmed, onProgress })),
+	runImport: (source: string, importId: number, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<JobOutcome<ImportDoneItem, number | null>, string>(__TAURI_INVOKE("run_import", { source, importId, request, confirmed, onProgress })),
 	/**  Stops a running import: the batch it is in is rolled back; committed batches stay. */
 	cancelImport: (importId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_import", { importId })),
 	backupPreferences: () => typedError<BackupPreferencesItem, string>(__TAURI_INVOKE("backup_preferences")),
@@ -96,32 +96,32 @@ export const commands = {
 	 *  Backs up the connection's database with its vendor's tool, through its tunnel; the tool's
 	 *  output goes to `on_event` line by line.
 	 */
-	runBackup: (session: string, runId: number, request: BackupRequestItem_Deserialize, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<BackupOutcome, string>(__TAURI_INVOKE("run_backup", { session, runId, request, onEvent })),
+	runBackup: (session: string, runId: number, request: BackupRequestItem_Deserialize, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<BackupDoneItem, null>, string>(__TAURI_INVOKE("run_backup", { session, runId, request, onEvent })),
 	/**  The tool a restore will run and what its confirmation must say. */
 	previewRestore: (session: string, request: RestoreRequestItem) => typedError<RestorePreviewItem, string>(__TAURI_INVOKE("preview_restore", { session, request })),
 	/**
 	 *  Restores a file into the connection's database with its vendor's tool, through its tunnel.
 	 *  The core refuses a read-only connection and an unconfirmed restore.
 	 */
-	runRestore: (session: string, runId: number, request: RestoreRequestItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<RestoreOutcome, string>(__TAURI_INVOKE("run_restore", { session, runId, request, confirmed, onEvent })),
+	runRestore: (session: string, runId: number, request: RestoreRequestItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<RestoreDoneItem, null>, string>(__TAURI_INVOKE("run_restore", { session, runId, request, confirmed, onEvent })),
 	/**  Stops a running backup or restore: the tool is killed and a partial backup removed. */
 	cancelBackup: (runId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_backup", { runId })),
 	/**  The file (SQLite) or folder (DuckDB) a copy will be. */
 	previewEmbeddedBackup: (session: string, request: EmbeddedBackupItem) => typedError<string, string>(__TAURI_INVOKE("preview_embedded_backup", { session, request })),
 	/**  Copies a SQLite database with `VACUUM INTO`, or exports a DuckDB one, in a session of its own. */
-	runEmbeddedBackup: (session: string, runId: number, request: EmbeddedBackupItem, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<BackupOutcome, string>(__TAURI_INVOKE("run_embedded_backup", { session, runId, request, onEvent })),
+	runEmbeddedBackup: (session: string, runId: number, request: EmbeddedBackupItem, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<BackupDoneItem, null>, string>(__TAURI_INVOKE("run_embedded_backup", { session, runId, request, onEvent })),
 	/**
 	 *  Loads a DuckDB export folder into the connection's database. The core refuses a read-only
 	 *  connection and an unconfirmed import.
 	 */
-	runDuckdbImport: (session: string, runId: number, folder: string, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<RestoreOutcome, string>(__TAURI_INVOKE("run_duckdb_import", { session, runId, folder, confirmed, onEvent })),
+	runDuckdbImport: (session: string, runId: number, folder: string, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<RestoreDoneItem, null>, string>(__TAURI_INVOKE("run_duckdb_import", { session, runId, folder, confirmed, onEvent })),
 	/**  Reads an `.sql` file and counts its statements and what the guard would ask about. */
 	planSqlFile: (session: string, path: string) => typedError<FilePlanItem, string>(__TAURI_INVOKE("plan_sql_file", { session, path })),
 	/**
 	 *  Runs an `.sql` file in a session of its own, statement by statement. The core refuses a
 	 *  read-only connection and an unconfirmed run.
 	 */
-	runSqlFile: (session: string, runId: number, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<FileRunOutcome, string>(__TAURI_INVOKE("run_sql_file", { session, runId, path, onError, confirmed, onEvent })),
+	runSqlFile: (session: string, runId: number, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<FileRunDoneItem, null>, string>(__TAURI_INVOKE("run_sql_file", { session, runId, path, onError, confirmed, onEvent })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -479,7 +479,7 @@ export const commands = {
 	 *  type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
 	 *  `stats_id` stops it.
 	 */
-	columnStats: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<ColumnStatsOutcome_Serialize, string>(__TAURI_INVOKE("column_stats", { source, statsId, table, result, column })),
+	columnStats: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<JobOutcome<ColumnStatsItem_Serialize, null>, string>(__TAURI_INVOKE("column_stats", { source, statsId, table, result, column })),
 	/**
 	 *  A table data tab column's most frequent values, to pick a filter's value from: counted by
 	 *  the server like `column_stats` (a new session of the tab's connection, every statement a
@@ -515,7 +515,7 @@ export const commands = {
 	 *  only, each table inside the engine's read-only transaction. Each table's start and end go to
 	 *  `on_event`; `cancel_data_search` with the same `search_id` stops it.
 	 */
-	dataSearch: (source: string, searchId: number, request: DataSearchRequestItem, onEvent: Channel<DataSearchEventItem_Deserialize>) => typedError<DataSearchSummaryItem, string>(__TAURI_INVOKE("data_search", { source, searchId, request, onEvent })),
+	dataSearch: (source: string, searchId: number, request: DataSearchRequestItem, onEvent: Channel<DataSearchEventItem_Deserialize>) => typedError<JobOutcome<DataSearchSummaryItem, DataSearchSummaryItem>, string>(__TAURI_INVOKE("data_search", { source, searchId, request, onEvent })),
 	/**  Stops a data search: the running statement and every table after it. */
 	cancelDataSearch: (searchId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_data_search", { searchId })),
 	/**
@@ -579,17 +579,17 @@ export const commands = {
 	 *  Runs a query again in a new session and streams every row to `path` (ADR-034). Only a single
 	 *  read is run; a connection type that confirms execution needs `confirmed`.
 	 */
-	exportQuery: (source: string, exportId: number, sql: string, path: string, options: ExportFileOptions_Deserialize, confirmed: boolean, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportOutcome, string>(__TAURI_INVOKE("export_query", { source, exportId, sql, path, options, confirmed, onProgress })),
+	exportQuery: (source: string, exportId: number, sql: string, path: string, options: ExportFileOptions_Deserialize, confirmed: boolean, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportSummaryItem, null>, string>(__TAURI_INVOKE("export_query", { source, exportId, sql, path, options, confirmed, onProgress })),
 	/**
 	 *  Streams every row of a table data tab's view (its filter and order, not just the loaded
 	 *  page) to `path`, through the core's own SELECT.
 	 */
-	exportTableData: (source: string, exportId: number, view: TableExportItem, path: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportOutcome, string>(__TAURI_INVOKE("export_table_data", { source, exportId, view, path, options, onProgress })),
+	exportTableData: (source: string, exportId: number, view: TableExportItem, path: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportSummaryItem, null>, string>(__TAURI_INVOKE("export_table_data", { source, exportId, view, path, options, onProgress })),
 	/**
 	 *  Streams explorer tables and views, one file each, into `folder`, never over an existing
 	 *  file. Stops at a cancel or an error; the files written before stay.
 	 */
-	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, names: FileNamePatternItem, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportTablesOutcome_Serialize, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, names, options, onProgress })),
+	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, names: FileNamePatternItem, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportedFileItem[], TablesStoppedItem>, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, names, options, onProgress })),
 	/**  Stops a running streaming export: its statement and its writer; no file is left. */
 	cancelExport: (exportId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_export", { exportId })),
 	/**
@@ -1276,6 +1276,13 @@ export type AuditSessionItem = {
 
 export type AuditStatusItem = "ok" | "error" | "refused" | "cleared";
 
+/**  A finished backup: where it is, its size and how long it took. */
+export type BackupDoneItem = {
+	path: string,
+	bytes: number | null,
+	millis: number | null,
+};
+
 /**  What a run reports as it goes. */
 export type BackupEventItem = BackupEventItem_Serialize | BackupEventItem_Deserialize;
 
@@ -1301,10 +1308,6 @@ export type BackupOptionsItem_Serialize = { kind: "postgres"; schemas: string[];
 compression: number | null; 
 /**  Empty: the database's. */
 encoding: string; content: DumpContentItem; inserts: boolean; noPrivileges: boolean; noOwner: boolean; clean: boolean; create: boolean } | { kind: "mysql"; databases: string[]; tables: string[]; consistency: MysqlConsistencyItem; addDrop: boolean; noCreate: boolean; noData: boolean; extendedInsert: boolean; routines: boolean; events: boolean; triggers: boolean; includeViews: boolean; stripDefiner: boolean; hexBlob: boolean; columnStatistics: ColumnStatisticsItem };
-
-export type BackupOutcome = { kind: "done"; path: string; bytes: number | null; millis: number | null } | 
-/**  The password must be asked first. */
-{ kind: "passwordRequired" } | { kind: "cancelled" } | { kind: "failed"; message: string };
 
 /**  The dialog's remembered choices. */
 export type BackupPreferencesItem = {
@@ -1783,15 +1786,6 @@ export type ColumnStatsItem_Serialize = {
 	masked: boolean,
 };
 
-/**  How asking for a column's statistics ended. */
-export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize | ColumnStatsOutcome_Deserialize;
-
-/**  How asking for a column's statistics ended. */
-export type ColumnStatsOutcome_Deserialize = { kind: "done"; stats: ColumnStatsItem_Deserialize } | { kind: "cancelled" };
-
-/**  How asking for a column's statistics ended. */
-export type ColumnStatsOutcome_Serialize = { kind: "done"; stats: ColumnStatsItem_Serialize } | { kind: "cancelled" };
-
 /**  A column of a table data tab, for its statistics: the tab's table and filter. */
 export type ColumnStatsTarget = {
 	schema: string,
@@ -2269,13 +2263,13 @@ export type DataSearchRequestItem = {
 	rowsPerTable: number,
 };
 
-/**  How a data search ended. */
+/**
+ *  What a data search read: the tables it read to the end and the hits it found. How it ended
+ *  (done, cancelled, or stopped at the most hits a search returns) is its [`DataSearchOutcome`].
+ */
 export type DataSearchSummaryItem = {
 	tables: number,
 	hits: number,
-	cancelled: boolean,
-	/**  It stopped at the most hits a search returns. */
-	stopped: boolean,
 };
 
 /**
@@ -2934,13 +2928,6 @@ export type ExportFileOptions_Serialize = {
 	json: JsonOptionsItem,
 };
 
-/**  How a streaming export ended. */
-export type ExportOutcome = { kind: "done"; summary: ExportSummaryItem } | { kind: "cancelled" } | 
-/**  The connection's type confirms execution: ask, then export again with `confirmed`. */
-{ kind: "needsConfirmation" } | 
-/**  Not a read: only the loaded rows can be exported. */
-{ kind: "notARead"; message: string } | { kind: "failed"; message: string };
-
 /**
  *  Rows and bytes written so far by a streaming export; `table` is the position of the table
  *  being written when several are exported.
@@ -2973,27 +2960,6 @@ export type ExportSummaryItem = {
 	bytes: number | null,
 	/**  Characters the encoding lacks, written as `?`. */
 	replaced: number | null,
-};
-
-/**  How exporting several tables ended: the files written, and where it stopped if it did. */
-export type ExportTablesOutcome = ExportTablesOutcome_Serialize | ExportTablesOutcome_Deserialize;
-
-/**  How exporting several tables ended: the files written, and where it stopped if it did. */
-export type ExportTablesOutcome_Deserialize = {
-	files: ExportedFileItem[],
-	cancelled: boolean,
-	/**  Position of the table that failed, with why. */
-	failedTable?: number | null,
-	error?: string | null,
-};
-
-/**  How exporting several tables ended: the files written, and where it stopped if it did. */
-export type ExportTablesOutcome_Serialize = {
-	files: ExportedFileItem[],
-	cancelled: boolean,
-	/**  Position of the table that failed, with why. */
-	failedTable: number | null,
-	error: string | null,
 };
 
 /**  A file written by `export_tables`. */
@@ -3063,7 +3029,13 @@ export type FileRiskItem = {
 	count: number | null,
 };
 
-export type FileRunOutcome = { kind: "done"; done: number | null; failed: number | null; total: number | null; millis: number | null } | { kind: "needsConfirmation" } | { kind: "cancelled" } | { kind: "failed"; message: string };
+/**  A file run that went to the end: statements run, failed and in the file, and how long. */
+export type FileRunDoneItem = {
+	done: number | null,
+	failed: number | null,
+	total: number | null,
+	millis: number | null,
+};
 
 /**  What "Hide" and "Show only" in the explorer do with one name. */
 export type FilterActionItem = "hide" | "showOnly";
@@ -3370,6 +3342,15 @@ export type ImportChoice = {
 	action: string,
 };
 
+/**  What a finished import did. */
+export type ImportDoneItem = {
+	schema: string,
+	table: string,
+	rows: number | null,
+	createdTable: boolean,
+	millis: number | null,
+};
+
 export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown" | "xlsx";
 
 /**
@@ -3479,13 +3460,6 @@ export type ImportOptionsItem = {
 	/**  The sheet of a workbook (XLSX); empty: the first one. */
 	sheet: string,
 };
-
-/**  How an import ended. */
-export type ImportOutcome = { kind: "done"; schema: string; table: string; rows: number | null; createdTable: boolean; millis: number | null } | 
-/**  The plan needs a confirmation: ask, then run again with `confirmed`. */
-{ kind: "needsConfirmation" } | { kind: "cancelled"; committed: number | null } | { kind: "failed"; message: string; 
-/**  Rows committed before the failure (they stay). */
-committed: number | null };
 
 /**  What will run, written by the core, to show before it does. */
 export type ImportPlanItem = {
@@ -3645,6 +3619,27 @@ export type InteractionRequest = {
 	id: number,
 	request: InteractionKind,
 };
+
+/**
+ *  How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
+ *  export, an import, a backup, a restore, a file run, a data search, a column's statistics),
+ *  read from `spelaion_core::JobEnd`. Generic over what the job returns (`T`) and what it
+ *  leaves behind when it stops early (`K`: the rows an import committed, the files an export
+ *  of several tables wrote, the tables a search read, or nothing).
+ */
+export type JobOutcome<T, K> = { kind: "done"; result: T } | 
+/**  It stopped at a limit it was given, with what it found until then. */
+{ kind: "stoppedAtLimit"; result: T } | 
+/**  What was already committed or written stays. */
+{ kind: "cancelled"; kept: K } | 
+/**  What was already committed or written stays. */
+{ kind: "failed"; message: string; kept: K } | 
+/**  The connection's type asks before it runs: ask, then run it again with `confirmed`. */
+{ kind: "needsConfirmation" } | 
+/**  The connection's password must be asked first. */
+{ kind: "passwordRequired" } | 
+/**  Only a single read may run there (an export runs the query again). */
+{ kind: "notARead"; message: string };
 
 /**  How JSON and NDJSON write values (SDB-391). */
 export type JsonOptionsItem = {
@@ -5487,6 +5482,12 @@ export type RerunCheckItem_Serialize = {
 	openTransaction: boolean,
 };
 
+/**  A finished restore: the bytes of the file fed to the tool and how long it took. */
+export type RestoreDoneItem = {
+	bytes: number | null,
+	millis: number | null,
+};
+
 export type RestoreFormatItem = "auto" | "plain" | "custom" | "directory" | "tar";
 
 /**  Why a restored tab is not exactly as it was kept. */
@@ -5495,8 +5496,6 @@ export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } 
 export type RestoreOptionsItem = { kind: "postgres"; clean: boolean; noOwner: boolean; create: boolean } | { kind: "mysql"; 
 /**  Empty: the connection's. */
 database: string; disableForeignKeys: boolean };
-
-export type RestoreOutcome = { kind: "done"; bytes: number | null; millis: number | null } | { kind: "needsConfirmation" } | { kind: "passwordRequired" } | { kind: "cancelled" } | { kind: "failed"; message: string };
 
 export type RestorePreviewItem = {
 	tool: string,
@@ -6392,6 +6391,15 @@ export type TableStructureItem_Serialize = {
 	comments: boolean,
 	transactional: boolean,
 	rebuilds: boolean,
+};
+
+/**
+ *  Where exporting several tables stopped: the files finished before, which stay, and the
+ *  position of the table it stopped at.
+ */
+export type TablesStoppedItem = {
+	files: ExportedFileItem[],
+	table: number,
 };
 
 export type TemporalKindItem = "date" | "time" | "timestamp" | 

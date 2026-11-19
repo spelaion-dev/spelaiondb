@@ -15,15 +15,13 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use arrow::array::RecordBatch;
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
-use spelaion_driver_api::{
-    CancelHandle, Dialect, DriverError, ExecEvent, ExecOptions, LogicalType, Value,
-};
+use spelaion_driver_api::{Dialect, DriverError, ExecEvent, ExecOptions, LogicalType, Value};
 
 use crate::Session;
 use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comments};
@@ -34,6 +32,7 @@ use crate::export::{
 use crate::export_binary::BinaryFile;
 use crate::export_xlsx::XlsxBook;
 use crate::guard::check_script;
+use crate::job::JobCancel;
 use crate::masking::{mask_batch, masked_schema};
 use crate::table_data::{PageError, table_export_sql};
 
@@ -88,39 +87,6 @@ pub enum ExportError {
     Cancelled,
     #[error("{0}")]
     Invalid(String),
-}
-
-/// Stops a running export: its statement (the engine's cancel) and its writer. Created
-/// before the export's session exists, so a cancel that comes while it is still connecting
-/// is not lost. After [`ExportError::Cancelled`] the session may still be inside the export's
-/// read-only transaction, with the rest of the rows on their way: close it.
-#[derive(Default)]
-pub struct ExportCancel {
-    cancelled: AtomicBool,
-    handle: std::sync::Mutex<Option<Arc<dyn CancelHandle>>>,
-}
-
-impl ExportCancel {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The session whose statement [`ExportCancel::cancel`] stops.
-    pub fn attach(&self, session: &Session) {
-        *self.handle.lock().expect("lock poisoned") = Some(session.connection().cancel_handle());
-    }
-
-    pub async fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        let handle = self.handle.lock().expect("lock poisoned").clone();
-        if let Some(handle) = handle {
-            let _ = handle.cancel().await;
-        }
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
 }
 
 /// A table or view, with the table data tab's filter and order (both empty from the explorer).
@@ -237,7 +203,7 @@ pub async fn export_query(
     confirmed: bool,
     path: &Path,
     export: &StreamExport,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(ExportProgress) + Send + Sync),
 ) -> Result<FileSummary, ExportError> {
     let dialect = session.dialect().clone();
@@ -269,7 +235,7 @@ pub async fn export_table(
     table: &TableSource,
     path: &Path,
     export: &StreamExport,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(ExportProgress) + Send + Sync),
 ) -> Result<FileSummary, ExportError> {
     let dialect = session.dialect().clone();
@@ -311,7 +277,7 @@ async fn table_sheet(
     table: &TableSource,
     target: Target,
     export: &StreamExport,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(ExportProgress) + Send + Sync),
 ) -> Result<Written, ExportError> {
     let dialect = session.dialect().clone();
@@ -370,7 +336,7 @@ pub async fn export_tables(
     names: &FileNamePattern,
     database: Option<&str>,
     export: &StreamExport,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(usize, ExportProgress) + Send + Sync),
 ) -> Result<Vec<ExportedFile>, TablesError> {
     if export.format == ExportFormat::Xlsx {
@@ -446,7 +412,7 @@ async fn export_workbook(
     names: &FileNamePattern,
     database: Option<&str>,
     export: &StreamExport,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(usize, ExportProgress) + Send + Sync),
 ) -> Result<Vec<ExportedFile>, TablesError> {
     let failed = |table: usize, error| TablesError {
@@ -764,9 +730,7 @@ fn checked_read(dialect: &dyn Dialect, sql: &str) -> Result<String, ExportError>
 
 /// The statements around the read: the engine's read-only transaction, always rolled back.
 /// Refused on a server that accepts that transaction without enforcing it (SDB-169).
-pub(crate) fn barrier(
-    session: &Session,
-) -> Result<(&'static str, Option<&'static str>), ExportError> {
+fn barrier(session: &Session) -> Result<(&'static str, Option<&'static str>), ExportError> {
     if let Some(reason) = session.read_only_transaction_refusal() {
         return Err(ExportError::Invalid(reason));
     }
@@ -793,7 +757,7 @@ pub(crate) fn barrier(
 
 /// Runs the first statement of [`barrier`]: as it is, except ClickHouse's, which is set only
 /// where the session is not read-only already (a user whose profile is read-only cannot set it).
-pub(crate) async fn enter(session: &Session, begin: &str) -> Result<(), DriverError> {
+async fn enter(session: &Session, begin: &str) -> Result<(), DriverError> {
     if begin == crate::readonly::CLICKHOUSE_READ_ONLY {
         session.clickhouse_read_only().await.map(|_| ())
     } else {
@@ -807,7 +771,7 @@ async fn stream_read(
     destination: Target,
     export: &StreamExport,
     target: &SqlTarget,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(ExportProgress) + Send + Sync),
 ) -> Result<Written, ExportError> {
     match export.format {
@@ -829,20 +793,40 @@ async fn stream_read(
     }
     export.csv.check().map_err(ExportError::Invalid)?;
     export.sql.check().map_err(ExportError::Invalid)?;
-    if cancel.is_cancelled() {
+    let Some(_attached) = cancel.attach(session) else {
         return Err(ExportError::Cancelled);
-    }
-    let (begin, end) = barrier(session)?;
-    enter(session, begin).await?;
-    let result = write_stream(session, sql, destination, export, target, cancel, progress).await;
-    match (&result, end) {
+    };
+    read_only_transaction(
+        session,
+        write_stream(session, sql, destination, export, target, cancel, progress),
         // A cancelled export's session is closed by its owner, which ends the transaction;
         // waiting here for the engine to discard the rest of the rows would only delay it.
-        (Err(ExportError::Cancelled), _) | (_, None) => {}
-        // Read-only either way; a failure here changes nothing that was written.
-        (_, Some(end)) => {
-            let _ = drain(session, end).await;
-        }
+        |result| matches!(result, Err(ExportError::Cancelled)),
+    )
+    .await
+}
+
+/// Runs `read` inside the engine's read-only transaction: refused where the server accepts
+/// that transaction without enforcing it ([`barrier`]), entered ([`enter`]), and ended once
+/// `read` is over (read-only either way: nothing to keep or lose), unless `left_to_owner` says
+/// the session's owner ends it by closing the session. Every read the core runs again in a
+/// session of its own goes through here: an export, a data search's tables, a column's
+/// statistics.
+pub(crate) async fn read_only_transaction<T, E>(
+    session: &Session,
+    read: impl Future<Output = Result<T, E>>,
+    left_to_owner: impl FnOnce(&Result<T, E>) -> bool,
+) -> Result<T, E>
+where
+    E: From<ExportError> + From<DriverError>,
+{
+    let (begin, end) = barrier(session)?;
+    enter(session, begin).await?;
+    let result = read.await;
+    if let Some(end) = end
+        && !left_to_owner(&result)
+    {
+        let _ = drain(session, end).await;
     }
     result
 }
@@ -1001,7 +985,7 @@ async fn write_stream(
     destination: Target,
     export: &StreamExport,
     target: &SqlTarget,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(ExportProgress) + Send + Sync),
 ) -> Result<Written, ExportError> {
     let path = destination.path.clone();

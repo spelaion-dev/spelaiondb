@@ -376,9 +376,10 @@ function BackupForm({ request }: { request: BackupRequest }) {
       );
       switch (outcome.kind) {
         case "done":
+        case "stoppedAtLimit":
           setPhase({
             kind: "done",
-            text: t("backup.done", { size: bytes(outcome.bytes ?? 0), seconds: numbers.format((outcome.millis ?? 0) / 1000), path: outcome.path }),
+            text: t("backup.done", { size: bytes(outcome.result.bytes ?? 0), seconds: numbers.format((outcome.result.millis ?? 0) / 1000), path: outcome.result.path }),
           });
           break;
         case "cancelled":
@@ -388,8 +389,17 @@ function BackupForm({ request }: { request: BackupRequest }) {
           setPhase({ kind: "failed", text: t("backup.failed", { reason: t("backup.passwordRequired") }) });
           break;
         case "failed":
+        case "notARead":
           setPhase({ kind: "failed", text: t("backup.failed", { reason: outcome.message }) });
           break;
+        // A backup is a read: nothing is confirmed before it runs.
+        case "needsConfirmation":
+          setPhase({ kind: "failed", text: t("backup.failed", { reason: t("runFile.notConfirmed") }) });
+          break;
+        default: {
+          const unexpected: never = outcome;
+          return unexpected;
+        }
       }
     } catch (e) {
       setPhase({ kind: "failed", text: t("backup.failed", { reason: message(e) }) });
@@ -429,7 +439,8 @@ function BackupForm({ request }: { request: BackupRequest }) {
       );
       switch (outcome.kind) {
         case "done":
-          setPhase({ kind: "done", text: t("restoreDb.done", { seconds: numbers.format((outcome.millis ?? 0) / 1000) }) });
+        case "stoppedAtLimit":
+          setPhase({ kind: "done", text: t("restoreDb.done", { seconds: numbers.format((outcome.result.millis ?? 0) / 1000) }) });
           break;
         case "cancelled":
           setPhase({ kind: "failed", text: t("restoreDb.cancelled") });
@@ -441,8 +452,13 @@ function BackupForm({ request }: { request: BackupRequest }) {
           setPhase({ kind: "failed", text: t("restoreDb.failed", { reason: t("backup.passwordRequired") }) });
           break;
         case "failed":
+        case "notARead":
           setPhase({ kind: "failed", text: t("restoreDb.failed", { reason: outcome.message }) });
           break;
+        default: {
+          const unexpected: never = outcome;
+          return unexpected;
+        }
       }
     } catch (e) {
       setPhase({ kind: "failed", text: t("restoreDb.failed", { reason: message(e) }) });
