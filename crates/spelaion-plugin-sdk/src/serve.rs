@@ -73,6 +73,7 @@ where
         streams: Mutex::new(HashMap::new()),
         incoming: Mutex::new(HashMap::new()),
         tasks: Mutex::new(JoinSet::new()),
+        turns: Mutex::new(HashMap::new()),
     });
     let watcher = tokio::spawn(watch_closed(shared.clone()));
 
@@ -160,7 +161,9 @@ fn read_loop<R: Read>(
                         shared.send_now(Message::error(id, error));
                         continue;
                     }
-                    shared.spawn(runtime, guarded(shared.clone(), id, name, message));
+                    // Taken here, in the order they were read, not in the tasks.
+                    let turn = shared.turn_for(&name, &message);
+                    shared.spawn(runtime, guarded(shared.clone(), id, name, message, turn));
                 }
             }
         }
@@ -222,6 +225,31 @@ struct Shared {
     incoming: Mutex<HashMap<StreamId, Incoming>>,
     /// The requests being served: each holds what it uses of its session until it ends.
     tasks: Mutex<JoinSet<()>>,
+    /// Each session's last `execute` or `cancel` read: the next one waits for its turn.
+    turns: Mutex<HashMap<u64, oneshot::Receiver<()>>>,
+}
+
+/// A session's `execute` and `cancel` reach its driver in the order they were read (SDB-428).
+/// Each request is served in a task of its own, and tasks run in any order: a cancel written
+/// right after an execute could reach a driver that numbers its statements (the MySQL and
+/// PostgreSQL plugins do, when their `execute` is first polled) before the execute had, and
+/// find nothing to stop. So each waits for the one read before it: an execute until it has
+/// started its statement (its driver's `execute` polled once), a cancel until it has been
+/// delivered. Nothing is retried and no timer is involved.
+struct Turn {
+    /// The turn before this one; `None` once waited for, or when there was none.
+    before: Option<oneshot::Receiver<()>>,
+    /// Passes the turn on when dropped, however the request ends.
+    _done: oneshot::Sender<()>,
+}
+
+impl Turn {
+    /// Waits until the request read before this one has had its turn (or ended).
+    async fn wait(&mut self) {
+        if let Some(before) = self.before.take() {
+            let _ = before.await;
+        }
+    }
 }
 
 impl Shared {
@@ -389,7 +417,35 @@ impl Shared {
         if let Some(Slot::Connecting(given_up)) = slot {
             given_up.notify_one();
         }
+        self.turns
+            .lock()
+            .expect("lock poisoned")
+            .remove(&request.session);
         Ok(json!({}))
+    }
+
+    /// The turn of an `execute` or a `cancel` read now, for its session (SDB-428); `None` for
+    /// any other request, which keeps running alongside.
+    fn turn_for(&self, name: &str, message: &Message) -> Option<Turn> {
+        if name != method::EXECUTE && name != method::CANCEL {
+            return None;
+        }
+        // A request without its session fails in its task, with no turn to wait for.
+        let session = message
+            .params
+            .as_ref()
+            .and_then(|params| params.get("session"))
+            .and_then(Value::as_u64)?;
+        let (done, next) = oneshot::channel();
+        let before = self
+            .turns
+            .lock()
+            .expect("lock poisoned")
+            .insert(session, next);
+        Some(Turn {
+            before,
+            _done: done,
+        })
     }
 
     fn session(&self, id: u64) -> Result<Arc<Session>, RpcError> {
@@ -432,7 +488,7 @@ async fn watch_closed(shared: Arc<Shared>) {
 }
 
 /// Runs a request so that a driver that panics still answers: the core never waits for ever.
-async fn guarded(shared: Arc<Shared>, id: u64, name: String, message: Message) {
+async fn guarded(shared: Arc<Shared>, id: u64, name: String, message: Message, turn: Option<Turn>) {
     let stream = message
         .params
         .as_ref()
@@ -440,7 +496,7 @@ async fn guarded(shared: Arc<Shared>, id: u64, name: String, message: Message) {
         .and_then(Value::as_u64);
     let is_execute = name == method::EXECUTE;
     // In this task, not one more: a request wakes up as little as it can.
-    let served = AssertUnwindSafe(handle(shared.clone(), id, name, message))
+    let served = AssertUnwindSafe(handle(shared.clone(), id, name, message, turn))
         .catch_unwind()
         .await;
     if served.is_err() {
@@ -465,10 +521,20 @@ async fn guarded(shared: Arc<Shared>, id: u64, name: String, message: Message) {
     }
 }
 
-async fn handle(shared: Arc<Shared>, id: u64, name: String, message: Message) {
+async fn handle(
+    shared: Arc<Shared>,
+    id: u64,
+    name: String,
+    message: Message,
+    mut turn: Option<Turn>,
+) {
     if name == method::EXECUTE {
-        execute(&shared, id, &message).await;
+        execute(&shared, id, &message, turn).await;
         return;
+    }
+    if let Some(turn) = turn.as_mut() {
+        // A cancel: the execute read before it has started its statement.
+        turn.wait().await;
     }
     let result = if name == method::CONNECT {
         connect(&shared, &message).await
@@ -778,7 +844,11 @@ async fn on_session(
     Ok(value)
 }
 
-async fn execute(shared: &Arc<Shared>, id: u64, message: &Message) {
+async fn execute(shared: &Arc<Shared>, id: u64, message: &Message, mut turn: Option<Turn>) {
+    if let Some(turn) = turn.as_mut() {
+        // A cancel read before this execute is delivered first: it cannot reach this statement.
+        turn.wait().await;
+    }
     let request: Execute = match message.params() {
         Ok(request) => request,
         Err(error) => {
@@ -805,20 +875,29 @@ async fn execute(shared: &Arc<Shared>, id: u64, message: &Message) {
                 origins: request.origins,
             };
             let connection = &session.connection;
-            let started = match request.run {
-                Run::Statement => connection.execute(&request.sql, &options).await,
-                Run::Bound { params } => {
-                    connection
-                        .execute_bound(&request.sql, params, &options)
-                        .await
-                }
-                Run::Plan(mode) => connection.execute_plan(&request.sql, mode.into()).await,
-                Run::Request { request } => connection.execute_request(request, &options).await,
+            let sql = &request.sql;
+            let mut starting: std::pin::Pin<Box<dyn Future<Output = _> + Send + '_>> = match request
+                .run
+            {
+                Run::Statement => Box::pin(connection.execute(sql, &options)),
+                Run::Bound { params } => Box::pin(connection.execute_bound(sql, params, &options)),
+                Run::Plan(mode) => Box::pin(connection.execute_plan(sql, mode.into())),
+                Run::Request { request } => Box::pin(connection.execute_request(request, &options)),
+            };
+            // Polled once before a cancel read after it may reach the driver: a driver numbers
+            // its statement there. Then the turn passes, and the statement goes on.
+            let first = first_poll(&mut starting).await;
+            drop(turn.take());
+            let started = match first {
+                Some(started) => started,
+                None => starting.await,
             };
             started.map_err(driver_error)
         }
         Err(error) => Err(error),
     };
+    // A session that is not there: the turn passes here.
+    drop(turn);
     let events = match started {
         Ok(events) => events,
         Err(error) => {
@@ -843,6 +922,17 @@ async fn execute(shared: &Arc<Shared>, id: u64, message: &Message) {
     shared
         .notify(method::STREAM_END, StreamCredit { stream, batches: 0 })
         .await;
+}
+
+/// Polls `future` once: its output if it is ready then, `None` if it waits.
+async fn first_poll<F: Future + Unpin>(future: &mut F) -> Option<F::Output> {
+    std::future::poll_fn(
+        |context| match std::pin::Pin::new(&mut *future).poll(context) {
+            std::task::Poll::Ready(output) => std::task::Poll::Ready(Some(output)),
+            std::task::Poll::Pending => std::task::Poll::Ready(None),
+        },
+    )
+    .await
 }
 
 /// Sends a statement's events in the order the driver gives them, a batch only when the core

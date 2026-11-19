@@ -15,6 +15,10 @@
     its input closes: first its requests stop, its sessions are dropped and each driver's
     `Driver::shutdown` closes what it keeps open (DuckDB's shared files write what they hold),
     so a file is never left half written by a plugin that was only asked to end (SDB-360).
+    Each request runs in a task of its own, but a session's `execute` and `cancel` take turns
+    in the order they were read (`Turn` in `serve.rs`, SDB-428): an execute's driver future is
+    polled once (where the MySQL and PostgreSQL plugins number their statement) before a cancel
+    read after it reaches the driver, and a cancel is delivered before the next execute starts.
     Standard output is the protocol: a plugin never prints to it.
   - `crates/spelaion-plugin-host`: the core's side. `Plugin` is one process per program,
     started on the first connection and shared by every session of its engines. Its pipes are

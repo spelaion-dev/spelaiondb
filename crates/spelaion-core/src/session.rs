@@ -1005,14 +1005,43 @@ impl Session {
                     }
                 };
                 tokio::pin!(execute);
-                let opened = loop {
-                    match until(&mut execute, deadline, timed_out).await {
-                        Waited::Ready(opened) => break opened,
-                        Waited::TimedOut => {
-                            timed_out = true;
-                            let _ = connection.cancel_handle().cancel().await;
-                        }
+                // Polled once: the statement is sent (a plugin's `execute` is on its pipe once
+                // polled, and the plugin numbers it before it delivers a cancel read after it).
+                let early = first_poll(&mut execute).await;
+                // A cancel that came after the last check above (while the database context was
+                // read, say) may have reached the engine before this statement did: an engine
+                // that numbers its statements (MySQL's and PostgreSQL's plugins) then found
+                // nothing to stop. It is sent again, once (SDB-428), never on a timer, and only
+                // while this statement is known not to have ended: it was just sent, and the
+                // engine has not answered it, or answered with a stream none of whose events
+                // has been read (an error there means it ended: nothing is sent again). It is
+                // started before anything more is read, and counted in flight like any cancel:
+                // no later statement, run or commit is sent before it has returned (SDB-266).
+                if cancelled() && !matches!(early, Some(Err(_))) {
+                    let in_flight = cancel_gate.enter();
+                    let again = connection.cancel_handle();
+                    let mut sending = Box::pin(async move {
+                        let _ = again.cancel().await;
+                    });
+                    if first_poll(&mut sending).await.is_none() {
+                        // On its way: it ends on its own, still counted in flight until then.
+                        tokio::spawn(async move {
+                            let _in_flight = in_flight;
+                            sending.await;
+                        });
                     }
+                }
+                let opened = match early {
+                    Some(opened) => opened,
+                    None => loop {
+                        match until(&mut execute, deadline, timed_out).await {
+                            Waited::Ready(opened) => break opened,
+                            Waited::TimedOut => {
+                                timed_out = true;
+                                let _ = connection.cancel_handle().cancel().await;
+                            }
+                        }
+                    },
                 };
                 match opened {
                     Err(e) => {
@@ -1422,6 +1451,17 @@ async fn run_control(
 /// bounded by its engine's own connect timeout; this only keeps a cancel that never returns
 /// from holding the session.
 const CANCEL_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Polls `future` once: its output if it is ready then, `None` if it waits.
+async fn first_poll<F: Future + Unpin>(future: &mut F) -> Option<F::Output> {
+    std::future::poll_fn(
+        |context| match std::pin::Pin::new(&mut *future).poll(context) {
+            std::task::Poll::Ready(output) => std::task::Poll::Ready(Some(output)),
+            std::task::Poll::Pending => std::task::Poll::Ready(None),
+        },
+    )
+    .await
+}
 
 /// The cancels of a session still on their way to the engine (SDB-266).
 #[derive(Clone)]
