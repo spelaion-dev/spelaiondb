@@ -75,6 +75,15 @@
   (`src/runState.ts`), and Cancel is offered again only once the core no longer says it is
   cancelling. A statement's ending is `StatementEndItem`; `ScriptFinished` carries only its
   summary.
+  SDB-377: the update's state is `src-tauri/src/update_state.rs` (unknown, switched off, up to
+  date, available with its install ready, downloading or failed, or not installed by the app),
+  so a failed download is installed again without a new check and its progress reaches the page
+  (`UpdateChanged`); `update.rs` keeps the check, the signature and `SPELAION_NO_UPDATES`.
+  `app_lifecycle.rs` holds quitting (`Quit`: idle, sent, asking, quitting; the window's event
+  loop only touches atomics, never waits) and the folder switch (`Folder`, whose `FolderSwitch`
+  guard settles it when dropped, so a failed or panicking switch never leaves the app unable to
+  change folder). After a plugin change only new connections use the new engines; a session
+  already open keeps its plugin process until it is closed (ADR-055), on purpose.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

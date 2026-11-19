@@ -1,31 +1,24 @@
-// Automatic updates (ADR-021): the core side checks, downloads and verifies; this module keeps
-// what the UI shows. Nothing is installed until the user clicks "Install and restart", which is
-// offered only where the core says this copy can replace itself (on Linux, an AppImage).
+// Automatic updates (ADR-021): the core side checks, downloads and verifies, and keeps the
+// update's state (SDB-377): unknown, up to date, available, and while installing, how far the
+// download is or why it failed. This module shows that state as the core sends it, and keeps
+// only what is the page's own: a check or an action it is waiting for, and what it was told.
+// Nothing is installed until the user clicks "Install and restart", which is offered only where
+// the core says this copy can replace itself (on Linux, an AppImage).
 
 import { create } from "zustand";
-import { call, commands, type UpdateMethod, type UpdateStatus } from "./api";
+import { call, commands, events, type UpdateStatus } from "./api";
+import { installOf, isInstalling, type UpdateRequest } from "./updateState";
 
-/** The text that says how an update the app does not install is installed, or `null` when the
- * app installs it itself. Keys exist in both the `app` and the `settings` namespaces. */
-export function manualUpdateKey(method: UpdateMethod): "manualDeb" | "manualRpm" | "manualDownload" | null {
-  switch (method) {
-    case "inApp": return null;
-    case "deb": return "manualDeb";
-    case "rpm": return "manualRpm";
-    case "releasesPage": return "manualDownload";
-  }
-}
+export { downloadText, installOf, isInstalling, manualUpdateKey, updateProblem, type UpdateRequest } from "./updateState";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 interface UpdateStore {
-  /** `null` until the first check (or when the user turned startup checks off). */
-  status: UpdateStatus | null;
+  /** The update's state as the core sends it (`unknown` until the first check). */
+  status: UpdateStatus;
   /** Check at startup (a personal setting, on by default). */
   checkAtStartup: boolean;
-  checking: boolean;
-  installing: boolean;
-  error: string | null;
+  request: UpdateRequest;
   /** The notice was closed with "Later": shown again on the next start. */
   dismissed: boolean;
   notesOpen: boolean;
@@ -40,60 +33,68 @@ interface UpdateStore {
   hideNotes(): void;
 }
 
+let listening = false;
+
 export const useUpdate = create<UpdateStore>((set, get) => ({
-  status: null,
+  status: { kind: "unknown" },
   checkAtStartup: true,
-  checking: false,
-  installing: false,
-  error: null,
+  request: { kind: "idle" },
   dismissed: false,
   notesOpen: false,
   async start() {
+    if (!listening) {
+      listening = true;
+      // A download's progress and its failure arrive between the command's answers.
+      void events.updateChanged.listen((e) => set({ status: e.payload.status }));
+    }
     try {
       const enabled = await call(commands.getUpdateCheck());
       set({ checkAtStartup: enabled });
       // A failed check at startup stays quiet: the notice is for updates, not for the network.
       if (enabled) await get().check();
-      set({ error: null });
+      set({ request: { kind: "idle" } });
     } catch {
-      set({ error: null });
+      set({ request: { kind: "idle" } });
     }
   },
   async check() {
-    if (get().checking || get().installing) return;
-    set({ checking: true, error: null });
+    if (get().request.kind === "checking" || isInstalling(get().status)) return;
+    set({ request: { kind: "checking" } });
     try {
-      set({ status: await call(commands.updateCheck()), dismissed: false });
+      set({ status: await call(commands.updateCheck()), dismissed: false, request: { kind: "idle" } });
     } catch (e) {
-      set({ error: errorText(e) });
-    } finally {
-      set({ checking: false });
+      set({ request: { kind: "failed", action: "check", message: errorText(e) } });
     }
   },
   async install() {
-    if (get().installing) return;
-    set({ installing: true, error: null });
+    if (isInstalling(get().status)) return;
+    set({ request: { kind: "idle" } });
     try {
       // On success the app restarts and this never returns.
       await call(commands.updateInstall());
     } catch (e) {
-      set({ error: errorText(e), installing: false });
+      // A failed download is the core's state (it says why, and Install tries again); a
+      // refusal is the answer to this click.
+      const status = await call(commands.updateStatus()).catch(() => get().status);
+      set(installOf(status)?.kind === "failed"
+        ? { status }
+        : { status, request: { kind: "failed", action: "install", message: errorText(e) } });
     }
   },
   async openReleasesPage() {
     try {
       await call(commands.updateOpenReleasesPage());
-      set({ error: null });
+      set({ request: { kind: "idle" } });
     } catch (e) {
-      set({ error: errorText(e) });
+      set({ request: { kind: "failed", action: "openReleasesPage", message: errorText(e) } });
     }
   },
   async setCheckAtStartup(enabled) {
     try {
       await call(commands.setUpdateCheck(enabled));
-      set({ checkAtStartup: enabled, error: null });
+      set({ checkAtStartup: enabled, request: { kind: "idle" } });
     } catch (e) {
-      set({ error: errorText(e) });
+      set({ request: { kind: "failed", action: "setCheckAtStartup", message: errorText(e) } });
     }
   },
   dismiss() {

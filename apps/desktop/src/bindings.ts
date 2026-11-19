@@ -229,9 +229,12 @@ export const commands = {
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
 	 *  come back with their SQL, not executed (AGENTS.md). Refused for an install the app cannot
-	 *  replace (see `update_method`), whatever the web view asks.
+	 *  replace (see `update_method`), whatever the web view asks. The download's progress goes to
+	 *  the page (`UpdateChanged`); when it fails, the update stays to be installed again (SDB-377).
 	 */
 	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
+	/**  What the page shows about updates now (SDB-377). */
+	updateStatus: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_status")),
 	/**
 	 *  Opens the latest release's page in the system's browser, for an install that is updated by
 	 *  hand or by the package manager. Only that fixed address can be opened.
@@ -1180,6 +1183,7 @@ export const events = {
 	runChanged: makeEvent<RunChanged, RunChanged>("run-changed"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
 	transactionChanged: makeEvent<TransactionChanged, TransactionChanged>("transaction-changed"),
+	updateChanged: makeEvent<UpdateChanged_Serialize, UpdateChanged_Deserialize>("update-changed"),
 };
 
 /* Types */
@@ -3629,6 +3633,27 @@ export type IndexDetails = {
 	/**  `CREATE INDEX …` as the engine writes it (or a comment for SQLite's automatic ones). */
 	definition: string,
 };
+
+/**  Where installing an update stands. */
+export type InstallStatus = InstallStatus_Serialize | InstallStatus_Deserialize;
+
+/**  Where installing an update stands. */
+export type InstallStatus_Deserialize = 
+/**  Not started: "Install and restart" downloads it. */
+{ kind: "ready" } | 
+/**  Downloading: bytes received, of the total when the server said it. */
+{ kind: "downloading"; received: number | null; total?: number | null } | 
+/**  The download or the install failed, and why; installing again retries it. */
+{ kind: "failed"; reason: string };
+
+/**  Where installing an update stands. */
+export type InstallStatus_Serialize = 
+/**  Not started: "Install and restart" downloads it. */
+{ kind: "ready" } | 
+/**  Downloading: bytes received, of the total when the server said it. */
+{ kind: "downloading"; received: number | null; total: number | null } | 
+/**  The download or the install failed, and why; installing again retries it. */
+{ kind: "failed"; reason: string };
 
 /**
  *  A dialog nobody waits for any more (the connection test that asked was stopped, or
@@ -6783,6 +6808,28 @@ export type TunnelTestOutcome_Serialize = { kind: "tested"; report: TestReportIt
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
 
+/**
+ *  The update's state changed outside a command's answer: a download started, moved, or
+ *  failed. Sent a few times a second at most.
+ */
+export type UpdateChanged = UpdateChanged_Serialize | UpdateChanged_Deserialize;
+
+/**
+ *  The update's state changed outside a command's answer: a download started, moved, or
+ *  failed. Sent a few times a second at most.
+ */
+export type UpdateChanged_Deserialize = {
+	status: UpdateStatus_Deserialize,
+};
+
+/**
+ *  The update's state changed outside a command's answer: a download started, moved, or
+ *  failed. Sent a few times a second at most.
+ */
+export type UpdateChanged_Serialize = {
+	status: UpdateStatus_Serialize,
+};
+
 /**  How this copy of the app gets a new version. */
 export type UpdateMethod = 
 /**
@@ -6803,15 +6850,30 @@ export type UpdateMethod =
  */
 export type UpdateSourceItem = { kind: "table"; schema: string; name: string } | { kind: "query"; sql: string };
 
+/**  What the page shows about updates. */
 export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
 
+/**  What the page shows about updates. */
 export type UpdateStatus_Deserialize = 
+/**  Not checked yet in this run. */
+{ kind: "unknown" } | 
 /**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
-{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null; method: UpdateMethod };
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null; 
+/**  How this copy gets it; only `inApp` is installed by the app. */
+method: UpdateMethod; 
+/**  Where installing it stands; always `ready` unless `method` is `inApp`. */
+install: InstallStatus_Deserialize };
 
+/**  What the page shows about updates. */
 export type UpdateStatus_Serialize = 
+/**  Not checked yet in this run. */
+{ kind: "unknown" } | 
 /**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
-{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null; method: UpdateMethod };
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null; 
+/**  How this copy gets it; only `inApp` is installed by the app. */
+method: UpdateMethod; 
+/**  Where installing it stands; always `ready` unless `method` is `inApp`. */
+install: InstallStatus_Serialize };
 
 /**
  *  What a pasted connection URL fills in the form. The password goes only to the form's

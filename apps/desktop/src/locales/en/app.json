@@ -11,7 +11,14 @@
   "update": {
     "available": "SpelaionDB {{version}} is available (you have {{current}}).",
     "install": "Install and restart",
-    "installing": "Installing…",
+    "downloading": "Downloading… {{percent}}%",
+    "downloadingSize": "Downloading… {{received}}",
+    "failed": {
+      "check": "Could not check for updates: {{detail}}",
+      "install": "Could not install the update: {{detail}}. Install again to retry.",
+      "openReleasesPage": "Could not open the releases page: {{detail}}",
+      "setCheckAtStartup": "Could not save the update setting: {{detail}}"
+    },
     "manualDeb": "This copy was installed from a .deb package: download the new .deb from the releases page and install it with your package manager.",
     "manualRpm": "This copy was installed from an .rpm package: download the new .rpm from the releases page and install it with your package manager.",
     "manualDownload": "This copy cannot update itself: download the new version from the releases page.",
