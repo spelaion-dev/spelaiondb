@@ -5,6 +5,7 @@
 // `scrollToContent`, never the container's `scrollTop`.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { call, commands, type CopySpecialItem, type UpdateSourceItem, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
 import { readClipboardText } from "../clipboardText";
@@ -326,7 +327,8 @@ export function ResultGrid({
   onHiddenColumns?(hidden: number[]): void;
   /** "Chart selected columns": the first is the X axis, the numeric ones after it the values. */
   onChart?(columns: number[]): void;
-  refresh?: { disabled: boolean; run(row: number): void };
+  /** Refresh lives in the results toolbar and reads the grid's current page and sort state. */
+  refresh?: { target: HTMLElement; disabled: boolean; run(row: number): void };
   restoringView?: boolean;
   /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
@@ -2170,7 +2172,22 @@ export function ResultGrid({
       bulkEdit({ kind: "fillDown" });
     }
   }
+  const selectionText = selectionSummary();
   return (
+    <>
+    {refresh && createPortal(
+      <button
+        type="button"
+        className="ghost result-refresh"
+        aria-label={t("table.refresh")}
+        title={t(tableData ? "table.refreshHint" : "resultTabs.rerun")}
+        disabled={refresh.disabled || sorting}
+        onClick={() => refresh.run(pageStart)}
+      >
+        <Icon name="refresh" />
+      </button>,
+      refresh.target,
+    )}
     <div
       className="grid-wrap"
       ref={wrapRef}
@@ -2837,8 +2854,7 @@ export function ResultGrid({
         />
       )}
     </div>
-    <div className="grid-footer">
-      {refresh && <button type="button" className="ghost small" aria-label={t("table.refresh")} title={t(tableData ? "table.refreshHint" : "resultTabs.rerun")} disabled={refresh.disabled || sorting} onClick={() => refresh.run(pageStart)}><Icon name="refresh" /> {t("table.refresh")}</button>}
+    {(hidden.size > 0 || selectionText) && <div className="grid-footer">
       {hidden.size > 0 && (
         <button
           type="button"
@@ -2853,8 +2869,8 @@ export function ResultGrid({
           {t("results.hiddenColumns", { count: hidden.size, formattedCount: numbers.format(hidden.size) })}
         </button>
       )}
-      <span className="grid-selection">{selectionSummary()}</span>
-    </div>
+      <span className="grid-selection">{selectionText}</span>
+    </div>}
     {(editing || paging) && (
       <div className="result-editing">
         {editing && editing.inserts.length > 0 && <div className="pending-rows" aria-label={t("edit.newRows")}>
@@ -3129,6 +3145,7 @@ export function ResultGrid({
       </div>
     )}
     </div>
+    </>
   );
 }
 

@@ -135,6 +135,8 @@ export interface Tab {
   serverVersion: string | null;
   sql: string;
   run: RunState | null;
+  /** The start time of the run for which the UI sent Cancel (in memory only). */
+  cancelRequestedFor?: number;
   /** This tab's `${name}` variables (SDB-383): in memory only, never saved with the tab. */
   variables?: Record<string, string>;
   /** The last value given to each `:name` parameter in this tab, offered again; memory only. */

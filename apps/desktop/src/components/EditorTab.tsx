@@ -136,6 +136,22 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** This tab as the store has it now: its variables and remembered parameters (SDB-383). */
   const tabNow = () => useApp.getState().tabs.find((item) => item.id === tab.id);
 
+  async function cancelRun() {
+    const current = tabNow();
+    if (!current?.run?.running || current.cancelRequestedFor === current.run.startedAt) return;
+    const startedAt = current.run.startedAt;
+    updateTab(tab.id, { cancelRequestedFor: startedAt });
+    try {
+      await call(commands.cancel(tab.id));
+    } catch (error) {
+      const latest = tabNow();
+      if (latest?.run?.running && latest.run.startedAt === startedAt) {
+        updateTab(tab.id, { cancelRequestedFor: undefined });
+        setNotice({ text: t("results.cancelFailed", { detail: message(error) }), error: true });
+      }
+    }
+  }
+
   /** `text` with the tab's and its connection's `${name}` variables written in by the core
    *  (SDB-383), before the parameters, the guard and the run read it. A variable without a
    *  value is asked for and kept for this tab. `null` when the user cancels; throws what the
@@ -844,8 +860,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const actionState = useRef({ running: false, runBlocked: false });
   const resultCommand = useRef<(command: ResultTabCommand) => void>(() => undefined);
   /** The tab's session commands, as the latest render wrote them. */
-  const sessionCommand = useRef({ reconnect: async () => {}, readOnly: async () => {} });
-  sessionCommand.current = { reconnect: reconnectNow, readOnly: () => setSessionReadOnly(!tab.sessionReadOnly) };
+  const sessionCommand = useRef({ reconnect: reconnectNow, readOnly: () => setSessionReadOnly(!tab.sessionReadOnly), cancel: cancelRun });
+  sessionCommand.current = { reconnect: reconnectNow, readOnly: () => setSessionReadOnly(!tab.sessionReadOnly), cancel: cancelRun };
   useEffect(() => {
     const onCommand = (e: Event) => {
       const { tab: target, command } = (e as CustomEvent<{ tab: string; command: EditorCommand }>).detail;
@@ -912,7 +928,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           editor.current?.action(command);
           break;
         case "cancel":
-          if (running) void call(commands.cancel(tab.id)).catch(() => undefined);
+          void sessionCommand.current.cancel();
           break;
       }
     };
@@ -1288,7 +1304,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       // nothing was replaced.
       const detail = message(e);
       const translation = { key: "messages.runFailed", values: { detail } };
-      updateRun(tab.id, (r) => ({ ...r, running: false, activeResult: null, messages: [{ kind: "error", text: detail, translation }], error: { message: detail, offset: null, translation } }));
+      updateRun(tab.id, (r) => ({ ...r, running: false, elapsedMs: performance.now() - started.startedAt, activeResult: null, messages: [{ kind: "error", text: detail, translation }], error: { message: detail, offset: null, translation } }));
     }
     } finally {
       startingRun.current = false;
@@ -1306,6 +1322,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     runTexts.current.set(run, { text, source, results: 0, canRefresh });
     const startedAt = performance.now();
     updateTab(tab.id, {
+      cancelRequestedFor: undefined,
       run: { running: true, results: kept?.results ?? [], activeResult: kept?.activeResult ?? null, messages: [], error: null, startedAt, elapsedMs: null },
     });
     return { run, startedAt };
@@ -1353,7 +1370,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       else await commands.releasePlan(result.id);
     } catch (e) {
       const detail = message(e);
-      if (runStarted) updateRun(tab.id, current => ({ ...current, running: false, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));
+      if (runStarted) updateRun(tab.id, current => ({ ...current, running: false, elapsedMs: performance.now() - current.startedAt, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));
       setNotice({ text: t("plan.runFailed", { reason: message(e) }), error: true });
     } finally { startingRun.current = false; }
   }
@@ -1476,6 +1493,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   const running = tab.run?.running ?? false;
+  const cancelRequested = running && tab.cancelRequestedFor === tab.run?.startedAt;
+  const runStatus = running ? t(cancelRequested ? "results.cancelling" : "results.running") : "";
   // What Run will send, in the core's words; plain "Run" until its first answer.
   const runPicks = runLabel?.kind === "selection" && runLabel.statements > 1;
   const runName = !runLabel ? t("run")
@@ -1526,6 +1545,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults")} title={t(maximized ? "restoreResults" : "maximizeResults")} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
+      <span className="sr-only" role="status">{runStatus}</span>
       {variablesOpen && !tab.table && (
         <VariablesDialog tabId={tab.id} connectionId={tab.connectionId} connectionName={connection?.name ?? null} onClose={() => setVariablesOpen(false)} />
       )}
@@ -1605,11 +1625,6 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           </span>
         )}
         <div className="spacer" />
-        {tab.table && running && (
-          <button className="danger" onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
-            {t("cancel")}
-          </button>
-        )}
       </div>
       {tab.setupSkipped && tab.setupSkipped.length > 0 && (
         <div className="banner restore-notes setup-skipped" role="status" aria-label={t("setupSkipped.title")}>
@@ -1669,7 +1684,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
         <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane" hidden={maximized}>
           <div className="editor-actions" role="toolbar" aria-label={t("editorActions")}>
             {running ? (
-              <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
+              <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} disabled={cancelRequested} onClick={() => void cancelRun()}>
                 <EditorActionIcon name="cancel" />
               </button>
             ) : (
@@ -1758,6 +1773,9 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           {planOpen && plan ? <PlanViewer key={plan.id} summary={plan} controls={planControls} onBack={() => { setPlan(null); setPlanOpen(false); }} /> : <>{planOpen && planControls}<Results
             maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
             run={tab.run}
+            runStatus={runStatus}
+            cancelRequested={cancelRequested}
+            onCancelRun={() => void cancelRun()}
             session={tab.id}
             connectionId={tab.connectionId}
             table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
@@ -1824,6 +1842,9 @@ function errorRun(text: string, translation?: Translation, results: RunState["re
 
 function Results({
   run,
+  runStatus,
+  cancelRequested,
+  onCancelRun,
   session,
   connectionId,
   table,
@@ -1854,6 +1875,9 @@ function Results({
   /** The button that hides the SQL editor (SQL tabs only). */
   maximize?: { maximized: boolean; onToggle(): void };
   run: RunState | null;
+  runStatus: string;
+  cancelRequested: boolean;
+  onCancelRun(): void;
   session: string;
   connectionId: string | null;
   table: { schema: string; name: string; filter: string; orderBy: string } | null;
@@ -1888,6 +1912,7 @@ function Results({
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const [filteringResult, setFilteringResult] = useState<number | null>(null);
+  const [refreshSlot, setRefreshSlot] = useState<HTMLSpanElement | null>(null);
   const [filterError, setFilterError] = useState<{ result: number; message: string } | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerWidth, setViewerWidth] = useState(420);
@@ -1916,6 +1941,7 @@ function Results({
   // Nothing to show yet: the button only brings the editor back if it was hidden.
   if (!run) return <div className="empty">{t("results.empty")}{maximize?.maximized && maximizeButton}</div>;
   const active = run.results.find((r) => r.id === run.activeResult) ?? null;
+  const canRefresh = !!active && (!!table || !!active.refreshable);
   const showMessages = active === null;
   const error = run.error ? translatedError(run.error, t, numbers) : null;
   return (
@@ -1936,6 +1962,7 @@ function Results({
           onSelect={onSelect}
         />
         {active && <div className="result-tools">
+          {canRefresh && <span ref={setRefreshSlot} />}
           {!restoringView && <ResultFilter
             key={`filter-${active.id}-${active.refreshScrollRow === undefined ? 0 : 1}`}
             result={active}
@@ -1988,6 +2015,7 @@ function Results({
         </div>}
         {maximizeButton}
       </div>
+      {run.running && <ResultRunProgress key={run.startedAt} startedAt={run.startedAt} status={runStatus} cancelRequested={cancelRequested} onCancel={onCancelRun} />}
       {active && filterError?.result === active.id && <div id={`result-filter-error-${active.id}`} className="result-filter-error" role="alert">{filterError.message}</div>}
       <div className="result-body">
         {active && chartShown[active.id] && (
@@ -2031,7 +2059,11 @@ function Results({
             viewerWidth={viewerWidth}
             onViewerWidth={setViewerWidth}
             pagingLocked={restoringView || pendingEdits || run.running || filteringResult === active.id || !!active.paging?.loading || !!editing?.busy}
-            refresh={table || active.refreshable ? { disabled: refreshDisabled || filteringResult === active.id || !!active.paging?.loading || !ended(active), run: (row) => onRefresh(active.id, row) } : undefined}
+            refresh={canRefresh && refreshSlot ? {
+              target: refreshSlot,
+              disabled: refreshDisabled || filteringResult === active.id || !!active.paging?.loading || !ended(active),
+              run: (row) => onRefresh(active.id, row),
+            } : undefined}
             onLoadMore={() => onLoadMore(active.id)}
             onCountQuery={() => onCountQuery(active.id)}
             onQueryPageSize={onQueryPageSize}
@@ -2058,9 +2090,7 @@ function Results({
         )}
       </div>
       <div className="statusline">
-        {run.running ? (
-          <span>{t("results.running")}</span>
-        ) : (
+        {!run.running && (
           <span>
             {(() => {
               if (!active) return "";
@@ -2092,6 +2122,32 @@ function Results({
         {error && !showMessages && <span className="status-error">{t("results.error", { message: error.split("\n")[0] })}</span>}
         {active && readOnlyHint && <span className="muted" title={t("edit.queryReadOnlyHint")}>{t("edit.readOnly")}</span>}
       </div>
+    </div>
+  );
+}
+
+function ResultRunProgress({ startedAt, status, cancelRequested, onCancel }: {
+  startedAt: number;
+  status: string;
+  cancelRequested: boolean;
+  onCancel(): void;
+}) {
+  const { t, i18n } = useTranslation("editor");
+  const seconds = useMemo(() => new Intl.NumberFormat(i18n.language, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }), [i18n.language]);
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    const tick = window.setInterval(() => setNow(performance.now()), 100);
+    return () => window.clearInterval(tick);
+  }, []);
+  return (
+    <div className="result-run-progress">
+      <span className="result-run-spinner" aria-hidden="true" />
+      <span aria-hidden="true">{status}</span>
+      <span className="result-run-elapsed muted" role="timer">{t("results.elapsed", { seconds: seconds.format((now - startedAt) / 1000) })}</span>
+      <button type="button" disabled={cancelRequested} onClick={onCancel}>{t("results.cancelQuery")}</button>
     </div>
   );
 }

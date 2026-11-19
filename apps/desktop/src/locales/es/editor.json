@@ -35,7 +35,11 @@
     "empty": "Escribe una consulta y pulsa Ctrl+Intro.",
     "result": "Resultado {{number}}",
     "messages": "Mensajes",
-    "running": "Ejecutando…",
+    "running": "Ejecutando consulta…",
+    "cancelling": "Cancelando consulta…",
+    "elapsed": "{{seconds}} s",
+    "cancelQuery": "Cancelar consulta",
+    "cancelFailed": "No se pudo cancelar la consulta: {{detail}}",
     "loading": " (cargando)",
     "partial": {
       "cancelled_one": "Parcial: cancelada tras {{formattedCount}} fila",
