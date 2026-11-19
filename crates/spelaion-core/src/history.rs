@@ -16,7 +16,7 @@ use spelaion_store::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::table_filters::{StoredTableFilters, TableFilterChange, stored_table_filters};
-use crate::{CoreEvent, ResultId, ScriptOptions, Session};
+use crate::{CoreEvent, ResultId, ScriptOptions, Session, StatementEnd};
 
 /// Identity captured from the source session, never from a subsequently edited profile.
 #[derive(Debug, Clone, Default)]
@@ -1786,13 +1786,17 @@ impl QueryHistory {
                     CoreEvent::StatementFailed { error, .. } => {
                         if let Some(active) = active.take() {
                             let elapsed = active.started.elapsed();
-                            let message = if error.cancelled {
+                            let cancelled = match error.end {
+                                StatementEnd::Cancelled => true,
+                                StatementEnd::Failed | StatementEnd::TimedOut => false,
+                            };
+                            let message = if cancelled {
                                 "Query cancelled".to_string()
                             } else {
                                 error.message.clone()
                             };
                             let database=active.database.clone();
-                            if let Err(error) = history.record_database(active.finish(elapsed, Some(message), error.cancelled),database).await {
+                            if let Err(error) = history.record_database(active.finish(elapsed, Some(message), cancelled),database).await {
                                 yield warning(error);
                             }
                         }

@@ -137,7 +137,7 @@ pub async fn run_sql_file(
             }
             CoreEvent::StatementFailed { index, error } => {
                 failed += 1;
-                if !error.cancelled {
+                if error.end != crate::StatementEnd::Cancelled {
                     events(BackupEvent::Log {
                         line: crate::audit::redact_secrets(&format!(
                             "Statement {} failed: {}",

@@ -1177,6 +1177,7 @@ export const events = {
 	pluginInstallChanged: makeEvent<PluginInstallChanged, PluginInstallChanged>("plugin-install-changed"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
+	runChanged: makeEvent<RunChanged, RunChanged>("run-changed"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
 	transactionChanged: makeEvent<TransactionChanged, TransactionChanged>("transaction-changed"),
 };
@@ -5696,6 +5697,12 @@ export type RowReferenceItem_Serialize = {
 	error: string | null,
 };
 
+/**  An editor tab's run state changed (SDB-370): sent only when it changes. */
+export type RunChanged = {
+	session: string,
+	state: RunStateItem,
+};
+
 /**
  *  What the editor's Run will send: the statement under the cursor, the selection, or the
  *  whole script (a tab with no connection).
@@ -5718,6 +5725,18 @@ export type RunOptionsItem_Serialize = {
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds: number | null,
 };
+
+/**
+ *  What an editor tab's session runs (SDB-370), as the core publishes it: the tab shows it and
+ *  never works it out from the run's events. Statements are counted from 0.
+ */
+export type RunStateItem = { kind: "idle" } | 
+/**  The statement runs, or is the next to. */
+{ kind: "running"; statement: number } | 
+/**  The statement failed and the run waits for `answer_script_error` with this ticket. */
+{ kind: "paused"; statement: number; ticket: number; remaining: number } | 
+/**  A cancel was asked for; the run has not ended yet. */
+{ kind: "cancelling"; statement: number };
 
 /**  What Run will send and the statements in it, as the core reads them. */
 export type RunTargetItem = RunTargetItem_Serialize | RunTargetItem_Deserialize;
@@ -5861,11 +5880,13 @@ executionMs: number | null;
 /**  Reading the rows after it. */
 fetchMs: number | null } | { kind: "statementFailed"; index: number; message: string; code?: string | null; detail?: string | null; hint?: string | null; 
 /**  Error position in bytes within the script, to underline it. */
-scriptOffset?: number | null; cancelled: boolean; 
-/**  It ran longer than the run's statement timeout. */
-timedOut: boolean } | 
+scriptOffset?: number | null; 
+/**  How it ended: failed, cancelled or timed out (SDB-370). */
+end: StatementEndItem } | 
 /**  The run waits for `answer_script_error` with this ticket (ADR-035). */
-{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
+{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | 
+/**  The run ended; its summary says how. */
+{ kind: "scriptFinished"; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
 
 export type ScriptEvent_Serialize = 
 /**
@@ -5893,11 +5914,13 @@ executionMs: number | null;
 /**  Reading the rows after it. */
 fetchMs: number | null } | { kind: "statementFailed"; index: number; message: string; code: string | null; detail: string | null; hint: string | null; 
 /**  Error position in bytes within the script, to underline it. */
-scriptOffset: number | null; cancelled: boolean; 
-/**  It ran longer than the run's statement timeout. */
-timedOut: boolean } | 
+scriptOffset: number | null; 
+/**  How it ended: failed, cancelled or timed out (SDB-370). */
+end: StatementEndItem } | 
 /**  The run waits for `answer_script_error` with this ticket (ADR-035). */
-{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string };
+{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | 
+/**  The run ended; its summary says how. */
+{ kind: "scriptFinished"; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string };
 
 /**  How scripts run from the editor, shared by every workspace. */
 export type ScriptPreferencesItem = {
@@ -5908,14 +5931,18 @@ export type ScriptPreferencesItem = {
 	confirmDelaySeconds: number,
 };
 
-/**  Why a run stopped with statements left. */
+/**  Why a run stopped before going through every statement its mode let it run. */
 export type ScriptStopItem = {
 	kind: ScriptStopKind,
 	/**  The statement it stopped at. */
 	index: number,
 };
 
-export type ScriptStopKind = "failed" | "cancelled" | "transactionAborted" | "transactionRolledBack" | "closed";
+export type ScriptStopKind = "failed" | "cancelled" | "transactionAborted" | "transactionRolledBack" | 
+/**  The session closed while the run waited for an answer. */
+"closed" | 
+/**  The connection was lost while the run waited for an answer. */
+"sessionLost";
 
 /**  "N statements: X ok, Y failed", and where the time went (ADR-035). */
 export type ScriptSummaryItem = ScriptSummaryItem_Serialize | ScriptSummaryItem_Deserialize;
@@ -6238,6 +6265,11 @@ export type StatStateItem = { kind: "done" } |
 { kind: "notForType" } | 
 /**  The engine refused it: its message. */
 { kind: "failed"; message: string };
+
+/**  How a statement that did not run to its end ended (SDB-370), as the core says it. */
+export type StatementEndItem = "failed" | "cancelled" | 
+/**  It ran longer than the run's statement timeout. */
+"timedOut";
 
 /**
  *  What Ctrl+Enter runs: the text the core wrote for the statement under the cursor, and that

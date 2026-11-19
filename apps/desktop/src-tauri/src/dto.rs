@@ -2012,9 +2012,8 @@ pub enum ScriptEvent {
         hint: Option<String>,
         /// Error position in bytes within the script, to underline it.
         script_offset: Option<u32>,
-        cancelled: bool,
-        /// It ran longer than the run's statement timeout.
-        timed_out: bool,
+        /// How it ended: failed, cancelled or timed out (SDB-370).
+        end: StatementEndItem,
     },
     /// The run waits for `answer_script_error` with this ticket (ADR-035).
     ErrorPaused {
@@ -2022,9 +2021,8 @@ pub enum ScriptEvent {
         ticket: u32,
         remaining: u32,
     },
+    /// The run ended; its summary says how.
     ScriptFinished {
-        executed: u32,
-        failed: bool,
         summary: ScriptSummaryItem,
     },
     HistoryWarning {
@@ -2099,6 +2097,77 @@ impl From<spelaion_core::ResultEnd> for ResultEndItem {
     }
 }
 
+/// How a statement that did not run to its end ended (SDB-370), as the core says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum StatementEndItem {
+    Failed,
+    Cancelled,
+    /// It ran longer than the run's statement timeout.
+    TimedOut,
+}
+
+impl From<spelaion_core::StatementEnd> for StatementEndItem {
+    fn from(end: spelaion_core::StatementEnd) -> Self {
+        use spelaion_core::StatementEnd;
+        match end {
+            StatementEnd::Failed => Self::Failed,
+            StatementEnd::Cancelled => Self::Cancelled,
+            StatementEnd::TimedOut => Self::TimedOut,
+        }
+    }
+}
+
+/// What an editor tab's session runs (SDB-370), as the core publishes it: the tab shows it and
+/// never works it out from the run's events. Statements are counted from 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum RunStateItem {
+    Idle,
+    /// The statement runs, or is the next to.
+    Running {
+        statement: u32,
+    },
+    /// The statement failed and the run waits for `answer_script_error` with this ticket.
+    Paused {
+        statement: u32,
+        ticket: u32,
+        remaining: u32,
+    },
+    /// A cancel was asked for; the run has not ended yet.
+    Cancelling {
+        statement: u32,
+    },
+}
+
+impl From<spelaion_core::RunState> for RunStateItem {
+    fn from(state: spelaion_core::RunState) -> Self {
+        use spelaion_core::RunState;
+        match state {
+            RunState::Idle => Self::Idle,
+            RunState::Running { statement } => Self::Running {
+                statement: u32_of(statement),
+            },
+            RunState::Paused {
+                statement,
+                ticket,
+                remaining,
+            } => Self::Paused {
+                statement: u32_of(statement),
+                ticket: u32::try_from(ticket.0).unwrap_or(u32::MAX),
+                remaining: u32_of(remaining),
+            },
+            RunState::Cancelling { statement } => Self::Cancelling {
+                statement: u32_of(statement),
+            },
+        }
+    }
+}
+
 fn u32_of(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
@@ -2136,7 +2205,7 @@ impl From<spelaion_core::ScriptSummary> for ScriptSummaryItem {
     }
 }
 
-/// Why a run stopped with statements left.
+/// Why a run stopped before going through every statement its mode let it run.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptStopItem {
@@ -2152,7 +2221,10 @@ pub enum ScriptStopKind {
     Cancelled,
     TransactionAborted,
     TransactionRolledBack,
+    /// The session closed while the run waited for an answer.
     Closed,
+    /// The connection was lost while the run waited for an answer.
+    SessionLost,
 }
 
 impl From<spelaion_core::ScriptStop> for ScriptStopItem {
@@ -2164,6 +2236,7 @@ impl From<spelaion_core::ScriptStop> for ScriptStopItem {
             ScriptStop::TransactionAborted { .. } => ScriptStopKind::TransactionAborted,
             ScriptStop::TransactionRolledBack { .. } => ScriptStopKind::TransactionRolledBack,
             ScriptStop::Closed { .. } => ScriptStopKind::Closed,
+            ScriptStop::SessionLost { .. } => ScriptStopKind::SessionLost,
         };
         Self {
             kind,
@@ -2447,8 +2520,7 @@ impl From<CoreEvent> for ScriptEvent {
                 detail: error.detail,
                 hint: error.hint,
                 script_offset: error.script_offset.map(u32_of),
-                cancelled: error.cancelled,
-                timed_out: error.timed_out,
+                end: error.end.into(),
             },
             CoreEvent::ErrorPaused {
                 index,
@@ -2459,13 +2531,7 @@ impl From<CoreEvent> for ScriptEvent {
                 ticket: u32::try_from(ticket.0).unwrap_or(u32::MAX),
                 remaining: u32_of(remaining),
             },
-            CoreEvent::ScriptFinished {
-                executed,
-                failed,
-                summary,
-            } => ScriptEvent::ScriptFinished {
-                executed: u32_of(executed),
-                failed,
+            CoreEvent::ScriptFinished { summary, .. } => ScriptEvent::ScriptFinished {
                 summary: ScriptSummaryItem::from(summary),
             },
             CoreEvent::HistoryWarning { message } => ScriptEvent::HistoryWarning { message },
@@ -3315,6 +3381,14 @@ impl From<spelaion_core::TransactionOutcome> for TransactionOutcomeItem {
 pub struct TransactionChanged {
     pub session: String,
     pub status: TransactionStatusItem,
+}
+
+/// An editor tab's run state changed (SDB-370): sent only when it changes.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct RunChanged {
+    pub session: String,
+    pub state: RunStateItem,
 }
 
 /// The window was asked to close while sessions are open: the UI calls `quit_asking`, looks for

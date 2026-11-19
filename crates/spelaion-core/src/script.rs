@@ -52,7 +52,8 @@ pub enum AnswerError {
     NotWaiting,
 }
 
-/// Why a script stopped with statements left to run.
+/// Why a script run stopped before going through every statement its mode let it run. A
+/// failure or a cancel names the statement it stopped at, also when it was the last one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptStop {
     /// The statement at `index` failed and the run stopped there ([`OnError::Stop`], or Stop
@@ -66,8 +67,11 @@ pub enum ScriptStop {
     /// The failed statement rolled back the transaction it ran in (SQL Server with
     /// `XACT_ABORT`, a MySQL deadlock): going on would run the rest without what came before.
     TransactionRolledBack { index: usize },
-    /// The run was waiting for an answer and its session was closed or lost.
+    /// The run was waiting for an answer and its session was closed: its tab closed, it was
+    /// dropped, or it was closed after being idle too long (ADR-029).
     Closed { index: usize },
+    /// The run was waiting for an answer and its session's connection was lost (ADR-028).
+    SessionLost { index: usize },
 }
 
 impl ScriptStop {
@@ -78,7 +82,8 @@ impl ScriptStop {
             | ScriptStop::Cancelled { index }
             | ScriptStop::TransactionAborted { index }
             | ScriptStop::TransactionRolledBack { index }
-            | ScriptStop::Closed { index } => index,
+            | ScriptStop::Closed { index }
+            | ScriptStop::SessionLost { index } => index,
         }
     }
 }
@@ -101,6 +106,10 @@ impl std::fmt::Display for ScriptStop {
                 f,
                 "the session closed while statement {n}'s error waited for an answer"
             ),
+            ScriptStop::SessionLost { .. } => write!(
+                f,
+                "the connection was lost while statement {n}'s error waited for an answer"
+            ),
         }
     }
 }
@@ -114,7 +123,9 @@ pub struct ScriptSummary {
     pub executed: usize,
     pub succeeded: usize,
     pub failed: usize,
-    /// Why the run ended with statements left, if it did.
+    /// How the run ended: `None` when it went through every statement its mode let it run
+    /// (with [`crate::OnError::Continue`], or after Skip, some of them may have failed);
+    /// otherwise why it stopped, at which statement, even the last.
     pub stop: Option<ScriptStop>,
     /// Summed over the statements: until the engine's first answer.
     pub execution: Duration,
@@ -134,7 +145,10 @@ impl ScriptSummary {
 pub(crate) enum Resume {
     Answer(ErrorAnswer),
     Cancelled,
+    /// Its session was closed (its tab, dropped, idle).
     Closed,
+    /// Its session's connection was lost.
+    Lost,
 }
 
 struct Waiting {
@@ -151,13 +165,23 @@ pub(crate) struct Pause {
 
 impl Pause {
     /// Starts waiting: returns the ticket to show and where the answer arrives.
+    ///
+    /// Only the run that holds the session pauses, so none waits already. If one did, it is
+    /// stopped as closed, never forgotten.
     pub(crate) fn wait(&self) -> (ErrorTicket, oneshot::Receiver<Resume>) {
         let ticket = self
             .tickets
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
             + 1;
         let (reply, answer) = oneshot::channel();
-        *self.waiting.lock().expect("lock poisoned") = Some(Waiting { ticket, reply });
+        let earlier = self
+            .waiting
+            .lock()
+            .expect("lock poisoned")
+            .replace(Waiting { ticket, reply });
+        if let Some(earlier) = earlier {
+            let _ = earlier.reply.send(Resume::Closed);
+        }
         (ErrorTicket(ticket), answer)
     }
 
@@ -232,6 +256,31 @@ mod tests {
         let (_, answer) = pause.wait();
         drop(pause);
         assert!(answer.await.is_err(), "a dropped pause stops the run");
+    }
+
+    #[tokio::test]
+    async fn a_second_pause_stops_the_first_as_closed() {
+        let pause = Pause::default();
+        let (first, earlier) = pause.wait();
+        let (second, _answer) = pause.wait();
+        assert_eq!(earlier.await.unwrap(), Resume::Closed);
+        assert_eq!(
+            pause.answer(first, ErrorAnswer::Skip),
+            Err(AnswerError::NotWaiting)
+        );
+        assert!(pause.answer(second, ErrorAnswer::Skip).is_ok());
+    }
+
+    #[test]
+    fn a_lost_session_is_told_apart_from_a_closed_one() {
+        assert_eq!(
+            ScriptStop::SessionLost { index: 1 }.to_string(),
+            "the connection was lost while statement 2's error waited for an answer"
+        );
+        assert_eq!(
+            ScriptStop::Closed { index: 1 }.to_string(),
+            "the session closed while statement 2's error waited for an answer"
+        );
     }
 
     #[test]

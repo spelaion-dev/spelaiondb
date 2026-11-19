@@ -5,7 +5,7 @@ import type { EditorActionId } from "./editorActions";
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFormatItem, OnErrorItem, RestoreNoteItem, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
-import type { DiagramScopeItem_Deserialize, RestoredTabItem, ResultEndItem } from "./bindings";
+import type { DiagramScopeItem_Deserialize, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
 
 export interface ResultMeta {
   id: number;
@@ -135,8 +135,9 @@ export interface Tab {
   serverVersion: string | null;
   sql: string;
   run: RunState | null;
-  /** The start time of the run for which the UI sent Cancel (in memory only). */
-  cancelRequestedFor?: number;
+  /** What its session runs, as the core last said it (SDB-370): running, paused at a
+   *  statement, cancelling. The core decides; this only shows it. */
+  runState?: RunStateItem;
   /** This tab's `${name}` variables (SDB-383): in memory only, never saved with the tab. */
   variables?: Record<string, string>;
   /** The last value given to each `:name` parameter in this tab, offered again; memory only. */

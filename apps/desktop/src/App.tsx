@@ -131,6 +131,10 @@ export default function App() {
     const unlistenTransaction = events.transactionChanged.listen((e) => {
       useApp.getState().updateTab(e.payload.session, { transaction: e.payload.status });
     });
+    // The core keeps each editor tab's run state (SDB-370); the tab only shows it.
+    const unlistenRun = events.runChanged.listen((e) => {
+      useApp.getState().updateTab(e.payload.session, { runState: e.payload.state });
+    });
     // Closing the window with sessions open: the core held it; the UI quits or asks (SDB-140).
     const unlistenQuit = events.quitRequested.listen(() => void answerQuitRequest());
     // A second launch (or Finder) asked this window to open something (SDB-397).
@@ -155,6 +159,7 @@ export default function App() {
       void unlistenClosed.then((f) => f());
       void unlistenLost.then((f) => f());
       void unlistenTransaction.then((f) => f());
+      void unlistenRun.then((f) => f());
       void unlistenQuit.then((f) => f());
       void unlistenLaunch.then((f) => f());
       window.removeEventListener("keydown", onKey);

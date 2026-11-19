@@ -4,6 +4,12 @@
 import type { ScriptSummaryItem } from "./api";
 import type { Message, Translation } from "./store";
 
+/** Whether the Messages tab sums the run up: a script of several statements, or one whose
+ *  statement never ran. A single statement that failed or was cancelled already said so. */
+export function showsSummary(summary: ScriptSummaryItem): boolean {
+  return summary.statements > 1 || summary.notRun > 0;
+}
+
 /** "5 statements: 4 OK, 1 failed, 0 not run (12 ms execute, 3 ms fetch)", then why it stopped. */
 export function summaryMessages(summary: ScriptSummaryItem): Message[] {
   const failed = summary.failed > 0 || summary.stop != null;

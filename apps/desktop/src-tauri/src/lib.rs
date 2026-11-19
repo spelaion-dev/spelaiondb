@@ -2189,6 +2189,7 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
             .close_when_idle(std::time::Duration::from_secs(seconds.into()));
     }
     forward_transaction(app, session.clone(), open);
+    forward_run(app, session.clone(), open);
     let mut health = open.session.health();
     let watched = Arc::downgrade(open);
     let app = app.clone();
@@ -2279,6 +2280,37 @@ fn forward_transaction(app: &AppHandle, session: String, open: &Arc<OpenConnecti
     });
 }
 
+/// Tells the UI every change of an editor tab's run state (SDB-370): running a statement,
+/// paused after an error, cancelling, idle. The core sends it only when it changes, so this
+/// adds no re-render (SDB-110). Stops once the session is no longer the tab's.
+fn forward_run(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
+    let mut changes = open.session.run_state();
+    let watched = Arc::downgrade(open);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while changes.changed().await.is_ok() {
+            let state = *changes.borrow_and_update();
+            // Compared by address, without holding the session: `disconnect` must still be
+            // able to close it.
+            let still_the_tabs = app
+                .state::<AppState>()
+                .sessions
+                .lock()
+                .await
+                .get(&session)
+                .is_some_and(|s| std::ptr::eq(Arc::as_ptr(&s.open), watched.as_ptr()));
+            if !still_the_tabs {
+                return;
+            }
+            let _ = RunChanged {
+                session: session.clone(),
+                state: state.into(),
+            }
+            .emit(&app);
+        }
+    });
+}
+
 /// An editor tab's transaction, as the core last read it (ADR-031).
 #[command]
 async fn transaction_status(
@@ -2302,7 +2334,7 @@ async fn set_auto_commit(
         .set_auto_commit(on)
         .await
         .map(Into::into)
-        .map_err(|e| e.to_string())
+        .map_err(|e| open.session.transaction_refusal(&e))
 }
 
 #[command]
@@ -2315,7 +2347,7 @@ async fn commit_transaction(
         .commit()
         .await
         .map(Into::into)
-        .map_err(|e| e.to_string())
+        .map_err(|e| open.session.transaction_refusal(&e))
 }
 
 #[command]
@@ -2328,7 +2360,7 @@ async fn rollback_transaction(
         .rollback()
         .await
         .map(Into::into)
-        .map_err(|e| e.to_string())
+        .map_err(|e| open.session.transaction_refusal(&e))
 }
 
 /// Of these sessions, the ones whose closing must be confirmed: a transaction with work in it
@@ -6616,6 +6648,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             InteractionClosed,
             SessionLost,
             TransactionChanged,
+            RunChanged,
             QuitRequested,
             plugins::PluginInstallChanged,
             plugins::PluginsChanged,

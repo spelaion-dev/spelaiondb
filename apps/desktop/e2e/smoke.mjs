@@ -2723,6 +2723,8 @@ try {
   let paused = page.getByRole("dialog", { name: "Statement 1 failed" });
   await paused.getByText("2 statements after it have not run yet.").waitFor();
   await paused.getByText("UNIQUE constraint failed", { exact: false }).waitFor();
+  // The core's run state says where it waits (SDB-370).
+  await panel.locator(".result-run-progress", { hasText: "Paused at statement 1" }).waitFor();
   await shot("05e-script-error-ask");
   await paused.getByRole("button", { name: "Skip and continue" }).click();
   await paused.waitFor({ state: "detached" });
