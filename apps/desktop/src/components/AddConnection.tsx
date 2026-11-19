@@ -36,7 +36,7 @@ import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./Connect
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
-import { openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
+import { installText, openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -301,6 +301,7 @@ function EnginePicker({
   onImport(client: ImportClientId): void;
 }) {
   const { t } = useTranslation("connections");
+  const { t: settings, i18n } = useTranslation("settings");
   const [search, setSearch] = useState("");
   const [url, setUrl] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
@@ -372,6 +373,8 @@ function EnginePicker({
               <div className="engine-grid">
                 {items.map((e) => {
                   const needed = e.available ? pluginNeeded(plugins, e.engine ?? e.id) : null;
+                  // Its plugin's download, when one runs, wherever it was started.
+                  const downloading = needed?.install.kind === "downloading" ? installText(needed, settings, i18n.language) : null;
                   return (
                     <button
                       key={e.id}
@@ -383,15 +386,16 @@ function EnginePicker({
                         !e.available
                           ? t("comingSoonHint", { engine: e.name })
                           : needed
-                            ? t("needsPluginHint", { engine: e.name, plugin: needed.name })
+                            ? [t("needsPluginHint", { engine: e.name, plugin: needed.name }), downloading].filter(Boolean).join(" ")
                             : e.name
                       }
                       data-needs-plugin={needed ? needed.name : undefined}
+                      data-plugin-install={needed ? needed.install.kind : undefined}
                     >
                       <EngineBadge engine={e} />
                       <span className="engine-card-name">{e.name}</span>
                       {!e.available && <span className="engine-card-soon">{t("comingSoon")}</span>}
-                      {needed && <span className="engine-card-soon">{t("needsPlugin")}</span>}
+                      {needed && <span className="engine-card-soon">{downloading ? t("pluginDownloading") : t("needsPlugin")}</span>}
                     </button>
                   );
                 })}

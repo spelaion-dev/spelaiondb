@@ -1173,7 +1173,7 @@ export const events = {
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
 	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
-	pluginInstallProgress: makeEvent<PluginInstallProgress, PluginInstallProgress>("plugin-install-progress"),
+	pluginInstallChanged: makeEvent<PluginInstallChanged, PluginInstallChanged>("plugin-install-changed"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
@@ -4990,6 +4990,20 @@ export type PlanView = {
 	findingsOnly: boolean,
 };
 
+/**
+ *  What a plugin's engines get on this machine: the core's one answer
+ *  (`PluginState::availability`).
+ */
+export type PluginAvailability = 
+/**  A build is started: its engines use it. */
+"inUse" | 
+/**  Builds are here and none may be started (`message` says why). */
+"refused" | 
+/**  The pinned build should be next to the app and is not (`message` says which file). */
+"missing" | 
+/**  Nothing of it is here: it needs installing. */
+"notInstalled";
+
 /**  The build of a plugin that its engines start. */
 export type PluginInUse = {
 	version: string,
@@ -4998,13 +5012,27 @@ export type PluginInUse = {
 	engines: string[],
 };
 
-/**  How far an install's download is. Sent a few times a second at most. */
-export type PluginInstallProgress = {
-	/**  The id the page gave `pluginsInstall`. */
-	install: number,
-	received: number | null,
-	/**  The archive's size, from the catalogue. */
-	total: number | null,
+/**  A plugin's install, as every view shows it (SDB-373). */
+export type PluginInstall = 
+/**  No install of it is running, and the last one did not fail. */
+{ kind: "idle" } | 
+/**
+ *  Its archive is downloading: bytes received of the total the catalogue gives (0 when it
+ *  gives none). `install` is the id to stop it with `pluginsCancelInstall`.
+ */
+{ kind: "downloading"; install: number; received: number | null; total: number | null } | 
+/**  The last install failed or was stopped, in the core's words. */
+{ kind: "failed"; why: string };
+
+/**
+ *  A plugin's install changed: it started, more of it arrived (a few times a second at most),
+ *  it failed or was stopped, or it ended (idle again; the overview has changed then). Every
+ *  view that shows the plugin reads it, wherever the install was started (SDB-373).
+ */
+export type PluginInstallChanged = {
+	/**  The plugin's name. */
+	name: string,
+	install: PluginInstall,
 };
 
 /**  One plugin of ours, as this machine has it. */
@@ -5016,6 +5044,10 @@ export type PluginItem_Deserialize = {
 	name: string,
 	/**  Every engine anything here says it serves. */
 	engines: string[],
+	/**  What its engines get: the core's one answer. */
+	availability: PluginAvailability,
+	/**  Its install, wherever it was started from. */
+	install: PluginInstall,
 	/**  The build started for its engines, if any. */
 	inUse?: PluginInUse | null,
 	/**  The builds on this machine that are not started, newest first. */
@@ -5040,6 +5072,10 @@ export type PluginItem_Serialize = {
 	name: string,
 	/**  Every engine anything here says it serves. */
 	engines: string[],
+	/**  What its engines get: the core's one answer. */
+	availability: PluginAvailability,
+	/**  Its install, wherever it was started from. */
+	install: PluginInstall,
 	/**  The build started for its engines, if any. */
 	inUse: PluginInUse | null,
 	/**  The builds on this machine that are not started, newest first. */

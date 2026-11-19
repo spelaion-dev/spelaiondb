@@ -97,7 +97,33 @@ pub struct Missing {
     pub engines: Vec<String>,
 }
 
+/// What a plugin's engines get on this machine: one answer, decided in one place
+/// ([`PluginState::availability`]) from what is here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Availability {
+    /// A build is started: its engines use it. Whatever else is here (an older build refused,
+    /// the pinned build's program missing) does not change that.
+    InUse(Chosen),
+    /// Builds are here and none may be started: the newest one, and why.
+    Refused(Refused),
+    /// Nothing usable is here, and the pinned build should be next to the app.
+    Missing(Missing),
+    /// Nothing of it is here. The catalogue may offer it.
+    NotInstalled,
+}
+
 impl PluginState {
+    /// What its engines get: a build started wins over everything else, then the newest build
+    /// refused, then the pinned build missing.
+    pub fn availability(&self) -> Availability {
+        match (&self.chosen, self.refused.first(), &self.missing) {
+            (Some(chosen), _, _) => Availability::InUse(chosen.clone()),
+            (None, Some(refused), _) => Availability::Refused(refused.clone()),
+            (None, None, Some(missing)) => Availability::Missing(missing.clone()),
+            (None, None, None) => Availability::NotInstalled,
+        }
+    }
+
     /// The offered build, when it is newer than the one started: an update. Installing it is
     /// the user's click.
     pub fn update(&self) -> Option<&Offered> {
@@ -110,16 +136,14 @@ impl PluginState {
     /// Why no build of this plugin is started although one is on this machine, as its engines
     /// say it; `None` when one is started or none is here.
     pub fn message(&self) -> Option<String> {
-        if self.chosen.is_some() {
-            return None;
-        }
-        let mut message = match (self.refused.first(), &self.missing) {
-            (Some(refused), _) => format!(
+        let mut message = match self.availability() {
+            Availability::InUse(_) | Availability::NotInstalled => return None,
+            Availability::Refused(refused) => format!(
                 "{} {} is not started: {}.",
                 self.name, refused.version, refused.why
             ),
             // Nothing of it is here, and this SpelaionDB was made to carry it.
-            (None, Some(missing)) => {
+            Availability::Missing(missing) => {
                 // What gets it back depends on who is asking.
                 let how = if super::RELEASE_BUILD {
                     "Install SpelaionDB again to get it back."
@@ -133,7 +157,6 @@ impl PluginState {
                     missing.program.display()
                 )
             }
-            (None, None) => return None,
         };
         if let Some(offered) = &self.offered {
             message.push_str(&format!(
@@ -345,5 +368,114 @@ impl Driver for RefusedPlugin {
 
     async fn create_database(&self, _database: &str) -> Result<(), DriverError> {
         Err(DriverError::Connection(self.why.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NAME: &str = "spelaiondb-plugin-duckdb";
+
+    fn chosen(version: &str) -> Chosen {
+        Chosen {
+            version: version.into(),
+            source: Source::Installed,
+            program: PathBuf::from("installed-program"),
+            sha256: "00".repeat(32),
+            engines: vec!["duckdb".into()],
+        }
+    }
+
+    fn refused(version: &str, why: NotUsable) -> Refused {
+        Refused {
+            version: version.into(),
+            source: Source::Installed,
+            engines: vec!["duckdb".into()],
+            why,
+        }
+    }
+
+    fn missing() -> Missing {
+        Missing {
+            version: "0.1.0".into(),
+            program: PathBuf::from("next-to-the-app"),
+            engines: vec!["duckdb".into()],
+        }
+    }
+
+    fn offered(version: &str) -> Offered {
+        Offered {
+            version: version.into(),
+            engines: vec!["duckdb".into()],
+            archive_size: 1,
+            address: "https://github.com/spelaion-dev/x/releases/x.tar.gz".into(),
+        }
+    }
+
+    fn state(
+        chosen: Option<Chosen>,
+        refused: Vec<Refused>,
+        missing: Option<Missing>,
+        offered: Option<Offered>,
+    ) -> PluginState {
+        PluginState {
+            name: NAME.into(),
+            chosen,
+            refused,
+            offered,
+            missing,
+        }
+    }
+
+    #[test]
+    fn a_build_in_use_wins_over_anything_refused_or_missing_beside_it() {
+        // Everything at once: the one in use is what the engines get, and they say nothing.
+        let all = state(
+            Some(chosen("0.2.0")),
+            vec![refused("0.9.0", NotUsable::Withdrawn("broken".into()))],
+            Some(missing()),
+            Some(offered("0.3.0")),
+        );
+        assert_eq!(all.availability(), Availability::InUse(chosen("0.2.0")));
+        assert_eq!(all.message(), None);
+    }
+
+    #[test]
+    fn the_newest_refused_build_explains_before_a_missing_one() {
+        let both = state(
+            None,
+            vec![
+                refused("0.9.0", NotUsable::Withdrawn("broken".into())),
+                refused("0.8.0", NotUsable::Unlisted),
+            ],
+            Some(missing()),
+            None,
+        );
+        assert_eq!(
+            both.availability(),
+            Availability::Refused(refused("0.9.0", NotUsable::Withdrawn("broken".into())))
+        );
+        let message = both.message().expect("its engines say why");
+        assert!(message.starts_with(&format!("{NAME} 0.9.0 is not started: it was withdrawn")));
+        assert!(!message.contains("next-to-the-app"), "{message}");
+    }
+
+    #[test]
+    fn a_missing_pinned_build_says_which_file_and_what_can_be_installed() {
+        let gone = state(None, Vec::new(), Some(missing()), Some(offered("0.3.0")));
+        assert_eq!(gone.availability(), Availability::Missing(missing()));
+        let message = gone.message().expect("its engines say why");
+        assert!(message.contains("next-to-the-app"), "{message}");
+        assert!(message.ends_with("Version 0.3.0 can be installed in Settings > Plugins."));
+    }
+
+    #[test]
+    fn nothing_here_is_not_installed_and_says_nothing_even_when_offered() {
+        for offer in [None, Some(offered("0.3.0"))] {
+            let nothing = state(None, Vec::new(), None, offer);
+            assert_eq!(nothing.availability(), Availability::NotInstalled);
+            assert_eq!(nothing.message(), None);
+        }
     }
 }

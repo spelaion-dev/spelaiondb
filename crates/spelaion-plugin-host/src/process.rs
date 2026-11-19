@@ -109,6 +109,8 @@ impl Drop for Running {
 
 impl Drop for Process {
     fn drop(&mut self) {
+        // Dead before it is asked to end, as `kill` does, so nothing can still be sent to it.
+        self.shared.die("the plugin was stopped");
         // Asked to end first, as `kill` does: killed at once, a plugin could leave a file it
         // was writing half written.
         self.shared.close_input();
@@ -131,12 +133,19 @@ pub(crate) struct Shared {
     streams: Mutex<HashMap<StreamId, Receiving>>,
     /// Each session's "the connection is known to be closed".
     sessions: Mutex<HashMap<u64, Arc<AtomicBool>>>,
-    dead: AtomicBool,
-    why: Mutex<String>,
+    /// Whether it can still be talked to; changed only by [`Shared::die`].
+    life: Mutex<Life>,
     next_id: AtomicU64,
     next_stream: AtomicU64,
     /// The secrets this plugin was given: taken out of everything it says.
     secrets: Mutex<Vec<String>>,
+}
+
+/// Whether a process can still be talked to. It only moves from alive to dead, and dead
+/// always says why: the first reason given.
+enum Life {
+    Alive,
+    Dead { why: String },
 }
 
 /// Why a call got no result.
@@ -185,8 +194,7 @@ impl Process {
             pending: Mutex::new(HashMap::new()),
             streams: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
-            dead: AtomicBool::new(false),
-            why: Mutex::new(String::new()),
+            life: Mutex::new(Life::Alive),
             next_id: AtomicU64::new(1),
             next_stream: AtomicU64::new(1),
             secrets: Mutex::new(Vec::new()),
@@ -256,7 +264,15 @@ impl Process {
     }
 
     pub(crate) fn is_dead(&self) -> bool {
-        self.shared.dead.load(Ordering::SeqCst)
+        self.shared.is_dead()
+    }
+
+    /// Why it died, if it did.
+    pub(crate) fn why_dead(&self) -> Option<String> {
+        match &*self.shared.life.lock().expect("lock poisoned") {
+            Life::Alive => None,
+            Life::Dead { why } => Some(why.clone()),
+        }
     }
 
     /// Stops the program, and returns once it has ended. It is asked to end first (its input
@@ -396,7 +412,12 @@ impl Shared {
         frames.push(Frame::Message(
             Message::request(id, method, params).to_bytes(),
         ));
-        if self.dead.load(Ordering::SeqCst) || self.out.send(Outgoing::Frames(frames)).is_err() {
+        if self.is_dead() {
+            return Err(Failure::Lost);
+        }
+        if self.out.send(Outgoing::Frames(frames)).is_err() {
+            // Its input is gone: so is the plugin, whatever the reader has not noticed yet.
+            self.die("it stopped");
             return Err(Failure::Lost);
         }
         let answer = answered.await;
@@ -550,8 +571,19 @@ impl Shared {
         }
     }
 
+    fn is_dead(&self) -> bool {
+        match *self.life.lock().expect("lock poisoned") {
+            Life::Alive => false,
+            Life::Dead { .. } => true,
+        }
+    }
+
+    /// Why it died; asked only of a plugin that did.
     fn why(&self) -> String {
-        self.why.lock().expect("lock poisoned").clone()
+        match &*self.life.lock().expect("lock poisoned") {
+            Life::Alive => "it is still running".to_string(),
+            Life::Dead { why } => why.clone(),
+        }
     }
 
     /// The error of everything that was waiting on a plugin that stopped.
@@ -566,10 +598,18 @@ impl Shared {
     /// The plugin is gone: every request fails, every result ends with an error and every
     /// session's connection is closed. Nothing is retried.
     pub(crate) fn die(&self, why: &str) {
-        if self.dead.swap(true, Ordering::SeqCst) {
-            return;
+        {
+            let mut life = self.life.lock().expect("lock poisoned");
+            match *life {
+                Life::Alive => {
+                    *life = Life::Dead {
+                        why: why.to_string(),
+                    }
+                }
+                // The first reason stays, and the rest was done then.
+                Life::Dead { .. } => return,
+            }
         }
-        *self.why.lock().expect("lock poisoned") = why.to_string();
         // Dropping the senders fails the requests that wait.
         self.pending.lock().expect("lock poisoned").clear();
         let streams: Vec<Receiving> = self

@@ -6632,7 +6632,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             SessionLost,
             TransactionChanged,
             QuitRequested,
-            plugins::PluginInstallProgress,
+            plugins::PluginInstallChanged,
             plugins::PluginsChanged,
             launch::LaunchRequested
         ])

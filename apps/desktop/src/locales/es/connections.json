@@ -9,6 +9,7 @@
   "comingSoon": "Próximamente",
   "comingSoonHint": "{{engine}} todavía no está soportado",
   "needsPlugin": "Plugin no instalado",
+  "pluginDownloading": "Descargando el plugin…",
   "needsPluginHint": "{{engine}} necesita el plugin {{plugin}}, que no está instalado. Elígelo para abrir Ajustes > Plugins.",
   "needsPluginNote": "Esta conexión necesita el plugin {{plugin}} para {{engine}}, que no está instalado.",
   "openPlugins": "Abrir Plugins",
