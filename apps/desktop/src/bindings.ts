@@ -1135,14 +1135,14 @@ export const commands = {
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
 	/**  An editor tab's transaction, as the core last read it (ADR-031). */
-	transactionStatus: (session: string) => typedError<TransactionStatusItem_Serialize, string>(__TAURI_INVOKE("transaction_status", { session })),
+	transactionStatus: (session: string) => typedError<TransactionStatusItem, string>(__TAURI_INVOKE("transaction_status", { session })),
 	/**
 	 *  Turns an editor tab's auto-commit on or off; the core refuses to turn it on while a
 	 *  transaction is open (ADR-031).
 	 */
-	setAutoCommit: (session: string, on: boolean) => typedError<TransactionStatusItem_Serialize, string>(__TAURI_INVOKE("set_auto_commit", { session, on })),
-	commitTransaction: (session: string) => typedError<TransactionOutcomeItem_Serialize, string>(__TAURI_INVOKE("commit_transaction", { session })),
-	rollbackTransaction: (session: string) => typedError<TransactionOutcomeItem_Serialize, string>(__TAURI_INVOKE("rollback_transaction", { session })),
+	setAutoCommit: (session: string, on: boolean) => typedError<TransactionStatusItem, string>(__TAURI_INVOKE("set_auto_commit", { session, on })),
+	commitTransaction: (session: string) => typedError<TransactionOutcomeItem, string>(__TAURI_INVOKE("commit_transaction", { session })),
+	rollbackTransaction: (session: string) => typedError<TransactionOutcomeItem, string>(__TAURI_INVOKE("rollback_transaction", { session })),
 	/**
 	 *  Of these sessions, the ones whose closing must be confirmed: a transaction with work in it
 	 *  is open (ADR-031). The UI asks before closing a tab, switching its connection or
@@ -1150,8 +1150,9 @@ export const commands = {
 	 */
 	sessionsToConfirm: (sessions: string[]) => typedError<string[], string>(__TAURI_INVOKE("sessions_to_confirm", { sessions })),
 	/**
-	 *  The editor tabs with an open transaction, for the quit question: from what each session
-	 *  last read, with no round trip, so a server that does not answer cannot hold quitting.
+	 *  The editor tabs whose closing must ask, for the quit question: from what each session
+	 *  last read, with no round trip, so a server that does not answer cannot hold quitting. A lost
+	 *  session is left out: its server already rolled its transaction back (SDB-372).
 	 */
 	quitOpenTransactions: () => typedError<string[], string>(__TAURI_INVOKE("quit_open_transactions")),
 	/**
@@ -1177,7 +1178,7 @@ export const events = {
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
-	transactionChanged: makeEvent<TransactionChanged_Serialize, TransactionChanged_Deserialize>("transaction-changed"),
+	transactionChanged: makeEvent<TransactionChanged, TransactionChanged>("transaction-changed"),
 };
 
 /* Types */
@@ -1799,6 +1800,15 @@ export type ColumnStatsTarget = {
 	name: string,
 	filter: string,
 };
+
+/**  How a followed tab commits. */
+export type CommitModeItem = 
+/**  Each statement commits as it runs. */
+"auto" | 
+/**  Changes wait for Commit, as the user or the connection type chose. */
+"manual" | 
+/**  Smart commit turned manual commit on: it ends with the transaction. */
+"smartSwitched";
 
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
 
@@ -6615,76 +6625,42 @@ sampled: boolean; sampleRows: number | null } | { kind: "cancelled" } | { kind: 
  *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
  *  auto-commit toggle (ADR-031).
  */
-export type TransactionChanged = TransactionChanged_Serialize | TransactionChanged_Deserialize;
-
-/**
- *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
- *  auto-commit toggle (ADR-031).
- */
-export type TransactionChanged_Deserialize = {
+export type TransactionChanged = {
 	session: string,
-	status: TransactionStatusItem_Deserialize,
-};
-
-/**
- *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
- *  auto-commit toggle (ADR-031).
- */
-export type TransactionChanged_Serialize = {
-	session: string,
-	status: TransactionStatusItem_Serialize,
+	status: TransactionStatusItem,
 };
 
 /**  What a Commit or Rollback said. */
-export type TransactionOutcomeItem = TransactionOutcomeItem_Serialize | TransactionOutcomeItem_Deserialize;
-
-/**  What a Commit or Rollback said. */
-export type TransactionOutcomeItem_Deserialize = {
-	status: TransactionStatusItem_Deserialize,
+export type TransactionOutcomeItem = {
+	status: TransactionStatusItem,
 	notices: NoticeItem[],
 };
 
-/**  What a Commit or Rollback said. */
-export type TransactionOutcomeItem_Serialize = {
-	status: TransactionStatusItem_Serialize,
-	notices: NoticeItem[],
-};
-
-/**  What the core last read about a transaction (ADR-031). */
-export type TransactionStateItem = "idle" | "open" | 
+/**  Whether a transaction is open, as the driver last said. */
+export type TransactionPhaseItem = { kind: "idle" } | 
+/**  Open with work a Commit would keep; `statements` run in it. */
+{ kind: "open"; statements: number } | 
 /**  Open, but the engine will only roll it back. */
-"failed";
+{ kind: "failed"; statements: number };
 
-/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
-export type TransactionStatusItem = TransactionStatusItem_Serialize | TransactionStatusItem_Deserialize;
-
-/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
-export type TransactionStatusItem_Deserialize = {
-	/**  The tab follows its transaction (an editor tab on an engine that can tell). */
-	supported: boolean,
-	autoCommit: boolean,
-	/**  The connection type's smart commit. */
-	smartCommit: boolean,
-	/**  Manual commit came from smart commit: it ends with the transaction. */
-	smartSwitched: boolean,
-	state?: TransactionStateItem | null,
-	/**  Statements run in the open transaction. */
-	statements: number,
-};
-
-/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
-export type TransactionStatusItem_Serialize = {
-	/**  The tab follows its transaction (an editor tab on an engine that can tell). */
-	supported: boolean,
-	autoCommit: boolean,
-	/**  The connection type's smart commit. */
-	smartCommit: boolean,
-	/**  Manual commit came from smart commit: it ends with the transaction. */
-	smartSwitched: boolean,
-	state: TransactionStateItem | null,
-	/**  Statements run in the open transaction. */
-	statements: number,
-};
+/**
+ *  An editor tab's transaction, as the core keeps it (ADR-031, ADR-060): its state, and the
+ *  core's answers to what the controls ask. The UI only shows it and derives nothing.
+ */
+export type TransactionStatusItem = 
+/**
+ *  The tab does not follow its transaction (not an editor tab, or an engine that cannot
+ *  tell): it only runs in auto-commit.
+ */
+{ kind: "notFollowed" } | { kind: "followed"; commit: CommitModeItem; transaction: TransactionPhaseItem; 
+/**  The connection type's smart commit. */
+smartCommit: boolean; 
+/**  Commit and Rollback apply: a transaction is open, also one that failed. */
+inTransaction: boolean; 
+/**  Auto-commit cannot be turned on now: commit or roll back first. */
+autoCommitLocked: boolean; 
+/**  Commit and Rollback are shown: in manual commit, or while a transaction is open. */
+endActionsShown: boolean };
 
 /**  The transposed view of rows of a result (SDB-386): a result of its own in the core. */
 export type TransposedItem = {

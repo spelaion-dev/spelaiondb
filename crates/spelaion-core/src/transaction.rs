@@ -1,7 +1,8 @@
 //! Transactions you can see and control (ADR-031).
 //!
-//! An editor session has a [`TransactionStatus`]: auto-commit or manual commit, whether its
-//! connection type asks for smart commit, and whether a transaction is open. The state always
+//! An editor session has a [`TransactionLifecycle`], shown as a [`TransactionStatus`]:
+//! auto-commit or manual commit, whether its connection type asks for smart commit, and
+//! whether a transaction is open. The state always
 //! comes from the driver ([`Connection::transaction_state`]), read after every statement, so it
 //! stays true after a `BEGIN` the user typed, an implicit commit or an error that rolled the
 //! transaction back. In manual commit the core opens a transaction with the engine's own
@@ -10,13 +11,18 @@
 //!
 //! [`Connection::transaction_state`]: spelaion_driver_api::Connection::transaction_state
 
-use spelaion_config::Safeguards;
 use spelaion_driver_api::Notice;
 pub use spelaion_driver_api::TransactionState;
 
 use crate::classify::classify_read_only;
 
-/// What an editor session shows about its transaction.
+mod lifecycle;
+
+pub use lifecycle::{CommitMode, TransactionLifecycle, TransactionPhase};
+
+/// What an editor session shows about its transaction: a read-only view of its
+/// [`TransactionLifecycle`], which is the state (ADR-060). It is only made from one, so its
+/// fields always agree; they stay for the readers written before the lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionStatus {
     /// The session follows its transaction: an editor session whose engine can tell whether
@@ -35,46 +41,44 @@ pub struct TransactionStatus {
     /// Statements run in the open transaction (transaction control and internal metadata
     /// reads are not counted).
     pub statements: u32,
+    /// The state the fields show; private, so a view can only be made from a lifecycle.
+    lifecycle: TransactionLifecycle,
+}
+
+impl From<TransactionLifecycle> for TransactionStatus {
+    fn from(lifecycle: TransactionLifecycle) -> Self {
+        Self {
+            supported: lifecycle.is_followed(),
+            auto_commit: lifecycle.auto_commit(),
+            smart_commit: lifecycle.smart_commit(),
+            smart_switched: lifecycle.smart_switched(),
+            state: lifecycle.state(),
+            statements: lifecycle.statements(),
+            lifecycle,
+        }
+    }
 }
 
 impl Default for TransactionStatus {
     fn default() -> Self {
-        Self {
-            supported: false,
-            auto_commit: true,
-            smart_commit: false,
-            smart_switched: false,
-            state: None,
-            statements: 0,
-        }
+        TransactionLifecycle::NotFollowed.into()
     }
 }
 
 impl TransactionStatus {
+    /// The state this view shows.
+    pub fn lifecycle(&self) -> TransactionLifecycle {
+        self.lifecycle
+    }
+
     /// A transaction is open with work that a Commit would keep.
     pub fn is_open(&self) -> bool {
-        self.state == Some(TransactionState::Open)
+        self.lifecycle.is_open()
     }
 
     /// A transaction is open, also one that can only be rolled back.
     pub fn in_transaction(&self) -> bool {
-        matches!(
-            self.state,
-            Some(TransactionState::Open | TransactionState::Failed)
-        )
-    }
-
-    /// Takes the driver's answer: when no transaction is open any more, the count restarts and
-    /// a session that smart commit switched returns to auto-commit.
-    pub(crate) fn observe(&mut self, state: TransactionState) {
-        self.state = Some(state);
-        if state == TransactionState::Idle {
-            self.statements = 0;
-            if self.smart_switched {
-                self.smart_switched = false;
-                self.auto_commit = true;
-            }
-        }
+        self.lifecycle.in_transaction()
     }
 }
 
@@ -102,21 +106,6 @@ pub struct TransactionOutcome {
     /// The engine's notices and warnings, and what the core noticed (a failed transaction
     /// that a Commit could only roll back).
     pub notices: Vec<Notice>,
-}
-
-/// The starting status of an editor session under its connection type's safeguards.
-pub(crate) fn initial_status(
-    safeguards: &Safeguards,
-    state: TransactionState,
-) -> TransactionStatus {
-    TransactionStatus {
-        supported: true,
-        auto_commit: !safeguards.manual_commit,
-        smart_commit: safeguards.smart_commit,
-        smart_switched: false,
-        state: Some(state),
-        statements: 0,
-    }
 }
 
 /// How a statement relates to transactions.
@@ -402,29 +391,5 @@ mod tests {
         assert!(is_write("postgres", "create table t (a int)"));
         assert!(is_write("mysql", "insert into t values (1)"));
         assert!(is_write("sqlserver", "delete from t where id = 1"));
-    }
-
-    #[test]
-    fn a_smart_switch_ends_with_its_transaction() {
-        let mut status = TransactionStatus {
-            supported: true,
-            auto_commit: false,
-            smart_commit: true,
-            smart_switched: true,
-            state: Some(TransactionState::Open),
-            statements: 2,
-        };
-        status.observe(TransactionState::Open);
-        assert!(!status.auto_commit && status.statements == 2);
-        status.observe(TransactionState::Idle);
-        assert!(status.auto_commit && !status.smart_switched && status.statements == 0);
-        // A manual mode the user chose stays manual.
-        let mut manual = TransactionStatus {
-            smart_switched: false,
-            auto_commit: false,
-            ..status
-        };
-        manual.observe(TransactionState::Idle);
-        assert!(!manual.auto_commit);
     }
 }

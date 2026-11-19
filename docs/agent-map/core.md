@@ -77,7 +77,14 @@
   transaction: the state always comes from the driver (`Connection::transaction_state`, read
   after every statement), manual commit opens one with the engine's `BEGIN`, smart commit is a
   connection type safeguard, and `Session::close_needs_confirmation` is the check before
-  closing a tab, disconnecting or quitting; core-written statements use `run_generated`, never
+  closing a tab, disconnecting or quitting. The state is one enum, `TransactionLifecycle`
+  (`transaction/lifecycle.rs`, SDB-372, ADR-060): not followed, or followed with a
+  `CommitMode` (auto, manual, switched by smart commit) and a `TransactionPhase` (idle, open or
+  failed, with its statement count); it changes only through its own methods.
+  `TransactionStatus` is a read-only view made from it, and `closing_asks` is the one rule for
+  "must closing ask" (`closing_asks_from_last_state` for the quit question, which leaves out a
+  lost session). The page gets `TransactionStatusItem` (the state and the core's answers) and
+  derives nothing; core-written statements use `run_generated`, never
   the manual-commit `BEGIN`; `tests/transactions.rs` runs it on every engine. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;

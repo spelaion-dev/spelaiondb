@@ -16,7 +16,7 @@ import {
   type ConnectionItem_Serialize,
   type ConnectionTypeDraft_Deserialize,
   type ConnectionTypeItem_Serialize,
-  type TransactionStatusItem_Serialize,
+  type TransactionStatusItem as GeneratedTransactionStatusItem,
   type EngineItem_Serialize,
   type EngineChangeItem_Serialize,
   type NamePatternPreview_Serialize,
@@ -164,7 +164,7 @@ export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
 export type ConnectionTypeItem = ConnectionTypeItem_Serialize;
-export type TransactionStatusItem = TransactionStatusItem_Serialize;
+export type TransactionStatusItem = GeneratedTransactionStatusItem;
 export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
 export type ImportItem = ImportItem_Serialize;
 export type KubePort = KubePortItem_Serialize;

@@ -279,7 +279,10 @@ pub use tls_warning::{
     TlsRisk, TlsRoute, TlsWarning, connection_draft_tls_warning, connection_tls_warning,
     draft_tls_warning, file_tls_warning, is_local_host, tls_warning,
 };
-pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
+pub use transaction::{
+    CommitMode, TransactionError, TransactionLifecycle, TransactionOutcome, TransactionPhase,
+    TransactionState, TransactionStatus,
+};
 pub use transpose::{MAX_TRANSPOSED_ROWS, TransposeError, Transposed, transpose};
 pub use value_pick::{
     ChoicePicker, ChoiceSource, KEY_LABEL_CHARS, KEY_LABEL_COLUMNS, KEY_PAGE_ROWS, KeyPicker,

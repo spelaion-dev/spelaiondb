@@ -3185,47 +3185,95 @@ pub struct SessionLost {
     pub open_transaction: bool,
 }
 
-/// What the core last read about a transaction (ADR-031).
+/// An editor tab's transaction, as the core keeps it (ADR-031, ADR-060): its state, and the
+/// core's answers to what the controls ask. The UI only shows it and derives nothing.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum TransactionStateItem {
-    Idle,
-    Open,
-    /// Open, but the engine will only roll it back.
-    Failed,
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TransactionStatusItem {
+    /// The tab does not follow its transaction (not an editor tab, or an engine that cannot
+    /// tell): it only runs in auto-commit.
+    NotFollowed,
+    Followed {
+        commit: CommitModeItem,
+        transaction: TransactionPhaseItem,
+        /// The connection type's smart commit.
+        smart_commit: bool,
+        /// Commit and Rollback apply: a transaction is open, also one that failed.
+        in_transaction: bool,
+        /// Auto-commit cannot be turned on now: commit or roll back first.
+        auto_commit_locked: bool,
+        /// Commit and Rollback are shown: in manual commit, or while a transaction is open.
+        end_actions_shown: bool,
+    },
 }
 
-/// An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it.
+/// How a followed tab commits.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct TransactionStatusItem {
-    /// The tab follows its transaction (an editor tab on an engine that can tell).
-    pub supported: bool,
-    pub auto_commit: bool,
-    /// The connection type's smart commit.
-    pub smart_commit: bool,
-    /// Manual commit came from smart commit: it ends with the transaction.
-    pub smart_switched: bool,
-    pub state: Option<TransactionStateItem>,
-    /// Statements run in the open transaction.
-    pub statements: u32,
+pub enum CommitModeItem {
+    /// Each statement commits as it runs.
+    Auto,
+    /// Changes wait for Commit, as the user or the connection type chose.
+    Manual,
+    /// Smart commit turned manual commit on: it ends with the transaction.
+    SmartSwitched,
+}
+
+/// Whether a transaction is open, as the driver last said.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TransactionPhaseItem {
+    Idle,
+    /// Open with work a Commit would keep; `statements` run in it.
+    Open {
+        statements: u32,
+    },
+    /// Open, but the engine will only roll it back.
+    Failed {
+        statements: u32,
+    },
+}
+
+impl From<spelaion_core::TransactionLifecycle> for TransactionStatusItem {
+    fn from(lifecycle: spelaion_core::TransactionLifecycle) -> Self {
+        use spelaion_core::{CommitMode, TransactionLifecycle, TransactionPhase};
+        match lifecycle {
+            TransactionLifecycle::NotFollowed => Self::NotFollowed,
+            TransactionLifecycle::Followed { commit, phase } => Self::Followed {
+                commit: match commit {
+                    CommitMode::Auto { .. } => CommitModeItem::Auto,
+                    CommitMode::Manual { .. } => CommitModeItem::Manual,
+                    CommitMode::SmartSwitched => CommitModeItem::SmartSwitched,
+                },
+                transaction: match phase {
+                    TransactionPhase::Idle => TransactionPhaseItem::Idle,
+                    TransactionPhase::Open { statements } => {
+                        TransactionPhaseItem::Open { statements }
+                    }
+                    TransactionPhase::Failed { statements } => {
+                        TransactionPhaseItem::Failed { statements }
+                    }
+                },
+                smart_commit: lifecycle.smart_commit(),
+                in_transaction: lifecycle.in_transaction(),
+                auto_commit_locked: lifecycle.auto_commit_locked(),
+                end_actions_shown: lifecycle.end_actions_shown(),
+            },
+        }
+    }
 }
 
 impl From<spelaion_core::TransactionStatus> for TransactionStatusItem {
-    fn from(s: spelaion_core::TransactionStatus) -> Self {
-        use spelaion_core::TransactionState;
-        Self {
-            supported: s.supported,
-            auto_commit: s.auto_commit,
-            smart_commit: s.smart_commit,
-            smart_switched: s.smart_switched,
-            state: s.state.map(|state| match state {
-                TransactionState::Idle => TransactionStateItem::Idle,
-                TransactionState::Open => TransactionStateItem::Open,
-                TransactionState::Failed => TransactionStateItem::Failed,
-            }),
-            statements: s.statements,
-        }
+    fn from(status: spelaion_core::TransactionStatus) -> Self {
+        status.lifecycle().into()
     }
 }
 

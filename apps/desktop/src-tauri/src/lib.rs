@@ -2215,7 +2215,7 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
             return;
         };
         // The last state read before the loss (ADR-031).
-        let open_transaction = idle.is_none() && watched.session.transaction_status().is_open();
+        let open_transaction = idle.is_none() && watched.session.transaction_lifecycle().is_open();
         let state = app.state::<AppState>();
         let mut sessions = state.sessions.lock().await;
         let current = sessions
@@ -2249,7 +2249,7 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
 /// Tells the UI every change of an editor tab's transaction (ADR-031), while that session is
 /// still the tab's.
 fn forward_transaction(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
-    if !open.session.transaction_status().supported {
+    if !open.session.transaction_lifecycle().is_followed() {
         return;
     }
     let mut changes = open.session.transaction();
@@ -2386,18 +2386,20 @@ async fn quit_cancelled(state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
-/// The editor tabs with an open transaction, for the quit question: from what each session
-/// last read, with no round trip, so a server that does not answer cannot hold quitting.
+/// The editor tabs whose closing must ask, for the quit question: from what each session
+/// last read, with no round trip, so a server that does not answer cannot hold quitting. A lost
+/// session is left out: its server already rolled its transaction back (SDB-372).
 #[command]
 async fn quit_open_transactions(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     Ok(open_transactions(&*state.sessions.lock().await))
 }
 
-/// The editor tabs with an open transaction, from what each session last read.
+/// The editor tabs whose closing must ask, from what each session last read
+/// (`Session::closing_asks_from_last_state`, the core's one rule).
 fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> {
     let mut open: Vec<String> = sessions
         .iter()
-        .filter(|(_, s)| s.open.session.transaction_status().is_open())
+        .filter(|(_, s)| s.open.session.closing_asks_from_last_state())
         .map(|(key, _)| key.clone())
         .collect();
     open.sort();

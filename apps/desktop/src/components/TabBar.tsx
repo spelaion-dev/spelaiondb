@@ -204,8 +204,8 @@ export function TabBar({ hidden }: { hidden: boolean }) {
               ) : (
                 <span className={`dot dot-${tab.status}`} role="img" aria-label={t(`editor:status.${tab.status}`)} title={t(`editor:status.${tab.status}`)} />
               )}
-              {(tab.transaction?.state === "open" || tab.transaction?.state === "failed") && (
-                <span className={`tab-tx${tab.transaction.state === "failed" ? " tab-tx-failed" : ""}`} title={t("editor:transaction.tabBadge")} aria-label={t("editor:transaction.tabBadge")}>TX</span>
+              {tab.transaction?.kind === "followed" && tab.transaction.inTransaction && (
+                <span className={`tab-tx${tab.transaction.transaction.kind === "failed" ? " tab-tx-failed" : ""}`} title={t("editor:transaction.tabBadge")} aria-label={t("editor:transaction.tabBadge")}>TX</span>
               )}
               {renaming === tab.id ? (
                 <RenameInput tab={tab} onDone={() => document.getElementById(`workspace-${tab.id}`)?.focus()} />
