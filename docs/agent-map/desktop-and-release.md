@@ -61,6 +61,11 @@
 - Lifecycles in the app (ADR-060): `src-tauri` hands on the core's state types, and the page
   reads them from `bindings.ts`; it does not rebuild a state from events or derive it from
   flags. A state that exists only in the page (a dialog's phase, a value being loaded) is a
-  discriminated union whose `switch` ends in a `never` check. The app's own lifecycles (the
-  registry of running work, a tab's connection, the dialogs, the update, the folder switch,
-  quitting) are SDB-369, SDB-371, SDB-375 and SDB-377.
+  discriminated union whose `switch` ends in a `never` check. The shared ones are in
+  `src/dialogState.ts` (`Loaded<T>`, "preview, then apply", a job's phase; reducers tested by
+  `scripts/dialog-state.test.mjs`) and their hooks in `src/useDialogState.ts`
+  (`usePreviewThenApply`, `useJobPhase`, `confirmShown`): a new dialog uses them, not its own
+  preview, error, busy or id flags. The hooks only show: what may run is still the core's
+  check (ADR-047, ADR-008). The search panel's data search is one phase in `src/searchRun.ts`.
+  The app's own lifecycles (the registry of running work, a tab's connection, the dialogs, the
+  update, the folder switch, quitting) are SDB-369, SDB-371, SDB-375 and SDB-377.

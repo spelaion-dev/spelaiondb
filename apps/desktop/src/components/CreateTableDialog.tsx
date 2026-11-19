@@ -7,10 +7,10 @@ import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { AlterationPreviewItem, NewTableItem } from "../bindings";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
-import { useApp, useDialogs } from "../store";
+import { scriptText } from "../dialogState";
+import { useApp } from "../store";
+import { confirmShown, usePreviewThenApply } from "../useDialogState";
 import { Icon } from "./Icons";
-
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 type Column = { id: number; name: string; dataType: string; nullable: boolean; default: string; comment: string; primary: boolean };
 type ForeignKey = { id: number; name: string; columns: string; referencedTable: string; referencedColumns: string };
@@ -49,10 +49,6 @@ export function CreateTableDialog({ session, connectionId, schema, onClose, onDo
   ]);
   const [keys, setKeys] = useState<ForeignKey[]>([]);
   const [indexes, setIndexes] = useState<Index[]>([]);
-  const [preview, setPreview] = useState<{ key: string; value: AlterationPreviewItem } | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const previousFocus = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   useEffect(() => () => { if (previousFocus.current?.isConnected) previousFocus.current.focus(); }, []);
 
@@ -71,17 +67,11 @@ export function CreateTableDialog({ session, connectionId, schema, onClose, onDo
   }), [schema, name, columns, keys, indexes]);
   const key = JSON.stringify(table);
 
-  useEffect(() => {
-    let current = true;
-    const timer = window.setTimeout(() => {
-      call(commands.previewCreateTable(session, JSON.parse(key) as NewTableItem))
-        .then((value) => { if (current) { setPreview({ key, value }); setPreviewError(null); } })
-        .catch((e: unknown) => { if (current) { setPreview(null); setPreviewError(message(e)); } });
-    }, 200);
-    return () => { current = false; window.clearTimeout(timer); };
-  }, [session, key]);
-
-  const ready = preview !== null && preview.key === key;
+  const flow = usePreviewThenApply<AlterationPreviewItem>(session, key, 200, (asked) =>
+    call(commands.previewCreateTable(session, JSON.parse(asked) as NewTableItem)));
+  const { preview, busy } = flow;
+  const ready = preview.kind === "ready";
+  const error = flow.apply.kind === "failed" ? flow.apply.message : null;
   const readOnly = connection?.readOnly ?? false;
   const production = connection?.kind?.safeguards.confirmDataChanges ?? false;
   const comments = connection?.engine !== "sqlite";
@@ -91,28 +81,18 @@ export function CreateTableDialog({ session, connectionId, schema, onClose, onDo
   const updateIndex = (id: number, change: Partial<Index>) => setIndexes((items) => items.map((i) => (i.id === id ? { ...i, ...change } : i)));
 
   async function create() {
-    if (!ready || !preview) return;
+    if (preview.kind !== "ready") return;
     const shown = preview.value;
-    let confirmed = false;
-    if (shown.risks.length > 0) {
-      const statements = shown.risks.map((r) => ({ sql: shown.statements[r.statement] ?? shown.sql, risk: r.risk }));
-      if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
-      confirmed = true;
-    }
-    setBusy(true);
-    setError(null);
-    try {
+    const confirmed = await confirmShown(connection?.name ?? "", shown);
+    if (confirmed === null) return;
+    await flow.run(async () => {
       await call(commands.applyCreateTable(session, table, shown.sql, confirmed));
       onDone(name.trim());
-    } catch (e) {
-      setError(t("createTable.failed", { detail: message(e) }));
-    } finally {
-      setBusy(false);
-    }
+    }, (detail) => t("createTable.failed", { detail }));
   }
 
   function openInEditor() {
-    if (!ready || !preview) return;
+    if (preview.kind !== "ready") return;
     const tab = useApp.getState().addTab(connectionId, preview.value.sql);
     connectTabFromExplorer(tab, session, explorerDatabase(connectionId, schema));
     onClose();
@@ -197,7 +177,7 @@ export function CreateTableDialog({ session, connectionId, schema, onClose, onDo
         )}
         <span className="muted small">{t("objectChange.sql")}</span>
         <pre className="object-change-sql mono structure-sql" aria-label={t("objectChange.sql")} aria-live="polite">
-          {ready ? preview.value.sql : previewError ?? "…"}
+          {scriptText(preview)}
         </pre>
         {production && <p className="warn small">{t("objectChange.production")}</p>}
         {readOnly && <p className="warn small">{t("objectChange.readOnly")}</p>}

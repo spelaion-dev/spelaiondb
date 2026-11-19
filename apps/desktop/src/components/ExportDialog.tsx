@@ -11,8 +11,10 @@ import { create } from "zustand";
 import { call, commands, type CellRange, type TextFormat } from "../api";
 import type { ExportDefaultsItem, ExportFileOptions, ExportSummaryItem, ExportProgressItem, FileNamePatternItem, JobOutcome, JsonOptionsItem, RerunCheckItem, SqlOptionsItem } from "../bindings";
 import { chooseFolder, chooseSavePath } from "../dialogs";
+import { errorText as message } from "../dialogState";
 import { useApp, useDialogs, type ResultMeta } from "../store";
 import { ended, partialText } from "../resultEnd";
+import { useJobPhase } from "../useDialogState";
 
 /** What the dialog exports. */
 export type ExportRequest =
@@ -62,18 +64,13 @@ const ENCODINGS: Encoding[] = ["utf8Bom", "utf8", "utf16Le", "windows1252"];
 
 type Scope = "loaded" | "all" | "selection";
 
-type Phase =
-  | { kind: "options" }
-  | { kind: "running"; rows: number; bytes: number; table: number | null }
-  | { kind: "done"; text: string }
-  | { kind: "failed"; text: string; fallback: string | null };
+/** The rows and bytes written, and the table being written of several. */
+type Progress = { rows: number; bytes: number; table: number | null };
+/** A failed export, and the file its loaded rows can still be written to. */
+type Failure = { text: string; fallback: string | null };
 
 /** Ids the core keys running exports by (to cancel them). */
 let nextExport = Math.floor(Math.random() * 1_000_000);
-
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 export function ExportDialog() {
   const request = useExport((s) => s.request);
@@ -109,8 +106,10 @@ function ExportForm({ request }: { request: ExportRequest }) {
   const [names, setNames] = useState<FileNamePatternItem>({ pattern: "{table}", timestampFormat: "%Y%m%d-%H%M%S" });
   const [sql, setSql] = useState<SqlOptions>({ rowsPerInsert: 1, omitSchema: false, keywordCase: "upper", nameCase: "asIs", upsert: false });
   const [json, setJson] = useState<JsonOptions>({ isoDates: false, jsonAsJson: true });
-  const [phase, setPhase] = useState<Phase>({ kind: "options" });
-  const [exportId, setExportId] = useState<number | null>(null);
+  // Idle is the options form.
+  const job = useJobPhase<Progress, { text: string }, Failure>();
+  const { phase, running } = job;
+  const exportId = phase.kind === "running" ? phase.id : null;
   const [lastPath, setLastPath] = useState<string | null>(null);
   // The options are shown once the last export's choices are in (or could not be read).
   const [ready, setReady] = useState(false);
@@ -163,7 +162,6 @@ function ExportForm({ request }: { request: ExportRequest }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const running = phase.kind === "running";
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !running) close();
@@ -244,18 +242,19 @@ function ExportForm({ request }: { request: ExportRequest }) {
 
   async function exportLoaded(path: string, range: CellRange | null) {
     if (!result) return;
-    setPhase({ kind: "running", rows: 0, bytes: 0, table: null });
+    // Written from the loaded rows at once: nothing to cancel.
+    job.start(null, { rows: 0, bytes: 0, table: null });
     try {
       const summary = await call(commands.exportResult(result.id, request.session, path, options(), range));
-      setPhase({ kind: "done", text: doneText(summary.rows ?? 0, path, summary.replaced ?? 0) });
+      job.done({ text: doneText(summary.rows ?? 0, path, summary.replaced ?? 0) });
     } catch (e) {
-      setPhase({ kind: "failed", text: message(e), fallback: null });
+      job.failed({ text: message(e), fallback: null });
     }
   }
 
   async function start(path?: string, confirmed = false) {
     const target = path ?? (await askPath().catch((e: unknown) => {
-      setPhase({ kind: "failed", text: message(e), fallback: null });
+      job.failed({ text: message(e), fallback: null });
       return null;
     }));
     if (!target) return;
@@ -273,10 +272,9 @@ function ExportForm({ request }: { request: ExportRequest }) {
       confirmed = true;
     }
     const id = ++nextExport;
-    setExportId(id);
-    setPhase({ kind: "running", rows: 0, bytes: 0, table: null });
+    job.start(id, { rows: 0, bytes: 0, table: null });
     const channel = new Channel<ExportProgressItem>();
-    channel.onmessage = (p) => setPhase((current) => (current.kind === "running" ? { kind: "running", rows: p.rows ?? 0, bytes: p.bytes ?? 0, table: p.table ?? null } : current));
+    channel.onmessage = (p) => job.progress(id, { rows: p.rows ?? 0, bytes: p.bytes ?? 0, table: p.table ?? null });
     try {
       if (request.kind === "tables" && request.tables.length > 1) {
         const outcome = await call(commands.exportTables(request.session, id, request.tables, target, names, options(), channel));
@@ -290,25 +288,25 @@ function ExportForm({ request }: { request: ExportRequest }) {
         switch (outcome.kind) {
           case "done":
           case "stoppedAtLimit":
-            setPhase({ kind: "done", text: written });
+            job.done({ text: written });
             break;
           case "cancelled":
-            setPhase({ kind: "done", text: `${t("export.cancelled")} ${written}` });
+            job.done({ text: `${t("export.cancelled")} ${written}` });
             break;
           case "failed": {
             const failed = request.tables[outcome.kept.table]?.name ?? "";
-            setPhase({ kind: "failed", text: `${t("export.tableFailed", { table: failed, reason: outcome.message })} ${written}`, fallback: null });
+            job.failed({ text: `${t("export.tableFailed", { table: failed, reason: outcome.message })} ${written}`, fallback: null });
             break;
           }
           // The core writes these reads itself: nothing is asked or refused before they run.
           case "notARead":
-            setPhase({ kind: "failed", text: t("export.notARead", { reason: outcome.message }), fallback: null });
+            job.failed({ text: t("export.notARead", { reason: outcome.message }), fallback: null });
             break;
           case "needsConfirmation":
-            setPhase({ kind: "failed", text: t("export.failedAgain", { reason: t("runFile.notConfirmed") }), fallback: null });
+            job.failed({ text: t("export.failedAgain", { reason: t("runFile.notConfirmed") }), fallback: null });
             break;
           case "passwordRequired":
-            setPhase({ kind: "failed", text: t("export.failedAgain", { reason: t("backup.passwordRequired") }), fallback: null });
+            job.failed({ text: t("export.failedAgain", { reason: t("backup.passwordRequired") }), fallback: null });
             break;
           default: {
             const unexpected: never = outcome;
@@ -331,27 +329,27 @@ function ExportForm({ request }: { request: ExportRequest }) {
       switch (outcome.kind) {
         case "done":
         case "stoppedAtLimit":
-          setPhase({ kind: "done", text: doneText(outcome.result.rows ?? 0, target, outcome.result.replaced ?? 0) });
+          job.done({ text: doneText(outcome.result.rows ?? 0, target, outcome.result.replaced ?? 0) });
           break;
         case "cancelled":
-          setPhase({ kind: "done", text: t("export.cancelledNoFile") });
+          job.done({ text: t("export.cancelledNoFile") });
           break;
         case "needsConfirmation":
           if (!sql || !(await useDialogs.getState().askRisks(connection?.name ?? "", [{ sql, risk: "execution" }]))) {
-            setPhase({ kind: "options" });
+            job.reset();
             return;
           }
           await start(target, true);
           return;
         case "notARead":
-          setPhase({ kind: "failed", text: t("export.notARead", { reason: outcome.message }), fallback });
+          job.failed({ text: t("export.notARead", { reason: outcome.message }), fallback });
           break;
         case "failed":
-          setPhase({ kind: "failed", text: t("export.failedAgain", { reason: outcome.message }), fallback });
+          job.failed({ text: t("export.failedAgain", { reason: outcome.message }), fallback });
           break;
         // The export's session is opened from the tab's, with its password.
         case "passwordRequired":
-          setPhase({ kind: "failed", text: t("export.failedAgain", { reason: t("backup.passwordRequired") }), fallback });
+          job.failed({ text: t("export.failedAgain", { reason: t("backup.passwordRequired") }), fallback });
           break;
         default: {
           const unexpected: never = outcome;
@@ -359,9 +357,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
         }
       }
     } catch (e) {
-      setPhase({ kind: "failed", text: message(e), fallback: null });
-    } finally {
-      setExportId(null);
+      job.failed({ text: message(e), fallback: null });
     }
   }
 
@@ -374,13 +370,13 @@ function ExportForm({ request }: { request: ExportRequest }) {
         ? t("export.titleSelection")
         : t("export.title");
 
-  const tableName = phase.kind === "running" && phase.table !== null && request.kind === "tables" ? request.tables[phase.table]?.name : null;
+  const tableName = phase.kind === "running" && phase.progress.table !== null && request.kind === "tables" ? request.tables[phase.progress.table]?.name : null;
 
   return (
     <div className="modal-backdrop">
       <div className="modal export-dialog" role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
-        {phase.kind === "options" && ready && (
+        {phase.kind === "idle" && ready && (
           <>
             {request.kind === "result" && (
               <fieldset className="export-scope">
@@ -567,9 +563,9 @@ function ExportForm({ request }: { request: ExportRequest }) {
           <>
             <p role="status" className="export-progress">
               {tableName != null && request.kind === "tables"
-                ? `${t("export.tableProgress", { index: numbers.format((phase.table ?? 0) + 1), total: numbers.format(request.tables.length), table: tableName })} · `
+                ? `${t("export.tableProgress", { index: numbers.format((phase.progress.table ?? 0) + 1), total: numbers.format(request.tables.length), table: tableName })} · `
                 : ""}
-              {t("export.progress", { count: phase.rows, formattedCount: numbers.format(phase.rows), size: bytes(phase.bytes) })}
+              {t("export.progress", { count: phase.progress.rows, formattedCount: numbers.format(phase.progress.rows), size: bytes(phase.progress.bytes) })}
             </p>
             <div className="modal-actions">
               <button className="danger" disabled={exportId === null} onClick={() => exportId !== null && void call(commands.cancelExport(exportId)).catch(() => undefined)}>
@@ -596,7 +592,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
               {phase.text}
             </p>
             <div className="modal-actions">
-              <button onClick={() => setPhase({ kind: "options" })}>{t("export.back")}</button>
+              <button onClick={job.reset}>{t("export.back")}</button>
               {phase.fallback && lastPath && (
                 <button
                   className="primary"

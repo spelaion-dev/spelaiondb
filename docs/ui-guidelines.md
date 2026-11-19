@@ -321,7 +321,10 @@ A confirmation reads:
   leaving never drops typed text, unsaved SQL or pending edits without one.
 - **While it runs**, its buttons are disabled, the action reads "Running…" or "Deleting…" and
   Escape does nothing. If it fails, the dialog stays open with the error inside it
-  (`role="alert"`) and what was typed is kept.
+  (`role="alert"`) and what was typed is kept. A dialog that shows the core's script and then
+  applies it uses `usePreviewThenApply`, and one that runs a job uses `useJobPhase`
+  (`useDialogState.ts`); a value it loads is a `Loaded<T>` (`dialogState.ts`), never flags
+  beside each other (ADR-060).
 - Dialogs opened over a form (trust, password, fingerprint) take Escape first; only the topmost
   closes, and focus returns to what opened it (`modalFocus.ts`). Never decide a safeguard in
   React: dialogs show what the core decided (`check_script`, ADR-008, ADR-029).

@@ -27,6 +27,8 @@ import type {
   ToolItem,
 } from "../bindings";
 import { chooseFolder, chooseOpenFile, openFilters } from "../dialogs";
+import { errorText as message, loadedValue, type Loaded } from "../dialogState";
+import { useJobPhase } from "../useDialogState";
 import { formatBytes } from "./ServerObservation";
 
 export type BackupFamily = "postgres" | "mysql" | "sqlite" | "duckdb";
@@ -60,7 +62,8 @@ export const useBackup = create<{ request: BackupRequest | null; open(request: B
   close: () => set({ request: null }),
 }));
 
-type Phase = { kind: "idle" } | { kind: "running"; bytes: number; total: number | null } | { kind: "done"; text: string } | { kind: "failed"; text: string };
+/** The bytes written or read, of the total when the tool knows it. */
+type Progress = { bytes: number; total: number | null };
 
 /** The log lines kept: the newest. */
 const LOG_LINES = 2000;
@@ -71,10 +74,6 @@ const STATISTICS: ColumnStatisticsItem[] = ["auto", "off", "on"];
 const RESTORE_FORMATS: RestoreFormatItem[] = ["auto", "plain", "custom", "directory", "tar"];
 
 let nextRun = Math.floor(Math.random() * 1_000_000);
-
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 export function BackupDialog() {
   const request = useBackup((s) => s.request);
@@ -158,14 +157,18 @@ function BackupForm({ request }: { request: BackupRequest }) {
   const [restoreFormat, setRestoreFormat] = useState<RestoreFormatItem>("auto");
   const [pgRestore, setPgRestore] = useState({ clean: false, noOwner: false, create: false });
   const [myRestore, setMyRestore] = useState({ database: "", disableForeignKeys: false });
-  const [preview, setPreview] = useState<BackupPreviewItem | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<RestorePreviewItem | null>(null);
-  const [confirmError, setConfirmError] = useState<string | null>(null);
+  /** The file the backup will write: the core's last answer, kept while the next is asked for. */
+  const [previewed, setPreviewed] = useState<Loaded<BackupPreviewItem>>({ kind: "idle" });
+  const preview = loadedValue(previewed);
+  const previewError = previewed.kind === "failed" ? previewed.message : null;
+  /** What a restore will do, asked before it runs. */
+  const [confirmation, setConfirmation] = useState<Loaded<RestorePreviewItem>>({ kind: "idle" });
+  const confirm = loadedValue(confirmation);
+  const confirmError = confirmation.kind === "failed" ? confirmation.message : null;
   const [log, setLog] = useState<string[]>([]);
-  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
-  const [runId, setRunId] = useState<number | null>(null);
-  const running = phase.kind === "running";
+  const job = useJobPhase<Progress, { text: string }, { text: string }>();
+  const { phase, running } = job;
+  const runningId = phase.kind === "running" ? phase.id : null;
   const logRef = useRef<HTMLPreElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const bytes = (n: number) => formatBytes(n, i18n.language);
@@ -174,14 +177,12 @@ function BackupForm({ request }: { request: BackupRequest }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || running) return;
-      if (confirm || confirmError) {
-        setConfirm(null);
-        setConfirmError(null);
-      } else close();
+      if (confirmation.kind === "ready" || confirmation.kind === "failed") setConfirmation({ kind: "idle" });
+      else close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [running, confirm, confirmError, close]);
+  }, [running, confirmation, close]);
 
   // The remembered tool folder, output folder and pattern.
   useEffect(() => {
@@ -301,8 +302,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
   const previewKey = JSON.stringify(restoring ? null : embedded ? embeddedRequest() : backupRequest());
   useEffect(() => {
     if (restoring || !folder.trim()) {
-      setPreview(null);
-      setPreviewError(null);
+      setPreviewed({ kind: "idle" });
       return;
     }
     let current = true;
@@ -317,14 +317,10 @@ function BackupForm({ request }: { request: BackupRequest }) {
         : call(commands.previewBackup(request.session, JSON.parse(previewKey) as BackupRequestItem));
       void asked
         .then((p) => {
-          if (!current) return;
-          setPreview(p);
-          setPreviewError(null);
+          if (current) setPreviewed({ kind: "ready", value: p });
         })
         .catch((e: unknown) => {
-          if (!current) return;
-          setPreview(null);
-          setPreviewError(message(e));
+          if (current) setPreviewed({ kind: "failed", message: message(e) });
         });
     }, 300);
     return () => {
@@ -346,7 +342,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
     void call(commands.setBackupPreferences(next)).catch(() => undefined);
   }
 
-  function onEvent(event: BackupEventItem) {
+  function onEvent(id: number, event: BackupEventItem) {
     switch (event.kind) {
       case "started":
         setLog((now) => [...now, `$ ${event.commandLine}`].slice(-LOG_LINES));
@@ -355,7 +351,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
         setLog((now) => [...now, event.line].slice(-LOG_LINES));
         break;
       case "progress":
-        setPhase((now) => (now.kind === "running" ? { kind: "running", bytes: event.bytes ?? 0, total: event.total ?? null } : now));
+        job.progress(id, { bytes: event.bytes ?? 0, total: event.total ?? null });
         break;
       case "statements":
         break;
@@ -365,11 +361,10 @@ function BackupForm({ request }: { request: BackupRequest }) {
   async function startBackup() {
     remember();
     const id = ++nextRun;
-    setRunId(id);
     setLog([]);
-    setPhase({ kind: "running", bytes: 0, total: null });
+    job.start(id, { bytes: 0, total: null });
     const channel = new Channel<BackupEventItem>();
-    channel.onmessage = onEvent;
+    channel.onmessage = (event) => onEvent(id, event);
     try {
       const outcome = await call(
         embedded ? commands.runEmbeddedBackup(request.session, id, embeddedRequest(), channel) : commands.runBackup(request.session, id, backupRequest(), channel),
@@ -377,24 +372,23 @@ function BackupForm({ request }: { request: BackupRequest }) {
       switch (outcome.kind) {
         case "done":
         case "stoppedAtLimit":
-          setPhase({
-            kind: "done",
+          job.done({
             text: t("backup.done", { size: bytes(outcome.result.bytes ?? 0), seconds: numbers.format((outcome.result.millis ?? 0) / 1000), path: outcome.result.path }),
           });
           break;
         case "cancelled":
-          setPhase({ kind: "failed", text: t("backup.cancelled") });
+          job.failed({ text: t("backup.cancelled") });
           break;
         case "passwordRequired":
-          setPhase({ kind: "failed", text: t("backup.failed", { reason: t("backup.passwordRequired") }) });
+          job.failed({ text: t("backup.failed", { reason: t("backup.passwordRequired") }) });
           break;
         case "failed":
         case "notARead":
-          setPhase({ kind: "failed", text: t("backup.failed", { reason: outcome.message }) });
+          job.failed({ text: t("backup.failed", { reason: outcome.message }) });
           break;
         // A backup is a read: nothing is confirmed before it runs.
         case "needsConfirmation":
-          setPhase({ kind: "failed", text: t("backup.failed", { reason: t("runFile.notConfirmed") }) });
+          job.failed({ text: t("backup.failed", { reason: t("runFile.notConfirmed") }) });
           break;
         default: {
           const unexpected: never = outcome;
@@ -402,35 +396,32 @@ function BackupForm({ request }: { request: BackupRequest }) {
         }
       }
     } catch (e) {
-      setPhase({ kind: "failed", text: t("backup.failed", { reason: message(e) }) });
-    } finally {
-      setRunId(null);
+      job.failed({ text: t("backup.failed", { reason: message(e) }) });
     }
   }
 
   async function askRestore() {
-    setConfirmError(null);
     if (request.family === "duckdb") {
       // DuckDB's own IMPORT DATABASE: no tool to find; the core still refuses a read-only connection.
-      setConfirm({ tool: "DuckDB", version: "DuckDB IMPORT DATABASE", format: "directory", notes: [], readOnly: false });
+      setConfirmation({ kind: "ready", value: { tool: "DuckDB", version: "DuckDB IMPORT DATABASE", format: "directory", notes: [], readOnly: false } });
       return;
     }
+    setConfirmation({ kind: "loading" });
     try {
-      setConfirm(await call(commands.previewRestore(request.session, restoreRequest())));
+      setConfirmation({ kind: "ready", value: await call(commands.previewRestore(request.session, restoreRequest())) });
     } catch (e) {
-      setConfirmError(message(e));
+      setConfirmation({ kind: "failed", message: message(e) });
     }
   }
 
   async function startRestore() {
-    setConfirm(null);
+    setConfirmation({ kind: "idle" });
     remember();
     const id = ++nextRun;
-    setRunId(id);
     setLog([]);
-    setPhase({ kind: "running", bytes: 0, total: null });
+    job.start(id, { bytes: 0, total: null });
     const channel = new Channel<BackupEventItem>();
-    channel.onmessage = onEvent;
+    channel.onmessage = (event) => onEvent(id, event);
     try {
       const outcome = await call(
         request.family === "duckdb"
@@ -440,20 +431,20 @@ function BackupForm({ request }: { request: BackupRequest }) {
       switch (outcome.kind) {
         case "done":
         case "stoppedAtLimit":
-          setPhase({ kind: "done", text: t("restoreDb.done", { seconds: numbers.format((outcome.result.millis ?? 0) / 1000) }) });
+          job.done({ text: t("restoreDb.done", { seconds: numbers.format((outcome.result.millis ?? 0) / 1000) }) });
           break;
         case "cancelled":
-          setPhase({ kind: "failed", text: t("restoreDb.cancelled") });
+          job.failed({ text: t("restoreDb.cancelled") });
           break;
         case "needsConfirmation":
-          setPhase({ kind: "failed", text: t("restoreDb.failed", { reason: t("restoreDb.notConfirmed") }) });
+          job.failed({ text: t("restoreDb.failed", { reason: t("restoreDb.notConfirmed") }) });
           break;
         case "passwordRequired":
-          setPhase({ kind: "failed", text: t("restoreDb.failed", { reason: t("backup.passwordRequired") }) });
+          job.failed({ text: t("restoreDb.failed", { reason: t("backup.passwordRequired") }) });
           break;
         case "failed":
         case "notARead":
-          setPhase({ kind: "failed", text: t("restoreDb.failed", { reason: outcome.message }) });
+          job.failed({ text: t("restoreDb.failed", { reason: outcome.message }) });
           break;
         default: {
           const unexpected: never = outcome;
@@ -461,9 +452,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
         }
       }
     } catch (e) {
-      setPhase({ kind: "failed", text: t("restoreDb.failed", { reason: message(e) }) });
-    } finally {
-      setRunId(null);
+      job.failed({ text: t("restoreDb.failed", { reason: message(e) }) });
     }
   }
 
@@ -836,10 +825,10 @@ function BackupForm({ request }: { request: BackupRequest }) {
         )}
         {phase.kind === "running" && (
           <p role="status" className="backup-progress">
-            {phase.total
-              ? t("restoreDb.progress", { read: bytes(phase.bytes), total: bytes(phase.total) })
-              : phase.bytes > 0
-                ? t("backup.progress", { size: bytes(phase.bytes) })
+            {phase.progress.total
+              ? t("restoreDb.progress", { read: bytes(phase.progress.bytes), total: bytes(phase.progress.total) })
+              : phase.progress.bytes > 0
+                ? t("backup.progress", { size: bytes(phase.progress.bytes) })
                 : restoring
                   ? t("restoreDb.running")
                   : t("backup.running")}
@@ -858,7 +847,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
 
         <div className="modal-actions">
           {running ? (
-            <button disabled={runId === null} onClick={() => runId !== null && void call(commands.cancelBackup(runId)).catch(() => undefined)}>
+            <button disabled={runningId === null} onClick={() => runningId !== null && void call(commands.cancelBackup(runningId)).catch(() => undefined)}>
               {restoring ? t("restoreDb.cancel") : t("backup.cancel")}
             </button>
           ) : (
@@ -902,7 +891,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
               </p>
             )}
             <div className="modal-actions">
-              <button ref={confirmRef} autoFocus onClick={() => setConfirm(null)}>
+              <button ref={confirmRef} autoFocus onClick={() => setConfirmation({ kind: "idle" })}>
                 {t("restoreDb.keep")}
               </button>
               <button className="danger" disabled={confirm.readOnly} onClick={() => void startRestore()}>

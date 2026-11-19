@@ -18,14 +18,15 @@ import type {
   ImportRequestItem,
   ImportSourceItem,
   IfExistsItem,
-  RiskKind,
 } from "../bindings";
 import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase } from "../connect";
 import { isTextField, useFocusedPaste } from "../focusedPaste";
 import { readClipboardText } from "../clipboardText";
 import { chooseOpenFile } from "../dialogs";
+import { errorText as message, loadedValue, type Loaded } from "../dialogState";
 import { Icon } from "./Icons";
 import { useApp, useDialogs } from "../store";
+import { confirmShown, useJobPhase } from "../useDialogState";
 
 /** What the dialog imports into. */
 export interface ImportRequest {
@@ -49,11 +50,13 @@ export const useImport = create<{ request: ImportRequest | null; open(request: I
 
 type Step = "source" | "target" | "review";
 
-type Phase =
-  | { kind: "idle" }
-  | { kind: "running"; read: number; committed: number }
-  | { kind: "done"; text: string; schema: string; table: string }
-  | { kind: "failed"; text: string };
+/** The rows read and committed, while the import runs. */
+type Progress = { read: number; committed: number };
+/** A finished import, and the table it loaded (to open it). */
+type Done = { text: string; schema: string; table: string };
+
+/** Reading the source: the last preview stays shown while it is read again. */
+type SourceRead = { kind: "idle" } | { kind: "reading" } | { kind: "failed"; message: string };
 
 /** Where a column of the source goes: a column of the table, a new one, or nowhere. */
 interface Mapping {
@@ -75,9 +78,6 @@ const FORMATS: ImportOptionsItem["format"][] = ["csv", "tsv", "json", "markdown"
 
 let nextImport = Math.floor(Math.random() * 1_000_000);
 
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 export function ImportDialog() {
   const request = useImport((s) => s.request);
@@ -94,8 +94,10 @@ function ImportForm({ request }: { request: ImportRequest }) {
   const [source, setSource] = useState<ImportSourceItem | null>(request.text != null ? { kind: "text", text: request.text } : null);
   const [preview, setPreview] = useState<ImportPreviewItem | null>(null);
   const [options, setOptions] = useState<ImportOptionsItem | null>(null);
-  const [sourceError, setSourceError] = useState<string | null>(null);
-  const [reading, setReading] = useState(false);
+  const [sourceRead, setSourceRead] = useState<SourceRead>({ kind: "idle" });
+  const reading = sourceRead.kind === "reading";
+  const sourceError = sourceRead.kind === "failed" ? sourceRead.message : null;
+  const setSourceError = (text: string) => setSourceRead({ kind: "failed", message: text });
   const [included, setIncluded] = useState<boolean[]>([]);
   const [schemas, setSchemas] = useState<string[]>([]);
   const [schema, setSchema] = useState<string>(request.schema ?? "");
@@ -107,11 +109,11 @@ function ImportForm({ request }: { request: ImportRequest }) {
   const [ifExists, setIfExists] = useState<IfExistsItem>("fail");
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [commitEvery, setCommitEvery] = useState("50000");
-  const [plan, setPlan] = useState<ImportPlanItem | null>(null);
-  const [planError, setPlanError] = useState<string | null>(null);
-  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
-  const [importId, setImportId] = useState<number | null>(null);
-  const running = phase.kind === "running";
+  const [planned, setPlanned] = useState<Loaded<ImportPlanItem>>({ kind: "idle" });
+  const plan = loadedValue(planned);
+  const job = useJobPhase<Progress, Done, { text: string }>();
+  const { phase, running } = job;
+  const importId = phase.kind === "running" ? phase.id : null;
   const sequence = useRef(0);
 
   useEffect(() => {
@@ -126,8 +128,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
   // The core reads the source again whenever it or the options change.
   async function read(next: ImportSourceItem, with_: ImportOptionsItem | null) {
     const mine = ++sequence.current;
-    setReading(true);
-    setSourceError(null);
+    setSourceRead({ kind: "reading" });
     try {
       const shown = await call(commands.importPreview(request.session, next, with_));
       if (mine !== sequence.current) return;
@@ -136,12 +137,12 @@ function ImportForm({ request }: { request: ImportRequest }) {
       setOptions(shown.options);
       if (!sameColumns) setIncluded(shown.columns.map(() => true));
       if (!newTable) setNewTable(shown.suggestedTable);
+      // A clipboard message given while it read stays.
+      setSourceRead((now) => (now.kind === "reading" ? { kind: "idle" } : now));
     } catch (e) {
       if (mine !== sequence.current) return;
       setPreview(null);
       setSourceError(message(e));
-    } finally {
-      if (mine === sequence.current) setReading(false);
     }
   }
 
@@ -161,7 +162,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
         setSchemas(names);
         if (!schema && names[0]) setSchema(names[0]);
       })
-      .catch((e: unknown) => current && setPlanError(message(e)));
+      .catch((e: unknown) => current && setPlanned({ kind: "failed", message: message(e) }));
     return () => {
       current = false;
     };
@@ -288,30 +289,28 @@ function ImportForm({ request }: { request: ImportRequest }) {
   async function review() {
     const built = importRequest();
     if (!built) return;
-    setPlan(null);
-    setPlanError(null);
+    setPlanned({ kind: "loading" });
     setStep("review");
     try {
-      setPlan(await call(commands.importPlan(request.session, built)));
+      setPlanned({ kind: "ready", value: await call(commands.importPlan(request.session, built)) });
     } catch (e) {
-      setPlanError(message(e));
+      setPlanned({ kind: "failed", message: message(e) });
     }
   }
 
   async function start(confirmed: boolean) {
     const built = importRequest();
     if (!built || !plan) return;
-    if (!confirmed && plan.risks.length > 0) {
-      const all = [...plan.statements, plan.insert];
-      const statements: { sql: string; risk: RiskKind }[] = plan.risks.map((r) => ({ sql: all[r.statement] ?? plan.insert, risk: r.risk }));
-      if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
-      confirmed = true;
+    if (!confirmed) {
+      // The risks point into the statements, then the insert.
+      const asked = await confirmShown(connection?.name ?? "", { sql: plan.insert, statements: [...plan.statements, plan.insert], risks: plan.risks });
+      if (asked === null) return;
+      confirmed = asked;
     }
     const id = ++nextImport;
-    setImportId(id);
-    setPhase({ kind: "running", read: 0, committed: 0 });
+    job.start(id, { read: 0, committed: 0 });
     const channel = new Channel<ImportProgressItem>();
-    channel.onmessage = (p) => setPhase((now) => (now.kind === "running" ? { kind: "running", read: p.read ?? 0, committed: p.committed ?? 0 } : now));
+    channel.onmessage = (p) => job.progress(id, { read: p.read ?? 0, committed: p.committed ?? 0 });
     try {
       const outcome = await call(commands.runImport(request.session, id, built, confirmed, channel));
       switch (outcome.kind) {
@@ -319,8 +318,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
         case "stoppedAtLimit": {
           const done = outcome.result;
           const seconds = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 }).format((done.millis ?? 0) / 1000);
-          setPhase({
-            kind: "done",
+          job.done({
             text: t("import.done", { count: done.rows ?? 0, formattedCount: numbers.format(done.rows ?? 0), table: done.table, seconds }),
             schema: done.schema,
             table: done.table,
@@ -329,22 +327,21 @@ function ImportForm({ request }: { request: ImportRequest }) {
           break;
         }
         case "needsConfirmation":
-          setPhase({ kind: "idle" });
+          job.reset();
           await start(false);
           return;
         case "cancelled":
-          setPhase({
-            kind: "failed",
+          job.failed({
             text: t("import.cancelled", { count: outcome.kept ?? 0, formattedCount: numbers.format(outcome.kept ?? 0) }),
           });
           break;
         case "failed":
         case "notARead":
-          setPhase({ kind: "failed", text: t("import.failed", { reason: outcome.message }) });
+          job.failed({ text: t("import.failed", { reason: outcome.message }) });
           break;
         // The import's session is opened from the tab's, with its password.
         case "passwordRequired":
-          setPhase({ kind: "failed", text: t("import.failed", { reason: t("backup.passwordRequired") }) });
+          job.failed({ text: t("import.failed", { reason: t("backup.passwordRequired") }) });
           break;
         default: {
           const unexpected: never = outcome;
@@ -352,9 +349,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
         }
       }
     } catch (e) {
-      setPhase({ kind: "failed", text: t("import.failed", { reason: message(e) }) });
-    } finally {
-      setImportId(null);
+      job.failed({ text: t("import.failed", { reason: message(e) }) });
     }
   }
 
@@ -675,10 +670,10 @@ function ImportForm({ request }: { request: ImportRequest }) {
 
         {step === "review" && (
           <>
-            {!plan && !planError && <p className="muted" role="status">{t("import.planning")}</p>}
-            {planError && (
+            {(planned.kind === "idle" || planned.kind === "loading") && <p className="muted" role="status">{t("import.planning")}</p>}
+            {planned.kind === "failed" && (
               <p className="error" role="alert">
-                {t("import.couldNotPlan", { reason: planError })}
+                {t("import.couldNotPlan", { reason: planned.message })}
               </p>
             )}
             {plan && (
@@ -693,9 +688,9 @@ function ImportForm({ request }: { request: ImportRequest }) {
             {phase.kind === "running" && (
               <p role="status" className="import-progress">
                 {t("import.progress", {
-                  count: phase.read,
-                  formattedCount: numbers.format(phase.read),
-                  committed: numbers.format(phase.committed),
+                  count: phase.progress.read,
+                  formattedCount: numbers.format(phase.progress.read),
+                  committed: numbers.format(phase.progress.committed),
                 })}
               </p>
             )}
@@ -725,7 +720,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
                 <>
                   <button
                     onClick={() => {
-                      setPhase({ kind: "idle" });
+                      job.reset();
                       setStep("target");
                     }}
                   >

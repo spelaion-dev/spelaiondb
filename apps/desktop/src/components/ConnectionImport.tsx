@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ImportItem, type ImportReport } from "../api";
 import { chooseFolder, chooseOpenFile } from "../dialogs";
+import { errorText } from "../dialogState";
 import { EngineIcon } from "./EngineIcon";
 import { useApp } from "../store";
 import { refreshConnections } from "./Sidebar";
@@ -39,55 +40,62 @@ declare global {
 /** What to do with a chosen connection that already exists. */
 type DuplicateChoice = "import" | "replace";
 
+/** The core's scan of the client's connections. A new scan starts from `reading`: an earlier
+ *  answer (a locked file among them) is not this one's. */
+type Scan =
+  | { kind: "reading" }
+  /** Nothing was chosen and the client keeps nothing this system reads on its own (HeidiSQL
+   *  outside Windows). */
+  | { kind: "needsChoice" }
+  /** An encrypted export: its password is asked; `wrong` when the last one did not open it. */
+  | { kind: "locked"; dir: string; wrong: boolean }
+  | { kind: "found"; dir: string; items: ImportItem[]; canSavePasswords: boolean }
+  | { kind: "failed"; message: string };
+
+/** Importing the chosen connections. */
+type Importing = { kind: "idle" } | { kind: "importing" } | { kind: "failed"; message: string };
+
 export function ConnectionImport(props: { client: ImportClientId; onBack(): void; onDone(): void }) {
   const { t } = useTranslation("connections");
   const clientInfo = IMPORT_CLIENTS.find((c) => c.id === props.client);
   const client = clientInfo?.label ?? props.client;
   const hasWorkspace = useApp((s) => Boolean(s.workspace?.workspace));
   const [dir, setDir] = useState<string | null>(window.__spelaionImportDirs?.[props.client] ?? null);
-  const [found, setFound] = useState<{ dir: string; items: ImportItem[]; canSavePasswords: boolean } | null>(null);
-  // An encrypted export: the password typed, the one the last read used, and whether it failed.
+  const [scan, setScan] = useState<Scan>({ kind: "reading" });
+  const found = scan.kind === "found" ? scan : null;
+  const locked = scan.kind === "locked" ? scan : null;
+  const needsChoice = scan.kind === "needsChoice";
+  // An encrypted export: the password typed, and the one the last read used.
   const [typedPassword, setTypedPassword] = useState("");
   const [filePassword, setFilePassword] = useState("");
-  const [locked, setLocked] = useState<{ dir: string; wrong: boolean } | null>(null);
-  // The core's answer: nothing was chosen and the client keeps nothing this system reads on its
-  // own (HeidiSQL outside Windows), and whether it does keep something (to offer going back).
-  const [needsChoice, setNeedsChoice] = useState(false);
+  // Whether the client keeps something this system reads on its own (to offer going back).
   const [defaultSource, setDefaultSource] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [duplicates, setDuplicates] = useState<Record<string, DuplicateChoice>>({});
   const [personal, setPersonal] = useState(!hasWorkspace);
   const [savePasswords, setSavePasswords] = useState(true);
   const [folder, setFolder] = useState("");
   const [keepFolders, setKeepFolders] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState<Importing>({ kind: "idle" });
+  const busy = importing.kind === "importing";
+  const error = scan.kind === "failed" ? scan.message : importing.kind === "failed" ? importing.message : null;
   const [report, setReport] = useState<ImportReport | null>(null);
 
   const existingOf = (c: ImportItem) => (personal ? c.existingPersonal : c.existingProject);
 
   useEffect(() => {
     let active = true;
-    setError(null);
-    setFound(null);
-    setNeedsChoice(false);
+    setScan({ kind: "reading" });
+    setImporting({ kind: "idle" });
     call(commands.scanConnections(props.client, dir, filePassword || null))
-      .then((scan) => {
+      .then((answer) => {
         if (!active) return;
-        setDefaultSource(scan.defaultSource);
-        if (scan.needsChoice) {
-          setLocked(null);
-          setNeedsChoice(true);
-          return;
-        }
-        if (scan.needsPassword) {
-          setLocked({ dir: scan.dir, wrong: scan.wrongPassword });
-          return;
-        }
-        setLocked(null);
-        setFound({ dir: scan.dir, items: scan.connections, canSavePasswords: scan.canSavePasswords });
+        setDefaultSource(answer.defaultSource);
+        if (answer.needsChoice) setScan({ kind: "needsChoice" });
+        else if (answer.needsPassword) setScan({ kind: "locked", dir: answer.dir, wrong: answer.wrongPassword });
+        else setScan({ kind: "found", dir: answer.dir, items: answer.connections, canSavePasswords: answer.canSavePasswords });
       })
-      .catch((e: unknown) => active && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => active && setScan({ kind: "failed", message: errorText(e) }));
     return () => {
       active = false;
     };
@@ -96,7 +104,6 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
   function choose(picked: string | null) {
     setTypedPassword("");
     setFilePassword("");
-    setLocked(null);
     setDir(picked);
   }
 
@@ -122,8 +129,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
 
   async function runImport() {
     if (!found) return;
-    setBusy(true);
-    setError(null);
+    setImporting({ kind: "importing" });
     try {
       const choices = found.items
         .filter((c) => chosen.has(c.id))
@@ -138,10 +144,9 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
       );
       setReport(outcome);
       await refreshConnections();
+      setImporting({ kind: "idle" });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
+      setImporting({ kind: "failed", message: errorText(e) });
     }
   }
 
@@ -265,7 +270,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
           </div>
         </form>
       )}
-      {!found && !error && !locked && !needsChoice && <p className="muted">{t("importer.reading", { client })}</p>}
+      {scan.kind === "reading" && <p className="muted">{t("importer.reading", { client })}</p>}
       {found && found.items.length === 0 && <p className="muted">{t("importer.none")}</p>}
       {found && found.items.length > 0 && (
         <>

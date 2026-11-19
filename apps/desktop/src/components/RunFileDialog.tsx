@@ -10,6 +10,8 @@ import { create } from "zustand";
 import { call, commands } from "../api";
 import type { BackupEventItem, FilePlanItem, OnErrorItem } from "../bindings";
 import { chooseOpenFile, openFilters } from "../dialogs";
+import { errorText as message, loadedValue, type Loaded } from "../dialogState";
+import { useJobPhase } from "../useDialogState";
 import { formatBytes } from "./ServerObservation";
 
 export interface RunFileRequest {
@@ -24,20 +26,13 @@ export const useRunFile = create<{ request: RunFileRequest | null; open(request:
   close: () => set({ request: null }),
 }));
 
-type Phase =
-  | { kind: "idle" }
-  | { kind: "running"; done: number; total: number }
-  | { kind: "done"; text: string }
-  | { kind: "failed"; text: string };
+/** The statements done of the total, while the file runs. */
+type Progress = { done: number; total: number };
 
 /** The failure lines kept: the newest. */
 const LOG_LINES = 500;
 
 let nextRun = Math.floor(Math.random() * 1_000_000);
-
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 export function RunFileDialog() {
   const request = useRunFile((s) => s.request);
@@ -52,15 +47,13 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
   const seconds = useMemo(() => new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 }), [i18n.language]);
   const [path, setPath] = useState("");
   const [onError, setOnError] = useState<OnErrorItem>("stop");
-  const [plan, setPlan] = useState<FilePlanItem | null>(null);
-  const [planError, setPlanError] = useState<string | null>(null);
+  const [planned, setPlanned] = useState<Loaded<FilePlanItem>>({ kind: "idle" });
+  const plan = loadedValue(planned);
   const [confirming, setConfirming] = useState(false);
-  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  const job = useJobPhase<Progress, { text: string }, { text: string }>();
+  const { phase, running } = job;
   const [log, setLog] = useState<string[]>([]);
-  const [runId, setRunId] = useState<number | null>(null);
-  const [started, setStarted] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
-  const running = phase.kind === "running";
   const keepRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -86,14 +79,16 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
 
   // The core reads the file again whenever it changes.
   useEffect(() => {
-    setPlan(null);
-    setPlanError(null);
-    if (!path.trim()) return;
+    if (!path.trim()) {
+      setPlanned({ kind: "idle" });
+      return;
+    }
+    setPlanned({ kind: "loading" });
     let current = true;
     const timer = window.setTimeout(() => {
       void call(commands.planSqlFile(request.session, path))
-        .then((p) => current && setPlan(p))
-        .catch((e: unknown) => current && setPlanError(message(e)));
+        .then((p) => current && setPlanned({ kind: "ready", value: p }))
+        .catch((e: unknown) => current && setPlanned({ kind: "failed", message: message(e) }));
     }, 250);
     return () => {
       current = false;
@@ -113,10 +108,10 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
     if (chosen) setPath(chosen);
   }
 
-  function onEvent(event: BackupEventItem) {
+  function onEvent(id: number, event: BackupEventItem) {
     switch (event.kind) {
       case "statements":
-        setPhase((p) => (p.kind === "running" ? { kind: "running", done: event.done ?? 0, total: event.total ?? 0 } : p));
+        job.progress(id, { done: event.done ?? 0, total: event.total ?? 0 });
         break;
       case "log":
         setLog((lines) => [...lines, event.line].slice(-LOG_LINES));
@@ -130,22 +125,18 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
   async function run() {
     setConfirming(false);
     const id = ++nextRun;
-    setRunId(id);
     setLog([]);
-    const begin = Date.now();
-    setStarted(begin);
-    setNow(begin);
-    setPhase({ kind: "running", done: 0, total: plan?.statements ?? 0 });
+    job.start(id, { done: 0, total: plan?.statements ?? 0 });
+    setNow(Date.now());
     const channel = new Channel<BackupEventItem>();
-    channel.onmessage = onEvent;
+    channel.onmessage = (event) => onEvent(id, event);
     try {
       const outcome = await call(commands.runSqlFile(request.session, id, path, onError, true, channel));
       switch (outcome.kind) {
         case "done":
         case "stoppedAtLimit": {
           const ran = outcome.result;
-          setPhase({
-            kind: "done",
+          job.done({
             text:
               (ran.failed ?? 0) > 0
                 ? t("runFile.doneWithFailures", {
@@ -158,17 +149,17 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
           break;
         }
         case "cancelled":
-          setPhase({ kind: "failed", text: t("runFile.cancelled") });
+          job.failed({ text: t("runFile.cancelled") });
           break;
         case "needsConfirmation":
-          setPhase({ kind: "failed", text: t("runFile.failed", { reason: t("runFile.notConfirmed") }) });
+          job.failed({ text: t("runFile.failed", { reason: t("runFile.notConfirmed") }) });
           break;
         case "failed":
         case "notARead":
-          setPhase({ kind: "failed", text: t("runFile.failed", { reason: outcome.message }) });
+          job.failed({ text: t("runFile.failed", { reason: outcome.message }) });
           break;
         case "passwordRequired":
-          setPhase({ kind: "failed", text: t("runFile.failed", { reason: t("backup.passwordRequired") }) });
+          job.failed({ text: t("runFile.failed", { reason: t("backup.passwordRequired") }) });
           break;
         default: {
           const unexpected: never = outcome;
@@ -176,14 +167,13 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
         }
       }
     } catch (e) {
-      setPhase({ kind: "failed", text: t("runFile.failed", { reason: message(e) }) });
-    } finally {
-      setRunId(null);
+      job.failed({ text: t("runFile.failed", { reason: message(e) }) });
     }
   }
 
   const title = t("runFile.title", { name: request.connectionName });
-  const elapsed = started === null ? 0 : Math.max(0, (now - started) / 1000);
+  const elapsed = phase.kind === "running" ? Math.max(0, (now - phase.started) / 1000) : 0;
+  const runningId = phase.kind === "running" ? phase.id : null;
   const fileName = path.split(/[\\/]/).pop() ?? path;
 
   return (
@@ -211,9 +201,9 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
               {t("runFile.plan", { count: plan.statements ?? 0, formattedCount: numbers.format(plan.statements ?? 0), size: formatBytes(plan.bytes ?? 0, i18n.language) })}
             </p>
           )}
-          {planError && (
+          {planned.kind === "failed" && (
             <p className="error small" role="alert">
-              {t("runFile.cannotRead", { reason: planError })}
+              {t("runFile.cannotRead", { reason: planned.message })}
             </p>
           )}
         </fieldset>
@@ -225,9 +215,9 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
         )}
         {phase.kind === "running" && (
           <div className="backup-progress" role="status">
-            <progress max={Math.max(1, phase.total)} value={phase.done} aria-label={t("runFile.progressLabel")} />
+            <progress max={Math.max(1, phase.progress.total)} value={phase.progress.done} aria-label={t("runFile.progressLabel")} />
             <span>
-              {t("runFile.progress", { done: numbers.format(phase.done), total: numbers.format(phase.total), seconds: numbers.format(Math.floor(elapsed)) })}
+              {t("runFile.progress", { done: numbers.format(phase.progress.done), total: numbers.format(phase.progress.total), seconds: numbers.format(Math.floor(elapsed)) })}
             </span>
           </div>
         )}
@@ -244,7 +234,7 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
 
         <div className="modal-actions">
           {running ? (
-            <button disabled={runId === null} onClick={() => runId !== null && void call(commands.cancelBackup(runId)).catch(() => undefined)}>
+            <button disabled={runningId === null} onClick={() => runningId !== null && void call(commands.cancelBackup(runningId)).catch(() => undefined)}>
               {t("runFile.cancel")}
             </button>
           ) : (
