@@ -390,6 +390,20 @@
   `StepStatus`, `TableStatus`, `HostFile`, `InstallState`, `AgentAccess`, `StartupAction`.
   The implicit ones are SDB-366 to SDB-377, one pull request each, in the ADR's order; each
   starts with a test that pins today's behaviour.
+- A session's run (`run_state.rs`, SDB-370): `Session::run_state()` is a watch of `RunState`
+  (idle, running a statement, paused with its ticket, cancelling), sent only when it changes.
+  A run the user sees (`RunKind::User`, `Generated`) holds a `RunGuard` from when it asks for
+  the session until it lets go of it or is dropped; the core's own reads (`Metadata`,
+  `Parsed`) hold none and never make the session busy (SDB-277). "Is it busy" is
+  `RunState::is_busy`, everywhere: Commit, Rollback, the auto-commit switch and closing read it,
+  and `Session::transaction_refusal` says what runs. The cancels are counted in `Runs`, the one
+  place the state is worked out. A failed statement says how it ended with `StatementEnd`
+  (failed, cancelled, timed out; `cancelled` and `timed_out` only mirror it, set by
+  `StatementError::ended`), `ScriptFinished` is built by `CoreEvent::finished` from its
+  summary, and the summary's `stop` says how every run ended: `None` only when it went through
+  every statement its mode let it run; a failure or a cancel names its statement even when it
+  was the last; `SessionLost` (the connection was lost while paused) is apart from `Closed`.
+  Tests: `run_state.rs` and `run_state_tests.rs`, one per transition.
 - Jobs (`job.rs`, SDB-368): every job takes a `JobCancel`, made by its caller before the
   session exists and bound by the job itself (`attach`, after requesting a session run, so the
   run sees the cancel); a cancel always goes through `Session::cancel`. How a job's result reads

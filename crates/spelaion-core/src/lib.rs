@@ -61,6 +61,9 @@ mod references;
 mod result_end_tests;
 mod result_tabs;
 mod results;
+mod run_state;
+#[cfg(test)]
+mod run_state_tests;
 mod save_name;
 mod script;
 mod selection_stats;
@@ -242,8 +245,8 @@ pub use selection_stats::{
 pub use server_family::ServerFamily;
 pub use server_settings::{ServerSetting, SettingKind, server_settings};
 pub use session::{
-    AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
-    ScriptSummary, Session, StatementError,
+    AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, RunState, ScriptOptions, ScriptStop,
+    ScriptSummary, Session, StatementEnd, StatementError,
 };
 pub use session_read_only::{SessionReadOnlyError, set_session_read_only};
 pub use session_setup::{

@@ -5,7 +5,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
-import type { EditableTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem } from "../bindings";
+import type { EditableTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
@@ -22,7 +22,8 @@ import { defaultChart, ResultChart, type ChartSettings } from "./ResultChart";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { TransposedView } from "./TransposedView";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
-import { summaryMessages, summaryShort } from "../scriptRun";
+import { showsSummary, summaryMessages, summaryShort } from "../scriptRun";
+import { isCancelling, runStatus } from "../runState";
 import { saveTab, saveTabAs } from "../sqlFiles";
 import { notifyFinished } from "../notify";
 import { EditorActionsButton } from "./EditorMenu";
@@ -78,6 +79,24 @@ function translated(text: Translation, t: TFunction<"editor">, numbers: Intl.Num
   }
   if (typeof values.count === "number") values.formattedCount = numbers.format(values.count);
   return t(text.key, values);
+}
+
+/** The Messages line of a statement that did not run to its end, by how it ended. */
+function statementEndKey(end: StatementEndItem): string {
+  switch (end) {
+    case "failed":
+      return "messages.statementFailed";
+    case "cancelled":
+      return "messages.statementCancelled";
+    case "timedOut":
+      return "messages.statementTimedOut";
+    default:
+      return unknownEnd(end);
+  }
+}
+
+function unknownEnd(end: never): never {
+  throw new Error(`unknown statement end: ${JSON.stringify(end)}`);
 }
 
 function translatedError(error: NonNullable<RunState["error"]>, t: TFunction<"editor">, numbers: Intl.NumberFormat): string {
@@ -136,17 +155,17 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** This tab as the store has it now: its variables and remembered parameters (SDB-383). */
   const tabNow = () => useApp.getState().tabs.find((item) => item.id === tab.id);
 
+  /** Asks the core to cancel the run; the tab shows "Cancelling…" once the core says it is
+   *  (its run state, SDB-370), and until the run has ended. */
   async function cancelRun() {
     const current = tabNow();
-    if (!current?.run?.running || current.cancelRequestedFor === current.run.startedAt) return;
+    if (!current?.run?.running || isCancelling(current.runState)) return;
     const startedAt = current.run.startedAt;
-    updateTab(tab.id, { cancelRequestedFor: startedAt });
     try {
       await call(commands.cancel(tab.id));
     } catch (error) {
       const latest = tabNow();
       if (latest?.run?.running && latest.run.startedAt === startedAt) {
-        updateTab(tab.id, { cancelRequestedFor: undefined });
         setNotice({ text: t("results.cancelFailed", { detail: message(error) }), error: true });
       }
     }
@@ -1322,7 +1341,6 @@ export function EditorTab({ tab }: { tab: Tab }) {
     runTexts.current.set(run, { text, source, results: 0, canRefresh });
     const startedAt = performance.now();
     updateTab(tab.id, {
-      cancelRequestedFor: undefined,
       run: { running: true, results: kept?.results ?? [], activeResult: kept?.activeResult ?? null, messages: [], error: null, startedAt, elapsedMs: null },
     });
     return { run, startedAt };
@@ -1428,9 +1446,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
       case "statementFailed": {
         const offset =
           event.scriptOffset == null || request.bound ? null : request.from + byteToIndex(request.text, event.scriptOffset);
-        const diagnostic = { message: event.message, detail: event.detail, hint: event.hint, code: event.code, cancelled: event.cancelled };
+        const diagnostic = { message: event.message, detail: event.detail, hint: event.hint, code: event.code, cancelled: event.end === "cancelled" };
         failures.set(event.index, event.message);
-        const key = event.cancelled ? "messages.statementCancelled" : event.timedOut ? "messages.statementTimedOut" : "messages.statementFailed";
+        const key = statementEndKey(event.end);
         updateRun(tab.id, (r) => ({
           ...r,
           error: { message: event.message, offset, diagnostic },
@@ -1460,7 +1478,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           running: false,
           elapsedMs,
           summary,
-          messages: summary.statements > 1 || summary.stop ? [...r.messages, ...summaryMessages(summary)] : r.messages,
+          messages: showsSummary(summary) ? [...r.messages, ...summaryMessages(summary)] : r.messages,
         }, runId));
         useApp.getState().refreshHistory();
         if (mayChangeCompletionCatalog(request.text, connection?.engine ?? null)) {
@@ -1493,8 +1511,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   const running = tab.run?.running ?? false;
-  const cancelRequested = running && tab.cancelRequestedFor === tab.run?.startedAt;
-  const runStatus = running ? t(cancelRequested ? "results.cancelling" : "results.running") : "";
+  // What the core says the tab's session runs (SDB-370): paused at a statement, cancelling.
+  const cancelRequested = running && isCancelling(tab.runState);
+  const runStatusText = runStatus(tab.runState);
+  const runStatusLine = running ? t(runStatusText.key, runStatusText.values) : "";
   // What Run will send, in the core's words; plain "Run" until its first answer.
   const runPicks = runLabel?.kind === "selection" && runLabel.statements > 1;
   const runName = !runLabel ? t("run")
@@ -1545,7 +1565,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults")} title={t(maximized ? "restoreResults" : "maximizeResults")} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
-      <span className="sr-only" role="status">{runStatus}</span>
+      <span className="sr-only" role="status">{runStatusLine}</span>
       {variablesOpen && !tab.table && (
         <VariablesDialog tabId={tab.id} connectionId={tab.connectionId} connectionName={connection?.name ?? null} onClose={() => setVariablesOpen(false)} />
       )}
@@ -1773,7 +1793,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           {planOpen && plan ? <PlanViewer key={plan.id} summary={plan} controls={planControls} onBack={() => { setPlan(null); setPlanOpen(false); }} /> : <>{planOpen && planControls}<Results
             maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
             run={tab.run}
-            runStatus={runStatus}
+            runStatus={runStatusLine}
             cancelRequested={cancelRequested}
             onCancelRun={() => void cancelRun()}
             session={tab.id}

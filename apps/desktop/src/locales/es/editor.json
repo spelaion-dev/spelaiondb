@@ -36,6 +36,7 @@
     "result": "Resultado {{number}}",
     "messages": "Mensajes",
     "running": "Ejecutando consulta…",
+    "paused": "En pausa en la sentencia {{index}}",
     "cancelling": "Cancelando consulta…",
     "elapsed": "{{seconds}} s",
     "cancelQuery": "Cancelar consulta",
@@ -263,7 +264,8 @@
       "cancelled": "Cancelado en la sentencia {{index}}.",
       "transactionAborted": "La sentencia {{index}} abortó la transacción: el servidor solo la deshará, así que el resto no se ejecutó. Haz rollback y vuelve a ejecutar el resto.",
       "transactionRolledBack": "La sentencia {{index}} deshizo la transacción, así que el resto no se ejecutó: se habría ejecutado sin las sentencias anteriores.",
-      "closed": "La pestaña se cerró mientras el error de la sentencia {{index}} esperaba respuesta."
+      "closed": "La sesión se cerró mientras el error de la sentencia {{index}} esperaba respuesta.",
+      "sessionLost": "Se perdió la conexión mientras el error de la sentencia {{index}} esperaba respuesta."
     },
     "paused": "La sentencia {{index}} falló: esperando tu respuesta."
   },

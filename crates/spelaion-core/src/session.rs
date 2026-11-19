@@ -2,7 +2,7 @@
 //! In the app there is one per editor tab (ADR-004).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -15,6 +15,8 @@ use spelaion_driver_api::{
 use crate::health::{Health, SessionHealth, Tracked};
 use crate::masking::MaskPolicy;
 use crate::results::{PartialReason, ResultEnd, ResultId, ResultSource, ResultStore};
+pub use crate::run_state::RunState;
+use crate::run_state::Runs;
 pub use crate::script::{
     AnswerError, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop, ScriptSummary,
 };
@@ -80,6 +82,8 @@ pub enum CoreEvent {
         /// Statements after the failed one that have not run.
         remaining: usize,
     },
+    /// The run ended; its summary says how. Built only by [`CoreEvent::finished`]: `executed`
+    /// and `failed` are the summary's, for readers that only ask that.
     ScriptFinished {
         executed: usize,
         /// At least one statement failed.
@@ -92,6 +96,29 @@ pub enum CoreEvent {
     },
 }
 
+impl CoreEvent {
+    /// The run's last event, from its summary.
+    pub(crate) fn finished(summary: ScriptSummary) -> Self {
+        CoreEvent::ScriptFinished {
+            executed: summary.executed,
+            failed: summary.failed > 0,
+            summary,
+        }
+    }
+}
+
+/// How a statement that did not run to its end ended: the words of [`crate::JobEnd`] where
+/// they mean the same thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatementEnd {
+    /// The engine, the connection or the core refused or stopped it with an error.
+    Failed,
+    /// The user cancelled it.
+    Cancelled,
+    /// It ran longer than the run's statement timeout and was cancelled (ADR-035).
+    TimedOut,
+}
+
 /// A statement error, ready to display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatementError {
@@ -101,23 +128,44 @@ pub struct StatementError {
     pub hint: Option<String>,
     /// Error position in bytes **within the full script**, to underline it in the editor.
     pub script_offset: Option<usize>,
-    /// The user cancelled the statement.
+    /// How the statement ended.
+    pub end: StatementEnd,
+    /// `end` is [`StatementEnd::Cancelled`]. Set only with `end` ([`StatementError::ended`]).
     pub cancelled: bool,
-    /// The statement ran longer than the run's statement timeout and was cancelled.
+    /// `end` is [`StatementEnd::TimedOut`]. Set only with `end` ([`StatementError::ended`]).
     pub timed_out: bool,
 }
 
 impl StatementError {
-    fn from_driver(error: DriverError, script: &str, span: StatementSpan) -> Self {
-        let mut out = Self {
-            message: error.to_string(),
+    /// A statement that failed with `message` and nothing more to show.
+    pub(crate) fn failed(message: String, script_offset: Option<usize>) -> Self {
+        Self {
+            message,
             code: None,
             detail: None,
             hint: None,
-            script_offset: None,
-            cancelled: matches!(error, DriverError::Cancelled),
+            script_offset,
+            end: StatementEnd::Failed,
+            cancelled: false,
             timed_out: false,
-        };
+        }
+    }
+
+    /// Says how the statement ended.
+    pub(crate) fn ended(&mut self, end: StatementEnd) {
+        self.end = end;
+        match end {
+            StatementEnd::Failed => (self.cancelled, self.timed_out) = (false, false),
+            StatementEnd::Cancelled => (self.cancelled, self.timed_out) = (true, false),
+            StatementEnd::TimedOut => (self.cancelled, self.timed_out) = (false, true),
+        }
+    }
+
+    fn from_driver(error: DriverError, script: &str, span: StatementSpan) -> Self {
+        let mut out = Self::failed(error.to_string(), None);
+        if matches!(error, DriverError::Cancelled) {
+            out.ended(StatementEnd::Cancelled);
+        }
         if let DriverError::Database {
             code,
             detail,
@@ -201,16 +249,15 @@ pub struct Session {
     options: ExecOptions,
     /// Held while a script runs: one at a time, and no Commit or Rollback meanwhile.
     control: Arc<tokio::sync::Mutex<()>>,
-    /// Runs the user sees as running (their scripts, the core's generated statements such as a
-    /// table's page) that hold `control` or wait for it. Commit, Rollback and the auto-commit
-    /// switch are refused as busy while there is one; the core's own short reads (the editor's
-    /// schema, a catalog) only make them wait (SDB-277).
-    user_runs: Arc<AtomicUsize>,
+    /// The runs the user sees (their scripts, the core's generated statements such as a
+    /// table's page) that hold `control` or wait for it, the cancels, and the [`RunState`]
+    /// they mean. Commit, Rollback and the auto-commit switch are refused as busy while it is
+    /// not idle; the core's own short reads (the editor's schema, a catalog) only make them
+    /// wait (SDB-277).
+    runs: Arc<Runs>,
     transaction: Arc<tokio::sync::watch::Sender<TransactionLifecycle>>,
     /// The run that waits for an answer after an error ([`OnError::Ask`]), if any.
     pause: Arc<Pause>,
-    /// How many times the user asked to cancel: a run that sees it change stops.
-    cancels: Arc<AtomicU64>,
     /// Cancels still on their way to the engine: a new run, or a commit, waits for them before
     /// it sends anything (SDB-266).
     cancel_gate: CancelGate,
@@ -235,14 +282,14 @@ pub struct Session {
 pub(crate) struct SessionCancel {
     connection: Arc<dyn Connection>,
     pause: Arc<Pause>,
-    cancels: Arc<AtomicU64>,
+    runs: Arc<Runs>,
     cancel_gate: CancelGate,
 }
 
 impl SessionCancel {
     pub(crate) async fn cancel(&self) -> Result<(), DriverError> {
         let _in_flight = self.cancel_gate.enter();
-        self.cancels.fetch_add(1, Ordering::SeqCst);
+        self.runs.cancel();
         if self.pause.resume(Resume::Cancelled) {
             return Ok(());
         }
@@ -253,23 +300,6 @@ impl SessionCancel {
 /// How long Commit, Rollback or the auto-commit switch wait for one of the core's own reads
 /// that holds the session (SDB-277) before they say it is busy.
 const CORE_READ_WAIT: Duration = Duration::from_secs(10);
-
-/// A run the user sees, counted in [`Session::user_runs`] from when it asks for the session
-/// until it lets go of it (or is dropped).
-struct UserRun(Arc<AtomicUsize>);
-
-impl UserRun {
-    fn new(count: Arc<AtomicUsize>) -> Self {
-        count.fetch_add(1, Ordering::SeqCst);
-        Self(count)
-    }
-}
-
-impl Drop for UserRun {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
-}
 
 /// All paths share session serialization and state observation. Only editor SQL manages
 /// transactions; core metadata is not work the user ran in their open transaction.
@@ -339,12 +369,11 @@ impl Session {
             results,
             options: ExecOptions::default(),
             control: Arc::new(tokio::sync::Mutex::new(())),
-            user_runs: Arc::new(AtomicUsize::new(0)),
+            runs: Arc::new(Runs::default()),
             transaction: Arc::new(tokio::sync::watch::Sender::new(
                 TransactionLifecycle::NotFollowed,
             )),
             pause: Arc::new(Pause::default()),
-            cancels: Arc::new(AtomicU64::new(0)),
             cancel_gate: CancelGate::default(),
             masking: Arc::new(MaskPolicy::none()),
             read_only: false,
@@ -561,8 +590,45 @@ impl Session {
         SessionCancel {
             connection: self.connection.clone(),
             pause: self.pause.clone(),
-            cancels: self.cancels.clone(),
+            runs: self.runs.clone(),
             cancel_gate: self.cancel_gate.clone(),
+        }
+    }
+
+    /// What the session runs, as the user sees it (SDB-370): idle, running a statement,
+    /// paused after an error, or cancelling. Sent to every receiver when it changes, and only
+    /// then.
+    pub fn run_state(&self) -> tokio::sync::watch::Receiver<RunState> {
+        self.runs.subscribe()
+    }
+
+    /// The [`RunState`] now.
+    pub fn current_run_state(&self) -> RunState {
+        self.runs.state()
+    }
+
+    /// Why a transaction action was refused, saying what runs when it was refused as busy
+    /// ("statement 3 is running on this tab: …").
+    pub fn transaction_refusal(&self, error: &TransactionError) -> String {
+        match (error, self.current_run_state()) {
+            (TransactionError::Busy, RunState::Running { statement }) => format!(
+                "statement {} is running on this tab: wait for it to finish or cancel it",
+                statement + 1
+            ),
+            (TransactionError::Busy, RunState::Paused { statement, .. }) => format!(
+                "statement {} failed and the run on this tab waits for your answer: answer it or cancel the run",
+                statement + 1
+            ),
+            (TransactionError::Busy, RunState::Cancelling { statement }) => format!(
+                "the run on this tab is being cancelled at statement {}: wait for it to end",
+                statement + 1
+            ),
+            // One of the core's own reads held the session too long.
+            (TransactionError::Busy, RunState::Idle)
+            | (TransactionError::Unsupported, _)
+            | (TransactionError::Open, _)
+            | (TransactionError::NotOpen, _)
+            | (TransactionError::Failed(_), _) => error.to_string(),
         }
     }
 
@@ -615,11 +681,15 @@ impl Session {
     }
 
     /// Whether closing the session (closing its tab, switching its connection, quitting) must
-    /// ask first, by [`TransactionLifecycle::closing_asks`]. Asks the driver once more unless a
-    /// script is running, when the last state read decides.
+    /// ask first, by [`TransactionLifecycle::closing_asks`]. Asks the driver once more unless
+    /// the session is busy ([`RunState::is_busy`], or one of the core's reads holds it), when
+    /// the last state read decides.
     pub async fn close_needs_confirmation(&self) -> bool {
         if !self.transaction_lifecycle().is_followed() {
             return false;
+        }
+        if self.current_run_state().is_busy() {
+            return self.closing_asks_from_last_state();
         }
         let Ok(_running) = self.control.try_lock() else {
             return self.closing_asks_from_last_state();
@@ -688,10 +758,15 @@ impl Session {
     async fn transaction_control(
         &self,
     ) -> Result<tokio::sync::MutexGuard<'_, ()>, TransactionError> {
+        let busy = || self.current_run_state().is_busy();
+        if busy() {
+            return Err(TransactionError::Busy);
+        }
         if let Ok(guard) = self.control.try_lock() {
             return Ok(guard);
         }
-        if self.user_runs.load(Ordering::SeqCst) > 0 {
+        // A run may have asked for the session since.
+        if busy() {
             return Err(TransactionError::Busy);
         }
         tokio::time::timeout(CORE_READ_WAIT, self.control.lock())
@@ -809,7 +884,7 @@ impl Session {
     ) -> BoxStream<'static, CoreEvent> {
         // This run is requested now, even if history or another run delays its first poll.
         // A cancel during those waits stops it; a later, newly requested run gets a new epoch.
-        let cancels_at_start = self.cancels.load(Ordering::SeqCst);
+        let cancels_at_start = self.runs.cancels();
         let (managed, count_statement) = match kind {
             RunKind::User => (true, true),
             RunKind::Generated | RunKind::Parsed => (false, true),
@@ -855,13 +930,14 @@ impl Session {
         // Masking matches each column's origin too (ADR-052): ask the driver for it.
         options.origins |= masking.is_some() && !self.masking.is_empty();
         let control = self.control.clone();
-        let user_runs = match kind {
-            RunKind::User | RunKind::Generated => Some(self.user_runs.clone()),
-            RunKind::Parsed | RunKind::Metadata => None,
+        // A run the user sees is part of the session's run state; the core's own reads are not.
+        let seen_by_user = match kind {
+            RunKind::User | RunKind::Generated => true,
+            RunKind::Parsed | RunKind::Metadata => false,
         };
+        let runs = self.runs.clone();
         let transaction = self.transaction.clone();
         let pause = self.pause.clone();
-        let cancels = self.cancels.clone();
         let cancel_gate = self.cancel_gate.clone();
         let mut health = self.health.subscribe();
         let losing = self.health.clone();
@@ -875,38 +951,26 @@ impl Session {
                 yield CoreEvent::StatementStarted { index, span: refusal.span };
                 yield CoreEvent::StatementFailed {
                     index,
-                    error: StatementError {
-                        message: refusal.to_string(),
-                        code: None,
-                        detail: None,
-                        hint: None,
-                        script_offset: Some(refusal.span.start),
-                        cancelled: false,
-                        timed_out: false,
-                    },
+                    error: StatementError::failed(refusal.to_string(), Some(refusal.span.start)),
                 };
-                yield CoreEvent::ScriptFinished {
-                    executed: 0,
-                    failed: true,
-                    summary: ScriptSummary {
-                        statements: total,
-                        failed: 1,
-                        stop: (index + 1 < total).then_some(ScriptStop::Failed { index }),
-                        ..Default::default()
-                    },
-                };
+                yield CoreEvent::finished(ScriptSummary {
+                    statements: total,
+                    failed: 1,
+                    stop: Some(ScriptStop::Failed { index }),
+                    ..Default::default()
+                });
                 return;
             }
             // A run the user sees makes Commit, Rollback and the toggle busy from now on, while
-            // it waits for the session too (SDB-277).
-            let seen = user_runs.map(UserRun::new);
+            // it waits for the session too (SDB-277): it is running its first statement.
+            let seen = seen_by_user.then(|| runs.begin(cancels_at_start));
             // One script at a time; Commit, Rollback and the toggle wait for none. Held until
             // just before the last event (below), not until the stream is polled once more.
             let running = control.lock_owned().await;
             // A cancel still on its way to the engine would stop this run's first statement:
             // nothing is sent before it has returned (SDB-266).
             cancel_gate.settled().await;
-            let cancelled = || cancels.load(Ordering::SeqCst) != cancels_at_start;
+            let cancelled = || runs.cancelled_since(cancels_at_start);
             let follow = transaction.borrow().is_followed();
             let mut on_error = run_options.on_error;
             let mut summary = ScriptSummary { statements: spans.len(), ..Default::default() };
@@ -915,6 +979,9 @@ impl Session {
                 if cancelled() {
                     summary.stop = Some(ScriptStop::Cancelled { index });
                     break;
+                }
+                if let Some(seen) = &seen {
+                    seen.running(index);
                 }
                 yield CoreEvent::StatementStarted { index, span };
                 // A stream consumer may await history/context work after this yield. A cancel
@@ -952,9 +1019,13 @@ impl Session {
                             error.message = format!("could not open a transaction: {}", error.message);
                             error.script_offset = None;
                             summary.failed += 1;
-                            if index + 1 < total {
-                                summary.stop = Some(ScriptStop::Failed { index });
-                            }
+                            // The run stops here whatever its mode, also at its last statement.
+                            summary.stop = Some(if cancelled() {
+                                error.ended(StatementEnd::Cancelled);
+                                ScriptStop::Cancelled { index }
+                            } else {
+                                ScriptStop::Failed { index }
+                            });
                             yield CoreEvent::StatementFailed { index, error };
                             break;
                         }
@@ -1176,10 +1247,9 @@ impl Session {
                 if let Some(error) = failure.as_mut() {
                     if user_cancelled {
                         // Some engines report a cancel as an ordinary error (PostgreSQL's 57014).
-                        error.cancelled = true;
+                        error.ended(StatementEnd::Cancelled);
                     } else if timed_out {
-                        error.cancelled = false;
-                        error.timed_out = true;
+                        error.ended(StatementEnd::TimedOut);
                         let limit = run_options.statement_timeout.unwrap_or_default();
                         error.message = format!(
                             "the statement ran longer than its timeout ({}) and was cancelled: {}",
@@ -1253,12 +1323,21 @@ impl Session {
                 };
                 summary.failed += 1;
                 yield CoreEvent::StatementFailed { index, error };
-                let remaining = total - index - 1;
-                if remaining == 0 {
-                    break;
-                }
+                // A cancel always ends the run, and says so even at the last statement.
                 if user_cancelled {
                     summary.stop = Some(ScriptStop::Cancelled { index });
+                    break;
+                }
+                let remaining = total - index - 1;
+                if remaining == 0 {
+                    // Nothing is left either way, but only a run that goes on past errors went
+                    // through every statement as its mode says: the others stopped here.
+                    match on_error {
+                        OnError::Continue => {}
+                        OnError::Stop | OnError::Ask => {
+                            summary.stop = Some(ScriptStop::Failed { index });
+                        }
+                    }
                     break;
                 }
                 if on_error == OnError::Stop {
@@ -1283,11 +1362,20 @@ impl Session {
                 }
                 if on_error == OnError::Ask {
                     let (ticket, answer) = pause.wait();
+                    if let Some(seen) = &seen {
+                        seen.paused(index, ticket, remaining);
+                    }
                     yield CoreEvent::ErrorPaused { index, ticket, remaining };
-                    let lost = health.wait_for(|h| *h != SessionHealth::Alive);
+                    let ended = health.wait_for(|h| *h != SessionHealth::Alive);
                     let resume = tokio::select! {
                         answer = answer => answer.unwrap_or(Resume::Closed),
-                        _ = lost => Resume::Closed,
+                        health = ended => match health.as_deref() {
+                            Ok(SessionHealth::Lost { .. }) => Resume::Lost,
+                            // Closed for being idle (ADR-029), or the session was dropped.
+                            Ok(SessionHealth::IdleClosed { .. } | SessionHealth::Alive) | Err(_) => {
+                                Resume::Closed
+                            }
+                        },
                     };
                     pause.clear(ticket);
                     match resume {
@@ -1305,19 +1393,20 @@ impl Session {
                             summary.stop = Some(ScriptStop::Closed { index });
                             break;
                         }
+                        Resume::Lost => {
+                            summary.stop = Some(ScriptStop::SessionLost { index });
+                            break;
+                        }
                     }
                 }
             }
             // The session takes the next command before anyone hears the run is over: the app
             // hands this event to the window before it asks the stream for more, and the switch,
             // Commit and Rollback it enables again would find the session still busy (SDB-98).
+            // The run state is idle by then too.
             drop(running);
             drop(seen);
-            yield CoreEvent::ScriptFinished {
-                executed: summary.executed,
-                failed: summary.failed > 0,
-                summary,
-            };
+            yield CoreEvent::finished(summary);
         });
         end_on_panic(run, losing, total_statements, self.results.clone())
     }
@@ -1325,18 +1414,13 @@ impl Session {
 
 /// The error of a statement that an internal error stopped (SDB-163).
 fn internal_statement_error(what: &str) -> StatementError {
-    StatementError {
-        message: format!(
+    StatementError::failed(
+        format!(
             "{what}: {}. Reconnect to go on: nothing is re-run on its own.",
             crate::panics::INTERNAL_ERROR
         ),
-        code: None,
-        detail: None,
-        hint: None,
-        script_offset: None,
-        cancelled: false,
-        timed_out: false,
-    }
+        None,
+    )
 }
 
 /// `run`, ending as a failed run if it panics (SDB-163): the statement that was running fails
@@ -1354,14 +1438,18 @@ fn end_on_panic(
         let mut run = std::panic::AssertUnwindSafe(run).catch_unwind();
         let mut summary = ScriptSummary { statements, ..Default::default() };
         let mut running = None;
+        // The last statement that started: a panic between statements stops the run there.
+        let mut last = None;
         let mut loading: Option<(usize, ResultId)> = None;
-        while let Some(event) = run.next().await {
+        loop {
+            let Some(event) = run.next().await else { break };
             match event {
                 Ok(event) => {
                     match &event {
                         CoreEvent::StatementStarted { index, .. } => {
                             summary.executed += 1;
                             running = Some(*index);
+                            last = Some(*index);
                         }
                         CoreEvent::StatementFinished { .. } => {
                             summary.succeeded += 1;
@@ -1384,25 +1472,25 @@ fn end_on_panic(
                     yield event;
                 }
                 Err(_) => {
+                    // What the run held goes now, before anyone hears it ended: the session
+                    // and its run state (idle), as when a run ends (SDB-98).
+                    drop(run);
                     health.lose(format!("a run was stopped by {}", crate::panics::INTERNAL_ERROR));
                     if let Some((index, result)) = loading {
                         let end = ResultEnd::Partial(PartialReason::ConnectionLost);
                         results.end(result, end);
                         yield CoreEvent::ResultEnded { index, result, end };
                     }
+                    // The run stops in every mode, as any failure that stops it does.
                     if let Some(index) = running {
                         summary.failed += 1;
-                        summary.stop = Some(ScriptStop::Failed { index });
                         yield CoreEvent::StatementFailed {
                             index,
                             error: internal_statement_error("the statement did not finish"),
                         };
                     }
-                    yield CoreEvent::ScriptFinished {
-                        executed: summary.executed,
-                        failed: true,
-                        summary,
-                    };
+                    summary.stop = Some(ScriptStop::Failed { index: last.unwrap_or(0) });
+                    yield CoreEvent::finished(summary);
                     break;
                 }
             }
@@ -1652,7 +1740,7 @@ mod tests {
                 "{name}"
             );
             drain(run).await;
-            assert_eq!(session.user_runs.load(Ordering::SeqCst), 0, "{name}");
+            assert_eq!(session.current_run_state(), RunState::Idle, "{name}");
 
             // And once it has ended, Rollback and the switch are taken (in manual commit that run
             // opened a transaction: auto-commit only comes back once it is ended).
