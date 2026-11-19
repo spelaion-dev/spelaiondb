@@ -284,6 +284,7 @@ impl Driver for Made {
                 bound_params: true,
             },
             cancelled: Arc::new(Notify::new()),
+            in_flight: Arc::new(Mutex::new(None)),
             closed: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -324,8 +325,18 @@ struct MadeConnection {
     params: String,
     capabilities: Capabilities,
     cancelled: Arc<Notify>,
+    /// The `numbered-sleep` statement in flight, as a driver whose cancel targets the
+    /// statement it numbered (the MySQL and PostgreSQL plugins' rule, SDB-221, SDB-222).
+    in_flight: InFlight,
     closed: Arc<AtomicBool>,
 }
+
+/// The statement a cancel stops: numbered when its `execute` is first polled, let go of when
+/// it ends. A cancel while none is in flight does nothing, and is not remembered for the next.
+type InFlight = Arc<Mutex<Option<(u64, Arc<Notify>)>>>;
+
+/// The number of the next `numbered-sleep`.
+static NUMBERED: AtomicU64 = AtomicU64::new(1);
 
 impl Drop for MadeConnection {
     fn drop(&mut self) {
@@ -343,12 +354,19 @@ impl Drop for MadeConnection {
     }
 }
 
-struct Cancel(Arc<Notify>);
+struct Cancel {
+    cancelled: Arc<Notify>,
+    in_flight: InFlight,
+}
 
 #[async_trait]
 impl CancelHandle for Cancel {
     async fn cancel(&self) -> Result<()> {
-        self.0.notify_one();
+        self.cancelled.notify_one();
+        let numbered = self.in_flight.lock().expect("lock poisoned").clone();
+        if let Some((_, stop)) = numbered {
+            stop.notify_one();
+        }
         Ok(())
     }
 }
@@ -490,6 +508,35 @@ impl Connection for MadeConnection {
                     Ok(ExecEvent::Batch(numbered_batch(&schema, 0, 1))),
                     Err(database_error()),
                 ])
+            }
+            // `numbered-sleep MS`: numbered now, as the first poll of a real driver's execute
+            // numbers its statement; it ends after MS milliseconds, or as cancelled if a cancel
+            // finds it in flight first.
+            ["numbered-sleep", ms] => {
+                let ms: u64 = ms.parse().map_err(|_| other("numbered-sleep MS"))?;
+                let number = NUMBERED.fetch_add(1, Ordering::SeqCst);
+                let stop = Arc::new(Notify::new());
+                *self.in_flight.lock().expect("lock poisoned") = Some((number, stop.clone()));
+                let in_flight = self.in_flight.clone();
+                Ok(Box::pin(async_stream::stream! {
+                    yield Ok(ExecEvent::Columns(numbered()));
+                    let cancelled = tokio::select! {
+                        _ = stop.notified() => true,
+                        _ = tokio::time::sleep(Duration::from_millis(ms)) => false,
+                    };
+                    // Let go of: a cancel from now on finds nothing in flight.
+                    {
+                        let mut current = in_flight.lock().expect("lock poisoned");
+                        if current.as_ref().is_some_and(|(n, _)| *n == number) {
+                            *current = None;
+                        }
+                    }
+                    if cancelled {
+                        yield Err(DriverError::Cancelled);
+                    } else {
+                        yield Ok(ExecEvent::Done { rows_affected: None });
+                    }
+                }))
             }
             // Runs until it is cancelled.
             ["sleep"] => {
@@ -645,7 +692,10 @@ impl Connection for MadeConnection {
     }
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
-        Arc::new(Cancel(self.cancelled.clone()))
+        Arc::new(Cancel {
+            cancelled: self.cancelled.clone(),
+            in_flight: self.in_flight.clone(),
+        })
     }
 
     async fn server_version(&self) -> Result<String> {
