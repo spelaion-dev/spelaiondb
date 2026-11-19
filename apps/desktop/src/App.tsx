@@ -35,6 +35,8 @@ import { manualUpdateKey, useUpdate } from "./update";
 import { useApp, useDialogs } from "./store";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
+import { ScreenBoundary } from "./components/ScreenBoundary";
+import { openLaunchRequest } from "./launch";
 
 const SIDEBAR_DEFAULT = 290;
 const SIDEBAR_MIN = 210;
@@ -57,6 +59,7 @@ export default function App() {
   const movingConnection = useApp((s) => s.movingConnection);
   // Save errors are shown next to the setting; only startup load errors need a banner.
   const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
+  const launchNotice = useApp((s) => s.launchNotice);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const sidebarSection = useApp((s) => s.sidebarSection);
@@ -104,6 +107,9 @@ export default function App() {
       await restoreTabs();
       const path = await commands.startupPlanPath();
       if (path) await openSavedPlan(path);
+      // What this app's command line asked to open besides its folder (SDB-397).
+      const launch = await commands.takeLaunchRequest();
+      if (launch) await openLaunchRequest(launch);
     });
     // Which engines need a plugin that is not installed (ADR-055), for the picker and failures.
     watchPlugins();
@@ -127,6 +133,8 @@ export default function App() {
     });
     // Closing the window with sessions open: the core held it; the UI quits or asks (SDB-140).
     const unlistenQuit = events.quitRequested.listen(() => void answerQuitRequest());
+    // A second launch (or Finder) asked this window to open something (SDB-397).
+    const unlistenLaunch = events.launchRequested.listen((e) => void openLaunchRequest(e.payload.request));
     // Global shortcuts: the registry's (commandRegistry.ts), the same commands as the menus and
     // the command palette. Ctrl+Tab is the tab bar's switcher (TabBar.tsx).
     const onKey = (e: KeyboardEvent) => {
@@ -148,6 +156,7 @@ export default function App() {
       void unlistenLost.then((f) => f());
       void unlistenTransaction.then((f) => f());
       void unlistenQuit.then((f) => f());
+      void unlistenLaunch.then((f) => f());
       window.removeEventListener("keydown", onKey);
     };
   }, []);
@@ -155,7 +164,9 @@ export default function App() {
   return (
     <div className="app" style={{ gridTemplateColumns: `${ACTIVITY_WIDTH}px ${sidebarOpen ? shownSidebarWidth : 0}px 0px minmax(0, 1fr)` }}>
       <ActivityBar />
-      <Sidebar hidden={sidebarSection !== "connections"} />
+      <ScreenBoundary screen="explorer" hidden={sidebarSection !== "connections"} className="sidebar">
+        <Sidebar hidden={sidebarSection !== "connections"} />
+      </ScreenBoundary>
       {sidebarSection === "processes" && <ProcessSidebar selected={processConnection} onSelect={setProcessConnection} />}
       {/* Always mounted: a data search goes on while another panel is shown. */}
       <SearchPanel hidden={sidebarSection !== "search"} />
@@ -200,6 +211,12 @@ export default function App() {
       <main className="main">
         {loadError && <div className="banner" role="alert">{loadError}<button onClick={() => void loadConnections()}>{t("retryConnections")}</button></div>}
         {preferenceError && <div className="banner" role="alert">{t("preferenceLoadError")} {preferenceError.detail}</div>}
+        {launchNotice && (
+          <div className="banner launch-notice" role="alert">
+            <span>{launchNotice}</span>
+            <button onClick={() => useApp.getState().setLaunchNotice(null)}>{t("shell:launch.dismiss")}</button>
+          </div>
+        )}
         <UpdateNotice />
         <ReleaseNotesDialog />
         <TabBar hidden={sidebarSection === "processes" || sidebarSection === "mcp"} />
@@ -222,21 +239,23 @@ export default function App() {
               tabs.map((t) => (
                 // All mounted (the editor keeps its state); only the active one is visible.
                 <div key={t.id} className="tab-panel" hidden={t.id !== activeTab}>
-                  {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
+                  <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
+                    {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
+                  </ScreenBoundary>
                 </div>
               ))
             )}
           </div>
           {sidebarSection === "processes" && (selectedProcessConnection
-            ? <ProcessMonitor key={selectedProcessConnection.id} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} />
+            ? <ScreenBoundary screen="process monitor"><ProcessMonitor key={selectedProcessConnection.id} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} /></ScreenBoundary>
             : <div className="process-welcome"><h2>{t("shell:processMonitor.title")}</h2><p>{t("shell:processMonitor.choose")}</p></div>)}
-          {sidebarSection === "mcp" && <McpPage />}
+          {sidebarSection === "mcp" && <ScreenBoundary screen="mcp"><McpPage /></ScreenBoundary>}
           {historyOpen && <HistoryPanel />}
           {snippetsOpen && <SnippetsPanel />}
         </div>
       </main>
       {connectionDialog && (
-        <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : "add"} dialog={connectionDialog} />
+        <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : connectionDialog.openImportMenu ? "import" : "add"} dialog={connectionDialog} />
       )}
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
       {movingConnection && <MoveConnection key={movingConnection.id} connection={movingConnection} />}

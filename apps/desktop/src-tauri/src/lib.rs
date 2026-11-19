@@ -4,12 +4,14 @@
 mod backup;
 mod clipboard_text;
 mod connection_import;
+mod diagnostics;
 mod diagram;
 mod dto;
 mod file_dialog;
 mod files;
 mod import;
 mod interaction;
+mod launch;
 mod library;
 mod mcp;
 mod panics;
@@ -26,8 +28,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use futures_util::StreamExt;
 use spelaion_config::{
-    Config, ConnectionDraft, ConnectionId, Resolver, Source, SystemBackend, TrustStore,
-    default_user_dir, load,
+    Config, ConnectionDefinition, ConnectionDraft, ConnectionId, Resolver, Source, SystemBackend,
+    TrustStore, default_user_dir, load,
 };
 use spelaion_core::{
     AppLog, Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect,
@@ -68,6 +70,8 @@ struct AppState {
     display: std::sync::RwLock<Arc<spelaion_core::Display>>,
     plans: Arc<spelaion_core::plan::PlanStore>,
     startup_plan: std::sync::Mutex<Option<String>>,
+    /// What this app's own command line asked to open (SDB-397), until the page takes it.
+    launch: std::sync::Mutex<launch::LaunchSlot>,
     sessions: Mutex<HashMap<String, DesktopSession>>,
     history: QueryHistory,
     /// Writes the open tabs to the local store on a deadline (ADR-036).
@@ -98,6 +102,48 @@ struct DesktopSession {
     password: Option<Secret>,
     /// Captured when connecting: changing folders must not reattribute an existing tab.
     history_workspace: String,
+    /// What the session was opened from (SDB-426), without secrets: a session made from this
+    /// one reuses its connection only while the configuration still says the same.
+    definition: Option<ConnectionDefinition>,
+}
+
+/// The definition `id` has in `config` now (SDB-426), as a session records it.
+fn definition_now(
+    config: &Config,
+    trust: &TrustStore,
+    id: &ConnectionId,
+) -> Option<ConnectionDefinition> {
+    let trusted = config
+        .workspace_root
+        .as_deref()
+        .is_some_and(|root| trust.is_trusted(root));
+    config.connection_definition(id, trusted)
+}
+
+/// A compatible kind recognized by the core when opening the session.
+fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
+    open.session.server_family().and_then(|family| {
+        use spelaion_core::ServerFamily;
+        let mark = match family {
+            ServerFamily::CockroachDb => "cockroachdb",
+            ServerFamily::YugabyteDb => "yugabytedb",
+            ServerFamily::OceanBase => "oceanbase",
+            ServerFamily::TiDb => "tidb",
+            ServerFamily::SingleStore => "singlestore",
+            ServerFamily::GreptimeDb => "greptimedb",
+            ServerFamily::PostgreSql
+            | ServerFamily::RisingWave
+            | ServerFamily::Materialize
+            | ServerFamily::CrateDb
+            | ServerFamily::Unchecked(_)
+            | ServerFamily::MySql
+            | ServerFamily::MariaDb
+            | ServerFamily::Doris
+            | ServerFamily::Databend => return None,
+        };
+        (spelaion_config::engine_kind_base(mark) == Some(open.resolved.engine))
+            .then(|| mark.to_owned())
+    })
 }
 
 /// Connection tests running now, by the id the UI gave them, to stop them (ADR-032).
@@ -631,6 +677,9 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
         path.as_bytes(),
         spelaion_config::atomic_file::NewFileMode::OwnerOnly,
     );
+    // The folder menu's and the palette's recent folders (SDB-397): a list, never a reason
+    // for the folder not to open.
+    let _ = state.history.add_recent_folder(path.clone()).await;
     state.reload().await;
     state.workspace_version.fetch_add(1, Ordering::Release);
     state.info().await
@@ -776,11 +825,37 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
     let connections = config.connections.clone();
+    let marks: Vec<_> = {
+        let sessions = state.sessions.lock().await;
+        connections
+            .iter()
+            .map(|entry| {
+                let saved = entry.file.engine_mark();
+                if saved != entry.file.engine.as_str() {
+                    return saved.to_owned();
+                }
+                sessions
+                    .values()
+                    .filter(|session| session.open.resolved.id == entry.id)
+                    .find_map(|session| {
+                        let mark = detected_engine_mark(&session.open)?;
+                        let opened = session.definition.as_ref()?;
+                        (definition_now(&config, &trust, &entry.id).as_ref() == Some(opened))
+                            .then_some(mark)
+                    })
+                    .unwrap_or_else(|| saved.to_owned())
+            })
+            .collect()
+    };
+    let tls_warnings: Vec<Option<TlsWarningItem>> = connections
+        .iter()
+        .map(|c| spelaion_core::file_tls_warning(&config, c).map(TlsWarningItem::from))
+        .collect();
     let types = spelaion_config::ConnectionTypes::load(&config, &trust);
     let workspace = history_workspace(&config, Source::Workspace);
     drop(config);
     let mut items = Vec::with_capacity(connections.len());
-    for c in connections {
+    for ((c, tls_warning), engine_mark) in connections.into_iter().zip(tls_warnings).zip(marks) {
         let scope = match c.id.source {
             Source::User => String::new(),
             Source::Workspace => workspace.clone(),
@@ -796,6 +871,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             description: c.file.description.clone(),
             tags: c.file.tags.clone(),
             engine: c.file.engine.as_str().into(),
+            engine_mark,
             env: c.file.env.clone(),
             kind: c
                 .file
@@ -811,6 +887,8 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             history_enabled,
             read_only: c.file.read_only,
             sql: c.file.engine.is_sql(),
+            tls_warning,
+            pooler: c.file.pooler.map(Into::into),
         });
     }
     Ok(items)
@@ -1103,6 +1181,11 @@ async fn test_connection(
             other => other,
         }
     };
+    let tls_warning = resolved
+        .as_ref()
+        .ok()
+        .and_then(spelaion_core::connection_tls_warning)
+        .map(TlsWarningItem::from);
     let options = spelaion_core::TestOptions {
         scope: if network_only {
             spelaion_core::TestScope::Network
@@ -1123,7 +1206,20 @@ async fn test_connection(
     state.tests.end(test);
     Ok(ConnectionTestOutcome::Tested {
         report: report.into(),
+        tls_warning,
     })
+}
+
+/// The warning the add / edit connection form shows while it is filled in (SDB-395): the core
+/// decides it from what is typed, and the network profile named.
+#[command]
+async fn draft_tls_warning(
+    draft: ConnectionDraftItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<TlsWarningItem>> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let config = state.config.read().await;
+    Ok(spelaion_core::connection_draft_tls_warning(&config, &draft).map(TlsWarningItem::from))
 }
 
 /// Stops a running connection or network profile test: the running step is dropped and
@@ -1333,7 +1429,21 @@ async fn move_connection(
     // Tabs waiting to be written carry the old identifier: written first, then moved with it.
     state.tabs.flush().await.map_err(|e| e.to_string())?;
     let (moved, workspace) = {
-        let config = state.config.read().await;
+        // Serialize the restriction switch with staging and moving the connection.
+        let config = state.config.write().await;
+        let destination = spelaion_config::connection_move_target(&config, &id, &folder)
+            .map_err(|e| e.to_string())?;
+        if destination != id {
+            let scope = spelaion_core::agent_workspace(&config, id.source)
+                .ok_or("the workspace for the connection's MCP restriction cannot be read")?;
+            state
+                .history
+                .stage_mcp_connection_move(scope, id.to_string(), destination.to_string())
+                .await
+                .map_err(|e| {
+                    format!("could not carry the MCP restriction to the destination: {e}")
+                })?;
+        }
         let moved = state.change_trust(|trust| {
             spelaion_config::move_connection(&config, trust, &id, &folder, &SystemBackend)
         })?;
@@ -1831,7 +1941,7 @@ async fn connect(
     }
     let id = parse_id(&connection);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let (resolved, history_workspace) = {
+    let (resolved, history_workspace, definition) = {
         let config = state.config.read().await;
         let resolved = match Resolver::new(&config, &trust, &SystemBackend).resolve(&id) {
             Ok(resolved) => resolved,
@@ -1846,7 +1956,11 @@ async fn connect(
             }
             Err(e) => return Err(e.to_string()),
         };
-        (resolved, history_workspace(&config, id.source))
+        (
+            resolved,
+            history_workspace(&config, id.source),
+            definition_now(&config, &trust, &id),
+        )
     };
     let save_to = match &resolved.password {
         spelaion_config::Password::Prompt { save_to } => save_to.clone(),
@@ -1921,6 +2035,7 @@ async fn connect(
         open.close().await;
         return Err("the folder changed while connecting; select a connection again".into());
     }
+    let engine_mark = detected_engine_mark(&open);
     let open = Arc::new(open);
     watch_session(&app, session.clone(), &open);
     let old = sessions.insert(
@@ -1929,6 +2044,7 @@ async fn connect(
             open,
             password,
             history_workspace,
+            definition,
         },
     );
     drop(sessions);
@@ -1937,12 +2053,16 @@ async fn connect(
     }
     Ok(ConnectOutcome::Connected {
         server_version,
+        engine_mark,
         setup_skipped,
     })
 }
 
 /// Open an independent tab from an existing explorer session, reusing its in-memory
-/// credentials and exact resolved connection. Passwords never cross back into the UI.
+/// credentials and exact resolved connection while the configuration still says the same
+/// (SDB-426, the core decides): after a saved edit the saved file is resolved again, and the
+/// typed password goes with it only to the same login, or the tab is told to connect as a new
+/// one does. Passwords never cross back into the UI.
 #[command]
 async fn connect_from_session(
     source: String,
@@ -1951,7 +2071,7 @@ async fn connect_from_session(
     editor: bool,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CmdResult<String> {
+) -> CmdResult<FromSessionOutcome> {
     if source == session {
         return Err("the source and target sessions must differ".into());
     }
@@ -1959,7 +2079,7 @@ async fn connect_from_session(
     if !workspace_version.is_multiple_of(2) {
         return Err("the folder is changing; select a connection again".into());
     }
-    let (source_open, password, history_workspace) = {
+    let (source_open, typed, history_workspace, opened) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
             .get(&source)
@@ -1968,7 +2088,41 @@ async fn connect_from_session(
             source.open.clone(),
             source.password.clone(),
             source.history_workspace.clone(),
+            source.definition.clone(),
         )
+    };
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let (resolved, password, definition) = {
+        let config = state.config.read().await;
+        let id = &source_open.resolved.id;
+        let now = definition_now(&config, &trust, id);
+        let current = opened
+            .as_ref()
+            .map(|opened| spelaion_core::session_source::source_session(opened, now.as_ref()));
+        match current {
+            Some(spelaion_core::session_source::SourceSession::Current) => {
+                (source_open.resolved.clone(), typed.clone(), now)
+            }
+            Some(spelaion_core::session_source::SourceSession::Changed) | None => {
+                // Edited since the source opened: the saved file, resolved as `connect` does.
+                // Whatever needs the user (trust, a change, variables, a password for another
+                // login) is left to that path.
+                let Ok(fresh) = Resolver::new(&config, &trust, &SystemBackend).resolve(id) else {
+                    return Ok(FromSessionOutcome::ConnectAgain);
+                };
+                let carried = spelaion_core::session_source::carried_password(
+                    &source_open.resolved,
+                    &fresh,
+                    typed.as_ref(),
+                );
+                if matches!(fresh.password, spelaion_config::Password::Prompt { .. })
+                    && carried.is_none()
+                {
+                    return Ok(FromSessionOutcome::ConnectAgain);
+                }
+                (fresh, carried, now)
+            }
+        }
     };
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
@@ -1977,14 +2131,9 @@ async fn connect_from_session(
         password: password.clone(),
         read_only_session: false,
     };
-    let open = open_connection(
-        source_open.resolved.clone(),
-        &state.engines(),
-        options,
-        state.results.clone(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let open = open_connection(resolved, &state.engines(), options, state.results.clone())
+        .await
+        .map_err(|e| e.to_string())?;
     if let Some(database) = database
         && let Err(error) = open.session.connection().select_database(&database).await
     {
@@ -2022,9 +2171,10 @@ async fn connect_from_session(
             open,
             password,
             history_workspace,
+            definition,
         },
     );
-    Ok(server_version)
+    Ok(FromSessionOutcome::Connected { server_version })
 }
 
 /// Keeps a session alive if its connection asks for it, closes it when its type says it has
@@ -2345,7 +2495,8 @@ async fn control_process(
         &open.session,
         &target,
         terminate,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         confirmed,
     )
     .await
@@ -2924,6 +3075,21 @@ async fn cancel(session: String, state: State<'_, AppState>) -> CmdResult<()> {
     open.session.cancel().await.map_err(|e| e.to_string())
 }
 
+/// "Read-only for this session" (SDB-395): the tab's session refuses every write, as a
+/// read-only connection's does, until it reconnects or this turns it off. Turning it off never
+/// makes a read-only connection writable; the core refuses with a transaction open.
+#[command]
+async fn set_session_read_only(
+    session: String,
+    read_only: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let open = state.session(&session).await?;
+    spelaion_core::set_session_read_only(&open, read_only)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Most rows copied to the clipboard at once; bigger selections are exported to a file.
 const MAX_COPY_ROWS: u32 = 100_000;
 
@@ -2941,6 +3107,10 @@ fn export_format(format: TextFormat) -> ExportFormat {
         TextFormat::SqlInsert => ExportFormat::SqlInsert {
             table: INSERT_TABLE.into(),
         },
+        TextFormat::Ndjson => ExportFormat::Ndjson,
+        TextFormat::Parquet => ExportFormat::Parquet,
+        TextFormat::ArrowIpc => ExportFormat::ArrowIpc,
+        TextFormat::Xlsx => ExportFormat::Xlsx,
     }
 }
 
@@ -2997,6 +3167,12 @@ async fn copy_rows(
             &stored, &rows, &columns, header, &display,
         ));
     }
+    if matches!(
+        format,
+        TextFormat::Ndjson | TextFormat::Parquet | TextFormat::ArrowIpc | TextFormat::Xlsx
+    ) {
+        return Err("that format is for files, not for the clipboard".into());
+    }
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
@@ -3050,6 +3226,31 @@ async fn copy_defaults(state: State<'_, AppState>) -> CmdResult<CopySpecialItem>
         .copy_defaults()
         .await
         .map(CopySpecialItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// The export dialog's defaults (SDB-66): what the last export chose.
+#[command]
+async fn export_defaults(state: State<'_, AppState>) -> CmdResult<ExportDefaultsItem> {
+    state
+        .history
+        .export_defaults()
+        .await
+        .map(ExportDefaultsItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Keeps the export dialog's choices as its next defaults, once the core has checked them.
+#[command]
+async fn set_export_defaults(
+    defaults: ExportDefaultsItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let defaults = defaults.into_defaults()?;
+    state
+        .history
+        .set_export_defaults(defaults)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -3126,6 +3327,7 @@ async fn export_result(
     }
     let dialect = dialect_for(&state, &session).await;
     let csv = options.csv()?;
+    let file_options = options.file_options()?;
     let stored = state
         .results
         .get(ResultId(result.into()))
@@ -3162,7 +3364,7 @@ async fn export_result(
         spelaion_core::export_to_file(
             &stored,
             &export,
-            options.encoding.into(),
+            &file_options,
             dialect.as_ref(),
             Path::new(&path),
         )
@@ -3202,12 +3404,51 @@ fn stream_export(options: &ExportFileOptions, table: &str) -> CmdResult<StreamEx
         header: options.header,
         csv: options.csv()?,
         encoding: options.encoding.into(),
+        gzip: options.gzip,
+        sql: options.sql.options()?,
+        json: options.json.into(),
         columns: options
             .columns
             .as_ref()
             .map(|c| c.iter().map(|&c| c as usize).collect()),
         batch_size: spelaion_core::DEFAULT_BATCH_ROWS,
     })
+}
+
+/// The file name an export suggests (SDB-391): `names` rendered by the core for `table` (or
+/// `result` for a query), with the format's extension. Never a path: the save dialog picks
+/// the folder.
+#[command]
+async fn export_file_name(
+    session: String,
+    names: FileNamePatternItem,
+    format: TextFormat,
+    gzip: bool,
+    table: Option<RelationRefItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let names: spelaion_core::FileNamePattern = names.into();
+    let database = match state.session(&session).await {
+        Ok(open) => open
+            .session
+            .connection()
+            .current_database()
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    let (schema, name) = match &table {
+        Some(table) => (table.schema.as_str(), table.name.as_str()),
+        None => ("", "result"),
+    };
+    let base = names.render_now(&spelaion_core::NameParts {
+        table: name,
+        schema,
+        database: &database,
+    })?;
+    Ok(format!("{base}.{}", export_format(format).extension(gzip)))
 }
 
 /// A new session for an export (ADR-034), opened like `connect_from_session` from the
@@ -3384,18 +3625,25 @@ async fn export_tables(
     export_id: u32,
     tables: Vec<RelationRefItem>,
     folder: String,
-    extension: String,
+    names: FileNamePatternItem,
     options: ExportFileOptions,
     on_progress: Channel<ExportProgressItem>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ExportTablesOutcome> {
-    if extension.is_empty() || !extension.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err("the file extension must be letters and digits".into());
-    }
+    let names: spelaion_core::FileNamePattern = names.into();
+    names.check()?;
     let settings = stream_export(&options, "")?;
     let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
     drop(tab);
+    // `{database}` in the names: the export session's, which follows the tab's connection.
+    let database = open
+        .session
+        .connection()
+        .current_database()
+        .await
+        .ok()
+        .flatten();
     let list: Vec<(String, String)> = tables.into_iter().map(|t| (t.schema, t.name)).collect();
     let progress = move |table: usize, p: spelaion_core::ExportProgress| {
         let _ = on_progress.send(ExportProgressItem {
@@ -3408,7 +3656,8 @@ async fn export_tables(
         &open.session,
         &list,
         Path::new(&folder),
-        &extension,
+        &names,
+        database.as_deref(),
         &settings,
         &cancel,
         &progress,
@@ -4889,7 +5138,8 @@ async fn editable_query_table(
         &open.session,
         ResultId(result.into()),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
     )
     .await?;
     Ok(table.map(|table| EditableTableItem {
@@ -5023,6 +5273,68 @@ async fn table_keys(
         .await
         .map_err(|e| e.to_string())?;
     Ok(keys.into_iter().map(TableKeyItem::from).collect())
+}
+
+/// A relation's comment and its properties from the catalog: owner, tablespace, storage
+/// engine… (SDB-393).
+#[command]
+async fn object_properties(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ObjectPropertiesItem> {
+    let open = state.session(&session).await?;
+    let connection = open.session.connection();
+    let described = connection
+        .describe_table(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    let properties = connection
+        .object_properties(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(ObjectPropertiesItem {
+        comment: described.object.comment.filter(|c| !c.is_empty()),
+        properties: properties.into_iter().map(Into::into).collect(),
+    })
+}
+
+/// How a table is partitioned and its partitions; `None` for a table that is not, or an engine
+/// that does not tell (SDB-393).
+#[command]
+async fn table_partitions(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<PartitioningItem>> {
+    let open = state.session(&session).await?;
+    let partitioning = open
+        .session
+        .connection()
+        .table_partitions(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(partitioning.map(Into::into))
+}
+
+/// What a relation uses and what uses it; `None` when the engine cannot tell (SDB-393).
+#[command]
+async fn object_dependencies(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<DependenciesItem>> {
+    let open = state.session(&session).await?;
+    let dependencies = open
+        .session
+        .connection()
+        .object_dependencies(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(dependencies.map(Into::into))
 }
 
 /// The foreign keys of other tables that point to `schema.table` (the explorer's and the table
@@ -5335,6 +5647,71 @@ async fn active_schema(session: String, state: State<'_, AppState>) -> CmdResult
     spelaion_core::active_schema(&open.session).await
 }
 
+/// The maintenance actions the explorer offers on `target` on this session's engine (SDB-392):
+/// the core decides.
+#[command]
+async fn maintenance_kinds(
+    session: String,
+    target: ObjectTargetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<MaintenanceKindItem>> {
+    let open = state.session(&session).await?;
+    let target = spelaion_core::ObjectTarget::try_from(target)?;
+    Ok(
+        spelaion_core::maintenance_kinds(open.session.dialect().as_ref(), &target)
+            .into_iter()
+            .map(MaintenanceKindItem::from)
+            .collect(),
+    )
+}
+
+/// A maintenance action's statement, written by the core from the action and its options, with
+/// what the app says about it before it runs (SDB-392). Refused on a read-only connection or session. It
+/// runs, as shown, in an editor tab of its own: through the guard, as any run.
+#[command]
+async fn maintenance_plan(
+    session: String,
+    target: ObjectTargetItem,
+    kind: MaintenanceKindItem,
+    options: MaintenanceOptionsItem,
+    state: State<'_, AppState>,
+) -> CmdResult<MaintenancePlanItem> {
+    let open = state.session(&session).await?;
+    let request = spelaion_core::MaintenanceRequest {
+        target: spelaion_core::ObjectTarget::try_from(target)?,
+        kind: kind.into(),
+        options: options.into(),
+    };
+    spelaion_core::maintenance_plan(&open.session, &request, open.session.is_read_only())
+        .await
+        .map(MaintenancePlanItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// "Duplicate table…" (SDB-394): the statements of a copy, written by the core from the
+/// catalog read now, with what it keeps and what it does not. Refused on a read-only
+/// connection or session. They run, as shown, in an editor tab of their own: through the guard and the
+/// connection type's confirmation, as any run.
+#[command]
+async fn duplicate_table_plan(
+    session: String,
+    request: DuplicateTableItem,
+    state: State<'_, AppState>,
+) -> CmdResult<DuplicatePlanItem> {
+    let open = state.session(&session).await?;
+    let engine = open.session.dialect().name().to_string();
+    let plan =
+        spelaion_core::duplicate_plan(&open.session, &request.into(), open.session.is_read_only())
+            .await
+            .map_err(|e| e.to_string())?;
+    Ok(DuplicatePlanItem {
+        sql: plan.sql,
+        kept: plan.kept.into_iter().map(TablePartItem::from).collect(),
+        not_kept: plan.not_kept.into_iter().map(TablePartItem::from).collect(),
+        indexes_optional: spelaion_core::duplicate_options(&engine).indexes_optional,
+    })
+}
+
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 /// was shown. The core writes the statements again from the change, and refuses read-only
 /// connections (ADR-026). Returns how many statements ran.
@@ -5350,7 +5727,8 @@ async fn apply_object_change(
     let ran = spelaion_core::apply_change(
         &open.session,
         &change,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         confirmed,
     )
     .await
@@ -5407,7 +5785,8 @@ async fn apply_principal_change(
         &change.into(),
         password.as_ref(),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         &open.resolved.safeguards(),
         confirmed,
     )
@@ -5501,7 +5880,8 @@ async fn apply_privilege_change(
         &open.session,
         &change.into(),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         &open.resolved.safeguards(),
         confirmed,
     )
@@ -5575,7 +5955,8 @@ async fn apply_table_alteration(
         &open.session,
         &alteration.into(),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         &open.resolved.safeguards(),
         confirmed,
     )
@@ -5617,7 +5998,8 @@ async fn apply_create_table(
         &open.session,
         &table.into(),
         &sql,
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         &open.resolved.safeguards(),
         confirmed,
     )
@@ -5702,7 +6084,8 @@ async fn apply_table_edits(
 ) -> CmdResult<u32> {
     let open = state.session(&session).await?;
     spelaion_core::check_edit_policy(
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         open.resolved.safeguards().confirm_data_changes,
         confirmed,
     )
@@ -5789,7 +6172,8 @@ async fn load_value_file(
 ) -> CmdResult<u32> {
     let open = state.session(&session).await?;
     spelaion_core::check_edit_policy(
-        open.resolved.params.read_only,
+        // The connection's read-only, or the session's (SDB-395).
+        open.session.is_read_only(),
         open.resolved.safeguards().confirm_data_changes,
         confirmed,
     )
@@ -5902,6 +6286,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             plans::explain_query,
             plans::open_plan_file,
             plans::startup_plan_path,
+            launch::take_launch_request,
+            launch::recent_folders,
+            launch::forget_recent_folder,
             plans::plan_page,
             plans::plan_statistics,
             plans::plan_raw_window,
@@ -5913,6 +6300,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             mcp::mcp_apply_install,
             mcp::mcp_settings,
             mcp::set_mcp_read_only,
+            mcp::set_mcp_connection_read_only,
             mcp::set_mcp_output_format,
             mcp::mcp_access,
             mcp::audit_events,
@@ -5982,11 +6370,15 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update::update_install,
             update::update_open_releases_page,
             plugins::plugins_overview,
+            diagnostics::diagnostic_info,
+            diagnostics::open_issue_page,
             plugins::plugins_refresh_catalogue,
             plugins::plugins_install,
             plugins::plugins_cancel_install,
             plugins::plugins_install_file,
             plugins::plugins_remove,
+            plugins::plugin_processes,
+            plugins::plugin_restart,
             engine_catalog,
             keychain_available,
             list_tunnels,
@@ -6012,6 +6404,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update_tunnel,
             delete_tunnel,
             copy_rows,
+            export_file_name,
+            export_defaults,
+            set_export_defaults,
             copy_defaults,
             copy_special,
             copy_updates,
@@ -6044,6 +6439,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             table_filter_condition,
             table_keys,
             referencing_keys,
+            object_properties,
+            table_partitions,
+            object_dependencies,
             follow_key,
             row_references,
             export_result,
@@ -6076,6 +6474,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             object_actions,
             preview_object_change,
             apply_object_change,
+            maintenance_kinds,
+            maintenance_plan,
+            duplicate_table_plan,
             principal_actions,
             preview_principal_change,
             apply_principal_change,
@@ -6164,6 +6565,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             append_query_page,
             count_query_rows,
             transpose_rows,
+            draft_tls_warning,
+            set_session_read_only,
             load_estimate,
             load_query_rows,
             cancel_load_rows,
@@ -6212,7 +6615,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             TransactionChanged,
             QuitRequested,
             plugins::PluginInstallProgress,
-            plugins::PluginsChanged
+            plugins::PluginsChanged,
+            launch::LaunchRequested
         ])
 }
 
@@ -6276,7 +6680,7 @@ fn open_main_window(
 /// built hidden, moved left of every monitor at its usual size, and only then shown; it can
 /// never be activated, so it never takes the foreground. The test drives the page over
 /// WebView2's debugging port, which needs neither. Without it nothing changes.
-const OFFSCREEN_SWITCH: &str = "SPELAION_E2E_OFFSCREEN";
+pub(crate) const OFFSCREEN_SWITCH: &str = "SPELAION_E2E_OFFSCREEN";
 
 /// Moves `window` entirely left of every monitor, keeping its size.
 ///
@@ -6378,37 +6782,57 @@ pub fn run() {
             &format!("could not make the personal folder private: {e}"),
         );
     }
-    // Initial folder: command-line argument or the last one opened.
+    // What the command line asks for (SDB-397), read by the core: a folder, `.sql` files, a
+    // connection to select, a plan. A launch while this personal folder's app is open hands
+    // its arguments to that window and ends here.
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let startup_plan = arguments
-        .windows(2)
-        .find(|args| args[0] == "--plan")
-        .map(|args| args[1].clone())
-        .or_else(|| {
-            arguments
-                .first()
-                .filter(|path| {
-                    Path::new(path).is_file()
-                        && matches!(
-                            Path::new(path).extension().and_then(|s| s.to_str()),
-                            Some("json" | "plan" | "sqlplan" | "xml")
-                        )
-                })
-                .cloned()
-        });
-    let workspace = arguments
-        .first()
-        .filter(|arg| !arg.starts_with('-') && Some(*arg) != startup_plan.as_ref())
-        .cloned()
-        .map(PathBuf::from)
+    let cwd = std::env::current_dir().unwrap_or_else(|_| user_dir.clone());
+    let instance = match spelaion_core::instance::claim(&user_dir, &arguments, &cwd) {
+        spelaion_core::instance::Claim::HandedOver => std::process::exit(0),
+        spelaion_core::instance::Claim::First(server) => Some(server),
+        spelaion_core::instance::Claim::Alone(why) => {
+            startup::note(
+                &log,
+                &format!("a second launch will open another window: {why}"),
+            );
+            None
+        }
+    };
+    let launch_request = spelaion_core::launch::parse(&arguments, &cwd);
+    let startup_plan = launch_request
+        .plan
+        .as_ref()
+        .map(|plan| plan.display().to_string());
+    // Initial folder: the command line's, or the last one opened.
+    let workspace = launch_request
+        .folder
+        .clone()
         .or_else(|| {
             std::fs::read_to_string(last_workspace_file(&user_dir))
                 .ok()
                 .map(|s| PathBuf::from(s.trim()))
         })
         .filter(|p| p.is_dir());
+    // The folder is open already and the plan has its own way: the rest goes to the page.
+    let launch_slot = {
+        let mut item = launch::LaunchRequestItem::from(&launch_request);
+        item.folder = None;
+        item.plan = None;
+        launch::LaunchSlot {
+            request: (item.connection.is_some()
+                || !item.files.is_empty()
+                || !item.refused.is_empty())
+            .then_some(item),
+            taken: false,
+        }
+    };
     let config = load(workspace.as_deref(), &user_dir);
     let history = open_history(&user_dir, &log);
+    // The folder opened at start is the most recent one (SDB-397).
+    if let Some(folder) = &workspace {
+        let _ =
+            tauri::async_runtime::block_on(history.add_recent_folder(folder.display().to_string()));
+    }
     // Its writer runs on Tauri's runtime, which `block_on` starts here.
     let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
     // The plugins installed from the Plugins page, under the last catalogue accepted (ADR-055).
@@ -6436,6 +6860,7 @@ pub fn run() {
         results,
         plans: Arc::new(spelaion_core::plan::PlanStore::new()),
         startup_plan: std::sync::Mutex::new(startup_plan),
+        launch: std::sync::Mutex::new(launch_slot),
         sessions: Mutex::new(HashMap::new()),
         history,
         tabs,
@@ -6474,6 +6899,10 @@ pub fn run() {
             // The window and its webview (WebView2 on Windows, WebKitGTK on Linux) open here:
             // when they cannot, there is no page to tell it in. An error returned from `setup`
             // would only be Tauri's panic.
+            // Later launches of this personal folder's app hand their arguments to this one.
+            if let Some(server) = instance {
+                launch::serve(server, app.handle().clone());
+            }
             if let Err(e) = open_main_window(app, interface_size) {
                 startup::ask(&StartupFailure::window(&e), &setup_log);
                 std::process::exit(1);
@@ -6489,6 +6918,11 @@ pub fn run() {
         }
     };
     app.run(|app, event| {
+        // Files opened from Finder (SDB-397): macOS sends them as an event, not as arguments.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Opened { urls } = &event {
+            launch::opened(app, urls);
+        }
         // Tauri exits without dropping the state: stop each `kubectl port-forward`
         // first, or it would outlive the app (ADR-015).
         if let tauri::RunEvent::Exit = event {

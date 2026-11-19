@@ -945,6 +945,45 @@ async fn sqlite_on_a_server_through_two_hops() {
             .unwrap(),
         "CREATE TRIGGER remote_t_note after update on remote_t begin select 1; end;"
     );
+    // A relation's dependencies through the server's sqlite3 (SDB-393): a view's program comes
+    // back in quote mode like any other result (`.explain off`).
+    let (_, error) = script(
+        &conn,
+        "create view if not exists remote_v as select note from remote_t where id > 0",
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    let dependencies = conn
+        .session
+        .connection()
+        .object_dependencies("main", "remote_t")
+        .await
+        .unwrap()
+        .expect("SQLite tells what it records");
+    let used_by: Vec<String> = dependencies
+        .used_by
+        .iter()
+        .map(|d| format!("{:?} {}", d.kind, d.name))
+        .collect();
+    assert_eq!(
+        used_by,
+        [
+            "View remote_v",
+            "ForeignKey child_of_remote",
+            "Trigger remote_t_note"
+        ]
+    );
+    let view = conn
+        .session
+        .connection()
+        .object_dependencies("main", "remote_v")
+        .await
+        .unwrap()
+        .expect("told");
+    assert_eq!(view.uses.len(), 1);
+    assert_eq!(view.uses[0].name, "remote_t");
+    let (_, error) = script(&conn, "drop view remote_v").await;
+    assert!(error.is_none(), "{error:?}");
 
     // The shell never runs commands of its own, nor a statement that would swallow the rest.
     let (_, error) = script(&conn, ".shell echo pwned").await;

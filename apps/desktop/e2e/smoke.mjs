@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
-import { crc32, deflateSync } from "node:zlib";
+import { crc32, deflateSync, gunzipSync } from "node:zlib";
 import { createCipheriv } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -101,8 +101,8 @@ async function freePort() {
   return port;
 }
 
-function startApp(extraEnv = {}) {
-  return spawn(exe, [demo], {
+function startApp(extraEnv = {}, extraArgs = []) {
+  return spawn(exe, [demo, ...extraArgs], {
     env: {
       ...process.env,
       ...extraEnv,
@@ -166,6 +166,12 @@ function restoreDemoConnections() {
     // Not there, or something else is in it: left as it is.
   }
   for (const copy of ["mysql-copy.toml", "mysql-copy-2.toml"]) rmSync(join(demoConnections, "docker", copy), { force: true });
+  // The databases list the SDB-396 step adds to MySQL (Docker), if a run stopped before it
+  // took it out again.
+  const mysqlFile = join(demoConnections, "docker", "mysql.toml");
+  const mysqlText = readFileSync(mysqlFile, "utf8");
+  const withoutList = mysqlText.replace(/^databases = .*\r?\n/m, "");
+  if (withoutList !== mysqlText) writeFileSync(mysqlFile, withoutList);
 }
 restoreDemoConnections();
 
@@ -334,6 +340,15 @@ try {
   async function run(panel) {
     await panel.locator(".cm-content").click();
     await page.keyboard.press("Control+Shift+Enter");
+  }
+  // A grid menu's submenu (Filter ▸, Copy ▸…), opened by focusing its item: the menu opens it
+  // when the item has the focus, as with the keyboard. A hover is not deterministic: when the
+  // menu opens with that item already under the pointer, moving onto it fires no mouseenter
+  // and the submenu never opens (SDB-420).
+  async function openSubmenu(item) {
+    await item.waitFor();
+    await item.focus();
+    await item.page().waitForFunction((el) => el.getAttribute("aria-expanded") === "true", await item.elementHandle());
   }
   async function replaceQuery(panel, sql) {
     await panel.locator(".cm-content").click();
@@ -918,7 +933,7 @@ try {
   const gridBox = await grid.boundingBox();
   // First data cell: below the 34 px header, right of the row numbers.
   await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12);
-  await page.keyboard.press("Control+a");
+  await panel.getByRole("button", { name: "Select all cells", exact: true }).click();
   await page.keyboard.press("Control+c");
   const all = (await copied(1)).trimEnd().split("\n");
   assert.equal(all.length, 6);
@@ -1047,7 +1062,15 @@ try {
     return text;
   };
   const openResultExport = () => panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
-  assert.match(await exportWith(openResultExport, "Export result", "csv", exportPath("result.csv")), /^Exported 6 rows to /);
+  assert.match(
+    await exportWith(openResultExport, "Export result", "csv", exportPath("result.csv"), async (dialog) => {
+      // A new user's defaults (SDB-66): a comma, UTF-8 with a BOM and formula escaping on.
+      assert.equal(await dialog.getByRole("combobox", { name: /^Delimiter/ }).inputValue(), ",");
+      assert.equal(await dialog.getByRole("combobox", { name: /^Encoding/ }).inputValue(), "utf8Bom");
+      assert.ok(await dialog.getByRole("checkbox", { name: /^Escape formulas/ }).isChecked());
+    }),
+    /^Exported 6 rows to /,
+  );
   const csv = readFileSync(exportPath("result.csv"), "utf8");
   assert.ok(csv.startsWith("\ufeffcountry,orders,total\r\n"), csv.slice(0, 40));
   assert.equal(csv.trimEnd().split("\r\n").length, 7);
@@ -1083,7 +1106,12 @@ try {
       await page.mouse.click(grid.x + 80, grid.y + 34 + 12, { button: "right" });
       await panel.getByRole("menuitem", { name: "Export selection…" }).click();
     };
-    const selected = await exportWith(openSelection, "Export selection", "tsv", exportPath("selection.tsv"));
+    const selected = await exportWith(openSelection, "Export selection", "tsv", exportPath("selection.tsv"), async (dialog) => {
+      // The dialog opens with the last export's choices (SDB-66): no header, as above.
+      const header = dialog.getByRole("checkbox", { name: "Column names as the first row" });
+      assert.equal(await header.isChecked(), false);
+      await header.check();
+    });
     assert.match(selected, /^Exported 2 rows to /);
     const tsv = readFileSync(exportPath("selection.tsv"), "utf8").replace(/^\ufeff/, "").trimEnd().split("\n");
     assert.equal(tsv[0], "country\torders");
@@ -1230,6 +1258,9 @@ try {
   await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
   const queryPages = panel.getByRole("group", { name: "Query result pages" });
   await queryPages.getByText("rows 1–500").waitFor();
+  await panel.getByRole("button", { name: "Select all cells", exact: true }).click();
+  await panel.locator(".grid-selection").getByText("All 500 rows selected", { exact: true }).waitFor();
+  await page.keyboard.press("Control+Home");
   const accessibleGrid = panel.getByRole("grid");
   await accessibleGrid.focus();
   await accessibleGrid.getByRole("gridcell", { name: /Row 1, id \(INTEGER\): 1/ }).waitFor();
@@ -1280,13 +1311,15 @@ try {
     await queryPageNumber.press("Enter");
     await panel.locator(".statusline", { hasText: "900 rows" }).waitFor();
     await queryPages.getByText("rows 801–900").waitFor();
-    // Row 1,050 (Ctrl+G): loaded up to it, then selected.
+    // Row 1,050 (Ctrl+G): loaded up to it, then selected. What go to row guarantees is that row
+    // loaded and selected: shown at the grid's end, it can make the grid fetch its next page as
+    // scrolling to the end always does (SDB-421), so the count is 1,050 or one page more.
     await panel.locator(".grid-scroller").focus();
     await page.keyboard.press("Control+g");
     await panel.getByRole("dialog", { name: "Go to row" }).getByRole("textbox", { name: "Go to row" }).fill("1050");
     await page.keyboard.press("Enter");
-    await panel.locator(".statusline", { hasText: "1,050 rows" }).waitFor();
     await panel.getByRole("grid").getByRole("gridcell", { name: /^Row 1,050, id \(INTEGER\): 1050$/ }).waitFor();
+    await panel.locator(".statusline", { hasText: /^(1,050|1,150) rows/ }).waitFor();
     await queryPages.getByRole("button", { name: "First page" }).click();
     await queryPages.getByText("rows 1–100").waitFor();
   }
@@ -1673,6 +1706,13 @@ try {
   assert.equal((await widthsNow())[1], 0, "customer_id has no width while hidden");
   const hiddenButton = panel.locator(".grid-footer .grid-hidden");
   await hiddenButton.getByText("1 hidden column", { exact: true }).waitFor();
+  // The corner selects the loaded rows beyond the viewport and returns keyboard input to the grid.
+  await topLeftCell();
+  const corner = panel.getByRole("button", { name: "Select all cells", exact: true });
+  assert.equal(await corner.getAttribute("title"), "Select all cells (Ctrl+A)");
+  await corner.click();
+  await selectionText.getByText("All 50,000 rows selected", { exact: true }).waitFor();
+  assert.ok(await sortGrid.evaluate(el => el === document.activeElement));
   // Selections and copies skip it: id, then created.
   await topLeftCell();
   await page.keyboard.press("Shift+ArrowRight");
@@ -1993,7 +2033,7 @@ try {
 
   step("filter by this value: contains, from the cell menu, on the loaded rows");
   await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12, { button: "right" });
-  await cellMenu.getByRole("menuitem", { name: "Filter ▸" }).hover();
+  await openSubmenu(cellMenu.getByRole("menuitem", { name: "Filter ▸" }));
   await panel.getByRole("menuitem", { name: "id contains '1'" }).click();
   await panel.locator(".filter-chip", { hasText: "id contains '1'" }).waitFor();
   await panel.locator(".statusline", { hasText: /^[\d,]+ of 50,000 rows/ }).waitFor();
@@ -3417,6 +3457,45 @@ try {
   assert.equal(await mainSchemaNode.evaluate((el) => getComputedStyle(el).cursor), "pointer");
   await mainSchemaNode.click();
 
+  step("duplicate a table: its statements and what the copy keeps shown first, run in a tab of its own (SDB-394)");
+  {
+    // The Tables folder, opened here and closed again for the steps after it.
+    const tables = page.getByRole("button", { name: "Expand or collapse Tables", exact: true });
+    await tables.click();
+    const customer = page.getByRole("button", { name: "Expand or collapse customer", exact: true });
+    await customer.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Duplicate table…" }).click();
+    const duplicate = page.getByRole("dialog", { name: "Duplicate customer" });
+    await duplicate.getByLabel("SQL that will run").filter({ hasText: "CREATE TABLE customer_copy (" }).waitFor();
+    await duplicate.getByText("The copy keeps:", { exact: false }).waitFor();
+    await duplicate.getByLabel("Copy its rows too").check();
+    await duplicate.getByLabel("SQL that will run").filter({ hasText: "INSERT INTO customer_copy (" }).waitFor();
+    await shot("sdb-394-duplicate-table");
+    await duplicate.getByRole("button", { name: "Duplicate in a new tab", exact: true }).click();
+    await duplicate.waitFor({ state: "detached" });
+    const duplicatePanel = page.locator(".tab-panel:not([hidden])");
+    assert.match(await duplicatePanel.locator(".cm-content").innerText(), /^CREATE TABLE customer_copy \(/);
+    await page.waitForTimeout(500);
+    await page.waitForFunction(() => !document.querySelector(".tab-panel:not([hidden]) .editor-action-cancel"));
+    await duplicatePanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
+    assert.equal(await duplicatePanel.locator(".message-error").count(), 0, "the copy ran without an error");
+    await replaceQuery(duplicatePanel, "select (select count(*) from main.customer_copy) = (select count(*) from main.customer) as same;");
+    await run(duplicatePanel);
+    await duplicatePanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await duplicatePanel.getByRole("grid").focus();
+    await duplicatePanel.getByRole("grid").getByRole("gridcell", { name: /^Row 1, same \(.*\): 1$/ }).waitFor();
+    await replaceQuery(duplicatePanel, "drop table main.customer_copy;");
+    await run(duplicatePanel);
+    const dropRisk = page.getByRole("dialog", { name: "Run these statements?" });
+    await dropRisk.getByRole("button", { name: "Run anyway", exact: true }).click();
+    await dropRisk.waitFor({ state: "detached" });
+    await page.waitForTimeout(500);
+    await page.waitForFunction(() => !document.querySelector(".tab-panel:not([hidden]) .editor-action-cancel"));
+    await page.keyboard.press("Control+w");
+    await tables.click();
+    await customer.waitFor({ state: "detached" });
+  }
+
   step("connection menu: every action once, from a right click or the keyboard, and no row buttons");
   {
     const shopRow = page.locator('.connection-row:has-text("Shop (SQLite)")');
@@ -3427,6 +3506,8 @@ try {
       "New query", "Open object by name…", "Refresh all schemas",
       "Edit…", "Configure filters…",
       "Back up…", "Run SQL file…",
+      // Only Shop's own sessions are open here: nothing else to disconnect (SDB-395).
+      "Disconnect all",
       "Duplicate", "Copy", "Paste connection", "Move to folder…",
       "Delete…",
     ]);
@@ -3496,6 +3577,25 @@ try {
     (await panel.locator(".cm-content").innerText()).trimEnd(),
     "DROP VIEW IF EXISTS big_orders;\nCREATE VIEW big_orders as select * from orders where total > 500;",
   );
+  // A view's dependencies (SDB-393): SQLite reads the tables it uses from the program it
+  // compiles for the view, and says what it does not record.
+  {
+    const viewRow = page.getByRole("button", { name: "Expand or collapse big_orders", exact: true });
+    const viewNode = page.locator(".node", { has: viewRow }).last();
+    await viewRow.locator(".twisty").click();
+    await viewNode.getByRole("button", { name: "Dependencies", exact: true }).click();
+    const dependencies = page.getByRole("region", { name: "Dependencies of big_orders" });
+    await dependencies.locator("tbody tr", { hasText: "orders" }).waitFor();
+    assert.deepEqual(
+      (await dependencies.locator("tbody tr").first().locator("td").allInnerTexts()).slice(0, 4),
+      ["Uses", "Table", "orders", "—"],
+    );
+    await dependencies.getByText("The engine does not record every dependency of these kinds", { exact: false }).waitFor();
+    await shot("sdb-393-dependencies");
+    await page.keyboard.press("Control+w");
+    await dependencies.waitFor({ state: "detached" });
+    await viewRow.locator(".twisty").click();
+  }
   // A trigger's definition, as SQLite keeps it, opens in a new tab and does not run.
   await page.getByRole("button", { name: "Expand or collapse Triggers", exact: true }).click();
   const triggerNode = page.getByRole("button", { name: "product_stock_check: open its definition", exact: true });
@@ -3735,6 +3835,10 @@ try {
     await ordersNode.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Export 2 tables…" }).click();
     const dialog = page.getByRole("dialog", { name: "Export 2 tables" });
+    // The last export was a TSV, with a semicolon for CSV and plain UTF-8 (SDB-66).
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("csv");
+    await dialog.getByRole("combobox", { name: /^Delimiter/ }).selectOption(",");
+    await dialog.getByRole("combobox", { name: /^Encoding/ }).selectOption("utf8Bom");
     await dialog.getByRole("button", { name: "Export…" }).click();
     await dialog.locator(".export-result", { hasText: "2 files" }).waitFor();
     await shot("05e-export-tables");
@@ -3745,6 +3849,86 @@ try {
     assert.equal(orders.length, 50_001);
     assert.ok(orders[0].startsWith("\ufeffid,"), orders[0]);
     assert.ok(readFileSync(join(folder, "customer.csv"), "utf8").startsWith("\ufeffid,"));
+  }
+  // The same tables as Parquet, named by a pattern the core renders (SDB-391).
+  {
+    const folder = join(userDir, "parquet");
+    mkdirSync(folder, { recursive: true });
+    const today = () => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    };
+    const before = today();
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
+    await ordersNode.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Export 2 tables\u2026" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export 2 tables" });
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("parquet");
+    await dialog.locator(".export-file summary").click();
+    await dialog.locator('input[name="export-name-pattern"]').fill("{schema}_{table}_{date}");
+    await shot("05e2-export-parquet-light");
+    // The settings dialog cannot open over this one: the screenshot switches the theme directly.
+    const themeBefore = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
+    await shot("05e2-export-parquet-dark");
+    await page.evaluate((value) => {
+      if (value === null) document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.dataset.theme = value;
+      window.dispatchEvent(new Event("spelaion-themechange"));
+    }, themeBefore);
+    await dialog.getByRole("button", { name: "Export\u2026" }).click();
+    await dialog.locator(".export-result", { hasText: "2 files" }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+    const written = readdirSync(folder).sort();
+    const dates = [...new Set([before, today()])];
+    assert.ok(
+      dates.some((date) => JSON.stringify(written) === JSON.stringify([`main_customer_${date}.parquet`, `main_orders_${date}.parquet`])),
+      written.join(", "),
+    );
+    for (const name of written) {
+      const bytes = readFileSync(join(folder, name));
+      assert.equal(bytes.subarray(0, 4).toString("latin1"), "PAR1", name);
+      assert.equal(bytes.subarray(bytes.length - 4).toString("latin1"), "PAR1", name);
+    }
+  }
+  // The same tables as one Excel workbook, a sheet each (SDB-390).
+  {
+    const folder = join(userDir, "xlsx");
+    mkdirSync(folder, { recursive: true });
+    const today = () => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    };
+    const before = today();
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
+    await ordersNode.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Export 2 tables\u2026" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export 2 tables" });
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("xlsx");
+    await dialog.getByText("One workbook in the folder you choose", { exact: false }).waitFor();
+    await dialog.locator(".export-file summary").click();
+    await dialog.locator('input[name="export-name-pattern"]').fill("workbook_{date}");
+    // A workbook is a zip already: no gzip.
+    assert.equal(await dialog.getByRole("checkbox", { name: "Compress with gzip" }).isDisabled(), true);
+    await shot("sdb-390-export-xlsx-light");
+    const themeBefore = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
+    await shot("sdb-390-export-xlsx-dark");
+    await page.evaluate((value) => {
+      if (value === null) document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.dataset.theme = value;
+      window.dispatchEvent(new Event("spelaion-themechange"));
+    }, themeBefore);
+    await dialog.getByRole("button", { name: "Export\u2026" }).click();
+    await dialog.locator(".export-result", { hasText: "a sheet each" }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+    const written = readdirSync(folder);
+    const dates = [...new Set([before, today()])];
+    assert.ok(dates.some((date) => JSON.stringify(written) === JSON.stringify([`workbook_${date}.xlsx`])), written.join(", "));
+    const bytes = readFileSync(join(folder, written[0]));
+    assert.equal(bytes.subarray(0, 4).toString("latin1"), "PK\x03\x04");
   }
   // A plain click forgets the choice without expanding the table.
   await ordersNode.click();
@@ -3969,6 +4153,24 @@ try {
   await page.keyboard.press("Enter");
   await palette.waitFor({ state: "detached" });
   assert.equal(await copied(copiedBeforePalette + 1), "orders");
+  {
+    // Copy diagnostic info (SDB-398): the version and the engines in use are there; no
+    // connection's name, host, user or file, and no path of this computer.
+    await page.keyboard.press("Control+Shift+P");
+    await paletteBox.fill("diagnostic");
+    assert.equal((await paletteLabels())[0], "General: Copy diagnostic info");
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Enter");
+    await palette.waitFor({ state: "detached" });
+    const report = await copied(before + 1);
+    const version = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("plugin:app|version"));
+    assert.ok(report.includes(`Version: ${version}`), report);
+    assert.match(report, /Engines in use: .*sqlite/, report);
+    assert.match(report, /Plugins:\n {2}spelaiondb-plugin-/, report);
+    for (const leak of ["127.0.0.1", "localhost", "bastion2", "Shop (SQLite)", "Postgres (Docker)", "MySQL (Docker)", "spelaion_test", "shop.db", userDir, userDir.replaceAll("\\", "/"), demo, demo.replaceAll("\\", "/")]) {
+      assert.ok(!report.includes(leak), `${leak} is in the diagnostic info:\n${report}`);
+    }
+  }
   // Link with editor: the active tab (big_orders' data) is shown in the tree as it changes.
   await viewsFolder.click();
   assert.equal(await viewsFolder.getAttribute("aria-expanded"), "false");
@@ -4184,6 +4386,16 @@ try {
   assert.equal(await ordersNode.getAttribute("aria-expanded"), "false");
   await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
   const range = panel.locator(".table-range");
+  // What reads the tab's page again (a page button, a header click) replaces its grid: the one
+  // shown goes away and another is mounted when the page arrives, and Apply is disabled until
+  // then. A click sent in between reaches no grid, so wait for the new one (SDB-423).
+  const tablePageReloadedBy = async (action) => {
+    const shownGrid = await panel.locator(".grid-scroller").elementHandle();
+    await action();
+    await page.waitForFunction((grid) => !grid.isConnected, shownGrid);
+    await panel.locator(".grid-scroller").waitFor();
+    await page.waitForFunction(() => !document.querySelector('.tab-panel:not([hidden]) .table-bar button[type="submit"]')?.disabled);
+  };
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   await panel.getByText("This page only", { exact: true }).waitFor();
   const beforeRefresh = await panel.locator(".result-tab-item.active").getAttribute("data-result");
@@ -4201,6 +4413,8 @@ try {
     await panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
     const dialog = page.getByRole("dialog", { name: "Export result" });
     assert.ok(await dialog.getByRole("radio", { name: /^Every row the filter keeps/ }).isChecked());
+    // The last export was JSON (SDB-66).
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("csv");
     await dialog.getByRole("button", { name: "Export…" }).click();
     await dialog.locator(".export-result", { hasText: "Exported 1,000 rows" }).waitFor();
     await dialog.getByRole("button", { name: "Close" }).click();
@@ -4209,6 +4423,32 @@ try {
     assert.equal(lines.length, 1_001);
     assert.ok(lines[1].startsWith("50000,"), lines[1]);
     assert.ok(lines[1_000].startsWith("49001,"), lines[1_000]);
+  }
+  // The next export's defaults (SDB-66): chosen here, offered again after the app restarts.
+  {
+    const path = join(userDir, "orders-remembered.sql.gz");
+    await page.evaluate((target) => (window.__spelaionSavePath = target), path);
+    await panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export result" });
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("csv");
+    await dialog.getByRole("combobox", { name: /^Delimiter/ }).selectOption("|");
+    await dialog.getByRole("checkbox", { name: "Column names as the first row" }).uncheck();
+    await dialog.getByLabel("NULL as", { exact: true }).fill("(null)");
+    await dialog.getByRole("combobox", { name: /^Encoding/ }).selectOption("windows1252");
+    await dialog.getByRole("checkbox", { name: /^Escape formulas/ }).uncheck();
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("sqlInsert");
+    await dialog.getByLabel("Rows per INSERT").fill("100");
+    await dialog.getByRole("combobox", { name: /^Keywords/ }).selectOption("lower");
+    await dialog.locator(".export-file summary").click();
+    await dialog.getByRole("checkbox", { name: "Compress with gzip" }).check();
+    await dialog.getByRole("button", { name: "Export…" }).click();
+    await dialog.locator(".export-result", { hasText: "Exported 1,000 rows" }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    const bytes = readFileSync(path);
+    assert.deepEqual([bytes[0], bytes[1]], [0x1f, 0x8b], "a gzip file");
+    // 1,000 rows, 100 per statement, in lower case.
+    assert.equal(gunzipSync(bytes).toString("utf8").match(/^insert into /gm)?.length, 10);
   }
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("");
   await panel.getByRole("textbox", { name: "WHERE" }).fill("total > 1990");
@@ -4304,7 +4544,7 @@ try {
     await shot("05j-transposed-row");
     await panel.getByRole("button", { name: "Show rows" }).click();
     await transposed.waitFor({ state: "detached" });
-    await pages.getByRole("button", { name: "First page" }).click();
+    await tablePageReloadedBy(() => pages.getByRole("button", { name: "First page" }).click());
     await range.filter({ hasText: "rows 1–500" }).waitFor();
   }
   // A header click sorts in the server: ORDER BY written with the engine's quoting.
@@ -4315,8 +4555,11 @@ try {
       box = await panel.locator(".grid-scroller").boundingBox();
       if (!box) await page.waitForTimeout(100);
     }
-    await page.mouse.click(box.x + 52 + 20, box.y + 18);
-    await page.mouse.click(box.x + 52 + 20, box.y + 18);
+    // Each click reads the page again, which replaces the grid: the second click waits for the
+    // new one, or it lands on the grid going away and is lost (SDB-423).
+    await tablePageReloadedBy(() => page.mouse.click(box.x + 52 + 20, box.y + 18));
+    await panel.locator('.grid-scroller[aria-label$="sorted by id, ascending"]').waitFor();
+    await tablePageReloadedBy(() => page.mouse.click(box.x + 52 + 20, box.y + 18));
     await panel.locator('.grid-scroller[aria-label$="sorted by id, descending"]').waitFor();
     assert.equal(await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue(), "id DESC");
     await range.filter({ hasText: "rows 1–500" }).waitFor();
@@ -4374,7 +4617,7 @@ try {
   {
     const grid = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.click(grid.x + 52 + 20, grid.y + 34 + 12, { button: "right" });
-    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await openSubmenu(panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
     await panel.getByText("Added to the table's WHERE").waitFor();
     await panel.getByRole("menuitem", { name: "id = 50000", exact: true }).click();
     await range.filter({ hasText: "rows 1–1" }).waitFor();
@@ -4387,7 +4630,7 @@ try {
     const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
     const createdX = box.x + 52 + widths[0] + widths[1] + 20;
     await page.mouse.click(createdX, box.y + 34 + 12, { button: "right" });
-    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await openSubmenu(panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
     await panel.getByRole("menuitem", { name: /^created contains '/ }).click();
     await page.waitForFunction(() => document.querySelector('input[aria-label="WHERE"]')?.value.includes(" AND "));
     assert.match(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), /^id = 50000 AND created LIKE '%\d{4}-\d{2}-\d{2}%' ESCAPE '!'$/);
@@ -4460,6 +4703,16 @@ try {
     const where = panel.getByRole("textbox", { name: "WHERE" });
     const suggestions = panel.getByRole("listbox", { name: "Filters used on this table and its columns" });
     const offered = () => suggestions.getByRole("option").locator("code").allInnerTexts();
+    // A filter is remembered once its page has loaded: the box asks the store then, and the
+    // list shows it when the store answers, which a busy disk can make later than the page
+    // and the keys that follow it (SDB-424). The open list takes the answer as it arrives.
+    const offeredBecomes = async (expected) => {
+      for (let i = 0; i < 50; i++) {
+        if (JSON.stringify(await offered()) === JSON.stringify(expected)) return;
+        await page.waitForTimeout(100);
+      }
+      assert.deepEqual(await offered(), expected);
+    };
     await openOrders();
     await range.filter({ hasText: "rows 1–500" }).waitFor();
     assert.equal(await where.inputValue(), "", "no default filter yet");
@@ -4489,7 +4742,7 @@ try {
     await where.fill("");
     await page.keyboard.press("ArrowDown");
     await suggestions.waitFor();
-    assert.deepEqual(await offered(), ["total > 1990", "id > 49900"]);
+    await offeredBecomes(["total > 1990", "id > 49900"]);
     // Typing narrows the list and offers the table's columns; Enter takes the one chosen.
     await where.fill("tot");
     await page.waitForFunction(() => document.querySelectorAll(".tab-panel:not([hidden]) .table-filter-suggestions li").length === 2);
@@ -4518,6 +4771,8 @@ try {
     await range.filter({ hasText: "rows 1–264" }).waitFor();
     assert.equal(await where.inputValue(), "total > 1990");
     await panel.locator(".table-default-badge", { hasText: "Default" }).waitFor();
+    // The reopened page has finished (its rows painted) before its grid is right-clicked.
+    await panel.locator(".statusline", { hasText: /rows · \d+ ms/ }).waitFor();
     // The custom filter's value, picked from the values the server counted with the tab's filter.
     {
       let box = null;
@@ -4526,7 +4781,9 @@ try {
         if (!box) await page.waitForTimeout(100);
       }
       await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12, { button: "right" });
-      await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+      const cellMenu = panel.locator(".result-grid-menu");
+      await cellMenu.waitFor();
+      await openSubmenu(cellMenu.getByRole("menuitem", { name: "Filter ▸" }));
       await panel.getByRole("menuitem", { name: "Custom filter…" }).click();
       const dialog = page.getByRole("dialog", { name: "Custom filter" });
       await dialog.getByLabel("Column").selectOption({ label: "customer_id" });
@@ -4584,7 +4841,7 @@ try {
     const addFilter = async (value) => {
       const box = await settledBox(names.locator(".grid-scroller"));
       await page.mouse.click(box.x + 80, box.y + 34 + 12, { button: "right" });
-      await names.getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await openSubmenu(names.getByRole("menuitem", { name: "Filter ▸" }));
       await names.getByRole("menuitem", { name: "Custom filter…" }).click();
       const dialog = page.getByRole("dialog", { name: "Custom filter" });
       // Only a table data tab offers the server's most frequent values.
@@ -5657,6 +5914,100 @@ try {
     await roleRow.waitFor({ state: "detached" });
   }
 
+  step("maintenance: refresh a materialized view from the explorer, its SQL shown first and run in a tab of its own (SDB-392)");
+  {
+    const pgNode = page.locator('.node:has(> .connection-row:has-text("Postgres (Docker)"))');
+    // A materialized view to refresh, made in a tab of the connection the explorer opened.
+    const makePanel = await newQuery("Postgres (Docker)", "create materialized view if not exists public.smoke_mv as select 1 as id;");
+    await run(makePanel);
+    await makePanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    await page.keyboard.press("Control+w");
+    const publicSchema = pgNode.getByRole("button", { name: "Expand or collapse schema public", exact: true });
+    if ((await publicSchema.getAttribute("aria-expanded")) !== "true") await publicSchema.click();
+    // Read the schema again: the view is new.
+    await publicSchema.focus();
+    await page.keyboard.press("F5");
+    const viewsFolder = pgNode.getByRole("button", { name: "Expand or collapse Materialized views", exact: true });
+    if ((await viewsFolder.getAttribute("aria-expanded")) !== "true") await viewsFolder.click();
+    const viewRow = pgNode.locator(".row", { hasText: "smoke_mv" }).first();
+    await viewRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Maintenance" }).click();
+    await page.getByRole("menuitem", { name: "Refresh materialized view…" }).click();
+    const refresh = page.getByRole("dialog", { name: "Refresh materialized view: smoke_mv" });
+    await refresh.getByLabel("SQL that will run").filter({ hasText: "REFRESH MATERIALIZED VIEW public.smoke_mv;" }).waitFor();
+    await refresh.getByLabel("WITH NO DATA: leave it empty until the next refresh").check();
+    await refresh.getByLabel("SQL that will run").filter({ hasText: "REFRESH MATERIALIZED VIEW public.smoke_mv WITH NO DATA;" }).waitFor();
+    await refresh.getByLabel("WITH NO DATA: leave it empty until the next refresh").uncheck();
+    await refresh.getByLabel("SQL that will run").filter({ hasText: "REFRESH MATERIALIZED VIEW public.smoke_mv;" }).waitFor();
+    await shot("sdb-392-refresh-materialized-view");
+    // Run: a new tab with the statement, run as shown through the guard.
+    await refresh.getByRole("button", { name: "Run in a new tab", exact: true }).click();
+    await refresh.waitFor({ state: "detached" });
+    const ranPanel = page.locator(".tab-panel:not([hidden])");
+    await ranPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    assert.equal((await ranPanel.locator(".cm-content").innerText()).trim(), "REFRESH MATERIALIZED VIEW public.smoke_mv;");
+    await replaceQuery(ranPanel, "drop materialized view public.smoke_mv;");
+    await run(ranPanel);
+    // A DROP: the guard asks first.
+    const dropRisk = page.getByRole("dialog", { name: "Run these statements?" });
+    await dropRisk.getByRole("button", { name: "Run anyway", exact: true }).click();
+    await dropRisk.waitFor({ state: "detached" });
+    // The messages of the refresh are still there until the drop starts: give it that moment,
+    // then wait for it to end before closing the tab.
+    await page.waitForTimeout(500);
+    await page.waitForFunction(() => !document.querySelector(".tab-panel:not([hidden]) .editor-action-cancel"));
+    await ranPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    await page.keyboard.press("Control+w");
+  }
+
+  step("object details: a partitioned table's Partitions tab and node in the explorer (SDB-393)");
+  {
+    const created = await newQuery(
+      "Postgres (Docker)",
+      "drop table if exists smoke_part;\n" +
+        "create table smoke_part (id int, at date) partition by range (at);\n" +
+        "create table smoke_part_2025 partition of smoke_part for values from ('2025-01-01') to ('2026-01-01');",
+    );
+    await run(created);
+    await page.getByRole("button", { name: "Run anyway" }).click();
+    await created.getByText("Statement 3: OK", { exact: false }).first().waitFor();
+    // The test PostgreSQL is shared: a failure below still drops the table, as far as it can.
+    const dropPart = async () => {
+      await replaceQuery(created, "drop table if exists smoke_part;");
+      await run(created);
+      await page.getByRole("button", { name: "Run anyway" }).click();
+      await created.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    };
+    try {
+      await (await connectionMenu("Postgres (Docker)")).getByRole("menuitem", { name: "Refresh all schemas" }).click();
+      const pgNode = page.locator('.node:has(> .connection-row:has-text("Postgres (Docker)"))');
+      const partRow = pgNode.getByRole("button", { name: "Expand or collapse smoke_part", exact: true });
+      const publicSchema = pgNode.getByRole("button", { name: "Expand or collapse schema public", exact: true });
+      if ((await publicSchema.getAttribute("aria-expanded")) !== "true") await publicSchema.click();
+      const tables = pgNode.getByRole("button", { name: "Expand or collapse Tables", exact: true }).first();
+      if ((await tables.getAttribute("aria-expanded")) !== "true") await tables.click();
+      await partRow.waitFor();
+      await partRow.locator(".twisty").click();
+      // A partitioned table always has its Partitions: listed when the engine tells them. It is the
+      // only partitioned table open in the explorer.
+      const partitionsFolder = pgNode.getByRole("button", { name: "Expand or collapse Partitions", exact: true });
+      await partitionsFolder.dblclick();
+      const partitions = page.getByRole("region", { name: "Partitions of smoke_part" });
+      // The pinned plugin may not list partitions yet (its protocol is older than 1.2): it says so.
+      await partitions.getByText("smoke_part_2025").or(partitions.getByText("does not list partitions yet", { exact: false })).first().waitFor();
+      await shot("sdb-393-partitions");
+      await page.keyboard.press("Control+w");
+      await partitions.waitFor({ state: "detached" });
+      await partRow.locator(".twisty").click();
+    } catch (error) {
+      await page.keyboard.press("Escape").catch(() => {});
+      await created.locator(".cm-content").click({ timeout: 5_000 }).then(dropPart, () => {}).catch(() => {});
+      throw error;
+    }
+    await dropPart();
+    await page.locator(".tabbar .tab.active .close").click();
+  }
+
   step("backup and restore: the vendor's tools found or reported missing, a live log, a confirmed restore (ADR-049)");
   {
     // The explorer opened Postgres (Docker) in the accounts step: its menu has the backups.
@@ -5839,7 +6190,19 @@ try {
     assert.ok(await ignoreErrors.isDisabled(), "nothing to ignore without setup statements");
     await wizard.getByLabel("Default schema", { exact: true }).fill("smoke_setup");
     await isolation.selectOption("repeatable-read");
-    await wizard.getByLabel("Run when a session opens", { exact: true }).fill("SET search_path TO smoke_setup, public;\nSET TIME ZONE 'UTC';");
+    // By its name: once it holds text, Chromium's accessible name for a textarea inside its
+    // label includes that text, so an exact label no longer finds it.
+    const setupStatements = wizard.locator('textarea[name="sessionSetup"]');
+    await setupStatements.fill("SET search_path TO smoke_setup, public;\nSELECT sdb100_missing_column;");
+    await wizard.getByRole("tab", { name: "Main" }).click();
+    await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+    await wizard.getByRole("button", { name: "Test connection" }).click();
+    await wizard.locator(".test-log .step.failed", { hasText: "Session setup" }).getByText(/statement 2 of 2 failed/).waitFor();
+    // The test log takes the bottom of the form: close it so the Session tab has its room.
+    await wizard.getByRole("button", { name: "Close the test log" }).click();
+    await wizard.locator(".test-log").waitFor({ state: "detached" });
+    await wizard.getByRole("tab", { name: "Session" }).click();
+    await setupStatements.fill("SET search_path TO smoke_setup, public;\nSET TIME ZONE 'UTC';");
     assert.ok(!(await ignoreErrors.isDisabled()));
     await shot("sdb-14-session-tab");
     await wizard.getByRole("tab", { name: "Options" }).click();
@@ -6025,6 +6388,30 @@ try {
     await dropImported.waitFor({ state: "detached" });
     await check.getByText("Statement 1: OK", { exact: false }).first().waitFor();
     await page.locator(".tabbar .tab.active .close").click();
+
+    // The workbook exported above: its sheets are offered, and the chosen one is read (SDB-390).
+    const workbookDir = join(userDir, "xlsx");
+    const workbook = join(workbookDir, readdirSync(workbookDir)[0]);
+    await mainSchema.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Import data into a new table…" }).click();
+    const sheets = page.getByRole("dialog", { name: "Import data" });
+    await sheets.waitFor();
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, workbook);
+    await sheets.getByRole("button", { name: "Choose file…" }).click();
+    const sheetPreview = sheets.getByRole("region", { name: "Preview" });
+    await sheetPreview.locator("tbody tr").first().waitFor();
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    await sheets.locator(".import-options summary").click();
+    const sheetSelect = sheets.locator('select[name="import-sheet"]');
+    // A sheet per table, in the order they were chosen; the first one is read.
+    assert.deepEqual(await sheetSelect.locator("option").allTextContents(), ["orders", "customer"]);
+    await sheetPreview.locator("th", { hasText: "customer_id" }).waitFor();
+    await sheets.getByText("Types detected from the first 1,000 rows", { exact: false }).waitFor();
+    await shot("sdb-390-import-sheet");
+    await sheetSelect.selectOption("customer");
+    await sheetPreview.locator("th", { hasText: "customer_id" }).waitFor({ state: "detached" });
+    await sheets.getByRole("button", { name: "Close", exact: true }).click();
+    await sheets.waitFor({ state: "detached" });
   }
 
   step("MySQL and MariaDB: password, TLS, types and the schema explorer");
@@ -6269,7 +6656,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   };
   const filterBy = async (op, value) => {
     await rightClickFirstCell();
-    await panel.getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await openSubmenu(panel.getByRole("menuitem", { name: "Filter ▸" }));
     await panel.getByRole("menuitem", { name: "Custom filter…" }).click();
     const dialog = page.getByRole("dialog", { name: "Custom filter" });
     await dialog.getByLabel("Column").selectOption({ label: "Command" });
@@ -6299,7 +6686,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(sleeping + busy, processlistTotal);
   // From the cell's own menu: the filter for its value, then reset.
   await rightClickFirstCell();
-  await panel.getByRole("menuitem", { name: "Filter ▸" }).hover();
+  await openSubmenu(panel.getByRole("menuitem", { name: "Filter ▸" }));
   await panel.getByRole("menuitem", { name: /^Id <> \d+$/ }).click();
   await panel.locator(".filter-chip").nth(1).waitFor();
   await panel.getByRole("button", { name: "Reset filters" }).click();
@@ -6351,12 +6738,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.locator('.connection-row:has-text("MySQL (Docker)") .twisty').click();
   await page.getByLabel("Password", { exact: true }).fill("spelaion");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await page.getByRole("button", { name: "Expand or collapse schema spelaion" }).waitFor();
+  await page.getByRole("button", { name: "Expand or collapse schema spelaion", exact: true }).waitFor();
   assert.ok(await page.locator('.connection-row:has-text("MySQL (Docker)") img.engine-icon').evaluate((icon) => icon.complete && icon.naturalWidth > 0));
   await connectionsActivity.click();
   await sidebar.waitFor({ state: "hidden" });
   await connectionsActivity.click();
-  await page.getByRole("button", { name: "Expand or collapse schema spelaion" }).waitFor();
+  await page.getByRole("button", { name: "Expand or collapse schema spelaion", exact: true }).waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
   // System schemas only when asked for, in Settings → Explorer (a personal preference).
   const systemSchema = page.getByRole("button", { name: "Expand or collapse schema information_schema" });
@@ -6394,11 +6781,49 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await setShowSystem(false);
   await systemSchema.first().waitFor({ state: "detached" });
 
+  step("connection form: a MySQL connection shows only the databases it names (SDB-396)");
+  {
+    const mysqlFile = join(demoConnections, "docker", "mysql.toml");
+    const mysqlText = readFileSync(mysqlFile, "utf8");
+    const editMysql = async () => {
+      await (await connectionMenu("MySQL (Docker)")).getByRole("menuitem", { name: "Edit…" }).click();
+      const form = page.locator(".modal.wizard");
+      await form.getByRole("heading", { name: "Edit MySQL (Docker)" }).waitFor();
+      return form;
+    };
+    let form = await editMysql();
+    // Another case still names it; the connection's own database is always shown.
+    await form.locator('textarea[name="databases"]').fill("Performance_Schema");
+    await form.getByRole("checkbox", { name: /cleartext password plugin/ }).waitFor();
+    await shot("sdb-396-databases-shown");
+    await form.getByRole("button", { name: "Save changes" }).click();
+    await form.waitFor({ state: "detached" });
+    assert.match(readFileSync(mysqlFile, "utf8"), /^databases = \["Performance_Schema"\]$/m);
+    // A tab opened from the explorer, whose session was opened before the edit, uses the
+    // saved file (SDB-426): it lists only those in its database picker, and the same login
+    // keeps the password typed for the explorer, so nothing is asked.
+    await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
+    const shownPanel = page.locator(".tab-panel:not([hidden])");
+    await shownPanel.locator(".status-connected").waitFor();
+    assert.equal(await page.getByRole("dialog").count(), 0, "nothing asked for the same login");
+    const shownPicker = shownPanel.getByLabel("Database", { exact: true });
+    await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await shownPicker.elementHandle());
+    const shownNames = await shownPicker.evaluate((el) => [...el.options].map((o) => o.value).filter(Boolean).sort());
+    assert.deepEqual(shownNames, ["performance_schema", "spelaion"]);
+    // Emptied again: the key goes and the file is as it was, byte for byte.
+    form = await editMysql();
+    assert.equal(await form.locator('textarea[name="databases"]').inputValue(), "Performance_Schema");
+    await form.locator('textarea[name="databases"]').fill("");
+    await form.getByRole("button", { name: "Save changes" }).click();
+    await form.waitFor({ state: "detached" });
+    assert.equal(readFileSync(mysqlFile, "utf8"), mysqlText);
+  }
+
   step("explorer: open a connected query for the selected database without asking again");
   await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
   await panel.locator(".status-connected").waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
-  const mysqlSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion" });
+  const mysqlSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion", exact: true });
   await mysqlSchema.dblclick();
   await panel.locator(".status-connected").waitFor();
   const selectedDatabase = panel.getByLabel("Database", { exact: true });
@@ -6591,8 +7016,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     for (let i = 0; i < 40 && !(box = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
     const before = await page.evaluate(() => window.__copied.length);
-    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
-    await page.keyboard.press("Control+a");
+    await panel.getByRole("button", { name: "Select all cells", exact: true }).click();
     await page.keyboard.press("Control+c");
     assert.deepEqual((await copied(before + 1)).trimEnd().split("\n"), ["1\tedited from viewer\t1", "2\ttwo\t", "4\tfour\t1", "5\tedited from viewer\t1"]);
   }
@@ -6617,15 +7041,21 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   }
   // A typed value that does not fit the column is refused by the core; nothing is applied.
   {
-    const box = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 34 + 12);
+    const grid = panel.getByRole("grid");
+    // Wait for the new grid to report the selected cell before asking it to start editing.
+    const editQty = async () => {
+      await grid.click({ position: { x: 52 + 270 + 20, y: 34 + 12 } });
+      await grid.getByRole("gridcell", { name: /^Row 1, qty \(/ }).waitFor();
+      await grid.press("F2");
+    };
+    await editQty();
     // The grid's own editor: the open cell viewer has an edit box with the same name.
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for qty" }));
     await editor.fill("123");
     await editor.press("Enter");
     await page.keyboard.press("Control+z");
     await panel.getByText("No pending changes").waitFor();
-    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 34 + 12);
+    await editQty();
     await editor.fill("lots");
     await editor.press("Enter");
     await panel.getByRole("button", { name: "Save changes" }).click();
@@ -6714,12 +7144,72 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.keyboard.insertText("select id, name from smoke_edit order by id;");
   await run(panel);
   await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+  // What a screen reader is given as the selection moves (SDB-425): the canvas grid's active
+  // descendant is a cell of its own for each move, its row, visible column and value written
+  // before it becomes the active descendant, once per move, and again after an edit.
+  const announceGrid = panel.locator(".grid-scroller");
+  const announced = (pattern) => page.waitForFunction(([source]) => {
+    const grid = document.querySelector(".tab-panel:not([hidden]) .grid-scroller");
+    const id = grid?.getAttribute("aria-activedescendant");
+    const cell = id ? document.getElementById(id) : null;
+    return Boolean(cell && new RegExp(source).test(cell.textContent ?? ""));
+  }, [pattern.source]);
+  const announcements = () => page.evaluate(() => window.__announcements.length);
+  await announceGrid.evaluate((grid) => {
+    window.__announcements = [];
+    window.__announcer?.disconnect();
+    window.__announcer = new MutationObserver(() => window.__announcements.push(grid.getAttribute("aria-activedescendant")));
+    window.__announcer.observe(grid, { attributes: true, attributeFilter: ["aria-activedescendant"] });
+  });
+  const announceMove = async (key, pattern) => {
+    const before = await announcements();
+    await page.keyboard.press(key);
+    await announced(pattern);
+    // Nothing more arrives for the same move: no duplicate, no late stale answer.
+    await page.waitForTimeout(400);
+    assert.equal(await announcements() - before, 1, `one announcement for ${key}`);
+  };
+  {
+    const box = await announceGrid.boundingBox();
+    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+    await announced(/^Row 1, id \(/);
+    await announceMove("ArrowRight", /^Row 1, name \(/);
+    await announceMove("ArrowDown", /^Row 2, name \(/);
+    await announceMove("ArrowUp", /^Row 1, name \(/);
+    // The accessibility tree (what AT-SPI and UI Automation read) names the active cell with
+    // that text, and the focused grid points at it.
+    const activeId = await announceGrid.getAttribute("aria-activedescendant");
+    const cellText = await page.evaluate((id) => document.getElementById(id).textContent, activeId);
+    const cdp = await page.context().newCDPSession(page);
+    const { root: domRoot } = await cdp.send("DOM.getDocument", { depth: 0 });
+    const selector = await page.evaluate((id) => `#${CSS.escape(id)}`, activeId);
+    const { nodeId: cellNode } = await cdp.send("DOM.querySelector", { nodeId: domRoot.nodeId, selector });
+    const { nodes: cellAx } = await cdp.send("Accessibility.getPartialAXTree", { nodeId: cellNode, fetchRelatives: false });
+    assert.equal(cellAx[0].name?.value, cellText);
+    const { nodeId: gridNode } = await cdp.send("DOM.querySelector", { nodeId: domRoot.nodeId, selector: ".tab-panel:not([hidden]) .grid-scroller" });
+    const { nodes: gridAx } = await cdp.send("Accessibility.getPartialAXTree", { nodeId: gridNode, fetchRelatives: false });
+    const descendant = (gridAx[0].properties ?? []).find((property) => property.name === "activedescendant");
+    assert.equal(descendant?.value?.relatedNodes?.[0]?.backendDOMNodeId, cellAx[0].backendDOMNodeId, "the grid's active descendant is that cell");
+    // A hidden column is skipped: the cell says its visible column and position.
+    await page.mouse.click(box.x + 52 + 20, box.y + 18, { button: "right" });
+    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Hide id" }).click();
+    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+    await announced(/^Row 1, name \(/);
+    assert.equal(await page.evaluate((id) => document.getElementById(id).getAttribute("aria-colindex"), await announceGrid.getAttribute("aria-activedescendant")), "1");
+    await announceMove("ArrowDown", /^Row 2, name \(/);
+    await panel.locator(".grid-footer .grid-hidden").click();
+    await panel.getByRole("dialog", { name: "Columns" }).getByRole("button", { name: "Show all" }).click();
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .grid-hidden") === null);
+  }
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("query edit");
     await editor.press("Enter");
+    // Back in the grid, the edited value is said (SDB-425).
+    await announced(/^Row 1, name \(.*\): query edit$/);
     await page.keyboard.press("Enter");
     const valueEditor = panel.locator(".cell-viewer").getByRole("textbox", { name: "New value for name" });
     await valueEditor.fill("viewer shortcut");
@@ -7017,6 +7507,62 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
     await shot("sdb-363-engine-marks-light");
     await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, themeBefore);
+  }
+  // A named kind keeps the picker mark after saving, and a folder keeps its folder icon.
+  {
+    const markCases = [
+      { picker: "CockroachDB", name: "Marked CockroachDB", selector: "img.engine-icon", field: "Host", value: "localhost" },
+      { picker: "CSV / Parquet folder", name: "Marked file folder", selector: ".engine-icon-fallback svg", field: "Folder", value: join(demo, "data") },
+    ];
+    const recorded = [];
+    for (const spec of markCases) {
+      const card = wizard.locator(".engine-card", { hasText: spec.picker });
+      const mark = await card.locator(spec.selector).evaluate((element) => element.outerHTML);
+      await card.click();
+      await wizard.getByLabel("Name", { exact: true }).fill(spec.name);
+      await wizard.getByRole("textbox", { name: spec.field, exact: true }).fill(spec.value);
+      await wizard.getByRole("tab", { name: "Options" }).click();
+      await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+      await wizard.getByRole("button", { name: "Save", exact: true }).click();
+      await wizard.waitFor({ state: "detached" });
+      const row = page.locator(".connection-row", { hasText: spec.name });
+      assert.equal(await row.locator(spec.selector).evaluate(element => element.outerHTML), mark);
+      recorded.push({ ...spec, mark });
+      if (spec !== markCases.at(-1)) {
+        await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+      }
+    }
+    await activities.getByRole("button", { name: "Processes", exact: true }).click();
+    for (const spec of recorded) {
+      const item = page.locator(".process-connection", { hasText: spec.name });
+      assert.equal(await item.locator(spec.selector).evaluate(element => element.outerHTML), spec.mark);
+    }
+    await activities.getByRole("button", { name: "Connections", exact: true }).click();
+    for (const spec of recorded) {
+      await (await connectionMenu(spec.name)).getByRole("menuitem", { name: "Delete…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Delete connection?" });
+      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
+    }
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    wizard = page.getByRole("dialog", { name: "Add connection" });
+    // DBeaver explicitly saved the named driver. The preview needs no database connection.
+    const source = join(userDir, "mark-import");
+    const directory = join(source, "General", ".dbeaver");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "data-sources.json"), JSON.stringify({
+      connections: { fixture: {
+        provider: "postgresql", driver: "postgres-cockroach-jdbc", name: "CockroachDB import fixture",
+        configuration: { host: "localhost", port: "26257", database: "defaultdb" },
+      } },
+    }));
+    await page.evaluate((dir) => (window.__spelaionImportDirs = { dbeaver: dir }), source);
+    await wizard.getByRole("button", { name: "Import connections from another client…" }).click();
+    await wizard.getByRole("menuitem", { name: "DBeaver", exact: true }).click();
+    const preview = wizard.getByRole("listitem").filter({ hasText: "CockroachDB import fixture" });
+    assert.equal(await preview.locator("img.engine-icon").evaluate(element => element.outerHTML), recorded[0].mark);
+    await wizard.getByRole("button", { name: "Back", exact: true }).click();
+    await page.evaluate(() => delete window.__spelaionImportDirs);
   }
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");
@@ -7362,7 +7908,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       await page.waitForTimeout(300);
       // The row at the top is 12345 (rows are 24 px high).
       await page.mouse.click(box.x + rowNum + idW + 20, box.y + 34 + 12, { button: "right" });
-      await big.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await openSubmenu(big.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
       await big.getByRole("menuitem", { name: "name contains 'item 12345'" }).click();
       await big.locator(".statusline", { hasText: "11 of 1,000,000 rows" }).waitFor({ timeout: 60_000 });
     });
@@ -7454,6 +8000,42 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const second = await newQuery("analytics", "select count(*) as n from sales;");
   await run(second);
   await second.locator(".statusline", { hasText: "1 row" }).waitFor();
+
+  step("plugin processes: Settings › Plugins shows DuckDB's process, Restart loses its sessions, and a tab reconnects by hand");
+  {
+    // SDB-399. The numbers are the core's, read for that one process.
+    let pid = null;
+    await withSettings("plugins", async (settings) => {
+      const row = settings.locator('.plugin-row[data-plugin="spelaiondb-plugin-duckdb"]');
+      const usage = row.locator(".plugin-process");
+      await usage.waitFor();
+      assert.match(await usage.innerText(), /^Running: .+ of memory, .+ processor, \d+ sessions?\.$/);
+      pid = await usage.getAttribute("data-pid");
+      // Read again every two seconds: the processor share needs two readings.
+      await row.locator(".plugin-process", { hasText: "%" }).waitFor({ timeout: 10_000 });
+      await shot("sdb-399-plugin-process");
+      // No transaction is open: it restarts without asking.
+      await row.getByRole("button", { name: "Restart" }).click();
+      await row.getByText("Restarted: its sessions were lost.", { exact: false }).waitFor();
+      assert.equal(await page.getByRole("dialog", { name: /Restart .* with an open transaction\?/ }).count(), 0);
+    });
+    // Its tabs say their session was lost at once (ADR-028), and nothing ran again.
+    const lostTab = second.locator(".status-lost");
+    await lostTab.waitFor();
+    assert.match(await lostTab.innerText(), /Connection lost/);
+    await lostTab.getByRole("button", { name: "Reconnect" }).click();
+    await second.locator(".status-connected").waitFor();
+    await second.getByText("Reconnected. Nothing was run again.", { exact: true }).waitFor();
+    await replaceQuery(second, "select * from range(3);");
+    await run(second);
+    await second.locator(".statusline", { hasText: "3 rows" }).waitFor();
+    // A new process serves it.
+    await withSettings("plugins", async (settings) => {
+      const usage = settings.locator('.plugin-row[data-plugin="spelaiondb-plugin-duckdb"] .plugin-process');
+      await usage.waitFor();
+      assert.notEqual(await usage.getAttribute("data-pid"), pid, "the plugin was started again");
+    });
+  }
 
   step("SQL Server: a new connection, a batch with two result sets");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
@@ -7952,8 +8534,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("heading", { name: "Edit MariaDB (copy)" }).waitFor();
   await wizard.getByRole("status").filter({ hasText: "was pasted as a personal connection" }).waitFor();
   await shot("13f-pasted-connection");
-  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
-  await wizard.waitFor({ state: "detached" });
+  // Activate Cancel itself after the edit form is ready. Its footer can move as the
+  // asynchronously loaded form settles, so avoid a pointer aimed at an earlier layout.
+  const dismissPastedEditor = async () => {
+    const cancel = wizard.getByRole("button", { name: "Cancel", exact: true }).and(wizard.locator("button:enabled"));
+    await cancel.press("Space");
+    await wizard.waitFor({ state: "detached" });
+  };
+  await dismissPastedEditor();
   const pastedFile = join(userDir, "connections", "mariadb-copy.toml");
   const pastedText = readFileSync(pastedFile, "utf8");
   assert.match(pastedText, /engine = "mariadb"/);
@@ -7973,8 +8561,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("menuitem", { name: "Paste connection" }).click();
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("heading", { name: "Edit MariaDB (copy) (copy)" }).waitFor();
-  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
-  await wizard.waitFor({ state: "detached" });
+  await dismissPastedEditor();
   // The pasted connection connects like the original, asking for its password.
   panel = await newQuery("MariaDB (copy) (copy)", "select version() as v;");
   await run(panel);
@@ -8739,7 +9326,17 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate((dir) => (window.__spelaionImportDirs = { dbeaver: dir }), join(userDir, "dbeaver"));
 
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from DBeaver…" }).click();
+    const imports = page.getByRole("button", { name: "Import connections from another client…" });
+    await imports.press("Enter");
+    const menu = page.getByRole("menu", { name: "Import connections from another client…" });
+    await menu.getByRole("menuitem", { name: "DBeaver", exact: true }).waitFor();
+    await page.keyboard.press("ArrowDown");
+    assert.ok(await menu.getByRole("menuitem", { name: "DataGrip", exact: true }).evaluate(el => el === document.activeElement));
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+    assert.ok(await imports.evaluate(el => el === document.activeElement));
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from DBeaver" }).waitFor();
     const list = importer.getByRole("list", { name: "DBeaver connections" });
@@ -8785,7 +9382,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // configurations), never the user's; the project is picked like a folder.
     await page.evaluate((dir) => (window.__spelaionImportDirs = { datagrip: dir }), datagripProject);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from DataGrip…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "DataGrip", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from DataGrip" }).waitFor();
     const list = importer.getByRole("list", { name: "DataGrip connections" });
@@ -8814,7 +9412,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await importer.getByRole("combobox", { name: "What to do with PG via bastion" }).selectOption({ label: "Import it as a copy" });
     await importer.getByRole("combobox", { name: "What to do with Analytics" }).selectOption({ label: "Import it as a copy" });
     await importer.getByRole("textbox", { name: "Put them in" }).fill("DataGrip");
-    await importer.getByRole("checkbox", { name: "Store the passwords DataGrip saved in the system keychain" }).uncheck();
+    await importer.getByRole("checkbox", { name: "Store the passwords DataGrip saved in the system keychain" }).waitFor({ state: "detached" });
     await shot("sdb-50-import-datagrip");
     await importer.getByRole("button", { name: "Import 7 connections" }).click();
     await importer
@@ -8841,7 +9439,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const exportFile = join(tableplusFixtures, "export.tableplusconnection");
     await page.evaluate((file) => (window.__spelaionImportDirs = { tableplus: file }), exportFile);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from TablePlus…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "TablePlus", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from TablePlus" }).waitFor();
     // The export is encrypted: nothing is listed until its password opens it.
@@ -8895,7 +9494,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const exportFile = join(root, "crates/spelaion-config/tests/fixtures/heidisql/heidisql-12.22.txt");
     await page.evaluate((file) => (window.__spelaionImportDirs = { heidisql: file }), exportFile);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from HeidiSQL…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "HeidiSQL", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from HeidiSQL" }).waitFor();
     const list = importer.getByRole("list", { name: "HeidiSQL connections" });
@@ -8909,7 +9509,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       else await list.getByRole("checkbox", { name, exact: true }).check();
     }
     await importer.getByRole("textbox", { name: "Put them in" }).fill("HeidiSQL");
-    await importer.getByRole("checkbox", { name: "Store the passwords HeidiSQL saved in the system keychain" }).uncheck();
+    await importer.getByRole("checkbox", { name: "Store the passwords HeidiSQL saved in the system keychain" }).waitFor({ state: "detached" });
     await shot("sdb-52-import-heidisql");
     await importer.getByRole("button", { name: "Import 2 connections" }).click();
     await importer.getByRole("status").filter({ hasText: "Imported 2 connections." }).waitFor();
@@ -8925,7 +9525,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   {
     // SPELAION_WORKBENCH_DIR is Workbench's folder here: nothing to pick.
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from MySQL Workbench…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "MySQL Workbench", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from MySQL Workbench" }).waitFor();
     const list = importer.getByRole("list", { name: "MySQL Workbench connections" });
@@ -8945,6 +9546,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await item("Shop MariaDB TLS").getByText("4 settings are not imported").click();
     await item("Shop MariaDB TLS").getByText("SQL mode: ANSI_QUOTES", { exact: false }).waitFor();
     await item("Shop MariaDB TLS").getByText("it is in its vault", { exact: false }).waitFor();
+    await importer.getByRole("checkbox", { name: "Store the passwords MySQL Workbench saved in the system keychain" }).waitFor({ state: "detached" });
     await importer.getByRole("textbox", { name: "Put them in" }).fill("Workbench");
     await shot("sdb-53-import-workbench");
     await importer.getByRole("button", { name: "Import 2 connections" }).click();
@@ -8966,8 +9568,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // The export a real pgAdmin 4 wrote (crates/spelaion-config/tests/fixtures/pgadmin/README.md).
     const exportFile = join(root, "crates/spelaion-config/tests/fixtures/pgadmin/pgadmin-9.19-servers.json");
     await page.evaluate((file) => (window.__spelaionImportDirs = { pgadmin: file }), exportFile);
-    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from pgAdmin…" }).click();
+    await page.keyboard.press("Control+Shift+p");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("Import connections from another client");
+    await palette.getByRole("option", { name: /Import connections from another client/ }).click();
+    const menu = page.getByRole("menu", { name: "Import connections from another client…" });
+    await menu.getByRole("menuitem", { name: "pgAdmin", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from pgAdmin" }).waitFor();
     // An export file can be picked instead of pgAdmin's own database.
@@ -8994,6 +9600,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       if (await duplicate.count()) await duplicate.selectOption({ label: "Import it as a copy" });
       else await list.getByRole("checkbox", { name, exact: true }).check();
     }
+    await importer.getByRole("checkbox", { name: "Store the passwords pgAdmin saved in the system keychain" }).waitFor({ state: "detached" });
     await importer.getByRole("textbox", { name: "Put them in" }).fill("pgAdmin");
     await shot("sdb-54-import-pgadmin");
     await importer.getByRole("button", { name: "Import 3 connections" }).click();
@@ -9033,7 +9640,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     copyFileSync(join(fixtures, ".key"), join(dataDir, ".key"));
     await page.evaluate((dir) => (window.__spelaionImportDirs = { beekeeper: dir }), dataDir);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    await page.getByRole("button", { name: "Import from Beekeeper Studio…" }).click();
+    await page.getByRole("button", { name: "Import connections from another client…" }).click();
+    await page.getByRole("menuitem", { name: "Beekeeper Studio", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from Beekeeper Studio" }).waitFor();
     const list = importer.getByRole("list", { name: "Beekeeper Studio connections" });
@@ -9215,6 +9823,28 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.keyboard.insertText("select 'history_resumed_marker' as resumed;");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  // The export dialog opens with the choices of the last export before the restart (SDB-66).
+  {
+    await panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export result" });
+    const format = dialog.getByRole("combobox", { name: /^Format/ });
+    await format.waitFor();
+    assert.equal(await format.inputValue(), "sqlInsert");
+    assert.equal(await dialog.getByLabel("Rows per INSERT").inputValue(), "100");
+    assert.equal(await dialog.getByRole("combobox", { name: /^Keywords/ }).inputValue(), "lower");
+    await dialog.locator(".export-file summary").click();
+    assert.ok(await dialog.getByRole("checkbox", { name: "Compress with gzip" }).isChecked());
+    assert.equal(await dialog.locator('input[name="export-name-pattern"]').inputValue(), "workbook_{date}");
+    await format.selectOption("csv");
+    assert.equal(await dialog.getByRole("combobox", { name: /^Delimiter/ }).inputValue(), "|");
+    assert.equal(await dialog.getByRole("checkbox", { name: "Column names as the first row" }).isChecked(), false);
+    assert.equal(await dialog.getByLabel("NULL as", { exact: true }).inputValue(), "(null)");
+    assert.equal(await dialog.getByRole("combobox", { name: /^Encoding/ }).inputValue(), "windows1252");
+    assert.equal(await dialog.getByRole("checkbox", { name: /^Escape formulas/ }).isChecked(), false);
+    await shot("sdb-66-export-defaults-restored");
+    await dialog.getByRole("button", { name: "Close" }).last().click();
+    await dialog.waitFor({ state: "detached" });
+  }
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   history = page.getByRole("complementary", { name: "Query history", exact: true });
   await history.getByRole("textbox", { name: "Search query history" }).fill("round");
@@ -9558,7 +10188,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     };
     // A filter before the edits: ids 1, 10, 11 and 12.
     await page.mouse.click(...(await at(0, 0)), { button: "right" });
-    await shown.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await openSubmenu(shown.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
     await shown.getByRole("menuitem", { name: "id contains '1'" }).click();
     await shown.locator(".statusline", { hasText: /^4 of 12 rows/ }).waitFor();
     // The name of id 10, the second row shown, changed and not applied.
@@ -9635,6 +10265,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     mkdirSync(otherFolder, { recursive: true });
     await page.evaluate((target) => (window.__spelaionOpenFolder = target), otherFolder);
     await page.getByTitle("Open another folder").click();
+    // The folder's menu (SDB-397): Open folder… and the recent folders.
+    const folderMenu = page.getByRole("menu", { name: "Folders" });
+    await folderMenu.getByRole("menuitem", { name: "Open folder…" }).click();
     const folderEdits = page.getByRole("dialog", { name: "Open another folder with unsaved row changes?" });
     await folderEdits.waitFor();
     assert.deepEqual(await folderEdits.locator(".unsaved-edits-list li").allInnerTexts(), [editTab]);
@@ -9666,12 +10299,67 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // Leave nothing pending: cancel the query, discard the edit and close both tabs.
     await shown.getByRole("button", { name: "Cancel", exact: true }).click();
     await activeTab.locator(".tab-running").waitFor({ state: "detached" });
+    // Closing runs asynchronous checks. Wait for this tab to close before switching tabs.
+    const cancelledTab = await activeTab.elementHandle();
     await page.keyboard.press("Control+w");
+    await page.waitForFunction((tab) => !tab.isConnected, cancelledTab);
     await page.locator(".tabbar .tab", { hasText: editTab }).click();
     await page.locator(".tabbar .tab.active", { hasText: editTab }).waitFor();
     await shown.getByText("Updated: 1", { exact: false }).waitFor();
     await shown.getByRole("button", { name: "Discard" }).click();
-    await shown.getByText("Updated: 1", { exact: false }).waitFor({ state: "detached" });
+    await shown.getByText("No pending changes", { exact: true }).waitFor();
+    await shown.getByRole("grid").press("Control+w");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
+  }
+
+  step("read-only for this session refuses a write; disconnect all asks first with a transaction open (SDB-395)");
+  {
+    const controlPanel = await newQuery("Shop (SQLite)", "create temp table control_tx (x);");
+    await run(controlPanel);
+    await controlPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    const fromPalette = async (search, command) => {
+      await page.keyboard.press("Control+Shift+P");
+      const commandPalette = page.getByRole("dialog", { name: "Command palette" });
+      await commandPalette.getByRole("combobox").fill(search);
+      await commandPalette.locator(`[data-command="${command}"]`).click();
+      await commandPalette.waitFor({ state: "detached" });
+    };
+    // The session refuses the write before anything is sent, as a read-only connection's does.
+    await fromPalette("Read-only for this session", "editor.sessionReadOnly");
+    const chip = controlPanel.getByRole("button", { name: "Read-only session" });
+    await chip.waitFor();
+    await replaceQuery(controlPanel, "insert into control_tx values (1);");
+    await run(controlPanel);
+    await controlPanel.getByText("this session is read-only, so nothing was run", { exact: false }).first().waitFor();
+    // The chip ends it: the same write runs.
+    await chip.click();
+    await chip.waitFor({ state: "detached" });
+    await run(controlPanel);
+    await controlPanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
+    await controlPanel.getByText("this session is read-only, so nothing was run", { exact: false }).waitFor({ state: "detached" });
+    // A transaction open: Disconnect all asks first, and Cancel keeps it.
+    await controlPanel.locator(".transaction-controls").getByRole("checkbox", { name: "Auto-commit" }).click();
+    await controlPanel.locator(".transaction-controls input[type=checkbox]:not(:checked)").waitFor();
+    await replaceQuery(controlPanel, "insert into control_tx values (2);");
+    await run(controlPanel);
+    await controlPanel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+    await controlPanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
+    await fromPalette("Disconnect all", "connections.disconnectAll");
+    const asked = page.getByRole("dialog", { name: "Disconnect with an open transaction?" });
+    await asked.getByText("the server rolls back what was not committed", { exact: false }).waitFor();
+    await shot("sdb-395-disconnect-all-asks");
+    await asked.getByRole("button", { name: "Cancel", exact: true }).click();
+    await asked.waitFor({ state: "detached" });
+    await controlPanel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+    await controlPanel.locator(".status-connected").waitFor();
+    // Accepted: the session ends and the server rolls the transaction back; nothing reconnects.
+    await fromPalette("Disconnect all", "connections.disconnectAll");
+    await asked.getByRole("button", { name: "Disconnect and roll back", exact: true }).click();
+    await asked.waitFor({ state: "detached" });
+    await controlPanel.locator(".tx-badge").waitFor({ state: "detached" });
+    await controlPanel.getByText("Disconnected", { exact: true }).waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await controlPanel.locator(".status-connected").count(), 0, "nothing reconnects on its own");
     await page.keyboard.press("Control+w");
     await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
   }
@@ -9737,6 +10425,45 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.equal(app.exitCode, null, "the first close request waits for the UI");
     requestClose(app.pid);
     await quitWithin(exitedFrozen, 15_000, "a second close request did not quit a frozen UI");
+  }
+
+  step("opening from outside: an .sql file on the command line opens in a tab, not run, and a second launch hands its file to the open window");
+  {
+    // SDB-397. The restored tab reconnects (the setting is on from the step before); the
+    // opened files have no connection and nothing runs.
+    const first = join(userDir, "from-outside.sql");
+    const second = join(userDir, "handed-over.sql");
+    writeFileSync(first, "select 'from outside' as which;\n");
+    writeFileSync(second, "select 'handed over' as which;\n");
+    await browser.close().catch(() => {});
+    app = startApp({}, [first, "--connection", "no-such-connection"]);
+    browser = await connect();
+    page = await appPage();
+    page.setDefaultTimeout(30_000);
+    const tabLabel = (name) => page.locator(".tabbar .tab .tab-label", { hasText: name });
+    await tabLabel("from-outside.sql").waitFor();
+    let opened = page.locator(".tab-panel:not([hidden])");
+    assert.ok((await opened.locator(".cm-content").innerText()).includes("select 'from outside' as which;"));
+    await page.waitForTimeout(500);
+    assert.equal(await opened.locator(".grid-host").count(), 0, "opening ran nothing");
+    assert.equal(await page.locator(".tabbar .tab", { hasText: "from-outside.sql" }).locator(".dot-connected").count(), 0, "and connected nothing");
+    // What could not be opened is said, not guessed.
+    await page.locator(".launch-notice", { hasText: "no-such-connection" }).waitFor();
+    // A second launch with this personal folder hands its file over and ends at once.
+    const launch = startApp({}, [second]);
+    const [code] = await Promise.race([once(launch, "exit"), new Promise((_, reject) => setTimeout(() => reject(new Error("the second launch did not end")), 20_000))]);
+    assert.equal(code, 0, "the second launch ended after handing over");
+    await tabLabel("handed-over.sql").waitFor();
+    opened = page.locator(".tab-panel:not([hidden])");
+    assert.ok((await opened.locator(".cm-content").innerText()).includes("select 'handed over' as which;"));
+    await page.waitForTimeout(500);
+    assert.equal(await opened.locator(".grid-host").count(), 0, "the handed-over file ran nothing");
+    assert.equal(await page.locator(".tabbar .tab").count(), 3, "the restored tab and the two files");
+    await shot("sdb-397-opened-from-outside");
+    // The recent folders list the demo, opened at start.
+    const recent = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("recent_folders"));
+    assert.ok(recent.some((folder) => folder.name === "demo"), JSON.stringify(recent));
+    await closeApp();
   }
 
   checkContentSecurityPolicy();

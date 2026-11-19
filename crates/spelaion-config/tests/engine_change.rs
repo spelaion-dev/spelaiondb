@@ -329,3 +329,35 @@ fn a_team_engine_change_goes_through_trust_like_any_edit() {
     assert_eq!(changes.len(), 1);
     assert!(changes[0].fields.iter().any(|f| f.field == "engine"));
 }
+
+#[test]
+fn an_engine_change_keeps_the_pooler_cleartext_and_databases_only_where_they_apply() {
+    let fx = Fixture::new("engine-sdb396");
+    let pg = draft_of(
+        &fx,
+        "pooled",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\npooler = \"transaction\"\n",
+    );
+    let (next, change) = pg.with_engine(Engine::Mysql);
+    assert_eq!(next.pooler, None);
+    assert_eq!(change.dropped, ["pooler"]);
+    next.to_file(&fx.config()).unwrap();
+
+    let mysql = draft_of(
+        &fx,
+        "clear",
+        "schema_version = 1\nengine = \"mysql\"\nhost = \"h\"\nuser = \"u\"\ncleartext_password = true\n\
+         databases = [\"sales\", \"hr\"]\n[tls]\nmode = \"verify-full\"\n",
+    );
+    let (next, change) = mysql.with_engine(Engine::Mariadb);
+    assert!(next.cleartext_password && next.databases == ["sales", "hr"]);
+    assert!(change.dropped.is_empty());
+    let (next, change) = mysql.with_engine(Engine::Sqlserver);
+    assert!(!next.cleartext_password);
+    assert_eq!(next.databases, ["sales", "hr"]);
+    assert_eq!(change.dropped, ["cleartext_password"]);
+    next.to_file(&fx.config()).unwrap();
+    let (next, change) = mysql.with_engine(Engine::Postgres);
+    assert!(!next.cleartext_password && next.databases.is_empty());
+    assert_eq!(change.dropped, ["cleartext_password", "databases"]);
+}

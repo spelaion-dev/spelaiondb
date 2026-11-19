@@ -158,7 +158,7 @@ test("global shortcuts find their command; AltGr characters and editor keys do n
 
 test("the editor menu and keymap derive actions from the central palette registry", () => {
   const editor = menuCommands("editor");
-  assert.equal(editor.length, 27);
+  assert.equal(editor.length, 29);
   // The editor's zoom (SDB-389): Ctrl+= / Ctrl+- / Ctrl+0, the editor's own keys.
   assert.deepEqual(editor.filter((command) => command.id.startsWith("editor.zoom")).map((command) => command.shortcut), ["Ctrl+=", "Ctrl+-", "Ctrl+0"]);
   for (const key of ["=", "-", "0", "+"]) assert.equal(globalCommandFor(press(key, { ctrlKey: true })), null, `Ctrl+${key} is the editor's`);

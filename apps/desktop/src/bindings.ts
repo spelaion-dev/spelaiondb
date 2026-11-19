@@ -27,6 +27,15 @@ export const commands = {
 	explainQuery: (session: string, sql: string, options: ExplainOptions_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("explain_query", { session, sql, options, onEvent })),
 	openPlanFile: (path: string) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("open_plan_file", { path })),
 	startupPlanPath: () => __TAURI_INVOKE<string | null>("startup_plan_path"),
+	/**
+	 *  What this app's own command line asked for, once: the folder is already open and the plan
+	 *  goes through `startup_plan_path`, so only the files, the connection and the refusals.
+	 */
+	takeLaunchRequest: () => __TAURI_INVOKE<LaunchRequestItem_Serialize | null>("take_launch_request"),
+	/**  The folders opened most recently, newest first. */
+	recentFolders: () => typedError<RecentFolderItem[], string>(__TAURI_INVOKE("recent_folders")),
+	/**  Takes a folder out of the recent folders; the folder itself is not touched. */
+	forgetRecentFolder: (path: string) => typedError<boolean, string>(__TAURI_INVOKE("forget_recent_folder", { path })),
 	planPage: (plan: number, view: PlanView, offset: number, limit: number) => typedError<PlanPage_Serialize, string>(__TAURI_INVOKE("plan_page", { plan, view, offset, limit })),
 	planStatistics: (plan: number, kind: PlanStatKind, offset: number, limit: number) => typedError<PlanStatsPage_Serialize, string>(__TAURI_INVOKE("plan_statistics", { plan, kind, offset, limit })),
 	planRawWindow: (plan: number, offset: number) => typedError<RawWindow_Serialize, string>(__TAURI_INVOKE("plan_raw_window", { plan, offset })),
@@ -42,6 +51,8 @@ export const commands = {
 	mcpSettings: () => typedError<McpSettingsItem, string>(__TAURI_INVOKE("mcp_settings")),
 	/**  Read-only mode for every agent (ADR-033): `spelaiondb mcp` reads it on every call. */
 	setMcpReadOnly: (readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_read_only", { readOnly })),
+	/**  Changes only the local write restriction, in the workspace that the user was shown. */
+	setMcpConnectionReadOnly: (connection: string, workspace: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_connection_read_only", { connection, workspace, readOnly })),
 	setMcpOutputFormat: (format: ToolOutputItem) => typedError<null, string>(__TAURI_INVOKE("set_mcp_output_format", { format })),
 	/**  What agents can do on each connection, as the core decides it. */
 	mcpAccess: () => typedError<McpAccessItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
@@ -232,6 +243,17 @@ export const commands = {
 	 */
 	pluginsOverview: () => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_overview")),
 	/**
+	 *  The diagnostic report, scrubbed by the core: the app's version and system, its plugins and
+	 *  builds, the engines in use (never a connection's name or host) and the app log's last lines,
+	 *  and the failed screen when there is one.
+	 */
+	diagnosticInfo: (failure: ScreenFailureItem | null) => typedError<string, string>(__TAURI_INVOKE("diagnostic_info", { failure })),
+	/**
+	 *  Opens the new-issue page in the system's browser, on the user's click. Only that fixed
+	 *  address can be opened, and it carries nothing of the report.
+	 */
+	openIssuePage: () => typedError<null, string>(__TAURI_INVOKE("open_issue_page")),
+	/**
 	 *  Reads the published catalogue and accepts it, if the "check for updates" setting allows it
 	 *  and this SpelaionDB has the catalogue's key (else the core's error says which). For when
 	 *  the Plugins page opens. The engines are swapped when it is accepted.
@@ -260,6 +282,15 @@ export const commands = {
 	 *  swapped, so the next connection starts whatever build is left.
 	 */
 	pluginsRemove: (name: string, version: string, confirmed: boolean) => typedError<PluginRemoval_Serialize, string>(__TAURI_INVOKE("plugins_remove", { name, version, confirmed })),
+	/**  The plugin processes running now, with what each uses (SDB-399). Nothing is started. */
+	pluginProcesses: () => typedError<PluginProcessItem_Serialize[], string>(__TAURI_INVOKE("plugin_processes")),
+	/**
+	 *  Restarts the plugin `name` (SDB-399): its process is stopped, given `STOP_GRACE` to close
+	 *  its files, and the next connection starts it again, checked again. Its sessions are lost
+	 *  (ADR-028): each tab says so at once, and nothing is run again. When a session of it has a
+	 *  transaction open, nothing is stopped until `confirmed` (ADR-031).
+	 */
+	pluginRestart: (name: string, confirmed: boolean) => typedError<PluginRestart, string>(__TAURI_INVOKE("plugin_restart", { name, confirmed })),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
 	/**
@@ -351,6 +382,16 @@ export const commands = {
 	 *  without a line break after it.
 	 */
 	copyRows: (result: number, session: string, range: CellRange_Deserialize, format: TextFormat, header: boolean, displayed: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header, displayed })),
+	/**
+	 *  The file name an export suggests (SDB-391): `names` rendered by the core for `table` (or
+	 *  `result` for a query), with the format's extension. Never a path: the save dialog picks
+	 *  the folder.
+	 */
+	exportFileName: (session: string, names: FileNamePatternItem, format: TextFormat, gzip: boolean, table: RelationRefItem | null) => typedError<string, string>(__TAURI_INVOKE("export_file_name", { session, names, format, gzip, table })),
+	/**  The export dialog's defaults (SDB-66): what the last export chose. */
+	exportDefaults: () => typedError<ExportDefaultsItem, string>(__TAURI_INVOKE("export_defaults")),
+	/**  Keeps the export dialog's choices as its next defaults, once the core has checked them. */
+	setExportDefaults: (defaults: ExportDefaultsItem) => typedError<null, string>(__TAURI_INVOKE("set_export_defaults", { defaults })),
 	/**  The copy defaults (SDB-388): what "Copy special…" chose last. */
 	copyDefaults: () => typedError<CopySpecialItem, string>(__TAURI_INVOKE("copy_defaults")),
 	/**
@@ -499,6 +540,18 @@ export const commands = {
 	 */
 	referencingKeys: (session: string, schema: string, table: string) => typedError<TableKeyItem[], string>(__TAURI_INVOKE("referencing_keys", { session, schema, table })),
 	/**
+	 *  A relation's comment and its properties from the catalog: owner, tablespace, storage
+	 *  engine… (SDB-393).
+	 */
+	objectProperties: (session: string, schema: string, table: string) => typedError<ObjectPropertiesItem_Serialize, string>(__TAURI_INVOKE("object_properties", { session, schema, table })),
+	/**
+	 *  How a table is partitioned and its partitions; `None` for a table that is not, or an engine
+	 *  that does not tell (SDB-393).
+	 */
+	tablePartitions: (session: string, schema: string, table: string) => typedError<PartitioningItem_Serialize | null, string>(__TAURI_INVOKE("table_partitions", { session, schema, table })),
+	/**  What a relation uses and what uses it; `None` when the engine cannot tell (SDB-393). */
+	objectDependencies: (session: string, schema: string, table: string) => typedError<DependenciesItem_Serialize | null, string>(__TAURI_INVOKE("object_dependencies", { session, schema, table })),
+	/**
 	 *  Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
 	 *  of `schema.table`): the core finds the key in the catalog again, reads the row's typed
 	 *  values and writes the filter of the table data tab it leads to.
@@ -536,7 +589,7 @@ export const commands = {
 	 *  Streams explorer tables and views, one file each, into `folder`, never over an existing
 	 *  file. Stops at a cancel or an error; the files written before stay.
 	 */
-	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, extension: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportTablesOutcome_Serialize, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, extension, options, onProgress })),
+	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, names: FileNamePatternItem, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportTablesOutcome_Serialize, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, names, options, onProgress })),
 	/**  Stops a running streaming export: its statement and its writer; no file is left. */
 	cancelExport: (exportId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_export", { exportId })),
 	/**
@@ -645,6 +698,24 @@ export const commands = {
 	 *  connections (ADR-026). Returns how many statements ran.
 	 */
 	applyObjectChange: (session: string, change: ObjectChangeItem_Deserialize, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_object_change", { session, change, confirmed })),
+	/**
+	 *  The maintenance actions the explorer offers on `target` on this session's engine (SDB-392):
+	 *  the core decides.
+	 */
+	maintenanceKinds: (session: string, target: ObjectTargetItem_Deserialize) => typedError<MaintenanceKindItem[], string>(__TAURI_INVOKE("maintenance_kinds", { session, target })),
+	/**
+	 *  A maintenance action's statement, written by the core from the action and its options, with
+	 *  what the app says about it before it runs (SDB-392). Refused on a read-only connection or session. It
+	 *  runs, as shown, in an editor tab of its own: through the guard, as any run.
+	 */
+	maintenancePlan: (session: string, target: ObjectTargetItem_Deserialize, kind: MaintenanceKindItem, options: MaintenanceOptionsItem_Deserialize) => typedError<MaintenancePlanItem, string>(__TAURI_INVOKE("maintenance_plan", { session, target, kind, options })),
+	/**
+	 *  "Duplicate table…" (SDB-394): the statements of a copy, written by the core from the
+	 *  catalog read now, with what it keeps and what it does not. Refused on a read-only
+	 *  connection or session. They run, as shown, in an editor tab of their own: through the guard and the
+	 *  connection type's confirmation, as any run.
+	 */
+	duplicateTablePlan: (session: string, request: DuplicateTableItem) => typedError<DuplicatePlanItem, string>(__TAURI_INVOKE("duplicate_table_plan", { session, request })),
 	/**
 	 *  Which accounts the explorer may create, give a password, lock or drop on this session's
 	 *  engine (ADR-048): the core decides.
@@ -917,9 +988,12 @@ export const commands = {
 	connect: (session: string, connection: string, password: string | null, remember: boolean, editor: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember, editor })),
 	/**
 	 *  Open an independent tab from an existing explorer session, reusing its in-memory
-	 *  credentials and exact resolved connection. Passwords never cross back into the UI.
+	 *  credentials and exact resolved connection while the configuration still says the same
+	 *  (SDB-426, the core decides): after a saved edit the saved file is resolved again, and the
+	 *  typed password goes with it only to the same login, or the tab is told to connect as a new
+	 *  one does. Passwords never cross back into the UI.
 	 */
-	connectFromSession: (source: string, session: string, database: string | null, editor: boolean) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database, editor })),
+	connectFromSession: (source: string, session: string, database: string | null, editor: boolean) => typedError<FromSessionOutcome, string>(__TAURI_INVOKE("connect_from_session", { source, session, database, editor })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
@@ -962,6 +1036,17 @@ export const commands = {
 	 *  its first two columns in the user's language.
 	 */
 	transposeRows: (result: number, rows: number[], firstNumber: number, columnLabel: string, typeLabel: string) => typedError<TransposedItem, string>(__TAURI_INVOKE("transpose_rows", { result, rows, firstNumber, columnLabel, typeLabel })),
+	/**
+	 *  The warning the add / edit connection form shows while it is filled in (SDB-395): the core
+	 *  decides it from what is typed, and the network profile named.
+	 */
+	draftTlsWarning: (draft: ConnectionDraftItem_Deserialize) => typedError<TlsWarningItem | null, string>(__TAURI_INVOKE("draft_tls_warning", { draft })),
+	/**
+	 *  "Read-only for this session" (SDB-395): the tab's session refuses every write, as a
+	 *  read-only connection's does, until it reconnects or this turns it off. Turning it off never
+	 *  makes a read-only connection writable; the core refuses with a transaction open.
+	 */
+	setSessionReadOnly: (session: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_session_read_only", { session, readOnly })),
 	/**
 	 *  How many rows "Load every row" would load and roughly how much memory they take: the rows
 	 *  counted on the server, the memory from what a loaded row of `result` takes now.
@@ -1087,6 +1172,7 @@ export const commands = {
 export const events = {
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
+	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
 	pluginInstallProgress: makeEvent<PluginInstallProgress, PluginInstallProgress>("plugin-install-progress"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
@@ -1516,6 +1602,8 @@ export type ChartSeriesItem = {
 	values: (number | null)[],
 };
 
+export type CheckModeItem = "quick" | "fast" | "medium" | "extended" | "changed";
+
 /**  A column's allowed values, in the catalog's order. */
 export type ChoicePickerItem = {
 	source: ChoiceSourceItem,
@@ -1713,7 +1801,7 @@ export type ColumnStatsTarget = {
 
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
 
-export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string; 
+export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string; engineMark?: string | null; 
 /**
  *  Session setup statements that failed and were skipped (ADR-037): the connection
  *  ignores setup errors, and the tab says which.
@@ -1740,7 +1828,7 @@ item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string 
  */
 { kind: "missingVariables"; names: string[] };
 
-export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string; 
+export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string; engineMark: string | null; 
 /**
  *  Session setup statements that failed and were skipped (ADR-037): the connection
  *  ignores setup errors, and the tab says which.
@@ -1787,12 +1875,22 @@ export type ConnectionDraftItem_Deserialize = {
 	tags: string[],
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
+	engineKind?: string | null,
 	env: string,
 	host: string,
 	port?: number | null,
 	database: string,
 	/**  DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316). */
 	fileFolder: boolean,
+	/**  PostgreSQL behind a pooler (SDB-396); null for a direct connection. */
+	pooler?: PoolerItem | null,
+	/**
+	 *  MySQL and MariaDB: allow the cleartext password plugin (SDB-396). The core opens such a
+	 *  connection only over a checked certificate or an SSH tunnel.
+	 */
+	cleartextPassword: boolean,
+	/**  The databases the connection shows (SDB-396); empty for all of them. */
+	databases: string[],
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -1847,12 +1945,22 @@ export type ConnectionDraftItem_Serialize = {
 	tags: string[],
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
+	engineKind: string | null,
 	env: string,
 	host: string,
 	port: number | null,
 	database: string,
 	/**  DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316). */
 	fileFolder: boolean,
+	/**  PostgreSQL behind a pooler (SDB-396); null for a direct connection. */
+	pooler: PoolerItem | null,
+	/**
+	 *  MySQL and MariaDB: allow the cleartext password plugin (SDB-396). The core opens such a
+	 *  connection only over a checked certificate or an SSH tunnel.
+	 */
+	cleartextPassword: boolean,
+	/**  The databases the connection shows (SDB-396); empty for all of them. */
+	databases: string[],
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -1904,6 +2012,8 @@ export type ConnectionItem_Deserialize = {
 	/**  Short labels to find the connection; filtered on in the explorer. */
 	tags: string[],
 	engine: string,
+	/**  Presentation identifier. The base engine still drives commands. */
+	engineMark: string,
 	env?: string | null,
 	/**  The type `env` names (ADR-029); `None` for no label or a plain one. */
 	kind?: ConnectionTypeItem_Deserialize | null,
@@ -1920,6 +2030,13 @@ export type ConnectionItem_Deserialize = {
 	 *  its own language: what the app writes SQL for is not offered on it.
 	 */
 	sql: boolean,
+	/**  Its TLS does not check its server (SDB-395), from the file as written. */
+	tlsWarning?: TlsWarningItem | null,
+	/**
+	 *  PostgreSQL behind a pooler (SDB-396): in transaction mode a session has no schema of
+	 *  its own, so the editor's schema picker is off.
+	 */
+	pooler?: PoolerItem | null,
 };
 
 export type ConnectionItem_Serialize = {
@@ -1931,6 +2048,8 @@ export type ConnectionItem_Serialize = {
 	/**  Short labels to find the connection; filtered on in the explorer. */
 	tags: string[],
 	engine: string,
+	/**  Presentation identifier. The base engine still drives commands. */
+	engineMark: string,
 	env: string | null,
 	/**  The type `env` names (ADR-029); `None` for no label or a plain one. */
 	kind: ConnectionTypeItem_Serialize | null,
@@ -1947,6 +2066,13 @@ export type ConnectionItem_Serialize = {
 	 *  its own language: what the app writes SQL for is not offered on it.
 	 */
 	sql: boolean,
+	/**  Its TLS does not check its server (SDB-395), from the file as written. */
+	tlsWarning: TlsWarningItem | null,
+	/**
+	 *  PostgreSQL behind a pooler (SDB-396): in transaction mode a session has no schema of
+	 *  its own, so the editor's schema picker is off.
+	 */
+	pooler: PoolerItem | null,
 };
 
 /**
@@ -1959,7 +2085,9 @@ export type ConnectionTestOutcome = ConnectionTestOutcome_Serialize | Connection
  *  What testing a connection from its form gives (ADR-032). The steps arrive as they change
  *  through the command's channel; this is the end.
  */
-export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize } | 
+export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize; 
+/**  The connection's TLS does not check its server (SDB-395), from its resolved form. */
+tlsWarning?: TlsWarningItem | null } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" } | 
 /**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
@@ -1971,7 +2099,9 @@ export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestRe
  *  What testing a connection from its form gives (ADR-032). The steps arrive as they change
  *  through the command's channel; this is the end.
  */
-export type ConnectionTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize } | 
+export type ConnectionTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize; 
+/**  The connection's TLS does not check its server (SDB-395), from its resolved form. */
+tlsWarning: TlsWarningItem | null } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" } | 
 /**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
@@ -2147,6 +2277,51 @@ export type DataSearchSummaryItem = {
 	/**  It stopped at the most hits a search returns. */
 	stopped: boolean,
 };
+
+/**
+ *  What a relation uses and what uses it; `untracked` are the kinds the engine does not record
+ *  (SDB-393).
+ */
+export type DependenciesItem = DependenciesItem_Serialize | DependenciesItem_Deserialize;
+
+/**
+ *  What a relation uses and what uses it; `untracked` are the kinds the engine does not record
+ *  (SDB-393).
+ */
+export type DependenciesItem_Deserialize = {
+	uses: DependencyItem_Deserialize[],
+	usedBy: DependencyItem_Deserialize[],
+	untracked: DependencyKindItem[],
+};
+
+/**
+ *  What a relation uses and what uses it; `untracked` are the kinds the engine does not record
+ *  (SDB-393).
+ */
+export type DependenciesItem_Serialize = {
+	uses: DependencyItem_Serialize[],
+	usedBy: DependencyItem_Serialize[],
+	untracked: DependencyKindItem[],
+};
+
+export type DependencyItem = DependencyItem_Serialize | DependencyItem_Deserialize;
+
+export type DependencyItem_Deserialize = {
+	schema: string,
+	name: string,
+	kind: DependencyKindItem,
+	detail?: string | null,
+};
+
+export type DependencyItem_Serialize = {
+	schema: string,
+	name: string,
+	kind: DependencyKindItem,
+	detail: string | null,
+};
+
+/**  What a dependency is. */
+export type DependencyKindItem = "table" | "view" | "materializedView" | "function" | "procedure" | "trigger" | "foreignKey" | "sequence" | "type" | "index" | "other";
 
 export type DiagramColumnsItem = "all" | "keys" | "none";
 
@@ -2364,6 +2539,25 @@ export type DroppedConstraintItem = { kind: "constraint"; name: string } | { kin
 export type DuckdbFormatItem = "parquet" | "csv";
 
 export type DumpContentItem = "schemaAndData" | "schemaOnly" | "dataOnly";
+
+/**  What the duplicate form shows before the copy runs (SDB-394). */
+export type DuplicatePlanItem = {
+	sql: string,
+	kept: TablePartItem[],
+	notKept: TablePartItem[],
+	/**  The indexes and constraints may be left out on this engine. */
+	indexesOptional: boolean,
+};
+
+/**  "Duplicate table…": what to copy (the core's `DuplicateTable`). */
+export type DuplicateTableItem = {
+	schema: string,
+	name: string,
+	newSchema: string,
+	newName: string,
+	withData: boolean,
+	withIndexes: boolean,
+};
 
 /**  A connection made by "Duplicate" (ADR-030). */
 export type DuplicatedItem = {
@@ -2683,6 +2877,24 @@ export type ExplorerPreferencesItem = {
 	linkWithEditor: boolean,
 };
 
+/**
+ *  The export dialog's defaults (SDB-66): what the last export chose, offered by the next.
+ *  The core checks them before they are saved and reads them back leniently.
+ */
+export type ExportDefaultsItem = {
+	format: TextFormat,
+	/**  CSV's delimiter: one character. */
+	delimiter: string,
+	header: boolean,
+	nullText: string,
+	encoding: TextEncodingItem,
+	escapeFormulas: boolean,
+	gzip: boolean,
+	names: FileNamePatternItem,
+	sql: SqlOptionsItem,
+	json: JsonOptionsItem,
+};
+
 /**  How an export writes its file (ADR-034). The core checks the delimiter. */
 export type ExportFileOptions = ExportFileOptions_Serialize | ExportFileOptions_Deserialize;
 
@@ -2698,6 +2910,10 @@ export type ExportFileOptions_Deserialize = {
 	encoding: TextEncodingItem,
 	/**  Columns of the result by position, in order (the shown ones); `None`: all. */
 	columns?: number[] | null,
+	/**  The file compressed with gzip (Parquet: its column chunks). */
+	gzip?: boolean,
+	sql?: SqlOptionsItem,
+	json?: JsonOptionsItem,
 };
 
 /**  How an export writes its file (ADR-034). The core checks the delimiter. */
@@ -2712,6 +2928,10 @@ export type ExportFileOptions_Serialize = {
 	encoding: TextEncodingItem,
 	/**  Columns of the result by position, in order (the shown ones); `None`: all. */
 	columns: number[] | null,
+	/**  The file compressed with gzip (Parquet: its column chunks). */
+	gzip: boolean,
+	sql: SqlOptionsItem,
+	json: JsonOptionsItem,
 };
 
 /**  How a streaming export ended. */
@@ -2820,6 +3040,15 @@ export type FileFormatItem = {
 	lineEnding: LineEndingItem,
 };
 
+/**
+ *  How export files are named (SDB-391): `{table}`, `{schema}`, `{database}`, `{date}`,
+ *  `{time}` and `{timestamp}` (with `timestamp_format`). The core checks and renders it.
+ */
+export type FileNamePatternItem = {
+	pattern: string,
+	timestampFormat: string,
+};
+
 /**  What the confirmation of a file run shows. */
 export type FilePlanItem = {
 	bytes: number | null,
@@ -2900,6 +3129,14 @@ export type FoundObjectItem_Deserialize = { kind: "relation"; object: ObjectItem
 
 /**  What "Open object by name" found: a relation or another object of a schema. */
 export type FoundObjectItem_Serialize = { kind: "relation"; object: ObjectItem_Serialize } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
+
+/**  A session made from another one (SDB-426). */
+export type FromSessionOutcome = { kind: "connected"; serverVersion: string } | 
+/**
+ *  The connection was edited since the source session opened and the new session needs
+ *  the user (a password for another login, trust, variables): connect as a new tab does.
+ */
+{ kind: "connectAgain" };
 
 /**  How the stored value was written. */
 export type GeoFormat = 
@@ -3133,7 +3370,7 @@ export type ImportChoice = {
 	action: string,
 };
 
-export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown";
+export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown" | "xlsx";
 
 /**
  *  A connection found in another client's files. No secret travels: only whether a password
@@ -3154,6 +3391,7 @@ export type ImportItem_Deserialize = {
 	 *  cannot open it.
 	 */
 	engine?: string | null,
+	engineKind?: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported?: string | null,
 	/**  `host:port/database`, or the file for SQLite and DuckDB. */
@@ -3191,6 +3429,7 @@ export type ImportItem_Serialize = {
 	 *  cannot open it.
 	 */
 	engine: string | null,
+	engineKind: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported: string | null,
 	/**  `host:port/database`, or the file for SQLite and DuckDB. */
@@ -3237,6 +3476,8 @@ export type ImportOptionsItem = {
 	timestampFormat: string,
 	/**  `UTC` or an offset (`+02:00`); empty: none. */
 	timeZone: string,
+	/**  The sheet of a workbook (XLSX); empty: the first one. */
+	sheet: string,
 };
 
 /**  How an import ended. */
@@ -3267,6 +3508,8 @@ export type ImportPreviewItem = {
 	sampled: number,
 	more: boolean,
 	suggestedTable: string,
+	/**  The worksheets of a workbook (XLSX), in order; empty for the other formats. */
+	sheets: string[],
 };
 
 export type ImportProgressItem = {
@@ -3323,6 +3566,8 @@ export type ImportScan_Deserialize = {
 	 *  on its own, so the user chooses a folder or file first.
 	 */
 	needsChoice: boolean,
+	/**  At least one connection can be imported with a saved password. */
+	canSavePasswords: boolean,
 	/**
 	 *  The client keeps its connections somewhere this system reads when nothing is chosen
 	 *  (its folders, or HeidiSQL's registry on Windows), so the UI can offer to go back to it.
@@ -3343,6 +3588,8 @@ export type ImportScan_Serialize = {
 	 *  on its own, so the user chooses a folder or file first.
 	 */
 	needsChoice: boolean,
+	/**  At least one connection can be imported with a saved password. */
+	canSavePasswords: boolean,
 	/**
 	 *  The client keeps its connections somewhere this system reads when nothing is chosen
 	 *  (its folders, or HeidiSQL's registry on Windows), so the UI can offer to go back to it.
@@ -3373,6 +3620,8 @@ export type ImportTarget = {
 
 export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
 
+export type IndexCleanupItem = "auto" | "on" | "off";
+
 export type IndexDetails = {
 	name: string,
 	unique: boolean,
@@ -3395,6 +3644,12 @@ export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; 
 export type InteractionRequest = {
 	id: number,
 	request: InteractionKind,
+};
+
+/**  How JSON and NDJSON write values (SDB-391). */
+export type JsonOptionsItem = {
+	isoDates: boolean,
+	jsonAsJson: boolean,
 };
 
 /**  Which way a foreign key goes from a table (see `spelaion_core::KeyDirection`). */
@@ -3496,6 +3751,55 @@ export type LastPageItem = {
 	page: number,
 };
 
+export type LaunchRefusedItem = {
+	argument: string,
+	reason: string,
+};
+
+/**  What a launch asks the page to open, already checked by the core. */
+export type LaunchRequestItem = LaunchRequestItem_Serialize | LaunchRequestItem_Deserialize;
+
+/**  What a launch asks the page to open, already checked by the core. */
+export type LaunchRequestItem_Deserialize = {
+	/**  A folder to open (a second launch's: the first launch's is open already). */
+	folder?: string | null,
+	/**  A connection to select in the explorer, by id: never connected. */
+	connection?: string | null,
+	/**  `.sql` files to open in tabs, in order. */
+	files: string[],
+	/**  An execution plan file to open. */
+	plan?: string | null,
+	/**  What was not accepted and why, to say so. */
+	refused: LaunchRefusedItem[],
+};
+
+/**  What a launch asks the page to open, already checked by the core. */
+export type LaunchRequestItem_Serialize = {
+	/**  A folder to open (a second launch's: the first launch's is open already). */
+	folder: string | null,
+	/**  A connection to select in the explorer, by id: never connected. */
+	connection: string | null,
+	/**  `.sql` files to open in tabs, in order. */
+	files: string[],
+	/**  An execution plan file to open. */
+	plan: string | null,
+	/**  What was not accepted and why, to say so. */
+	refused: LaunchRefusedItem[],
+};
+
+/**  A second launch (or Finder) asked the running window to open something. */
+export type LaunchRequested = LaunchRequested_Serialize | LaunchRequested_Deserialize;
+
+/**  A second launch (or Finder) asked the running window to open something. */
+export type LaunchRequested_Deserialize = {
+	request: LaunchRequestItem_Deserialize,
+};
+
+/**  A second launch (or Finder) asked the running window to open something. */
+export type LaunchRequested_Serialize = {
+	request: LaunchRequestItem_Serialize,
+};
+
 /**  The line break a `.sql` file is written with. */
 export type LineEndingItem = "lf" | "crLf" | "cr";
 
@@ -3584,6 +3888,75 @@ export type LockWaitItem = {
 	blocking: string,
 };
 
+/**  An action of the explorer's Maintenance menu (SDB-392). */
+export type MaintenanceKindItem = "vacuum" | "analyze" | "refreshMaterializedView" | "truncate" | "enableTriggers" | "disableTriggers" | "check" | "repair" | "optimize" | "rebuildTable" | "rebuildIndexes" | "integrityCheck" | "checkpoint";
+
+/**
+ *  The options of a maintenance action; each action reads only its own (the core's
+ *  `MaintenanceOptions`).
+ */
+export type MaintenanceOptionsItem = MaintenanceOptionsItem_Serialize | MaintenanceOptionsItem_Deserialize;
+
+/**
+ *  The options of a maintenance action; each action reads only its own (the core's
+ *  `MaintenanceOptions`).
+ */
+export type MaintenanceOptionsItem_Deserialize = {
+	full: boolean,
+	freeze: boolean,
+	analyze: boolean,
+	disablePageSkipping: boolean,
+	skipLocked: boolean,
+	indexCleanup?: IndexCleanupItem | null,
+	truncatePages?: boolean | null,
+	verbose: boolean,
+	noData: boolean,
+	concurrently: boolean,
+	only: boolean,
+	restartIdentity: boolean,
+	cascade: boolean,
+	checkMode?: CheckModeItem | null,
+	quick: boolean,
+	extended: boolean,
+	useFrm: boolean,
+	local: boolean,
+};
+
+/**
+ *  The options of a maintenance action; each action reads only its own (the core's
+ *  `MaintenanceOptions`).
+ */
+export type MaintenanceOptionsItem_Serialize = {
+	full: boolean,
+	freeze: boolean,
+	analyze: boolean,
+	disablePageSkipping: boolean,
+	skipLocked: boolean,
+	indexCleanup: IndexCleanupItem | null,
+	truncatePages: boolean | null,
+	verbose: boolean,
+	noData: boolean,
+	concurrently: boolean,
+	only: boolean,
+	restartIdentity: boolean,
+	cascade: boolean,
+	checkMode: CheckModeItem | null,
+	quick: boolean,
+	extended: boolean,
+	useFrm: boolean,
+	local: boolean,
+};
+
+/**  What the app shows before a maintenance action runs (SDB-392). */
+export type MaintenancePlanItem = {
+	/**  The statement as it runs, in a tab of its own. */
+	sql: string,
+	/**  The engine refuses it inside a transaction (VACUUM). */
+	outsideTransaction: boolean,
+	/**  What a TRUNCATE with CASCADE also empties. */
+	alsoEmpties: string[],
+};
+
 /**  What the coordinates are, which decides whether a web map's tiles can go behind them. */
 export type MapCrs = 
 /**  Longitude and latitude in degrees, from the SRID (4326 and other geographic ones). */
@@ -3641,6 +4014,9 @@ export type McpAccessItem_Deserialize = {
 	/**  For a visible connection. */
 	access?: McpAccessKindItem | null,
 	reason?: McpReadOnlyReasonItem | null,
+	/**  Scope of the local write restriction and whether it was read successfully. */
+	restrictionWorkspace?: string | null,
+	readOnlyOverride?: boolean | null,
 	kind?: ConnectionTypeItem_Deserialize | null,
 };
 
@@ -3654,6 +4030,9 @@ export type McpAccessItem_Serialize = {
 	/**  For a visible connection. */
 	access: McpAccessKindItem | null,
 	reason: McpReadOnlyReasonItem | null,
+	/**  Scope of the local write restriction and whether it was read successfully. */
+	restrictionWorkspace: string | null,
+	readOnlyOverride: boolean | null,
 	kind: ConnectionTypeItem_Serialize | null,
 };
 
@@ -3750,7 +4129,7 @@ export type McpInstallPlanItem = {
 
 export type McpInstallStateItem = "noFile" | "notInstalled" | "installed" | "different" | "unreadable";
 
-export type McpReadOnlyReasonItem = "allAgents" | "connection" | "writesDenied" | "confirmUnsupported" | 
+export type McpReadOnlyReasonItem = "allAgents" | "connectionOverride" | "connection" | "writesDenied" | "confirmUnsupported" | 
 /**  The engine cannot run agents' writes yet (`runs_agent_writes`). */
 "engineWithoutWrites";
 
@@ -4017,6 +4396,31 @@ export type ObjectPathItem = {
 	names: string[],
 };
 
+/**  A relation's comment and its properties (SDB-393). */
+export type ObjectPropertiesItem = ObjectPropertiesItem_Serialize | ObjectPropertiesItem_Deserialize;
+
+/**  A relation's comment and its properties (SDB-393). */
+export type ObjectPropertiesItem_Deserialize = {
+	comment?: string | null,
+	properties: ObjectPropertyItem[],
+};
+
+/**  A relation's comment and its properties (SDB-393). */
+export type ObjectPropertiesItem_Serialize = {
+	comment: string | null,
+	properties: ObjectPropertyItem[],
+};
+
+/**
+ *  A foreign key seen from a table: its own (outgoing) or another table's that points to it
+ *  A property of a relation from the catalog (SDB-393): `name` is one of the driver contract's
+ *  `property` names (`owner`, `tablespace`, `engine`…) or the engine's own word.
+ */
+export type ObjectPropertyItem = {
+	name: string,
+	value: string,
+};
+
 /**
  *  An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
  *  writes the statements.
@@ -4106,6 +4510,41 @@ export type OutlineItem = {
 	entries: OutlineEntryItem[],
 	/**  How many statements the script has. */
 	total: number,
+};
+
+export type PartitionItem = PartitionItem_Serialize | PartitionItem_Deserialize;
+
+export type PartitionItem_Deserialize = {
+	schema: string,
+	name: string,
+	bound?: string | null,
+	estimatedRows?: number | null,
+	subpartitioned: boolean,
+};
+
+export type PartitionItem_Serialize = {
+	schema: string,
+	name: string,
+	bound: string | null,
+	estimatedRows: number | null,
+	subpartitioned: boolean,
+};
+
+/**  How a table is partitioned, and its partitions (SDB-393). */
+export type PartitioningItem = PartitioningItem_Serialize | PartitioningItem_Deserialize;
+
+/**  How a table is partitioned, and its partitions (SDB-393). */
+export type PartitioningItem_Deserialize = {
+	method: string,
+	key: string,
+	partitions: PartitionItem_Deserialize[],
+};
+
+/**  How a table is partitioned, and its partitions (SDB-393). */
+export type PartitioningItem_Serialize = {
+	method: string,
+	key: string,
+	partitions: PartitionItem_Serialize[],
 };
 
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
@@ -4637,6 +5076,46 @@ export type PluginOffered = {
 	address: string,
 };
 
+/**
+ *  One running plugin process, as Settings › Plugins shows it (SDB-399). The numbers are the
+ *  core's, read from the operating system for that process.
+ */
+export type PluginProcessItem = PluginProcessItem_Serialize | PluginProcessItem_Deserialize;
+
+/**
+ *  One running plugin process, as Settings › Plugins shows it (SDB-399). The numbers are the
+ *  core's, read from the operating system for that process.
+ */
+export type PluginProcessItem_Deserialize = {
+	/**  The plugin's name: its program's, `spelaiondb-plugin-duckdb`. */
+	name: string,
+	pid: number,
+	memoryBytes?: number | null,
+	/**  Since the previous reading, in percent of one core; none at the first. */
+	cpuPercent?: number | null,
+	cpuSeconds?: number | null,
+	sessions: number,
+	uptimeSeconds: number | null,
+	engines: string[],
+};
+
+/**
+ *  One running plugin process, as Settings › Plugins shows it (SDB-399). The numbers are the
+ *  core's, read from the operating system for that process.
+ */
+export type PluginProcessItem_Serialize = {
+	/**  The plugin's name: its program's, `spelaiondb-plugin-duckdb`. */
+	name: string,
+	pid: number,
+	memoryBytes: number | null,
+	/**  Since the previous reading, in percent of one core; none at the first. */
+	cpuPercent: number | null,
+	cpuSeconds: number | null,
+	sessions: number,
+	uptimeSeconds: number | null,
+	engines: string[],
+};
+
 /**  A build on this machine that is not started, and why (the core's words). */
 export type PluginRefused = {
 	version: string,
@@ -4667,6 +5146,18 @@ export type PluginRemoval_Serialize =
 { kind: "needsConfirmation"; openSessions: number } | 
 /**  Removed; the engines were swapped. */
 { kind: "removed"; overview: PluginsOverview_Serialize };
+
+/**  What restarting a plugin did. */
+export type PluginRestart = 
+/**
+ *  Nothing was stopped: these sessions (tabs, by id) have a transaction open, which the
+ *  restart would roll back (ADR-031). Call again with `confirmed` once the user agreed.
+ */
+{ kind: "needsConfirmation"; sessions: string[] } | 
+/**  Stopped: its sessions are lost and the next connection starts it again. */
+{ kind: "restarted" } | 
+/**  It was not running (it ended meanwhile). */
+{ kind: "notRunning" };
 
 /**  Where a build is on this machine. */
 export type PluginSource = 
@@ -4713,6 +5204,9 @@ export type PluginsOverview_Serialize = {
 	catalogueSerial: number | null,
 	plugins: PluginItem_Serialize[],
 };
+
+/**  A PostgreSQL connection's pooler (SDB-396). */
+export type PoolerItem = "session" | "transaction";
 
 export type PreviewColumnItem = {
 	name: string,
@@ -4903,6 +5397,15 @@ export type RecentFileItem = {
 	path: string,
 	name: string,
 	/**  Still on disk (checked when listed). */
+	exists: boolean,
+};
+
+/**  One recent folder, as the folder menu and the palette list it. */
+export type RecentFolderItem = {
+	path: string,
+	/**  Its last part, to show first. */
+	name: string,
+	/**  Whether it is still there. */
 	exists: boolean,
 };
 
@@ -5244,6 +5747,16 @@ export type SchemaObjectItem_Serialize = {
 
 /**  The kinds of `list_schema_objects` (ADR-024): the explorer has a folder for each. */
 export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
+
+/**  A screen that failed, as the page's error boundary saw it. */
+export type ScreenFailureItem = {
+	/**  Which screen: `explorer`, `tab`, `settings`… */
+	screen: string,
+	/**  The error's name and message. */
+	error: string,
+	/**  The components' stack. */
+	stack: string,
+};
 
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
@@ -5607,6 +6120,17 @@ export type SqlFileItem = {
 	hash: string,
 };
 
+/**  How a SQL export writes its statements (SDB-391); the core checks it. */
+export type SqlOptionsItem = {
+	rowsPerInsert: number,
+	omitSchema: boolean,
+	/**  `upper` or `lower`. */
+	keywordCase: string,
+	/**  `asIs`, `lower` or `upper`. */
+	nameCase: string,
+	upsert: boolean,
+};
+
 /**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */
 export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" | "insert" | "upsert" | "merge" | "update" | "updateFrom" | "delete" | "deleteUsing";
 
@@ -5648,6 +6172,11 @@ export type TableAlterationItem_Deserialize = {
 	table: string,
 	columns: ColumnEditItem_Deserialize[],
 	drop: DroppedConstraintItem[],
+	/**
+	 *  The table's comment as the form holds it (null or empty: none); the core changes it only
+	 *  when it differs from the catalog's (SDB-393).
+	 */
+	comment?: string | null,
 };
 
 /**  What a structure form asks for on one table; the core writes the SQL. */
@@ -5656,6 +6185,11 @@ export type TableAlterationItem_Serialize = {
 	table: string,
 	columns: ColumnEditItem_Serialize[],
 	drop: DroppedConstraintItem[],
+	/**
+	 *  The table's comment as the form holds it (null or empty: none); the core changes it only
+	 *  when it differs from the catalog's (SDB-393).
+	 */
+	comment: string | null,
 };
 
 export type TableDetails = TableDetails_Serialize | TableDetails_Deserialize;
@@ -5712,10 +6246,7 @@ export type TableFiltersItem_Serialize = {
 	refusedDefault: RefusedFilterItem | null,
 };
 
-/**
- *  A foreign key seen from a table: its own (outgoing) or another table's that points to it
- *  (incoming). `schema` and `table` are the other table.
- */
+/**  (incoming). `schema` and `table` are the other table. */
 export type TableKeyItem = {
 	direction: KeyDirectionItem,
 	name: string,
@@ -5741,6 +6272,9 @@ export type TablePageItem = {
 	limit: number,
 	offset: number,
 };
+
+/**  A part of a table, for what a duplicate keeps and what it does not (SDB-394). */
+export type TablePartItem = "columns" | "notNull" | "defaults" | "primaryKey" | "unique" | "checks" | "indexes" | "foreignKeys" | "identity" | "identityPosition" | "comments" | "triggers" | "rows";
 
 /**  A table chosen in the explorer, by schema and name. */
 export type TableRefItem = {
@@ -5782,6 +6316,8 @@ export type TableStructureItem = TableStructureItem_Serialize | TableStructureIt
 /**  A table's columns for its structure form, and what the engine does with a change. */
 export type TableStructureItem_Deserialize = {
 	columns: EditableColumnItem_Deserialize[],
+	/**  The table's comment (SDB-393). */
+	comment?: string | null,
 	comments: boolean,
 	transactional: boolean,
 	rebuilds: boolean,
@@ -5790,6 +6326,8 @@ export type TableStructureItem_Deserialize = {
 /**  A table's columns for its structure form, and what the engine does with a change. */
 export type TableStructureItem_Serialize = {
 	columns: EditableColumnItem_Serialize[],
+	/**  The table's comment (SDB-393). */
+	comment: string | null,
 	comments: boolean,
 	transactional: boolean,
 	rebuilds: boolean,
@@ -5871,11 +6409,11 @@ export type TestStepItem_Serialize = {
 
 export type TestStepKindItem = TestStepKindItem_Serialize | TestStepKindItem_Deserialize;
 
-export type TestStepKindItem_Deserialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
+export type TestStepKindItem_Deserialize = { kind: "resolve" } | { kind: "sessionSetup" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
 /**  `hop` counts from 1. */
 { kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context?: string | null; namespace?: string | null } | { kind: "ssm"; target: string; region?: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
 
-export type TestStepKindItem_Serialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
+export type TestStepKindItem_Serialize = { kind: "resolve" } | { kind: "sessionSetup" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
 /**  `hop` counts from 1. */
 { kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context: string | null; namespace: string | null } | { kind: "ssm"; target: string; region: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
 
@@ -5885,7 +6423,11 @@ export type TestStepStatusItem = "pending" | "running" | "ok" | "failed" | "skip
 export type TextEncodingItem = "utf8" | "utf8Bom" | "utf16Le" | "windows1252";
 
 /**  Text format to copy or export rows in. */
-export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList" | "html";
+export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList" | "html" | 
+/**  Files only (SDB-391). */
+"ndjson" | "parquet" | "arrowIpc" | 
+/**  Files only (SDB-390). */
+"xlsx";
 
 /**  A piece of a script, in UTF-8 bytes like every position the core gives. */
 export type TextSpan = {
@@ -5894,6 +6436,17 @@ export type TextSpan = {
 };
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
+
+/**  A connection whose TLS does not check its server (SDB-395), as the core decided it. */
+export type TlsWarningItem = {
+	/**  `unencrypted` (`disable`) or `unverified` (`prefer`, `require`). */
+	risk: string,
+	/**  The TLS mode as the connection file writes it. */
+	mode: string,
+	host: string,
+	/**  Through an SSH tunnel, AWS SSM or a Kubernetes forward: the calmer warning. */
+	tunneled: boolean,
+};
 
 /**  The tone of a connection type's badge, from the app's fixed palette (ADR-029). */
 export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";

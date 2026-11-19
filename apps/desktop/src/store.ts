@@ -98,7 +98,7 @@ export interface RunState {
 }
 
 export type TabStatus = "disconnected" | "connecting" | "connected";
-export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "references" | "indexes" | "triggers";
+export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "references" | "indexes" | "triggers" | "properties" | "partitions" | "dependencies";
 
 /**
  * A tab, in the order the tab bar shows it (pinned tabs first). The fields kept when a tab is
@@ -127,6 +127,9 @@ export interface Tab {
   lostTransaction?: boolean;
   /** Its transaction as the core last told it (ADR-031); the core decides, this only shows. */
   transaction?: TransactionStatusItem;
+  /** "Read-only for this session" (SDB-395): the core made its session refuse writes, until it
+   *  reconnects or the user turns it off. Only shown: the core holds the barrier. */
+  sessionReadOnly?: boolean;
   serverVersion: string | null;
   sql: string;
   run: RunState | null;
@@ -258,7 +261,7 @@ export function setNewScriptTemplate(template: string) {
 }
 
 export type ConnectionDialog =
-  | { kind: "add" }
+  | { kind: "add"; openImportMenu?: boolean }
   /** `notice`: shown above the form, such as "this is the copy just made". */
   | { kind: "edit"; id: string; notice?: string };
 
@@ -278,7 +281,7 @@ export interface ExplorerReveal {
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
-export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | ResultTabCommand | EditorActionId;
+export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | "reconnect" | "sessionReadOnly" | ResultTabCommand | EditorActionId;
 /** What a result tab's menu asks about the tab's active result (SDB-378). */
 export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "resultResetName" | "resultClose";
 
@@ -318,6 +321,11 @@ interface AppStore {
   historyRevision: number;
   historySaving: string[];
   workspaceChanging: boolean;
+  /** Why the last change of folder failed, shown above the explorer (SDB-397: wherever it
+   *  was asked, the folder menu, a recent folder, the palette or a second launch). */
+  folderError: string | null;
+  /** What a launch from outside asked for and could not be opened (SDB-397). */
+  launchNotice: string | null;
   /** Text of the explorer's quick filter; null while its box is closed. */
   explorerFilter: string | null;
   /** Tags the quick filter asks of connections (all of them); empty while its box is closed. */
@@ -387,6 +395,8 @@ interface AppStore {
   refreshHistory(): void;
   setHistorySaving(connection: string, saving: boolean): void;
   setWorkspaceChanging(changing: boolean): void;
+  setFolderError(error: string | null): void;
+  setLaunchNotice(notice: string | null): void;
   clearTabConnections(): void;
   setResultsMaximized(id: string, maximized: boolean): void;
   setExplorerFilter(filter: string | null): void;
@@ -422,6 +432,8 @@ export const useApp = create<AppStore>((set) => ({
   historyRevision: 0,
   historySaving: [],
   workspaceChanging: false,
+  folderError: null,
+  launchNotice: null,
   explorerFilter: null,
   explorerTags: [],
   openConnections: [],
@@ -603,6 +615,8 @@ export const useApp = create<AppStore>((set) => ({
     historySaving: saving ? [...new Set([...s.historySaving, connection])] : s.historySaving.filter((id) => id !== connection),
   })),
   setWorkspaceChanging: (workspaceChanging) => set({ workspaceChanging }),
+  setFolderError: (folderError) => set({ folderError }),
+  setLaunchNotice: (launchNotice) => set({ launchNotice }),
   setExplorerFilter: (explorerFilter) =>
     set((s) => ({ explorerFilter, explorerTags: explorerFilter === null ? [] : s.explorerTags })),
   toggleExplorerTag: (tag) =>

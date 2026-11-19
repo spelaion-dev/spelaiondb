@@ -17,9 +17,11 @@ mod conn_url;
 mod copy;
 mod datagrip;
 mod dbeaver;
+mod definition;
 mod draft;
 mod edit;
 mod engine_change;
+pub mod engine_options;
 mod error;
 mod heidisql;
 mod import;
@@ -52,6 +54,7 @@ pub use copy::{
 };
 pub use datagrip::{DatagripError, datagrip_dirs, jetbrains_dir, read_datagrip};
 pub use dbeaver::{DbeaverError, dbeaver_workspace, read_dbeaver};
+pub use definition::ConnectionDefinition;
 pub use draft::{
     CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, SessionDraft, add_connection,
     connection_password_stored, connection_revision, connections_dir, delete_connection,
@@ -78,16 +81,17 @@ pub use masking::{MASK_EVERYTHING, MaskingRules, check_pattern, check_patterns};
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{
     ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, HopConfig, IsolationLevel,
-    KubernetesConfig, KubernetesProfileConfig, MaskingConfig, McpConfig, ProxyConfig, ProxyType,
-    SCHEMA_VERSION, SecretSpec, SessionConfig, SshAuth, SsmConfig, TlsConfig, TlsModeConfig, Tone,
-    TunnelFile, TunnelPreferences, UserFile, UserMasking, WritePolicy,
+    KubernetesConfig, KubernetesProfileConfig, MaskingConfig, McpConfig, PoolerMode, ProxyConfig,
+    ProxyType, SCHEMA_VERSION, SecretSpec, SessionConfig, SshAuth, SsmConfig, TlsConfig,
+    TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile, UserMasking, WritePolicy,
+    engine_kind_base,
 };
 pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
     NameValues,
 };
 pub use pgadmin::{PgadminError, pgadmin_dir, read_pgadmin};
-pub use relocate::{Moved, move_connection};
+pub use relocate::{Moved, connection_move_target, move_connection};
 pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
     ResolvedSession, ResolvedSsm, ResolvedTunnel, Resolver, TunnelSettings,

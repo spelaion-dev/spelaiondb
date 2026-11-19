@@ -40,8 +40,12 @@ export interface CommandSpec {
 export const COMMANDS = [
   { id: "palette.show", category: "general", label: "app:commands.palette", shortcut: "Ctrl+Shift+P", scope: "global", hidden: true },
   { id: "object.openByName", category: "general", label: "app:commands.openObject", shortcut: "Ctrl+Shift+D", scope: "global" },
+  { id: "connection.import", category: "general", label: "connections:importer.open" },
   { id: "connection.add", category: "general", label: "connections:add", menus: ["welcome"] },
   { id: "data.importClipboard", category: "general", label: "app:commands.importClipboard", shortcut: "Ctrl+Alt+V", scope: "global" },
+  // Every connection's sessions at once (SDB-395): editor tabs and the explorer's.
+  { id: "connections.disconnectAll", category: "general", label: "connections:control.disconnectAll" },
+  { id: "connections.disconnectOthers", category: "general", label: "connections:control.disconnectOthers" },
   { id: "tab.new", category: "tab", label: "app:newQuery", shortcut: "Ctrl+T", scope: "global", menus: ["welcome"] },
   { id: "tab.rename", category: "tab", label: "app:tabs.rename", shortcut: "Ctrl+F2", scope: "global", menus: ["tab"] },
   { id: "tab.duplicate", category: "tab", label: "app:tabs.duplicate", shortcut: "Ctrl+Alt+D", scope: "global", menus: ["tab"] },
@@ -77,6 +81,10 @@ export const COMMANDS = [
   { id: "results.close", category: "data", label: "editor:resultTabs.close", menus: ["result"] },
   { id: "editor.cancel", category: "editor", label: "app:commands.cancelQuery" },
   { id: "editor.variables", category: "editor", label: "editor:variables.command", menus: ["editor"] },
+  // The tab's own session (SDB-395): a new one on request, nothing re-run (ADR-028); and the
+  // barrier of a read-only connection for it alone (ADR-053).
+  { id: "editor.reconnect", category: "editor", label: "editor:session.reconnect", menus: ["editor"] },
+  { id: "editor.sessionReadOnly", category: "editor", label: "editor:session.readOnly", menus: ["editor"] },
   { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor" },
   { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", menus: ["editor"] },
   { id: "editor.blockComment", category: "editor", label: "editor:actions.blockComment", shortcut: "Shift+Alt+A", scope: "editor", menus: ["editor"] },
@@ -113,6 +121,9 @@ export const COMMANDS = [
   { id: "view.mcp", category: "view", label: "shell:mcpServer", menus: ["activity"] },
   { id: "view.settings", category: "view", label: "settings:title", shortcut: "Ctrl+,", scope: "global", menus: ["activity"] },
   { id: "view.plugins", category: "view", label: "settings:plugins.title" },
+  // Bug reports (SDB-398): the report is the core's, scrubbed; nothing is sent.
+  { id: "help.copyDiagnostics", category: "general", label: "app:commands.copyDiagnostics" },
+  { id: "help.openIssue", category: "general", label: "app:commands.openIssue" },
 ] as const satisfies readonly CommandSpec[];
 
 export type CommandId = (typeof COMMANDS)[number]["id"];

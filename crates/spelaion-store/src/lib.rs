@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 mod aside;
 mod backup;
 mod editor_snippets;
+mod export;
 mod library;
 mod map;
 mod table_filters;
@@ -18,6 +19,10 @@ mod tabs;
 pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
 pub use editor_snippets::{EditorSnippet, is_snippet_name};
+pub use export::{
+    EXPORT_ENCODINGS, EXPORT_FORMATS, EXPORT_KEYWORD_CASES, EXPORT_MAX_ROWS_PER_INSERT,
+    EXPORT_NAME_CASES, EXPORT_NULL_TEXT_MAX, EXPORT_PATTERN_MAX, ExportPreferences,
+};
 pub use library::{HistoryFilter, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder};
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,
@@ -222,6 +227,12 @@ const MIGRATIONS: &[&str] = &["create table audit (
         primary key (workspace, connection, name)
     );",
     table_filters::MIGRATION,
+    // A local MCP write restriction. A row means read-only; there is no writable override.
+    "create table mcp_read_only_connections (
+        workspace  text not null,
+        connection text not null,
+        primary key (workspace, connection)
+    );",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -611,6 +622,27 @@ impl Default for ExplorerPreferences {
             server_side_filters: true,
             link_with_editor: false,
         }
+    }
+}
+
+/// How many recent folders are remembered (SDB-397).
+pub const MAX_RECENT_FOLDERS: usize = 10;
+
+/// A path a recent folder may have: absolute, on one line, of a sane length.
+fn valid_folder_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 4096
+        && !path.chars().any(char::is_control)
+        && std::path::Path::new(path).is_absolute()
+}
+
+/// Whether two paths name the same folder: case and slashes are ignored on Windows.
+fn same_folder(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        let fold = |p: &str| p.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+        fold(a) == fold(b)
+    } else {
+        a.trim_end_matches('/') == b.trim_end_matches('/')
     }
 }
 
@@ -1154,6 +1186,7 @@ impl Store {
             "explorer_filters",
             "explorer_bookmarks",
             "history_preferences",
+            "mcp_read_only_connections",
             "table_filter_history",
             "table_filter_defaults",
         ] {
@@ -1399,6 +1432,43 @@ impl Store {
     pub fn set_theme(&self, theme: &str) -> Result<(), StoreError> {
         validate_theme(theme)?;
         self.set_personal_setting("theme", theme)
+    }
+
+    /// The folders opened most recently (SDB-397), newest first, at most
+    /// [`MAX_RECENT_FOLDERS`]. What cannot be a folder's path is left out.
+    pub fn recent_folders(&self) -> Result<Vec<String>, StoreError> {
+        Ok(self
+            .personal_setting("recent_folders")?
+            .unwrap_or_default()
+            .lines()
+            .filter(|path| valid_folder_path(path))
+            .take(MAX_RECENT_FOLDERS)
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Puts `path` first in the recent folders (moving it if it was there already).
+    pub fn add_recent_folder(&self, path: &str) -> Result<(), StoreError> {
+        if !valid_folder_path(path) {
+            return Err(StoreError::new("not a folder's path".into()));
+        }
+        let mut folders = self.recent_folders()?;
+        folders.retain(|folder| !same_folder(folder, path));
+        folders.insert(0, path.to_string());
+        folders.truncate(MAX_RECENT_FOLDERS);
+        self.set_personal_setting("recent_folders", &folders.join("\n"))
+    }
+
+    /// Takes `path` out of the recent folders; whether it was there. The folder is untouched.
+    pub fn forget_recent_folder(&self, path: &str) -> Result<bool, StoreError> {
+        let mut folders = self.recent_folders()?;
+        let before = folders.len();
+        folders.retain(|folder| !same_folder(folder, path));
+        if folders.len() == before {
+            return Ok(false);
+        }
+        self.set_personal_setting("recent_folders", &folders.join("\n"))?;
+        Ok(true)
     }
 
     /// The interface size (SDB-389), one of [`INTERFACE_SIZES`], shared by every workspace in
@@ -1722,6 +1792,53 @@ impl Store {
 
     pub fn set_mcp_read_only(&self, read_only: bool) -> Result<(), StoreError> {
         self.set_flag("mcp.read_only", read_only)
+    }
+
+    /// A local restriction on one connection. Every read error is handled as read-only by
+    /// the caller, and an absent row is the default for newly migrated stores.
+    pub fn mcp_connection_read_only(
+        &self,
+        workspace: &str,
+        connection: &str,
+    ) -> Result<bool, StoreError> {
+        Ok(self.conn.query_row(
+            "select exists(select 1 from mcp_read_only_connections
+                           where workspace = ?1 and connection = ?2)",
+            params![workspace, connection],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn set_mcp_connection_read_only(
+        &self,
+        workspace: &str,
+        connection: &str,
+        read_only: bool,
+    ) -> Result<(), StoreError> {
+        let sql = if read_only {
+            "insert or ignore into mcp_read_only_connections (workspace, connection) values (?1, ?2)"
+        } else {
+            "delete from mcp_read_only_connections where workspace = ?1 and connection = ?2"
+        };
+        self.conn.execute(sql, params![workspace, connection])?;
+        Ok(())
+    }
+
+    /// Keep both IDs restricted during a move. The new file may be seen by an MCP server
+    /// as soon as it is written, before the old one and its settings are removed.
+    pub fn stage_mcp_connection_move(
+        &self,
+        workspace: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "insert or ignore into mcp_read_only_connections (workspace, connection)
+             select workspace, ?3 from mcp_read_only_connections
+             where workspace = ?1 and connection = ?2",
+            params![workspace, from, to],
+        )?;
+        Ok(())
     }
 
     /// The default output of the MCP server's query tools (ADR-033): JSON until changed.
@@ -2620,6 +2737,47 @@ mod tests {
     }
 
     #[test]
+    fn recent_folders_are_newest_first_bounded_and_forgotten_on_request() {
+        let path = temp("recent-folders");
+        let store = Store::open(&path).unwrap();
+        assert!(store.recent_folders().unwrap().is_empty());
+        let folder = |n: usize| {
+            if cfg!(windows) {
+                format!("C:\\work\\repo{n}")
+            } else {
+                format!("/work/repo{n}")
+            }
+        };
+        for n in 0..12 {
+            store.add_recent_folder(&folder(n)).unwrap();
+        }
+        let recent = store.recent_folders().unwrap();
+        assert_eq!(recent.len(), MAX_RECENT_FOLDERS);
+        assert_eq!(recent[0], folder(11));
+        // Opened again: first, once.
+        store.add_recent_folder(&folder(5)).unwrap();
+        let recent = store.recent_folders().unwrap();
+        assert_eq!(recent[0], folder(5));
+        assert_eq!(recent.iter().filter(|f| **f == folder(5)).count(), 1);
+        assert!(store.forget_recent_folder(&folder(5)).unwrap());
+        assert!(!store.forget_recent_folder(&folder(5)).unwrap());
+        assert!(!store.recent_folders().unwrap().contains(&folder(5)));
+        for refused in ["", "relative/path", "C:\\a\nb", "/a\u{7}b"] {
+            assert!(store.add_recent_folder(refused).is_err(), "{refused:?}");
+        }
+        // A damaged value keeps only what can be a folder's path.
+        store
+            .set_personal_setting(
+                "recent_folders",
+                &format!("{}\nrelative\n\u{1}x", folder(1)),
+            )
+            .unwrap();
+        assert_eq!(store.recent_folders().unwrap(), vec![folder(1)]);
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn interface_size_is_one_of_its_steps_and_persists() {
         let path = temp("interface-size");
         let store = Store::open(&path).unwrap();
@@ -2962,6 +3120,39 @@ mod tests {
                 .unwrap()
                 .confirm_delay_seconds,
             0
+        );
+    }
+
+    #[test]
+    fn an_agent_restriction_covers_both_connection_ids_while_it_moves() {
+        let path = temp("stage-mcp-restriction");
+        let store = Store::open(&path).unwrap();
+        store
+            .set_mcp_connection_read_only("/repo", "notes", true)
+            .unwrap();
+        store
+            .stage_mcp_connection_move("/repo", "notes", "new/notes")
+            .unwrap();
+        assert!(store.mcp_connection_read_only("/repo", "notes").unwrap());
+        assert!(
+            store
+                .mcp_connection_read_only("/repo", "new/notes")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .mcp_connection_read_only("/other", "new/notes")
+                .unwrap()
+        );
+
+        store
+            .move_connection_settings(Some("/repo"), "notes", "new/notes")
+            .unwrap();
+        assert!(!store.mcp_connection_read_only("/repo", "notes").unwrap());
+        assert!(
+            store
+                .mcp_connection_read_only("/repo", "new/notes")
+                .unwrap()
         );
     }
 

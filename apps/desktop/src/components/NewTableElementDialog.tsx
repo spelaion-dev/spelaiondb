@@ -52,8 +52,13 @@ export function NewTableElementDialog({ session, connectionId, schema, table, ki
       case "foreignKeys": element = { kind: "foreignKey", name, columns, referencedSchema, referencedTable, referencedColumns: referencedColumns.split("\n").map((s) => s.trim()).filter(Boolean) }; break;
       case "indexes": element = { kind: "index", name, columns, unique }; break;
       case "triggers": element = { kind: "trigger", name, timing, event, body }; break;
-      // A reference is a foreign key of the other table: created from that table's details.
-      case "references": return;
+      // A reference is a foreign key of the other table: created from that table's details; what
+      // the catalog says of a table (SDB-393) is not created here.
+      case "references":
+      case "properties":
+      case "partitions":
+      case "dependencies":
+        return;
     }
     setBusy(true);
     setError(null);

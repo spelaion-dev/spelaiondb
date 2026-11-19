@@ -49,6 +49,10 @@ pub(crate) struct Process {
     shared: Arc<Shared>,
     info: InitializeResult,
     running: Arc<Running>,
+    /// Its memory and processor time (SDB-399).
+    meter: crate::usage::Meter,
+    /// The last processor time read, and when: the use since then is a share of that time.
+    last_cpu: Mutex<Option<(Instant, Duration)>>,
 }
 
 /// The program itself: killed when this value goes, however that happens.
@@ -82,6 +86,12 @@ impl Running {
     }
 
     /// Kills the program now, and returns once it has ended.
+    /// Reads the program's numbers while it is still held (not let go of), so they are its own.
+    fn read(&self, meter: &crate::usage::Meter) -> Option<crate::usage::Reading> {
+        let child = self.0.lock().expect("lock poisoned");
+        child.as_ref().map(|child| meter.read(child))
+    }
+
     fn kill(&self) {
         let child = self.0.lock().expect("lock poisoned").take();
         if let Some(mut child) = child {
@@ -160,6 +170,7 @@ impl Process {
             command.creation_flags(CREATE_NO_WINDOW);
         }
         let mut child = command.spawn().map_err(|e| could_not_start(&e))?;
+        let meter = crate::usage::Meter::new(&child);
         let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
         // From here the program ends with this value, an early return included.
         let running = Arc::new(Running(Mutex::new(Some(child))));
@@ -198,7 +209,37 @@ impl Process {
             shared,
             info,
             running,
+            meter,
+            last_cpu: Mutex::new(None),
         }))
+    }
+
+    /// What the program uses now, and how many sessions it serves. The processor share is
+    /// over the time since the last reading (none at the first).
+    pub(crate) fn usage(&self) -> Option<crate::ProcessUsage> {
+        if self.is_dead() {
+            return None;
+        }
+        let reading = self.running.read(&self.meter)?;
+        let now = Instant::now();
+        let cpu_percent = reading.cpu.and_then(|cpu| {
+            let mut last = self.last_cpu.lock().expect("lock poisoned");
+            let share = last.and_then(|(then, before)| {
+                let elapsed = now.duration_since(then).as_secs_f64();
+                (elapsed > 0.0).then(|| cpu.saturating_sub(before).as_secs_f64() / elapsed * 100.0)
+            });
+            *last = Some((now, cpu));
+            share
+        });
+        Some(crate::ProcessUsage {
+            pid: self.meter.pid(),
+            memory_bytes: reading.memory_bytes,
+            cpu_seconds: reading.cpu.map(|cpu| cpu.as_secs_f64()),
+            cpu_percent,
+            engines: self.info.engines.clone(),
+            sessions: self.shared.sessions.lock().expect("lock poisoned").len(),
+            uptime: self.meter.uptime(),
+        })
     }
 
     pub(crate) fn shared(&self) -> &Arc<Shared> {

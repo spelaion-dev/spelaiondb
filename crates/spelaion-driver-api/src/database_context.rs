@@ -55,10 +55,25 @@ impl DatabaseContext {
     /// Called after source SQL finishes, including failures (a batch may have partly run).
     /// This observes syntax; it never sends a statement or guesses the outcome of a branch.
     pub fn observe(&mut self, sql: &str, succeeded: bool) {
+        self.observe_with_mysql_mode(sql, succeeded, None);
+    }
+
+    /// Observe MySQL or MariaDB SQL with the server's NO_BACKSLASH_ESCAPES flag as it stood
+    /// before execution. When the flag is unknown, use [Self::observe].
+    pub fn observe_mysql(&mut self, sql: &str, succeeded: bool, no_backslash_escapes: bool) {
+        self.observe_with_mysql_mode(sql, succeeded, Some(no_backslash_escapes));
+    }
+
+    fn observe_with_mysql_mode(
+        &mut self,
+        sql: &str,
+        succeeded: bool,
+        no_backslash_escapes: Option<bool>,
+    ) {
         if self.uncertain {
             return;
         }
-        let Some(tokens) = tokens(sql, self.dialect) else {
+        let Some(tokens) = tokens(sql, self.dialect, no_backslash_escapes) else {
             self.refresh(None);
             return;
         };
@@ -73,6 +88,15 @@ impl DatabaseContext {
             .map_or(start, |index| index + 1);
         let tokens = &tokens[start..end];
         if tokens.is_empty() {
+            return;
+        }
+        // A MySQL batch could change its quote mode partway through. A mode from before the
+        // batch establishes certainty only for a single statement.
+        if matches!(self.dialect, ContextDialect::Mysql)
+            && no_backslash_escapes.is_some()
+            && tokens.iter().any(|token| matches!(token, Token::Semicolon))
+        {
+            self.refresh(None);
             return;
         }
         // A later USE may only parse/produce a plan. Success no longer proves execution.
@@ -206,7 +230,11 @@ impl DatabaseContext {
     }
 }
 
-fn tokens(sql: &str, dialect: ContextDialect) -> Option<Vec<Token>> {
+fn tokens(
+    sql: &str,
+    dialect: ContextDialect,
+    no_backslash_escapes: Option<bool>,
+) -> Option<Vec<Token>> {
     // Metadata work stays bounded even for a huge generated INSERT; the user SQL still runs.
     if sql.len() > 1_048_576 {
         return None;
@@ -279,9 +307,20 @@ fn tokens(sql: &str, dialect: ContextDialect) -> Option<Vec<Token>> {
                         closed = true;
                         break;
                     }
-                    // MySQL's session SQL mode decides backslash escapes; do not guess it.
                     if bytes[at] == b'\\' && matches!(dialect, ContextDialect::Mysql) {
-                        return None;
+                        match (opening, no_backslash_escapes) {
+                            // Backtick identifiers never treat a backslash as an escape.
+                            (b'`', _) | (_, Some(true)) => {}
+                            (b'\'', Some(false)) => {
+                                // This is a string, so its contents are not used by the observer.
+                                at += 1;
+                                at += sql[at..].chars().next()?.len_utf8();
+                                continue;
+                            }
+                            // In double quotes ANSI_QUOTES also matters. Stay conservative if
+                            // the flag alone cannot say how a backslash is read.
+                            _ => return None,
+                        }
                     }
                     let character = sql[at..].chars().next()?;
                     name.push(character);
@@ -322,6 +361,35 @@ fn tokens(sql: &str, dialect: ContextDialect) -> Option<Vec<Token>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mysql_backslash_escapes_follow_the_server_flag() {
+        let mut context = DatabaseContext::new(ContextDialect::Mysql, Some("initial".into()));
+        for (sql, no_backslash_escapes) in [
+            (r"INSERT INTO t VALUES ('O''Brien \\ back')", false),
+            (r"SELECT 'O\'Brien; USE fake'", false),
+            (r"SELECT 'trailing\'", true),
+        ] {
+            context.observe_mysql(sql, true, no_backslash_escapes);
+            assert_eq!(context.snapshot().as_deref(), Some("initial"), "{sql}");
+        }
+        context.observe_mysql("USE other_db", true, false);
+        assert_eq!(context.snapshot().as_deref(), Some("other_db"));
+        context.observe_mysql(
+            r"SET sql_mode = 'NO_BACKSLASH_ESCAPES'; SELECT 'trailing\'; USE another_db",
+            true,
+            false,
+        );
+        assert_eq!(context.snapshot(), None);
+
+        context.refresh(Some("initial".into()));
+        context.observe(r"SELECT 'O\'Brien'", true);
+        assert_eq!(context.snapshot(), None, "mode unknown");
+
+        context.refresh(Some("initial".into()));
+        context.observe_mysql(r#"SELECT "O\"Brien""#, true, false);
+        assert_eq!(context.snapshot(), None, "ANSI_QUOTES unknown");
+    }
+
     #[test]
     fn context_observation_is_conservative_and_handles_quoted_names() {
         for (dialect, use_sql, expected) in [

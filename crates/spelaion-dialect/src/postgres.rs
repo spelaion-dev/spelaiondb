@@ -9,11 +9,54 @@ impl Dialect for PostgresDialect {
     }
 
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
-        split(script)
+        split(script).0
     }
 
+    /// The data of a `COPY … FROM STDIN` (SDB-162): from the line after its `;` up to the line
+    /// `\.`, as `psql` reads it.
+    fn copy_data(&self, script: &str, span: &StatementSpan) -> Option<std::ops::Range<usize>> {
+        if copy_stdio(span.text(script)) != Some(CopyStdio::FromStdin) {
+            return None;
+        }
+        let rest = &script[span.end..];
+        let semicolon = span.end + (rest.len() - rest.trim_start().len());
+        if script.as_bytes().get(semicolon) != Some(&b';') {
+            return None;
+        }
+        Some(copy_block(script, semicolon + 1).data)
+    }
+
+    /// A psql meta-command (`\connect`, `\i`, `\set`…) is psql's, not SQL: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        statement
+            .starts_with('\\')
+            .then(|| spelaion_driver_api::RequestError {
+                position: 0,
+                message: "this is a psql command, not SQL, and SpelaionDB only runs SQL".into(),
+            })
+    }
+
+    /// What lies outside strings, quoted names and comments, and outside the data of every
+    /// `COPY … FROM STDIN` (SDB-162): each piece between two data blocks is read on its own, so
+    /// a quote in the data never changes how the SQL after it is read.
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, skip_non_code)
+        let (_, blocks) = split(script);
+        let mut ranges = Vec::new();
+        let mut start = 0;
+        for block in blocks
+            .iter()
+            .map(|b| b.data.start..b.resume)
+            .chain(std::iter::once(script.len()..script.len()))
+        {
+            let piece = &script[start..block.start];
+            ranges.extend(
+                spelaion_driver_api::code_ranges(piece, skip_non_code)
+                    .into_iter()
+                    .map(|r| r.start + start..r.end + start),
+            );
+            start = block.end;
+        }
+        ranges
     }
 
     fn quote_identifier(&self, ident: &str) -> String {
@@ -134,14 +177,77 @@ fn is_routine(words: &[String]) -> bool {
     kind == "function" || kind == "procedure"
 }
 
+/// Whether byte `i` is the first one on its line but for blanks.
+fn at_line_start(b: &[u8], i: usize) -> bool {
+    b[..i]
+        .iter()
+        .rev()
+        .take_while(|&&c| c != b'\n')
+        .all(|&c| c == b' ' || c == b'\t' || c == b'\r')
+}
+
+/// `\restrict <key>` or `\unrestrict <key>`, the lines a plain pg_dump file starts and ends with.
+fn is_restrict(line: &str) -> bool {
+    let command = line[1..].split_ascii_whitespace().next().unwrap_or("");
+    command == "restrict" || command == "unrestrict"
+}
+
+/// The data of a `COPY … FROM STDIN` in a script (SDB-162).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CopyBlock {
+    /// The data lines, without the terminating `\.` line.
+    data: std::ops::Range<usize>,
+    /// The byte after the terminating line (or the end of the script): where SQL goes on.
+    resume: usize,
+}
+
+/// The data that follows a `COPY … FROM STDIN` whose `;` ends just before `after`. As `psql`
+/// reads it, it starts on the next line (the rest of the statement's line may only hold blanks
+/// or a `--` comment; anything else is data) and ends before a line that holds only `\.` (a
+/// `\r` before its newline allowed), or at the end of the script.
+fn copy_block(script: &str, after: usize) -> CopyBlock {
+    let b = script.as_bytes();
+    let line_end = b[after..]
+        .iter()
+        .position(|&c| c == b'\n')
+        .map_or(b.len(), |p| after + p);
+    let rest = script[after..line_end].trim();
+    let start = if rest.is_empty() || rest.starts_with("--") {
+        (line_end + 1).min(b.len())
+    } else {
+        after
+    };
+    let mut line = start;
+    while line < b.len() {
+        let end = b[line..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(b.len(), |p| line + p);
+        let text = &script[line..end];
+        if text.strip_suffix('\r').unwrap_or(text) == "\\." {
+            return CopyBlock {
+                data: start..line,
+                resume: (end + 1).min(b.len()),
+            };
+        }
+        line = end + 1;
+    }
+    CopyBlock {
+        data: start..b.len(),
+        resume: b.len(),
+    }
+}
+
 /// Splits at `;` outside quotes, comments and `$tag$` bodies. In a `CREATE FUNCTION` or
 /// `PROCEDURE`, as `psql` does, an unquoted `BEGIN` or `CASE` opens a block and `END` closes
 /// one, and a `;` inside a block does not split: a `BEGIN ATOMIC` body stays whole, and its
 /// `END` (a synonym of `COMMIT` on its own) is never sent alone. Elsewhere `BEGIN;` and `END;`
-/// are statements of their own.
-fn split(script: &str) -> Vec<StatementSpan> {
+/// are statements of their own. The data after a `COPY … FROM STDIN` (SDB-162) is skipped and
+/// returned apart: it is not SQL.
+fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
     let b = script.as_bytes();
     let mut spans = Vec::new();
+    let mut blocks = Vec::new();
     let mut start = 0;
     let mut has_code = false;
     // The first words of the current statement, lowercased, and its block depth.
@@ -151,6 +257,23 @@ fn split(script: &str) -> Vec<StatementSpan> {
 
     while i < b.len() {
         match b[i] {
+            // A psql meta-command, on a line of its own before a statement: not SQL. A plain
+            // pg_dump file (PostgreSQL 17.6 and later) wraps itself in `\restrict <key>` and
+            // `\unrestrict <key>`, which only keep psql from running other meta-commands, and
+            // SpelaionDB runs none: they are skipped. Any other is a statement of its own,
+            // which the session refuses (`refuse_statement`), never glued to the next one.
+            b'\\' if !has_code && at_line_start(b, i) => {
+                let end = b[i..]
+                    .iter()
+                    .position(|&c| c == b'\n')
+                    .map_or(b.len(), |p| i + p);
+                if !is_restrict(&script[i..end]) {
+                    spans.push(trimmed(script, i, end));
+                }
+                i = (end + 1).min(b.len());
+                start = i;
+                words.clear();
+            }
             b'\'' => {
                 // E'…' supports backslash escapes.
                 i = skip_quoted(b, i, b'\'', escape_string(b, i));
@@ -181,10 +304,19 @@ fn split(script: &str) -> Vec<StatementSpan> {
                 }
             },
             b';' if depth == 0 => {
-                if has_code {
-                    spans.push(trimmed(script, start, i));
-                }
                 i += 1;
+                if has_code {
+                    let span = trimmed(script, start, i - 1);
+                    spans.push(span);
+                    // Its data follows: skipped, never read as SQL.
+                    if words.first().map(String::as_str) == Some("copy")
+                        && copy_stdio(span.text(script)) == Some(CopyStdio::FromStdin)
+                    {
+                        let block = copy_block(script, i);
+                        i = block.resume;
+                        blocks.push(block);
+                    }
+                }
                 start = i;
                 has_code = false;
                 words.clear();
@@ -221,7 +353,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
     if has_code {
         spans.push(trimmed(script, start, b.len()));
     }
-    spans
+    (spans, blocks)
 }
 
 /// A `COPY` whose data goes through the connection, apart from the statement.
@@ -422,7 +554,7 @@ mod tests {
     use super::*;
 
     fn parts(script: &str) -> Vec<&str> {
-        split(script).iter().map(|s| s.text(script)).collect()
+        split(script).0.iter().map(|s| s.text(script)).collect()
     }
 
     #[test]
@@ -574,5 +706,126 @@ mod tests {
         assert_eq!(d.quote_identifier("user"), "\"user\"");
         assert_eq!(d.quote_identifier("a\"b"), "\"a\"\"b\"");
         assert_eq!(d.quote_identifier("1x"), "\"1x\"");
+    }
+
+    /// What a plain `pg_dump` writes: the data after `COPY … FROM stdin;`, up to `\.`.
+    const DUMP: &str = "SET client_encoding = 'UTF8';\n\
+        COPY public.t (id, note) FROM stdin;\n\
+        1\tit's; not -- SQL\n\
+        2\t:name and ${var} and $$\n\
+        3\t\\N\n\
+        \\.\n\
+        SELECT setval('public.t_id_seq', 3, true);\n";
+
+    #[test]
+    fn the_data_of_copy_from_stdin_is_skipped_and_given_apart() {
+        let d = PostgresDialect;
+        let spans = d.split_statements(DUMP);
+        let texts: Vec<&str> = spans.iter().map(|s| s.text(DUMP)).collect();
+        assert_eq!(
+            texts,
+            [
+                "SET client_encoding = 'UTF8'",
+                "COPY public.t (id, note) FROM stdin",
+                "SELECT setval('public.t_id_seq', 3, true)",
+            ]
+        );
+        let data = d.copy_data(DUMP, &spans[1]).expect("its data");
+        assert_eq!(
+            &DUMP[data],
+            "1\tit's; not -- SQL\n2\t:name and ${var} and $$\n3\t\\N\n"
+        );
+        // Only that statement has data.
+        assert_eq!(d.copy_data(DUMP, &spans[0]), None);
+        assert_eq!(d.copy_data(DUMP, &spans[2]), None);
+    }
+
+    #[test]
+    fn copy_data_ends_at_its_terminator_line_or_the_end_of_the_script() {
+        let d = PostgresDialect;
+        // Windows line endings, and a comment after the statement's `;`.
+        let crlf = "copy t from stdin; -- rows\r\na\r\nb\r\n\\.\r\nselect 1;\r\n";
+        let spans = d.split_statements(crlf);
+        assert_eq!(spans.len(), 2, "{spans:?}");
+        assert_eq!(&crlf[d.copy_data(crlf, &spans[0]).unwrap()], "a\r\nb\r\n");
+        assert_eq!(spans[1].text(crlf), "select 1");
+        // No terminator: the data runs to the end, and nothing after it is SQL.
+        let open = "copy t from stdin;\n1\n2";
+        let spans = d.split_statements(open);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(&open[d.copy_data(open, &spans[0]).unwrap()], "1\n2");
+        // No data at all.
+        let empty = "copy t from stdin;\n\\.\n";
+        let spans = d.split_statements(empty);
+        assert_eq!(d.copy_data(empty, &spans[0]), Some(19..19));
+        // A `\.` inside a line is data; only a line of its own ends it.
+        let inner = "copy t from stdin;\na\\.b\n \\.\n\\.\nselect 2";
+        let spans = d.split_statements(inner);
+        assert_eq!(
+            &inner[d.copy_data(inner, &spans[0]).unwrap()],
+            "a\\.b\n \\.\n"
+        );
+        assert_eq!(spans[1].text(inner), "select 2");
+    }
+
+    #[test]
+    fn other_copies_and_copy_words_have_no_data() {
+        let d = PostgresDialect;
+        for script in [
+            "copy t to stdout;\nselect 1",
+            "copy t from '/tmp/x';\nselect 1",
+            "select 'copy t from stdin';\nselect 1",
+            "do $$ begin copy t from stdin; end $$;\nselect 1",
+            "copy t from stdin",
+        ] {
+            let spans = d.split_statements(script);
+            assert!(
+                spans.iter().all(|s| d.copy_data(script, s).is_none()),
+                "{script}"
+            );
+        }
+        // Without its `;`, nothing follows the statement as its data.
+        assert_eq!(
+            parts("copy t to stdout;\nselect 1"),
+            ["copy t to stdout", "select 1"]
+        );
+    }
+
+    #[test]
+    fn psql_meta_commands_are_never_glued_to_a_statement() {
+        let d = PostgresDialect;
+        // How pg_dump 17.6 and later starts and ends a plain dump: skipped.
+        let dump = "--\n-- PostgreSQL database dump\n--\n\n\\restrict AbC123\n\nSET a = 1;\nselect 2;\n\n\\unrestrict AbC123\n";
+        assert_eq!(parts(dump), ["SET a = 1", "select 2"]);
+        // Any other is a statement of its own, which the session refuses.
+        let other = "select 1;\n  \\connect other\nselect 2;\n\\i /tmp/x.sql\n";
+        assert_eq!(
+            parts(other),
+            ["select 1", "\\connect other", "select 2", "\\i /tmp/x.sql"]
+        );
+        assert!(d.refuse_statement("\\connect other").is_some());
+        assert!(d.refuse_statement("select 1").is_none());
+        // A backslash inside a statement or a string is not one.
+        assert_eq!(
+            parts("select 'a\n\\b';\nselect E'\\\\x'\n  , 1;"),
+            ["select 'a\n\\b'", "select E'\\\\x'\n  , 1"]
+        );
+    }
+
+    #[test]
+    fn copy_data_is_not_code() {
+        let d = PostgresDialect;
+        let code: String = d.code_ranges(DUMP).into_iter().map(|r| &DUMP[r]).collect();
+        // Neither the placeholder nor the variable in the data is code, and the quote in the
+        // data does not make the SQL after it look like a string.
+        assert!(
+            !code.contains(":name") && !code.contains("${var}"),
+            "{code}"
+        );
+        assert!(code.contains("SELECT setval("), "{code}");
+        assert!(
+            code.contains("COPY public.t (id, note) FROM stdin;"),
+            "{code}"
+        );
     }
 }

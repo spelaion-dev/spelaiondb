@@ -26,7 +26,7 @@ export function ProcessSidebar({ selected, onSelect }: { selected: string | null
       {connections.map((connection) => <button key={connection.id} type="button" className={`process-connection ${connection.id === selected ? "active" : ""}`}
         disabled={!supported(connection.engine)} title={supported(connection.engine) ? connection.name : t("processMonitor.unsupported")}
         aria-pressed={connection.id === selected} onClick={() => onSelect(connection.id)}>
-        <EngineIcon engine={connection.engine} /><span className="process-connection-name">{connection.name}</span>
+        <EngineIcon engine={connection.engineMark} fallback={connection.engine} /><span className="process-connection-name">{connection.name}</span>
         {!supported(connection.engine) && <span className="muted small">{t("processMonitor.soon")}</span>}
       </button>)}
     </div>
@@ -104,7 +104,11 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         const sources = [`meta:${connection.id}`, ...useApp.getState().tabs.filter((tab) => tab.connectionId === connection.id && tab.status === "connected").map((tab) => tab.id)];
         let version: string | null = null;
         for (const source of sources) {
-          try { version = await call(commands.connectFromSession(source, id, null, false)); break; } catch { /* Try another open session. */ }
+          try {
+            const outcome = await call(commands.connectFromSession(source, id, null, false));
+            // "connectAgain": edited since that session opened (SDB-426); connect below.
+            if (outcome.kind === "connected") { version = outcome.serverVersion; break; }
+          } catch { /* Try another open session. */ }
         }
         if (version === null && !disposed) version = await openSession(id, connection.id);
         if (version === null) {
@@ -200,9 +204,14 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
       try {
         // PostgreSQL sessions cannot switch databases after connecting. SQL Server and
         // MySQL can select the process's database when opening the query.
-        const version = await call(commands.connectFromSession(id, tab, connection.engine === "postgres" ? null : row.database, false));
+        const database = connection.engine === "postgres" ? null : row.database;
+        const outcome = await call(commands.connectFromSession(id, tab, database, false));
+        // Edited since the monitor's session opened (SDB-426): connect as a new tab does.
+        const version = outcome.kind === "connected" ? outcome.serverVersion : await openSession(tab, connection.id);
         const current = useApp.getState().tabs.find((item) => item.id === tab);
-        if (!current || current.connectionId !== connection.id || current.status !== "connecting") { await call(commands.disconnect(tab)); return; }
+        if (!current || current.connectionId !== connection.id || current.status !== "connecting") { if (version !== null) await call(commands.disconnect(tab)); return; }
+        if (version === null) { useApp.getState().updateTab(tab, { status: "disconnected" }); return; }
+        if (outcome.kind === "connectAgain" && database) await call(commands.selectDatabase(tab, database)).catch(() => undefined);
         useApp.getState().updateTab(tab, { status: "connected", serverVersion: version });
       } catch {
         const current = useApp.getState().tabs.find((item) => item.id === tab);
@@ -214,7 +223,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
 
   return <section className="process-monitor" aria-label={t("processMonitor.title")}>
     <header className="process-heading">
-      <div><div className="process-eyebrow">{t("processMonitor.title")}</div><h1><EngineIcon engine={connection.engine} />{connection.name}</h1></div>
+      <div><div className="process-eyebrow">{t("processMonitor.title")}</div><h1><EngineIcon engine={connection.engineMark} fallback={connection.engine} />{connection.name}</h1></div>
       <div className="process-heading-actions">
         <div className="segmented" role="radiogroup" aria-label={t("processMonitor.view")}>
           {VIEWS.map((name) => <button key={name} type="button" role="radio" aria-checked={view === name} className={view === name ? "active" : ""} onClick={() => setView(name)}>{t(`processMonitor.views.${name}`)}</button>)}

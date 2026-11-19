@@ -52,7 +52,10 @@ export async function openFileDialog(): Promise<void> {
 
 /** Opens `path` in a new tab on the active tab's connection, or shows the tab that has it.
  *  Returns the tab, or null when it could not be read (the error is shown). */
-export async function openFilePath(path: string): Promise<string | null> {
+/** Opens a file in a tab (or shows its tab if it is open). The tab takes the active tab's
+ *  connection, unless `connectionId` says which (null: none, as for a file opened from
+ *  outside the app, SDB-397, which must not connect on its own). */
+export async function openFilePath(path: string, options: { connectionId?: string | null } = {}): Promise<string | null> {
   const app = useApp.getState();
   const open = app.tabs.find((t) => t.file && samePath(t.file.path, path));
   if (open) {
@@ -73,7 +76,9 @@ export async function openFilePath(path: string): Promise<string | null> {
     recentChanged();
   }
   const active = app.tabs.find((t) => t.id === app.activeTab);
-  const connectionId = active && !active.table && !active.tableDetails && !active.diagram ? active.connectionId : null;
+  const connectionId = options.connectionId !== undefined
+    ? options.connectionId
+    : active && !active.table && !active.tableDetails && !active.diagram ? active.connectionId : null;
   const id = useApp.getState().addTab(connectionId, file.text);
   useApp.getState().updateTab(id, { file: tabFile(file) });
   return id;

@@ -112,6 +112,37 @@ pub async fn stop(program: &Path) {
     }
 }
 
+/// A plugin whose process runs now, and what it uses (SDB-399).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunningPlugin {
+    /// Its program.
+    pub program: PathBuf,
+    pub usage: spelaion_plugin_host::ProcessUsage,
+}
+
+/// The plugins of this program whose process runs now, with their memory, processor time and
+/// sessions, read from the operating system for each process. Nothing is started.
+pub async fn running() -> Vec<RunningPlugin> {
+    let plugins: Vec<Plugin> = PLUGINS
+        .get_or_init(Default::default)
+        .lock()
+        .expect("lock poisoned")
+        .values()
+        .cloned()
+        .collect();
+    let mut out = Vec::new();
+    for plugin in plugins {
+        if let Some(usage) = plugin.usage().await {
+            out.push(RunningPlugin {
+                program: plugin.program().to_path_buf(),
+                usage,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.program.cmp(&b.program));
+    out
+}
+
 /// How Windows starts a path in its verbatim form.
 const VERBATIM: &str = r"\\?\";
 

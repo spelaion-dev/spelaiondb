@@ -74,7 +74,9 @@ and "Load every row" follow the two paths above, and never claim a page that is 
   existed throughout still appears once. Its last page is only known once every row is
   loaded, so "Last page" is "Load every row" followed by a scroll to its end. Its pages are
   never fetched by an offset or from the end (a reversed keyset would leave a gap in the
-  result, which holds its rows in order).
+  result, which holds its rows in order). "Go to row" guarantees the row loaded and selected,
+  not an exact count: a row shown at the grid's end can make the grid fetch its next page, as
+  scrolling to the end always does (SDB-421).
 - **"Load every row"** first says how many rows the server counts and roughly how much memory
   they take (the memory the loaded rows take, per row, times the count: `estimate`). A paged
   query then loads keyset pages of `MAX_PAGE_ROWS` until there are no more; a cancel stops the

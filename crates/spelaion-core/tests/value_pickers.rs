@@ -425,6 +425,14 @@ async fn allowed_values_come_from_the_catalog_on_every_engine() {
                     vec![status.into(), level.into(), "mood vp_mood".into()],
                 )
             }
+            "sqlite" => (
+                vec![],
+                vec![
+                    status.into(),
+                    "level INT".into(),
+                    "CONSTRAINT check_level CHECK (level IN (1, 2, 3))".into(),
+                ],
+            ),
             _ => (vec![], vec![status.into(), level.into()]),
         };
         run(label, session, &[format!("DROP TABLE {TABLE}")], true).await;

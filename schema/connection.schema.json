@@ -34,6 +34,13 @@
     "engine": {
       "$ref": "#/$defs/Engine"
     },
+    "engine_kind": {
+      "description": "A named protocol-compatible server chosen in the picker. For display only.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "env": {
       "description": "Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type\nin `connection-types.toml`; its badge and safeguards apply. Any other text is a plain\nlabel with no behaviour.",
       "type": [
@@ -152,6 +159,31 @@
     },
     "tls": {
       "$ref": "#/$defs/TlsConfig"
+    },
+    "pooler": {
+      "description": "PostgreSQL only: a connection pooler such as PgBouncer stands between the app and the\nserver (SDB-396). `transaction` (its transaction mode): each transaction may run on\nanother server connection, so no prepared statement and no session state is relied on;\nwhat is session state cannot be kept and is refused (`[session]`, `read_only`) or says\nso (the editor's schema). `session`: as a direct connection. Direct when absent.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PoolerMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cleartext_password": {
+      "description": "MySQL and MariaDB only: allow the `mysql_clear_password` authentication plugin, which\nbastions such as Warpgate ask for (SDB-396). The password then travels as it is: the\ncore refuses to connect unless TLS is verified (`verify-ca` or `verify-full`) or the\nconnection goes through an SSH tunnel.",
+      "type": "boolean"
+    },
+    "databases": {
+      "description": "The databases the explorer and the database picker show (SDB-396), by name; all when\nabsent. MySQL, MariaDB, SQL Server and the engines whose tabs choose a database. At\nmost 500 names, of up to 128 characters each.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
     },
     "session": {
       "description": "How every new session starts (ADR-037): setup statements, the default schema and the\nisolation level, applied each time a session opens (reconnecting included).",
@@ -337,6 +369,21 @@
         "require",
         "verify-ca",
         "verify-full"
+      ]
+    },
+    "PoolerMode": {
+      "description": "How a PostgreSQL pooler hands out server connections (SDB-396).",
+      "oneOf": [
+        {
+          "description": "A server connection for the whole session: as a direct connection.",
+          "type": "string",
+          "const": "session"
+        },
+        {
+          "description": "A server connection for each transaction (PgBouncer's transaction mode).",
+          "type": "string",
+          "const": "transaction"
+        }
       ]
     },
     "SessionConfig": {

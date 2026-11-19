@@ -9,6 +9,7 @@
 //! - A table with nothing to search, and one that fails, are reported and the search goes on.
 //! - The column catalog of metadata search (`list_columns`) lists every table's columns.
 //! - A search over 50 tables stops when cancelled mid-way, and the session is still usable.
+//! - A search cancelled at any point (as each table starts or ends) reports how it ended.
 
 mod engines;
 
@@ -516,6 +517,85 @@ async fn a_search_over_fifty_tables_stops_when_cancelled() {
             "{label}"
         );
         let drops: Vec<String> = names.iter().map(|n| format!("DROP TABLE {n}")).collect();
+        run(label, &session, &drops, true).await;
+    }
+}
+
+/// A search cancelled at any point reports how it ended (SDB-422): as each of four tables
+/// starts, and as each one ends, the last one included. The cancel is sent from inside the
+/// search's own progress report, so it lands exactly there, and every search is bounded: a lost
+/// end fails in seconds instead of hanging.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_search_cancelled_at_any_point_reports_how_it_ended() {
+    for (label, session, schema) in engines().await {
+        let names: Vec<String> = (0..4).map(|i| format!("ds_point_{i}")).collect();
+        let drops: Vec<String> = names.iter().map(|n| format!("DROP TABLE {n}")).collect();
+        run(label, &session, &drops, true).await;
+        let mut create = Vec::new();
+        for name in &names {
+            create.push(format!(
+                "CREATE TABLE {name} (id INT PRIMARY KEY, label VARCHAR(40))"
+            ));
+            create.push(format!(
+                "INSERT INTO {name} (id, label) VALUES (1, 'needle'), (2, 'hay')"
+            ));
+        }
+        run(label, &session, &create, false).await;
+        let request = DataSearchRequest {
+            value: "needle".into(),
+            tables: names.iter().map(|n| t(schema, n)).collect(),
+            options: DataSearchOptions::default(),
+        };
+        // Each point: the table's position, and whether the cancel comes as it starts or ends.
+        for table in 0..names.len() {
+            for at_end in [false, true] {
+                let point = format!(
+                    "{label}: table {table}, {}",
+                    if at_end { "end" } else { "start" }
+                );
+                let cancel = Arc::new(ExportCancel::new());
+                cancel.attach(&session);
+                let ended = Arc::new(Mutex::new(Vec::new()));
+                let progress = {
+                    let (cancel, ended) = (cancel.clone(), ended.clone());
+                    move |event: DataSearchEvent| {
+                        let here = match &event {
+                            DataSearchEvent::Started { index, .. } => !at_end && *index == table,
+                            DataSearchEvent::Finished(outcome) => {
+                                ended.lock().unwrap().push(outcome.clone());
+                                at_end && ended.lock().unwrap().len() == table + 1
+                            }
+                        };
+                        if here {
+                            // The cancel has been sent before the search goes on.
+                            tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(cancel.cancel())
+                            });
+                        }
+                    }
+                };
+                let summary = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    data_search(&session, &request, &cancel, &progress),
+                )
+                .await
+                .unwrap_or_else(|_| panic!("{point}: the search never ended"))
+                .unwrap_or_else(|e| panic!("{point}: {e}"));
+                assert!(summary.cancelled, "{point}: {summary:?}");
+                let ended = ended.lock().unwrap().clone();
+                // Every table it started ended, as searched or as cancelled (the one started as
+                // the cancel came ends cancelled), and no table was started after it.
+                let expected = table + 1;
+                assert_eq!(ended.len(), expected, "{point}: {ended:?}");
+                assert!(summary.tables <= expected, "{point}: {summary:?}");
+            }
+        }
+        // The session is still usable afterwards.
+        assert_eq!(
+            count_table_rows(&session, schema, &names[0], "").await,
+            Ok(2),
+            "{label}"
+        );
         run(label, &session, &drops, true).await;
     }
 }

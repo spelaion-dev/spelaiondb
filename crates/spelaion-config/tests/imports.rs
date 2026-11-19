@@ -7,8 +7,8 @@ mod common;
 
 use common::{FakeBackend, Fixture, personal, team};
 use spelaion_config::{
-    ConnectionDraft, Engine, ImportClient, ImportedConnection, ImportedSsh, ImportedTls,
-    KeychainItem, PasswordChoice, Source, TargetFolder, TlsModeConfig, add_connection,
+    ConnectionDraft, Engine, ImportClient, ImportedConnection, ImportedProxy, ImportedSsh,
+    ImportedTls, KeychainItem, PasswordChoice, Source, TargetFolder, TlsModeConfig, add_connection,
     connection_account, find_duplicate, import_names, import_plan, read_stored_passwords,
     replacement_draft, update_connection,
 };
@@ -37,6 +37,7 @@ fn imported(name: &str) -> ImportedConnection {
         tags: Vec::new(),
         folder: String::new(),
         engine: Ok(Engine::Postgres),
+        engine_kind: None,
         host: "db.internal".into(),
         port: Some(5432),
         database: "orders".into(),
@@ -380,6 +381,38 @@ fn passwords_in_another_apps_keychain_are_read_only_when_asked_and_never_written
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0].0, "Orders");
     assert!(again[0].password.is_none());
+}
+
+#[test]
+fn a_password_can_be_saved_even_if_only_a_network_profile_has_one() {
+    let mut connection = imported("Behind bastion");
+    assert!(!connection.has_importable_password());
+    connection.ssh = Some(ImportedSsh {
+        host: "bastion.example".into(),
+        port: None,
+        user: "tunnel".into(),
+        auth: spelaion_config::SshAuth::Password,
+        key_path: String::new(),
+        password: Some(Secret::new("test password")),
+        keepalive_interval: None,
+        keepalive_count: None,
+        connect_timeout: None,
+        local_port: None,
+    });
+    assert!(!connection.has_password());
+    assert!(connection.has_importable_password());
+
+    connection.ssh = None;
+    connection.proxy = Some(ImportedProxy {
+        host: "proxy.example".into(),
+        port: None,
+        user: "proxy".into(),
+        password: Some(Secret::new("test password")),
+    });
+    assert!(connection.has_importable_password());
+
+    connection.engine = Err("unsupported engine".into());
+    assert!(!connection.has_importable_password());
 }
 
 #[test]

@@ -17,14 +17,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, Connection, Dialect, DriverError, EventStream, ExecEvent,
-    ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey, Remote, RemoteControl,
-    RemoteProcess, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo,
+    CancelHandle, Capabilities, Connection, Dependencies, Dialect, DriverError, EventStream,
+    ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ObjectProperty, ReferencingKey,
+    Remote, RemoteControl, RemoteProcess, Result, SchemaColumn, SchemaInfo, SchemaObject,
+    TableInfo,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
 use spelaion_sqlite_schema::catalog::{self, Row};
+use spelaion_sqlite_schema::details;
 use spelaion_sqlite_schema::typing::{is_dml, is_query};
 use spelaion_sqlite_schema::{ResultBuilder, ResultColumn, SqlValue};
 
@@ -747,12 +749,13 @@ impl Connection for RemoteConnection {
     }
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
-        let object = self
-            .list_objects(schema)
-            .await?
-            .into_iter()
-            .find(|o| o.name == name)
-            .ok_or_else(|| DriverError::Other(format!("{schema}.{name} does not exist")))?;
+        let (object, checks) = catalog::described_object(
+            schema,
+            name,
+            &self
+                .rows(catalog::described_object_sql(schema, name))
+                .await?,
+        )?;
         let (mut table, to_primary_keys) = catalog::table(
             object,
             &self.rows(catalog::columns_sql(schema, name)).await?,
@@ -768,6 +771,7 @@ impl Connection for RemoteConnection {
                     .await?,
             );
         }
+        table.constraints.extend(checks);
         Ok(table)
     }
 
@@ -834,6 +838,15 @@ impl Connection for RemoteConnection {
             .rows(catalog::relation_definition_sql(schema, name))
             .await?;
         catalog::relation_definition(schema, name, &rows)
+    }
+
+    // `.explain off` keeps a view's program in quote mode, as every other query.
+    async fn object_properties(&self, schema: &str, name: &str) -> Result<Vec<ObjectProperty>> {
+        details::properties(schema, name, |sql| self.rows(sql)).await
+    }
+
+    async fn object_dependencies(&self, schema: &str, name: &str) -> Result<Option<Dependencies>> {
+        details::dependencies(schema, name, |sql| self.rows(sql)).await
     }
 }
 

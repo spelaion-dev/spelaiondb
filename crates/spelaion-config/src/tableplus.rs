@@ -572,6 +572,7 @@ fn connection_of(c: &Dictionary, id: String, folder: String, origin: Origin) -> 
         tags: Vec::new(),
         folder,
         engine,
+        engine_kind: None,
         host,
         port,
         database,

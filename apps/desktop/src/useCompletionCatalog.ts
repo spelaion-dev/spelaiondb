@@ -52,7 +52,12 @@ export function useCompletionCatalog(session: string, connection: string | null,
       await closing;
     };
     return cache.acquire(completionCacheKey(workspace, connection, database, generation, session), {
-      open: async () => { await call(commands.connectFromSession(session, metadata, database, false)); opened = true; },
+      open: async () => {
+        const outcome = await call(commands.connectFromSession(session, metadata, database, false));
+        // Edited since that session opened, and it needs the user (SDB-426): no hints from it.
+        if (outcome.kind !== "connected") throw new Error("the connection changed since its session opened");
+        opened = true;
+      },
       names: async (cancelled, schemaReady) => {
         const defaultSchema = await call(commands.activeSchema(metadata));
         const schemas = (await call(commands.listSchemas(metadata, null, false))).filter((schema) => !schema.system);

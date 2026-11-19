@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type NewIndexKindItem, type ObjectActionsItem, type ObjectTargetItem, type SchemaObjectItem, type TableDetails, type TableKeyItem } from "../api";
+import { call, commands, type DependenciesItem, type NewIndexKindItem, type ObjectActionsItem, type ObjectPropertiesItem, type ObjectTargetItem, type PartitioningItem, type SchemaObjectItem, type TableDetails, type TableKeyItem } from "../api";
 import { connectTabFromExplorer, explorerDatabase, EXPLORER_REFRESH_EVENT, openSession, openTableData } from "../connect";
 import { useApp, type Tab } from "../store";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
@@ -20,6 +20,11 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
   const [triggers, setTriggers] = useState<SchemaObjectItem[]>([]);
   /** The foreign keys of other tables that point to this one (the "References" tab). */
   const [references, setReferences] = useState<TableKeyItem[]>([]);
+  /** The "Properties", "Partitions" and "Dependencies" tabs (SDB-393): `null` partitions or
+   * dependencies say the engine does not tell, which is never shown as an empty list. */
+  const [properties, setProperties] = useState<ObjectPropertiesItem | null>(null);
+  const [partitioning, setPartitioning] = useState<PartitioningItem | null>(null);
+  const [dependencies, setDependencies] = useState<DependenciesItem | null>(null);
   const [actions, setActions] = useState<ObjectActionsItem | null>(null);
   /** Size on disk, index size and row estimate from the catalog's statistics (`null`: none). */
   const [stats, setStats] = useState<{ value: TableStatsItem | null } | { error: string } | null>(null);
@@ -45,10 +50,16 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       call(commands.objectActions(tab.id)),
       kind === "triggers" ? call(commands.listSchemaObjects(tab.id, schema, null, false)) : Promise.resolve([]),
       kind === "references" ? call(commands.referencingKeys(tab.id, schema, table)) : Promise.resolve([]),
+      kind === "properties" ? call(commands.objectProperties(tab.id, schema, table)) : Promise.resolve(null),
+      kind === "partitions" ? call(commands.tablePartitions(tab.id, schema, table)) : Promise.resolve(null),
+      kind === "dependencies" ? call(commands.objectDependencies(tab.id, schema, table)) : Promise.resolve(null),
       // The statistics are extra: when they cannot be read, the rest of the tab still shows.
       call(commands.tableStats(tab.id, schema, table)).then((value) => ({ value }), (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })),
-    ]).then(([result, capabilities, objects, referencing, statistics]) => {
+    ]).then(([result, capabilities, objects, referencing, props, partitions, uses, statistics]) => {
       if (!current) return;
+      setProperties(props);
+      setPartitioning(partitions);
+      setDependencies(uses);
       setStats(statistics);
       setDetails(result);
       setActions(capabilities);
@@ -127,10 +138,35 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       headers = [t("tableDetails.name"), t("tableDetails.comment")];
       rows = triggers.map((trigger) => ({ cells: [trigger.name, text(trigger.comment)], trigger, target: { kind: "schemaObject", object: trigger } }));
       break;
+    case "properties":
+      headers = [t("tableDetails.property"), t("tableDetails.value")];
+      rows = [
+        { cells: [t("properties.comment"), text(properties?.comment)] },
+        ...(properties?.properties ?? []).map((p) => ({ cells: [t(`properties.${p.name}`, { defaultValue: p.name }), p.value] })),
+      ];
+      break;
+    case "partitions":
+      headers = [t("tableDetails.name"), t("tableDetails.bound"), t("tableDetails.rows"), t("tableDetails.subpartitioned")];
+      rows = (partitioning?.partitions ?? []).map((p) => ({
+        cells: [p.schema === schema ? p.name : `${p.schema}.${p.name}`, p.bound ?? t("tableDetails.defaultPartition"),
+          p.estimatedRows == null ? "—" : new Intl.NumberFormat(i18n.language).format(p.estimatedRows), yesNo(p.subpartitioned)],
+      }));
+      break;
+    case "dependencies": {
+      headers = [t("tableDetails.direction"), t("tableDetails.kind"), t("tableDetails.name"), t("tableDetails.detail")];
+      const row = (direction: "uses" | "usedBy", d: DependenciesItem["uses"][number]): Row => ({
+        cells: [t(`tableDetails.${direction}`), t(`dependencyKinds.${d.kind}`), d.schema === schema ? d.name : `${d.schema}.${d.name}`, text(d.detail)],
+        // A table or view on the other side opens with its data.
+        data: d.kind === "table" || d.kind === "view" || d.kind === "materializedView" ? { schema: d.schema, table: d.name } : undefined,
+      });
+      rows = dependencies ? [...dependencies.uses.map((d) => row("uses", d)), ...dependencies.usedBy.map((d) => row("usedBy", d))] : [];
+      break;
+    }
   }
   const title = t(`folders.${kind}`);
-  // References are created as a foreign key of the other table, from its own details.
-  const creates = kind !== "references";
+  // References are created as a foreign key of the other table, from its own details; what the
+  // catalog says of a table (SDB-393) is not created here.
+  const creates = kind !== "references" && kind !== "properties" && kind !== "partitions" && kind !== "dependencies";
   const canCreate = actions !== null && creates && (kind === "constraints" || kind === "foreignKeys" ? actions.addConstraints : kind === "triggers" ? actions.addTriggers : true);
   return (
     <section className="table-details-view" aria-label={t("tableDetails.title", { section: title, table })}>
@@ -150,11 +186,20 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
             title={!canCreate ? t("newTableElement.unsupported") : undefined} onClick={() => setCreating(true)}>{t("newTableElement.add")}</button>}
           {kind === "columns" && <button type="button" disabled={tab.status !== "connected" || loading || !details}
             onClick={() => setEditing({ columns: selected.length > 0 ? selected : undefined })}>{t(selected.length > 0 ? "structure.editSelected" : "structure.editColumns", { count: selected.length })}</button>}
+          {kind === "properties" && <button type="button" disabled={tab.status !== "connected" || loading || !details}
+            onClick={() => setEditing({})}>{t("structure.editComment")}</button>}
           <button type="button" disabled={tab.status !== "connected" || loading} onClick={refresh}>{t("refresh")}</button>
         </div>
       </div>
       {actions && creates && !canCreate && <p className="muted">{t("newTableElement.unsupported")}</p>}
       {kind === "references" && <p className="muted">{t("tableDetails.referencesHint", { table })}</p>}
+      {kind === "partitions" && details && !loading && (partitioning
+        ? <p className="muted">{t("tableDetails.partitionedBy", { method: partitioning.method, key: partitioning.key })}</p>
+        : <p className="muted" role="status">{t("tableDetails.notPartitioned")}</p>)}
+      {kind === "dependencies" && details && !loading && !dependencies && <p className="muted" role="status">{t("tableDetails.dependenciesUnknown")}</p>}
+      {kind === "dependencies" && dependencies && dependencies.untracked.length > 0 && <p className="muted small">{t("tableDetails.untracked", {
+        kinds: dependencies.untracked.map((k) => t(`dependencyKinds.${k}`).toLowerCase()).join(", "),
+      })}</p>}
       {(error || (tab.status === "disconnected" && (tab.lost || tab.run?.error?.message))) && <p className="error" role="alert">{error ?? tab.lost ?? tab.run?.error?.message}</p>}
       {tab.status === "disconnected" && <button type="button" onClick={() => void reconnect()} disabled={!tab.connectionId}>{t("tableDetails.reconnect")}</button>}
       {tab.status === "connected" && needsRefresh && <p className="muted">{t("tableDetails.refreshAfterReconnect")}</p>}
@@ -167,7 +212,7 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
                 <button key={indexKind} type="button" onClick={() => void newIndex(indexKind)}>{t(`newIndex.${indexKind}`, { columns: selected.join(", ") })}</button>)}
             </div>
           )}
-          {rows.length === 0 ? <div className="table-details-empty">{t("tableDetails.empty")}</div> : (
+          {(kind === "partitions" && !partitioning) || (kind === "dependencies" && !dependencies) ? null : rows.length === 0 ? <div className="table-details-empty">{t("tableDetails.empty")}</div> : (
             <div className="table-details-scroll" tabIndex={0}>
               <table>
                 <thead><tr>{kind === "columns" && <th scope="col">{t("tableDetails.select")}</th>}{headers.map((header) => <th scope="col" key={header}>{header}</th>)}<th scope="col">{t("tableDetails.actions")}</th></tr></thead>

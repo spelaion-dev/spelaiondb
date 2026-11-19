@@ -446,6 +446,14 @@ pub(crate) fn validate_connection(
     file: ConnectionFile,
 ) -> Result<ConnectionFile, ConfigError> {
     check_version(path, file.schema_version)?;
+    if let Some(kind) = file.engine_kind.as_deref()
+        && crate::engine_kind_base(kind) != Some(file.engine)
+    {
+        return Err(ConfigError::new(
+            path,
+            "engine_kind must name a kind of the connection engine",
+        ));
+    }
     let missing: Vec<&str> = match file.engine {
         // Through Kubernetes the host is only a name for TLS: it may be left out. A network
         // profile may be a Kubernetes one (ADR-050): the resolver asks for the host otherwise.
@@ -595,6 +603,63 @@ pub(crate) fn validate_connection(
             return Err(ConfigError::new(
                 path,
                 "a folder of files takes no [session] table: its session is set up to read only that folder",
+            ));
+        }
+    }
+    // SDB-396: a pooler is PostgreSQL's, the cleartext password plugin MySQL's and MariaDB's.
+    if let Some(pooler) = file.pooler {
+        if file.engine != Engine::Postgres {
+            return Err(ConfigError::new(
+                path,
+                "pooler is for PostgreSQL: a PgBouncer (or another pooler) in front of the server",
+            ));
+        }
+        // Session state is not kept from one transaction to the next: what relies on it is
+        // refused, never quietly lost.
+        if pooler == crate::model::PoolerMode::Transaction {
+            if !file.session.is_default() {
+                return Err(ConfigError::new(
+                    path,
+                    "a pooler in transaction mode does not keep session settings: remove `[session]` (setup statements, schema and isolation level would apply to one transaction only)",
+                ));
+            }
+            if file.read_only {
+                return Err(ConfigError::new(
+                    path,
+                    "a pooler in transaction mode does not keep the session's read-only mode (ADR-053): remove `read_only`, or connect through the pooler in session mode",
+                ));
+            }
+        }
+    }
+    if file.cleartext_password && !matches!(file.engine, Engine::Mysql | Engine::Mariadb) {
+        return Err(ConfigError::new(
+            path,
+            "cleartext_password is for MySQL and MariaDB: the mysql_clear_password authentication plugin",
+        ));
+    }
+    if let Some(databases) = &file.databases {
+        if !file.engine.chooses_databases() {
+            let label = engine_label(file.engine);
+            return Err(ConfigError::new(
+                path,
+                format!("{label} has no database list to choose from: remove `databases`"),
+            ));
+        }
+        if databases.is_empty()
+            || databases.len() > crate::model::MAX_SHOWN_DATABASES
+            || databases.iter().any(|name| {
+                name.trim().is_empty()
+                    || name.chars().count() > crate::model::MAX_DATABASE_NAME
+                    || name.chars().any(char::is_control)
+            })
+        {
+            return Err(ConfigError::new(
+                path,
+                format!(
+                    "databases names at most {} databases, each of 1 to {} characters on one line",
+                    crate::model::MAX_SHOWN_DATABASES,
+                    crate::model::MAX_DATABASE_NAME
+                ),
             ));
         }
     }

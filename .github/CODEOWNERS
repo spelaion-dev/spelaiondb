@@ -8,6 +8,14 @@
 /crates/spelaion-core/src/readonly.rs           @petilolz @frglez
 /crates/spelaion-core/src/write.rs              @petilolz @frglez
 /crates/spelaion-core/src/guard.rs              @petilolz @frglez
+
+# Generated reads, session setup and import execution (ADR-034, ADR-037, ADR-038).
+/crates/spelaion-core/src/export_stream.rs             @petilolz @frglez
+/crates/spelaion-core/src/session_setup.rs             @petilolz @frglez
+/crates/spelaion-core/src/import/mod.rs                @petilolz @frglez
+/crates/spelaion-core/src/import/source.rs             @petilolz @frglez
+/crates/spelaion-core/src/import/xlsx.rs               @petilolz @frglez
+
 # Column masking (ADR-051).
 /crates/spelaion-core/src/masking.rs            @petilolz @frglez
 /crates/spelaion-config/src/masking.rs          @petilolz @frglez
@@ -19,6 +27,17 @@
 /crates/spelaion-config/src/resolve.rs          @petilolz @frglez
 /crates/spelaion-ssh/src/hostkeys.rs            @petilolz @frglez
 /crates/spelaion-ssh/src/auth.rs                @petilolz @frglez
+
+# Redaction, repository changes and client configuration (ADR-009, ADR-022, ADR-029, ADR-030, ADR-032, ADR-033).
+/crates/spelaion-core/src/conn_test.rs                 @petilolz @frglez
+/crates/spelaion-core/src/audit.rs                     @petilolz @frglez
+/crates/spelaion-config/src/copy.rs                    @petilolz @frglez
+/crates/spelaion-config/src/relocate.rs                @petilolz @frglez
+/crates/spelaion-config/src/types.rs                   @petilolz @frglez
+/crates/spelaion-config/src/mcp_clients.rs             @petilolz @frglez
+
+# Remote SQLite command and input handling (ADR-018).
+/crates/spelaion-driver-sqlite/src/remote.rs           @petilolz @frglez
 
 # Patched TLS libraries and dependency rules.
 /deny.toml                                      @petilolz @frglez

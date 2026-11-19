@@ -9,16 +9,22 @@ pub mod backup;
 mod catalog;
 mod chart;
 mod classify;
+pub mod cleartext;
 mod column_stats;
 mod conn_test;
+mod copy_in;
 mod cursor;
 mod data_search;
+pub mod diagnostics;
 mod display;
 mod edit;
 mod editor_snippets;
 mod er;
 mod export;
+mod export_binary;
+mod export_defaults;
 mod export_stream;
+mod export_xlsx;
 mod file_folder;
 mod filter;
 mod find;
@@ -29,7 +35,9 @@ mod guard;
 mod health;
 mod history;
 mod import;
+pub mod instance;
 pub mod kube;
+pub mod launch;
 mod load_rows;
 mod locks;
 pub mod masking;
@@ -56,7 +64,10 @@ mod selection_stats;
 mod server_family;
 mod server_settings;
 mod session;
+mod session_read_only;
 mod session_setup;
+pub mod session_source;
+mod shown;
 mod sort;
 mod sql_file;
 mod sql_mode;
@@ -67,6 +78,7 @@ mod table_stats;
 mod temporal;
 #[cfg(all(test, unix))]
 mod test_files;
+mod tls_warning;
 mod transaction;
 mod transpose;
 mod value_pick;
@@ -126,15 +138,17 @@ pub use er::{
     mermaid, read_model as read_er_model, save_diagram_text,
 };
 pub use export::{
-    CopyError, CopySpecial, CsvOptions, ExportFormat, ExportOptions, FileSummary, GenericDialect,
-    MAX_IN_LIST, MAX_NULL_TEXT, NameStyle, RowDelimiter, TextEncoding, column_in_list,
-    column_names, copy_selected_rows, copy_special, copy_text, copy_updates, export_to_file,
-    formula_escaped, write_result,
+    CopyError, CopySpecial, CsvOptions, ExportFormat, ExportOptions, FileOptions, FileSummary,
+    GenericDialect, JsonOptions, KeywordCase, MAX_IN_LIST, MAX_NULL_TEXT, MAX_ROWS_PER_INSERT,
+    NameCase, NameStyle, RowDelimiter, SqlOptions, TextEncoding, column_in_list, column_names,
+    copy_selected_rows, copy_special, copy_text, copy_updates, export_to_file, formula_escaped,
+    write_result,
 };
+pub use export_defaults::{ExportDefaults, ExportFileFormat, MAX_EXPORT_NULL_TEXT};
 pub use export_stream::{
-    DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, RerunCheck,
-    StreamExport, TableSource, TablesError, export_query, export_table, export_tables, file_name,
-    follow_session_context, rerun_check,
+    DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, FileNamePattern,
+    MAX_NAME_PATTERN, NameParts, RerunCheck, StreamExport, TableSource, TablesError, export_query,
+    export_table, export_tables, file_name, follow_session_context, rerun_check,
 };
 pub use file_folder::{FolderReport, FolderView, MAX_VIEWS as MAX_FOLDER_VIEWS, SkippedFile};
 pub use filter::{ColumnFilter, FilterMode, FilterOp};
@@ -182,6 +196,11 @@ pub use objects::{
     privilege_scope_fields, privilege_scopes, qualified_name, search_objects, set_active_schema,
     supports_added_checks, table_structure,
 };
+pub use objects::{
+    CheckMode, DuplicateOptions, DuplicatePlan, DuplicateTable, IndexCleanup, MaintenanceKind,
+    MaintenanceOptions, MaintenancePlan, MaintenanceRequest, TablePart, duplicate_options,
+    duplicate_plan, maintenance_kinds, maintenance_plan, maintenance_statement,
+};
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
     create_file_database, dialect_of, open_connection, open_route, test_tunnel,
@@ -219,6 +238,7 @@ pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
     ScriptSummary, Session, StatementError,
 };
+pub use session_read_only::{SessionReadOnlyError, set_session_read_only};
 pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
     isolation_statement, read_only_statement, setup_is_restricted,
@@ -248,6 +268,10 @@ pub use table_data::{
 };
 pub use table_filters::{RefusedFilter, TableFilterError, TableFilters};
 pub use table_stats::{TableStats, table_stats};
+pub use tls_warning::{
+    TlsRisk, TlsRoute, TlsWarning, connection_draft_tls_warning, connection_tls_warning,
+    draft_tls_warning, file_tls_warning, is_local_host, tls_warning,
+};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use transpose::{MAX_TRANSPOSED_ROWS, TransposeError, Transposed, transpose};
 pub use value_pick::{
@@ -267,5 +291,6 @@ pub use variables::{
 };
 pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
-    agent_view, check_write, has_read_barrier, runs_agent_writes,
+    agent_access_with_override, agent_view, agent_view_with_override, agent_workspace, check_write,
+    has_read_barrier, runs_agent_writes,
 };

@@ -248,6 +248,7 @@ function SecurityTab() {
   const { t } = useTranslation("mcp");
   const [settings, setSettings] = useState<McpSettingsItem | null>(null);
   const [access, setAccess] = useState<McpAccessItem[] | null>(null);
+  const [savingRestriction, setSavingRestriction] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const connectionsRevision = useApp((s) => s.connections);
 
@@ -267,6 +268,20 @@ function SecurityTab() {
       setError(message(e));
     }
     load();
+  }
+
+  async function updateRestriction(connection: McpAccessItem, readOnly: boolean) {
+    if (connection.restrictionWorkspace == null) return;
+    setError(null);
+    setSavingRestriction(true);
+    try {
+      await call(commands.setMcpConnectionReadOnly(connection.id, connection.restrictionWorkspace, readOnly));
+      setAccess(await call(commands.mcpAccess()));
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setSavingRestriction(false);
+    }
   }
 
   return (
@@ -312,13 +327,14 @@ function SecurityTab() {
             <tr>
               <th>{t("security.access.connection")}</th>
               <th>{t("security.access.agents")}</th>
+              <th>{t("security.access.restriction")}</th>
               <th>{t("security.access.type")}</th>
             </tr>
           </thead>
           <tbody>
             {access?.length === 0 && (
               <tr>
-                <td colSpan={3} className="muted">{t("security.access.none")}</td>
+                <td colSpan={4} className="muted">{t("security.access.none")}</td>
               </tr>
             )}
             {access?.map((c) => (
@@ -332,6 +348,18 @@ function SecurityTab() {
                     {c.visibility === "visible" ? t(`security.access.${c.access}`) : t(`security.access.${c.visibility}`)}
                   </div>
                   {c.visibility === "visible" && c.reason && <div className="muted">{t(`security.access.because.${c.reason}`)}</div>}
+                </td>
+                <td>
+                  <label className="mcp-switch">
+                    <input
+                      type="checkbox"
+                      aria-label={t("security.access.restrict", { name: c.name })}
+                      checked={c.readOnlyOverride ?? true}
+                      disabled={c.readOnlyOverride == null || savingRestriction}
+                      onChange={(e) => void updateRestriction(c, e.currentTarget.checked)}
+                    />
+                    <span>{t("security.access.readOnly")}</span>
+                  </label>
                 </td>
                 <td>
                   {c.kind ? (

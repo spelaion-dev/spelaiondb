@@ -1,9 +1,7 @@
 //! SQLite catalog of a local file, through rusqlite (queries and rows in
 //! `spelaion-sqlite-schema`'s `catalog`, ADR-058).
 
-use spelaion_driver_api::{
-    DriverError, LikeFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, TableInfo,
-};
+use spelaion_driver_api::{LikeFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, TableInfo};
 
 use spelaion_sqlite_schema::catalog::{self, Row};
 
@@ -37,10 +35,11 @@ pub fn list_objects(conn: &rusqlite::Connection, schema: &str) -> Result<Vec<Obj
 }
 
 pub fn describe_table(conn: &rusqlite::Connection, schema: &str, name: &str) -> Result<TableInfo> {
-    let object = list_objects(conn, schema)?
-        .into_iter()
-        .find(|o| o.name == name)
-        .ok_or_else(|| DriverError::Other(format!("{schema}.{name} does not exist")))?;
+    let (object, checks) = catalog::described_object(
+        schema,
+        name,
+        &query(conn, &catalog::described_object_sql(schema, name))?,
+    )?;
     let (mut table, to_primary_keys) = catalog::table(
         object,
         &query(conn, &catalog::columns_sql(schema, name))?,
@@ -55,6 +54,7 @@ pub fn describe_table(conn: &rusqlite::Connection, schema: &str, name: &str) -> 
             &catalog::primary_key_sql(schema, &referenced),
         )?);
     }
+    table.constraints.extend(checks);
     Ok(table)
 }
 

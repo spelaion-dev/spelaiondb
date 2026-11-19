@@ -126,7 +126,10 @@
       "notExposed": "Nada: no está expuesta a los agentes",
       "untrusted": "Nada: el proyecto no es de confianza",
       "noAgents": "Nada: este motor aún no admite agentes",
+      "restriction": "Restricción local",
+      "restrict": "Dar a los agentes acceso de solo lectura a {{name}}",
       "because": {
+        "connectionOverride": "Restricción local de MCP.",
         "allAgents": "El modo solo lectura está activado.",
         "connection": "La conexión es de solo lectura.",
         "writesDenied": "La conexión no deja escribir a los agentes.",

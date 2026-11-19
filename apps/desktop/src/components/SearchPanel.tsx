@@ -22,6 +22,7 @@ import {
 import { useCatalog, type CatalogSchema } from "../catalog";
 import { openTableData } from "../connect";
 import { type NameHit, schemasWithoutColumns, searchableTables, searchNames } from "../dbSearch";
+import { markCancelling } from "../searchRun";
 import { useApp } from "../store";
 import { openFound } from "./OpenObjectDialog";
 
@@ -319,8 +320,10 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
 
   function cancel() {
     if (!run?.running) return;
-    setRun({ ...run, cancelling: true });
-    void call(commands.cancelDataSearch(run.id)).catch(() => undefined);
+    const id = run.id;
+    // Applied to the run as it is by then: a search that ended since this render stays ended.
+    setRun((r) => markCancelling(r, id));
+    void call(commands.cancelDataSearch(id)).catch(() => undefined);
   }
 
   function toggle(schema: string, table: string) {

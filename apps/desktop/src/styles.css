@@ -2014,6 +2014,22 @@ select {
   left: 0;
   pointer-events: none;
 }
+.grid-select-all {
+  position: absolute;
+  inset: 0 auto auto 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.grid-select-all:hover,
+.grid-select-all:focus-visible {
+  color: var(--accent);
+  outline-offset: -2px;
+}
 .grid-scroller {
   position: absolute;
   inset: 0;
@@ -2892,6 +2908,9 @@ select {
 .modal.wizard.tunnel-editor {
   width: min(720px, 92vw);
   height: min(620px, 86vh);
+}
+.connection-form fieldset.plain-group {
+  margin: 0;
 }
 .connection-form fieldset.hop {
   position: relative;
@@ -4561,6 +4580,19 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .export-dialog .export-result {
   word-break: break-word;
 }
+/* The file's name and gzip (SDB-391): advanced, so it starts collapsed. */
+.export-dialog .export-file {
+  display: grid;
+  gap: var(--space-sm);
+}
+.export-dialog .export-file[open] {
+  padding-bottom: var(--space-xs);
+}
+.export-dialog .export-file summary {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  cursor: pointer;
+}
 
 /* Backup and restore dialog (BackupDialog.tsx, ADR-049). */
 .modal.backup-dialog {
@@ -5484,3 +5516,77 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .plugin-versions li { display: flex; align-items: center; gap: var(--space-md); }
 .plugin-actions { flex: none; display: flex; gap: var(--space-xs); }
 .missing-plugin { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-md); padding: var(--space-xs) 0; color: var(--fg); }
+
+/* A connection whose TLS does not check its server (SDB-395): in the form, the connection
+   test and the explorer's row. */
+.tls-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  margin: var(--space-xs) 0;
+  padding: var(--space-xs) var(--space-md);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  color: var(--warning-fg);
+  line-height: 1.5;
+}
+.tls-warning .icon {
+  flex: none;
+  margin-top: var(--space-2xs);
+}
+.tls-warning-test {
+  margin: 0 var(--space-2xl) var(--space-md);
+}
+.tls-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warning-fg);
+}
+
+/* "Read-only for this session" (SDB-395): shown in the tab's connection row; a click ends it. */
+.session-read-only {
+  height: var(--control-sm);
+  padding: 0 var(--space-sm);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+  color: var(--info-fg);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* A maintenance action's options (SDB-392), above its SQL. */
+.maintenance-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+/* A screen that failed to render (SDB-398): its panel stands where the screen was. */
+.screen-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-md);
+  margin: auto;
+  padding: var(--space-2xl);
+  max-width: 560px;
+  color: var(--fg);
+  overflow: auto;
+}
+.screen-failed[hidden] { display: none; }
+.screen-failed h2 { margin: 0; font-size: var(--text-lg); line-height: var(--leading-lg); font-weight: 600; }
+.screen-failed p { margin: 0; line-height: 1.5; }
+.screen-failed-error {
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+  color: var(--danger-fg);
+  overflow-wrap: anywhere;
+}
+.screen-failed-actions { display: flex; flex-wrap: wrap; gap: var(--space-md); }
+.screen-failed.sidebar { margin: 0; max-width: none; background: var(--sidebar); }
+.screen-failed-app { min-height: 100vh; justify-content: center; }
+/* What a launch from outside could not open (SDB-397): one line per item. */
+.launch-notice span { white-space: pre-line; }

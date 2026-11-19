@@ -36,6 +36,37 @@ pub struct Moved {
     pub password_moved: bool,
 }
 
+/// Resolves the connection identifier a move will use, checking for a conflicting file.
+pub fn connection_move_target(
+    config: &Config,
+    id: &ConnectionId,
+    folder: &str,
+) -> Result<ConnectionId, ResolveError> {
+    if config.connection(id).is_none() {
+        return Err(
+            ConfigError::new(Path::new(&id.to_string()), "the connection does not exist").into(),
+        );
+    }
+    let stem = id.path.rsplit('/').next().unwrap_or(&id.path);
+    let mut parts = folder_parts(folder)?;
+    parts.push(stem.to_owned());
+    let to = ConnectionId {
+        source: id.source,
+        path: parts.join("/"),
+    };
+    if &to != id {
+        let target = connections_dir(config, id.source)?.join(format!("{}.toml", to.path));
+        if config.connection(&to).is_some() || target.exists() {
+            return Err(ConfigError::new(
+                &target,
+                format!("that folder already has a connection file named {stem}.toml"),
+            )
+            .into());
+        }
+    }
+    Ok(to)
+}
+
 /// Moves a connection to `folder` (`""` for no folder, `prod/eu` for nested folders; each part
 /// is made a slug, as in the connection form), in the same layer. See the module
 /// documentation for its password and trust.
@@ -46,31 +77,19 @@ pub fn move_connection(
     folder: &str,
     backend: &dyn SecretBackend,
 ) -> Result<Moved, ResolveError> {
-    let entry = config.connection(id).ok_or_else(|| {
-        ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
-    })?;
-    let stem = id.path.rsplit('/').next().unwrap_or(&id.path).to_string();
-    let mut parts = folder_parts(folder)?;
-    parts.push(stem.clone());
-    let to = ConnectionId {
-        source: id.source,
-        path: parts.join("/"),
-    };
+    let to = connection_move_target(config, id, folder)?;
     if &to == id {
         return Ok(Moved {
             id: to,
             password_moved: false,
         });
     }
+    let entry = config
+        .connection(id)
+        .expect("the move target checked the source");
+    let stem = id.path.rsplit('/').next().unwrap_or(&id.path);
     let dir = connections_dir(config, id.source)?;
     let target = dir.join(format!("{}.toml", to.path));
-    if config.connection(&to).is_some() || target.exists() {
-        return Err(ConfigError::new(
-            &target,
-            format!("that folder already has a connection file named {stem}.toml"),
-        )
-        .into());
-    }
 
     // The file as it was loaded, byte for byte: one changed on disk since is not moved.
     let source = &entry.file_path;

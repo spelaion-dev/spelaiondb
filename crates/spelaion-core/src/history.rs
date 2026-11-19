@@ -40,6 +40,9 @@ pub enum HistoryError {
     /// Copy defaults whose text could not be read back (SDB-388): nothing was saved.
     #[error("{0}")]
     CopyOptions(String),
+    /// Export defaults an export would refuse (SDB-66): nothing was saved.
+    #[error("{0}")]
+    ExportOptions(String),
     #[error("could not start query history: {0}")]
     Start(#[source] std::io::Error),
     #[error("unsupported language; expected system, en or es")]
@@ -141,6 +144,17 @@ enum Request {
     GetInterfaceSize {
         reply: Reply<u16>,
     },
+    GetRecentFolders {
+        reply: Reply<Vec<String>>,
+    },
+    AddRecentFolder {
+        path: String,
+        reply: Reply<()>,
+    },
+    ForgetRecentFolder {
+        path: String,
+        reply: Reply<bool>,
+    },
     SetInterfaceSize {
         size: u16,
         reply: Reply<()>,
@@ -199,6 +213,13 @@ enum Request {
     },
     SetCopy {
         preferences: spelaion_store::CopyPreferences,
+        reply: Reply<()>,
+    },
+    GetExport {
+        reply: Reply<spelaion_store::ExportPreferences>,
+    },
+    SetExport {
+        preferences: spelaion_store::ExportPreferences,
         reply: Reply<()>,
     },
     SetDisplay {
@@ -265,6 +286,23 @@ enum Request {
     },
     SetMcpReadOnly {
         read_only: bool,
+        reply: Reply<()>,
+    },
+    McpConnectionReadOnly {
+        workspace: String,
+        connection: String,
+        reply: Reply<bool>,
+    },
+    SetMcpConnectionReadOnly {
+        workspace: String,
+        connection: String,
+        read_only: bool,
+        reply: Reply<()>,
+    },
+    StageMcpConnectionMove {
+        workspace: String,
+        from: String,
+        to: String,
         reply: Reply<()>,
     },
     SetMcpOutput {
@@ -413,6 +451,15 @@ impl QueryHistory {
                         Request::GetInterfaceSize { reply } => {
                             let _ = reply.send(store.get_interface_size());
                         }
+                        Request::GetRecentFolders { reply } => {
+                            let _ = reply.send(store.recent_folders());
+                        }
+                        Request::AddRecentFolder { path, reply } => {
+                            let _ = reply.send(store.add_recent_folder(&path));
+                        }
+                        Request::ForgetRecentFolder { path, reply } => {
+                            let _ = reply.send(store.forget_recent_folder(&path));
+                        }
                         Request::SetInterfaceSize { size, reply } => {
                             let _ = reply.send(store.set_interface_size(size));
                         }
@@ -468,6 +515,12 @@ impl QueryHistory {
                         }
                         Request::SetCopy { preferences, reply } => {
                             let _ = reply.send(store.set_copy_preferences(&preferences));
+                        }
+                        Request::GetExport { reply } => {
+                            let _ = reply.send(store.get_export_preferences());
+                        }
+                        Request::SetExport { preferences, reply } => {
+                            let _ = reply.send(store.set_export_preferences(&preferences));
                         }
                         Request::SetDisplay { preferences, reply } => {
                             let _ = reply.send(store.set_display_preferences(&preferences));
@@ -533,6 +586,35 @@ impl QueryHistory {
                         }
                         Request::SetMcpReadOnly { read_only, reply } => {
                             let _ = reply.send(store.set_mcp_read_only(read_only));
+                        }
+                        Request::McpConnectionReadOnly {
+                            workspace,
+                            connection,
+                            reply,
+                        } => {
+                            let _ =
+                                reply.send(store.mcp_connection_read_only(&workspace, &connection));
+                        }
+                        Request::SetMcpConnectionReadOnly {
+                            workspace,
+                            connection,
+                            read_only,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.set_mcp_connection_read_only(
+                                &workspace,
+                                &connection,
+                                read_only,
+                            ));
+                        }
+                        Request::StageMcpConnectionMove {
+                            workspace,
+                            from,
+                            to,
+                            reply,
+                        } => {
+                            let _ =
+                                reply.send(store.stage_mcp_connection_move(&workspace, &from, &to));
                         }
                         Request::SetMcpOutput { format, reply } => {
                             let _ = reply.send(store.set_mcp_output_format(format));
@@ -836,6 +918,25 @@ impl QueryHistory {
             .await
     }
 
+    /// The folders opened most recently (SDB-397), newest first.
+    pub async fn recent_folders(&self) -> Result<Vec<String>, HistoryError> {
+        self.request(|reply| Request::GetRecentFolders { reply })
+            .await
+    }
+
+    /// Puts a folder first in the recent folders; the store refuses what is not a path.
+    pub async fn add_recent_folder(&self, path: String) -> Result<(), HistoryError> {
+        self.request(|reply| Request::AddRecentFolder { path, reply })
+            .await
+    }
+
+    /// Takes a folder out of the recent folders (never touching the folder); whether it was
+    /// there.
+    pub async fn forget_recent_folder(&self, path: String) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::ForgetRecentFolder { path, reply })
+            .await
+    }
+
     /// Saves the interface size; the store refuses anything but one of its steps.
     pub async fn set_interface_size(&self, size: u16) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetInterfaceSize { size, reply })
@@ -1025,6 +1126,25 @@ impl QueryHistory {
             .await
     }
 
+    /// The export dialog's defaults (SDB-66): what the last export chose. What was saved is
+    /// read leniently: a part this version cannot use is its default.
+    pub async fn export_defaults(&self) -> Result<crate::ExportDefaults, HistoryError> {
+        let saved = self.request(|reply| Request::GetExport { reply }).await?;
+        Ok(crate::ExportDefaults::from_saved(&saved))
+    }
+
+    /// Saves the export dialog's defaults, after checking them (`ExportDefaults::check`):
+    /// options an export would refuse are refused here too and nothing changes.
+    pub async fn set_export_defaults(
+        &self,
+        defaults: crate::ExportDefaults,
+    ) -> Result<(), HistoryError> {
+        defaults.check().map_err(HistoryError::ExportOptions)?;
+        let preferences = defaults.to_saved();
+        self.request(|reply| Request::SetExport { preferences, reply })
+            .await
+    }
+
     /// How the result grid draws its cells (zebra rows, NULL, booleans).
     pub async fn grid_preferences(&self) -> Result<GridPreferences, HistoryError> {
         self.request(|reply| Request::GetGrid { reply }).await
@@ -1085,6 +1205,49 @@ impl QueryHistory {
     pub async fn set_mcp_read_only(&self, read_only: bool) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetMcpReadOnly { read_only, reply })
             .await
+    }
+
+    pub async fn mcp_connection_read_only(
+        &self,
+        workspace: String,
+        connection: String,
+    ) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::McpConnectionReadOnly {
+            workspace,
+            connection,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn set_mcp_connection_read_only(
+        &self,
+        workspace: String,
+        connection: String,
+        read_only: bool,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetMcpConnectionReadOnly {
+            workspace,
+            connection,
+            read_only,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn stage_mcp_connection_move(
+        &self,
+        workspace: String,
+        from: String,
+        to: String,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::StageMcpConnectionMove {
+            workspace,
+            from,
+            to,
+            reply,
+        })
+        .await
     }
 
     pub async fn set_mcp_output_format(&self, format: ToolOutput) -> Result<(), HistoryError> {
@@ -2911,6 +3074,63 @@ mod tests {
         let reopened = QueryHistory::open(path).unwrap();
         assert_eq!(reopened.theme().await.unwrap(), "dark");
         assert_eq!(reopened.language().await.unwrap(), "es");
+    }
+
+    #[tokio::test]
+    async fn export_defaults_are_checked_and_survive_a_reopen() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "spelaion-core-export-defaults-{}-{nonce}/state.db",
+            std::process::id()
+        ));
+        let history = QueryHistory::open(path.clone()).unwrap();
+        assert_eq!(
+            history.export_defaults().await.unwrap(),
+            crate::ExportDefaults::default()
+        );
+        let chosen = crate::ExportDefaults {
+            format: crate::ExportFileFormat::Parquet,
+            header: false,
+            csv: crate::CsvOptions {
+                delimiter: '|',
+                null_text: "(null)".into(),
+                escape_formulas: false,
+            },
+            encoding: crate::TextEncoding::Utf16Le,
+            gzip: true,
+            names: crate::FileNamePattern {
+                pattern: "{table}_{date}".into(),
+                timestamp_format: "%Y".into(),
+            },
+            sql: crate::SqlOptions {
+                rows_per_insert: 1000,
+                ..crate::SqlOptions::default()
+            },
+            json: crate::JsonOptions {
+                iso_dates: true,
+                json_as_json: true,
+            },
+        };
+        history.set_export_defaults(chosen.clone()).await.unwrap();
+        // Options an export would refuse are not saved, and nothing of them is kept.
+        let refused = crate::ExportDefaults {
+            names: crate::FileNamePattern {
+                pattern: "{owner}".into(),
+                ..chosen.names.clone()
+            },
+            format: crate::ExportFileFormat::Json,
+            ..chosen.clone()
+        };
+        assert!(matches!(
+            history.set_export_defaults(refused).await,
+            Err(HistoryError::ExportOptions(_))
+        ));
+        drop(history);
+        let reopened = QueryHistory::open(path).unwrap();
+        assert_eq!(reopened.export_defaults().await.unwrap(), chosen);
     }
 
     #[tokio::test]

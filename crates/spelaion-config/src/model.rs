@@ -28,6 +28,9 @@ pub struct ConnectionFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub engine: Engine,
+    /// A named protocol-compatible server chosen in the picker. For display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_kind: Option<String>,
     /// Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type
     /// in `connection-types.toml`; its badge and safeguards apply. Any other text is a plain
     /// label with no behaviour.
@@ -89,6 +92,24 @@ pub struct ConnectionFile {
     pub statement_timeout: Option<u32>,
     #[serde(default, skip_serializing_if = "TlsConfig::is_default")]
     pub tls: TlsConfig,
+    /// PostgreSQL only: a connection pooler such as PgBouncer stands between the app and the
+    /// server (SDB-396). `transaction` (its transaction mode): each transaction may run on
+    /// another server connection, so no prepared statement and no session state is relied on;
+    /// what is session state cannot be kept and is refused (`[session]`, `read_only`) or says
+    /// so (the editor's schema). `session`: as a direct connection. Direct when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pooler: Option<PoolerMode>,
+    /// MySQL and MariaDB only: allow the `mysql_clear_password` authentication plugin, which
+    /// bastions such as Warpgate ask for (SDB-396). The password then travels as it is: the
+    /// core refuses to connect unless TLS is verified (`verify-ca` or `verify-full`) or the
+    /// connection goes through an SSH tunnel.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cleartext_password: bool,
+    /// The databases the explorer and the database picker show (SDB-396), by name; all when
+    /// absent. MySQL, MariaDB, SQL Server and the engines whose tabs choose a database. At
+    /// most 500 names, of up to 128 characters each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub databases: Option<Vec<String>>,
     /// How every new session starts (ADR-037): setup statements, the default schema and the
     /// isolation level, applied each time a session opens (reconnecting included).
     #[serde(default, skip_serializing_if = "SessionConfig::is_default")]
@@ -132,7 +153,52 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// How a PostgreSQL pooler hands out server connections (SDB-396).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolerMode {
+    /// A server connection for the whole session: as a direct connection.
+    Session,
+    /// A server connection for each transaction (PgBouncer's transaction mode).
+    Transaction,
+}
+
+impl PoolerMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PoolerMode::Session => "session",
+            PoolerMode::Transaction => "transaction",
+        }
+    }
+}
+
+/// The most databases a connection's `databases` list names.
+pub const MAX_SHOWN_DATABASES: usize = 500;
+/// The longest database name it accepts, in characters.
+pub const MAX_DATABASE_NAME: usize = 128;
+
+/// Base engine for a picker kind. This is presentation metadata, never a server capability.
+pub fn engine_kind_base(kind: &str) -> Option<Engine> {
+    match kind {
+        "tidb" | "oceanbase" | "singlestore" | "greptimedb" => Some(Engine::Mysql),
+        "cockroachdb" | "yugabytedb" | "timescaledb" => Some(Engine::Postgres),
+        "influxdb" => Some(Engine::Flightsql),
+        "valkey" => Some(Engine::Redis),
+        "scylladb" => Some(Engine::Cassandra),
+        _ => None,
+    }
+}
+
 impl ConnectionFile {
+    /// Identifier used by the engine-mark catalogue.
+    pub fn engine_mark(&self) -> &str {
+        if self.file_folder {
+            "file-folder"
+        } else {
+            self.engine_kind.as_deref().unwrap_or(self.engine.as_str())
+        }
+    }
+
     /// What the connection form suggests for new connections.
     pub const SUGGESTED_KEEPALIVE: u32 = 300;
     /// Longest keep-alive interval accepted: a day.
@@ -313,6 +379,40 @@ impl Engine {
             | Engine::Cassandra
             | Engine::Tdengine
             | Engine::Neo4j
+            | Engine::Elasticsearch
+            | Engine::Opensearch
+            | Engine::Solr
+            | Engine::Meilisearch => false,
+        }
+    }
+
+    /// Whether a tab of the engine chooses its database from the server's list (MySQL,
+    /// MariaDB, SQL Server): what a connection's `databases` narrows (SDB-396).
+    pub fn chooses_databases(self) -> bool {
+        match self {
+            Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => true,
+            Engine::Postgres
+            | Engine::Sqlite
+            | Engine::Duckdb
+            | Engine::Mongodb
+            | Engine::Clickhouse
+            | Engine::Redis
+            | Engine::Trino
+            | Engine::Presto
+            | Engine::Oracle
+            | Engine::Libsql
+            | Engine::Cassandra
+            | Engine::Tdengine
+            | Engine::Flightsql
+            | Engine::Dremio
+            | Engine::Gizmosql
+            | Engine::Neo4j
+            | Engine::Hive
+            | Engine::Spark
+            | Engine::Kyuubi
+            | Engine::Impala
+            | Engine::Databend
+            | Engine::Spanner
             | Engine::Elasticsearch
             | Engine::Opensearch
             | Engine::Solr

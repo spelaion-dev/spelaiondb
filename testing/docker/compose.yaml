@@ -23,9 +23,10 @@
 # (TCPS on 12484), libSQL on 18095, GizmoSQL on 31337, Neo4j on 17474, Hive on 11010, Databend
 # on 18320, Spanner's emulator on 19021 and InfluxDB 3 on 18181, for tests without SSH. The proxies are on 11080 (SOCKS5) and 13128 (HTTP).
 # MongoDB, whose language is not SQL (ADR-056), is on 27017.
+# PgBouncer in transaction mode, in front of that PostgreSQL, is on 16432 (SDB-396).
 name: spelaion-test
 
-# The default phase's limits total 11,520 MiB; Trino/Presto/Hive run separately with bastions.
+# The default phase's limits total 11,536 MiB; Trino/Presto/Hive run separately with bastions.
 # check-memory.py enforces an 11.5 GiB ceiling for each active phase and
 # 4 GB left on the CI host for kind, the compiler/tests and the operating system.
 # Keep engine caches below their container limit: a cgroup cap alone just moves an OOM.
@@ -83,6 +84,27 @@ services:
       retries: 30
     # "direct" only exists to publish the port: Docker does not publish ports of containers
     # that are only on internal networks. No bastion is on it.
+    networks: [data, direct]
+
+  # PgBouncer in transaction mode in front of `postgres` (SDB-396), as hard on a client as a
+  # pooler can be (see pgbouncer/pgbouncer.ini): no prepared statements kept for the client,
+  # and each transaction on the server connection used least recently. Plain TCP, as most
+  # poolers are reached inside a network.
+  pgbouncer:
+    mem_limit: 16m
+    image: edoburu/pgbouncer:v1.24.1-p1
+    volumes:
+      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    ports:
+      - "127.0.0.1:16432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6432"]
+      interval: 2s
+      retries: 30
     networks: [data, direct]
 
   # MySQL 8.4 LTS and MariaDB 11.4 LTS with TLS (not required). Like PostgreSQL, the key is

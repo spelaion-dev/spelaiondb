@@ -53,7 +53,20 @@
     "missingShort": "no está",
     "forget": "Quitar {{name}} de los archivos recientes"
   },
+  "screenFailed": {
+    "title": "Esta pantalla ha dejado de funcionar",
+    "body": "El resto de SpelaionDB sigue funcionando. Vuelve a cargar esta pantalla para intentarlo de nuevo. Para contárnoslo, copia el informe y pégalo en una incidencia de GitHub.",
+    "reload": "Volver a cargar esta pantalla",
+    "copy": "Copiar informe",
+    "report": "Abrir una incidencia en GitHub",
+    "privacy": "El informe contiene la versión, el sistema, los plugins, el error y las últimas líneas del registro de la app, con los nombres, servidores, usuarios, rutas y secretos ocultos. SpelaionDB no envía nada: lo pegas tú.",
+    "copied": "Informe copiado: pégalo en la incidencia.",
+    "copyError": "No se pudo copiar el informe: {{detail}}",
+    "openError": "No se pudo abrir el navegador: {{detail}}"
+  },
   "commands": {
+    "copyDiagnostics": "Copiar información de diagnóstico",
+    "openIssue": "Abrir una incidencia en GitHub",
     "categories": {
       "general": "General",
       "tab": "Pestaña",
@@ -86,6 +99,7 @@
     "results": "Comandos y objetos",
     "connection": "Conexión",
     "recentFile": "Archivo reciente",
+    "recentFolder": "Carpeta reciente",
     "hint": "Comandos, conexiones, archivos recientes y los objetos que ha cargado el explorador. Intro lo ejecuta.",
     "actionHint": "Intro ejecuta la acción; Escape vuelve atrás.",
     "nothing": "Ningún comando ni objeto coincide. Los objetos aparecen al abrir su esquema en el explorador.",

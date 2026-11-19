@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/spelaion-dev/spelaiondb"
@@ -26,6 +26,8 @@ spelaion-https = { path = "crates/spelaion-https" }
 
 anyhow = "1"
 arrow = { version = "60", default-features = false, features = ["ipc"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "flate2", "flate2-rust_backend"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 async-trait = "0.1"
 futures-util = "0.3"
 insta = "1"

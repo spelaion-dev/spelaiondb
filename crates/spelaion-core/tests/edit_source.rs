@@ -415,3 +415,48 @@ async fn rows_read_across_a_use_are_not_editable() {
     );
     run("sqlserver", &session, "drop table edit_source_batch").await;
 }
+
+#[tokio::test]
+async fn mysql_keeps_the_database_context_after_writes_with_backslashes() {
+    for (label, var, driver) in [
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
+    ] {
+        let Some((host, port)) = server(var) else {
+            continue;
+        };
+        let conn = driver
+            .connect(&login(&host, port, "spelaion", "spelaion", "spelaion"))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: connecting: {e}"));
+        let session = Session::new(
+            conn,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
+        run(
+            label,
+            &session,
+            "create temporary table edit_source_backslashes (name varchar(100))",
+        )
+        .await;
+        for sql in [
+            "set sql_mode = ''",
+            r"insert into edit_source_backslashes values ('O''Brien \\ back')",
+            "set sql_mode = 'NO_BACKSLASH_ESCAPES'",
+            r"insert into edit_source_backslashes values ('trailing\')",
+        ] {
+            run(label, &session, sql).await;
+            assert_eq!(
+                session
+                    .connection()
+                    .database_context()
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("spelaion"),
+                "{label}: {sql}",
+            );
+        }
+    }
+}

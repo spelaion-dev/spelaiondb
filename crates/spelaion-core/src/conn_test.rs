@@ -1,6 +1,6 @@
 //! The connection test (ADR-032): opens a connection one step at a time (reading the
 //! configuration, the proxy, each SSH hop, the Kubernetes forward, reaching the database's
-//! address, logging in) and says which step failed, what kind of failure it was and what to
+//! address, logging in, applying session setup) and says which step failed, what kind of failure it was and what to
 //! try. A test opens its own tunnel, never a shared one, closes everything it opened when it
 //! ends or is stopped, and retries nothing.
 //!
@@ -22,17 +22,18 @@ use spelaion_ssh::{
     TunnelStage,
 };
 
-use crate::Engines;
 use crate::kube::{KubeError, KubeTunnel};
 use crate::open::{
-    OpenError, connect_driver, remote_sqlite, target, team_known_hosts, tunnel_spec,
-    typed_tunnel_spec,
+    OpenError, connect_driver, finish_session_setup, remote_sqlite, target, team_known_hosts,
+    tunnel_spec, typed_tunnel_spec,
 };
+use crate::session_setup::{SetupError, needs_session_setup, setup_is_restricted};
+use crate::{Engines, ResultStore, Session};
 
 /// How far a connection test goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestScope {
-    /// Every step, logging in to the database at the end.
+    /// Every step, including login and any session setup.
     Full,
     /// The network only: up to reaching the database's address, without logging in.
     Network,
@@ -80,6 +81,8 @@ pub enum StepKind {
         user: String,
         file: bool,
     },
+    /// Applying the connection's session settings and setup statements.
+    SessionSetup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +269,7 @@ impl TestStep {
                 title
             }
             StepKind::Target { host, port } => format!("Reach {host}:{port}"),
+            StepKind::SessionSetup => "Session setup".into(),
             StepKind::Database {
                 engine,
                 database,
@@ -481,6 +485,7 @@ struct Plan {
     kubernetes: Option<usize>,
     target: Option<usize>,
     database: Option<usize>,
+    session_setup: Option<usize>,
 }
 
 /// Where a tunnel's proxy and hops are in the list.
@@ -578,12 +583,19 @@ impl Plan {
             });
             steps.len() - 1
         });
+        let session_setup = (database.is_some()
+            && needs_session_setup(resolved, resolved.engine.as_str()))
+        .then(|| {
+            steps.push(StepKind::SessionSetup);
+            steps.len() - 1
+        });
         Self {
             steps,
             tunnel,
             kubernetes,
             target,
             database,
+            session_setup,
         }
     }
 }
@@ -675,7 +687,7 @@ async fn connection_steps(
             format!("engine not available: {}", resolved.engine.as_str()),
         )
     })?;
-    let connection = connect_driver(driver.as_ref(), resolved.engine, &params)
+    let connection = connect_driver(driver.as_ref(), resolved, &params)
         .await
         .map_err(|e| open_failure(&e))?;
     let version = connection
@@ -702,8 +714,20 @@ async fn connection_steps(
             .await
             .map_err(|message| (FailureKind::Other, message))?;
     }
-    drop(connection);
     run.ok_running();
+    if let Some(step) = plan.session_setup {
+        run.start(step);
+        let dialect = crate::dialect_of(resolved.engine).ok_or_else(|| {
+            open_failure(&OpenError::UnknownEngine(resolved.engine.as_str().into()))
+        })?;
+        let session = Session::new(connection, dialect, Arc::new(ResultStore::new()))
+            .with_read_only(resolved.params.read_only)
+            .with_masking(crate::masking::MaskPolicy::new(&resolved.masking));
+        finish_session_setup(&session, resolved, setup_is_restricted(resolved))
+            .await
+            .map_err(|error| open_failure(&error))?;
+        run.ok_running();
+    }
     Ok(Some(version))
 }
 
@@ -887,7 +911,9 @@ fn driver_failure(error: &DriverError) -> Failure {
 fn open_failure(error: &OpenError) -> Failure {
     match error {
         OpenError::Driver(e) => driver_failure(e),
-        OpenError::Timeout { .. } => (FailureKind::Timeout, error.to_string()),
+        OpenError::Timeout { .. } | OpenError::Setup(SetupError::Timeout { .. }) => {
+            (FailureKind::Timeout, error.to_string())
+        }
         OpenError::Tunnel(e) => ssh_failure(e),
         OpenError::Kube(e) => (classify_kube(e), error.to_string()),
         OpenError::PasswordRequired { save_to: Some(_) } => {
@@ -897,10 +923,10 @@ fn open_failure(error: &OpenError) -> Failure {
             (FailureKind::PasswordRequired, error.to_string())
         }
         OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
-        // The test logs in without the session setup; only an opened session runs it.
-        OpenError::Setup(_) | OpenError::NoReadOnlyBarrier(_) | OpenError::FileFolder(_) => {
-            (FailureKind::Other, error.to_string())
-        }
+        OpenError::Setup(_)
+        | OpenError::NoReadOnlyBarrier(_)
+        | OpenError::FileFolder(_)
+        | OpenError::Cleartext(_) => (FailureKind::Other, error.to_string()),
     }
 }
 
@@ -1205,6 +1231,7 @@ impl Redactor {
         let text = |s: &String| self.redact(s);
         let kind = match &step.kind {
             StepKind::Resolve => StepKind::Resolve,
+            StepKind::SessionSetup => StepKind::SessionSetup,
             StepKind::Proxy {
                 proxy_type,
                 host,

@@ -34,7 +34,8 @@
     "session": "Defaults",
     "setup": "Setup statements",
     "onThisComputer": "On this computer",
-    "masking": "Column masking"
+    "masking": "Column masking",
+    "databases": "Databases shown"
   },
   "fields": {
     "name": "Name",
@@ -136,14 +137,21 @@
     "isolationHint": "The isolation level of every transaction in new sessions. Auto-commit and manual commit come from the connection type.",
     "sessionSetup": "Run when a session opens",
     "ignoreSetupErrors": "Ignore errors in these statements",
-    "sessionSetupHint": "Run on every new session, before anything else, including after a reconnect. They are not your queries: they are not in the history and nothing you ran is run again.",
+    "sessionSetupHint": "Run when testing a full connection and when opening a new session, including after a reconnect. They are not your queries: they are not in the history and nothing you ran is run again.",
     "sessionSetupRestricted": "On this connection they may only read and change session settings (search path, time zone, role…): a statement that writes stops the session from opening.",
     "maskAlways": "Mask these columns",
     "maskAlwaysPlaceholder": "*password*\nemail\ncard_*",
     "maskNever": "Leave these columns visible",
     "maskNeverPlaceholder": "email_verified",
     "maskTypeRequires": "The {{type}} type always masks: {{patterns}}.",
-    "maskingHint": "One pattern per line, ignoring case: * is any characters, ? one. A pattern matches a column's name or the table column it reads; table.column names the table too. Masked values show as •••••• in the grid, copies, exports, statistics and agents' answers; you can reveal one cell at a time. \"Leave visible\" exempts your own patterns here, never a connection type's. Masking keeps values off the screen, not away from SQL: an expression such as lower(email) gets past it, and so does an alias on SQL Server, DuckDB and SQLite on a server. Use the database's permissions to keep data from people."
+    "maskingHint": "One pattern per line, ignoring case: * is any characters, ? one. A pattern matches a column's name or the table column it reads; table.column names the table too. Masked values show as •••••• in the grid, copies, exports, statistics and agents' answers; you can reveal one cell at a time. \"Leave visible\" exempts your own patterns here, never a connection type's. Masking keeps values off the screen, not away from SQL: an expression such as lower(email) gets past it, and so does an alias on SQL Server, DuckDB and SQLite on a server. Use the database's permissions to keep data from people.",
+    "pooler": "Pooler",
+    "cleartextPassword": "Allow the cleartext password plugin (mysql_clear_password)",
+    "cleartextPasswordHint": "Some proxies and LDAP or PAM logins ask for it. It sends the password as it is typed, so the connection opens only over TLS that checks the server's certificate (either “Verify” choice) or through a network profile with SSH hops.",
+    "cleartextPasswordRoute": "As it is, this connection would not open: choose one of the “Verify” choices on the SSL tab, or connect through a network profile with SSH hops.",
+    "databases": "Show only these databases",
+    "databasesPlaceholder": "All databases",
+    "databasesHint": "One name per line, ignoring case. Empty: all of them. The connection's own database is always shown. This only hides the others from the explorer, the database picker and agents' lists: a statement can still use them, as the server allows."
   },
   "tls": {
     "disable": "Disabled",
@@ -183,6 +191,7 @@
       "kubernetes": "Kubernetes port-forward to {{resource}}",
       "target": "Reach {{host}}:{{port}}",
       "database": "Log in to {{engine}} database {{database}} as {{user}}",
+      "sessionSetup": "Session setup",
       "databaseNoName": "Log in to {{engine}} as {{user}}",
       "file": "Open the {{engine}} file {{database}}",
       "ssm": "AWS SSM session through {{target}}",
@@ -365,8 +374,7 @@
     "unsupported": "This app has no driver for that database yet."
   },
   "importer": {
-    "or": "Or bring your connections from another client:",
-    "button": "Import from {{client}}…",
+    "open": "Import connections from another client…",
     "title": "Import from {{client}}",
     "from": "From",
     "defaultFolder": "{{client}}'s folders",
@@ -519,5 +527,25 @@
     "repeatable-read": "Repeatable read",
     "serializable": "Serializable",
     "snapshot": "Snapshot"
+  },
+  "tlsWarning": {
+    "unverified": "TLS mode “{{mode}}” does not check the server's certificate: anyone on the network between you and {{host}} could read or impersonate it. Use verify-full to check it.",
+    "unencrypted": "TLS is off: everything sent to {{host}}, the password included, crosses the network unencrypted.",
+    "unverifiedTunneled": "Through the tunnel, TLS mode “{{mode}}” does not check {{host}}'s certificate on the last stretch, from the tunnel's end to the server.",
+    "unencryptedTunneled": "Through the tunnel, the last stretch to {{host}}, from the tunnel's end to the server, is not encrypted."
+  },
+  "control": {
+    "disconnectAll": "Disconnect all",
+    "disconnectOthers": "Disconnect all others",
+    "disconnectOthersHere": "Disconnect all others"
+  },
+  "pooler": {
+    "none": "None: a direct connection",
+    "session": "PgBouncer in session mode",
+    "transaction": "PgBouncer in transaction mode",
+    "hint": "In session mode a pooler keeps one server connection for the whole session, so everything works as on a direct connection.",
+    "transactionHint": "In transaction mode each transaction may run on another server connection: SpelaionDB uses no prepared statements, and the session has no defaults, setup statements, schema of its own or read-only mode.",
+    "noSession": "This connection goes through a pooler in transaction mode, which keeps no session settings: these are not saved. Qualify names with their schema, or set what you need inside each transaction.",
+    "noReadOnly": "Not available through a pooler in transaction mode: the session's read-only mode would hold for one transaction only. Use a read-only database user, or connect through the pooler in session mode."
   }
 }

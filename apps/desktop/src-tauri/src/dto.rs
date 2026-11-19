@@ -526,6 +526,8 @@ pub struct EditableColumnItem {
 #[serde(rename_all = "camelCase")]
 pub struct TableStructureItem {
     pub columns: Vec<EditableColumnItem>,
+    /// The table's comment (SDB-393).
+    pub comment: Option<String>,
     pub comments: bool,
     pub transactional: bool,
     pub rebuilds: bool,
@@ -546,6 +548,7 @@ impl From<spelaion_core::TableStructure> for TableStructureItem {
                     generated: c.generated,
                 })
                 .collect(),
+            comment: structure.comment,
             comments: structure.comments,
             transactional: structure.transactional,
             rebuilds: structure.rebuilds,
@@ -584,6 +587,9 @@ pub struct TableAlterationItem {
     pub table: String,
     pub columns: Vec<ColumnEditItem>,
     pub drop: Vec<DroppedConstraintItem>,
+    /// The table's comment as the form holds it (null or empty: none); the core changes it only
+    /// when it differs from the catalog's (SDB-393).
+    pub comment: Option<String>,
 }
 
 impl From<TableAlterationItem> for spelaion_core::TableAlteration {
@@ -614,6 +620,7 @@ impl From<TableAlterationItem> for spelaion_core::TableAlteration {
                     }
                 })
                 .collect(),
+            comment: Some(item.comment),
         }
     }
 }
@@ -1444,6 +1451,8 @@ pub struct ConnectionItem {
     /// Short labels to find the connection; filtered on in the explorer.
     pub tags: Vec<String>,
     pub engine: String,
+    /// Presentation identifier. The base engine still drives commands.
+    pub engine_mark: String,
     pub env: Option<String>,
     /// The type `env` names (ADR-029); `None` for no label or a plain one.
     pub kind: Option<ConnectionTypeItem>,
@@ -1458,6 +1467,11 @@ pub struct ConnectionItem {
     /// Whether its engine is queried with SQL. One that is not (ADR-056) is read by the core in
     /// its own language: what the app writes SQL for is not offered on it.
     pub sql: bool,
+    /// Its TLS does not check its server (SDB-395), from the file as written.
+    pub tls_warning: Option<TlsWarningItem>,
+    /// PostgreSQL behind a pooler (SDB-396): in transaction mode a session has no schema of
+    /// its own, so the editor's schema picker is off.
+    pub pooler: Option<PoolerItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -1699,6 +1713,22 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
     }
 }
 
+/// A session made from another one (SDB-426).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FromSessionOutcome {
+    Connected {
+        server_version: String,
+    },
+    /// The connection was edited since the source session opened and the new session needs
+    /// the user (a password for another login, trust, variables): connect as a new tab does.
+    ConnectAgain,
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(
     tag = "kind",
@@ -1708,6 +1738,7 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
 pub enum ConnectOutcome {
     Connected {
         server_version: String,
+        engine_mark: Option<String>,
         /// Session setup statements that failed and were skipped (ADR-037): the connection
         /// ignores setup errors, and the tab says which.
         setup_skipped: Vec<SkippedSetupItem>,
@@ -2550,6 +2581,142 @@ impl From<KeyDirectionItem> for spelaion_core::KeyDirection {
 }
 
 /// A foreign key seen from a table: its own (outgoing) or another table's that points to it
+/// A property of a relation from the catalog (SDB-393): `name` is one of the driver contract's
+/// `property` names (`owner`, `tablespace`, `engine`…) or the engine's own word.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectPropertyItem {
+    pub name: String,
+    pub value: String,
+}
+
+impl From<spelaion_driver_api::ObjectProperty> for ObjectPropertyItem {
+    fn from(p: spelaion_driver_api::ObjectProperty) -> Self {
+        Self {
+            name: p.name,
+            value: p.value,
+        }
+    }
+}
+
+/// A relation's comment and its properties (SDB-393).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectPropertiesItem {
+    pub comment: Option<String>,
+    pub properties: Vec<ObjectPropertyItem>,
+}
+
+/// How a table is partitioned, and its partitions (SDB-393).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitioningItem {
+    pub method: String,
+    pub key: String,
+    pub partitions: Vec<PartitionItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionItem {
+    pub schema: String,
+    pub name: String,
+    pub bound: Option<String>,
+    pub estimated_rows: Option<f64>,
+    pub subpartitioned: bool,
+}
+
+impl From<spelaion_driver_api::Partitioning> for PartitioningItem {
+    fn from(p: spelaion_driver_api::Partitioning) -> Self {
+        Self {
+            method: p.method,
+            key: p.key,
+            partitions: p
+                .partitions
+                .into_iter()
+                .map(|part| PartitionItem {
+                    schema: part.schema,
+                    name: part.name,
+                    bound: part.bound,
+                    estimated_rows: part.estimated_rows.map(|n| n as f64),
+                    subpartitioned: part.subpartitioned,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What a dependency is.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum DependencyKindItem {
+    Table,
+    View,
+    MaterializedView,
+    Function,
+    Procedure,
+    Trigger,
+    ForeignKey,
+    Sequence,
+    Type,
+    Index,
+    Other,
+}
+
+impl From<spelaion_driver_api::DependencyKind> for DependencyKindItem {
+    fn from(kind: spelaion_driver_api::DependencyKind) -> Self {
+        use spelaion_driver_api::DependencyKind as K;
+        match kind {
+            K::Table => Self::Table,
+            K::View => Self::View,
+            K::MaterializedView => Self::MaterializedView,
+            K::Function => Self::Function,
+            K::Procedure => Self::Procedure,
+            K::Trigger => Self::Trigger,
+            K::ForeignKey => Self::ForeignKey,
+            K::Sequence => Self::Sequence,
+            K::Type => Self::Type,
+            K::Index => Self::Index,
+            K::Other => Self::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencyItem {
+    pub schema: String,
+    pub name: String,
+    pub kind: DependencyKindItem,
+    pub detail: Option<String>,
+}
+
+/// What a relation uses and what uses it; `untracked` are the kinds the engine does not record
+/// (SDB-393).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DependenciesItem {
+    pub uses: Vec<DependencyItem>,
+    pub used_by: Vec<DependencyItem>,
+    pub untracked: Vec<DependencyKindItem>,
+}
+
+impl From<spelaion_driver_api::Dependencies> for DependenciesItem {
+    fn from(d: spelaion_driver_api::Dependencies) -> Self {
+        let item = |d: spelaion_driver_api::DependencyInfo| DependencyItem {
+            schema: d.schema,
+            name: d.name,
+            kind: d.kind.into(),
+            detail: d.detail,
+        };
+        Self {
+            uses: d.uses.into_iter().map(item).collect(),
+            used_by: d.used_by.into_iter().map(item).collect(),
+            untracked: d.untracked.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 /// (incoming). `schema` and `table` are the other table.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -3138,6 +3305,32 @@ impl From<spelaion_config::TlsModeConfig> for TlsModeItem {
     }
 }
 
+/// A PostgreSQL connection's pooler (SDB-396).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolerItem {
+    Session,
+    Transaction,
+}
+
+impl From<spelaion_config::PoolerMode> for PoolerItem {
+    fn from(mode: spelaion_config::PoolerMode) -> Self {
+        match mode {
+            spelaion_config::PoolerMode::Session => Self::Session,
+            spelaion_config::PoolerMode::Transaction => Self::Transaction,
+        }
+    }
+}
+
+impl From<PoolerItem> for spelaion_config::PoolerMode {
+    fn from(mode: PoolerItem) -> Self {
+        match mode {
+            PoolerItem::Session => Self::Session,
+            PoolerItem::Transaction => Self::Transaction,
+        }
+    }
+}
+
 /// What a pasted connection URL fills in the form. The password goes only to the form's
 /// password field, like a typed one.
 #[derive(Debug, Clone, Serialize, Type)]
@@ -3180,12 +3373,20 @@ pub struct ConnectionDraftItem {
     pub tags: Vec<String>,
     /// An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…).
     pub engine: String,
+    pub engine_kind: Option<String>,
     pub env: String,
     pub host: String,
     pub port: Option<u16>,
     pub database: String,
     /// DuckDB: `database` is a folder of CSV, TSV and Parquet files (SDB-316).
     pub file_folder: bool,
+    /// PostgreSQL behind a pooler (SDB-396); null for a direct connection.
+    pub pooler: Option<PoolerItem>,
+    /// MySQL and MariaDB: allow the cleartext password plugin (SDB-396). The core opens such a
+    /// connection only over a checked certificate or an SSH tunnel.
+    pub cleartext_password: bool,
+    /// The databases the connection shows (SDB-396); empty for all of them.
+    pub databases: Vec<String>,
     pub user: String,
     pub password_mode: PasswordMode,
     pub password_env: String,
@@ -3243,11 +3444,15 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             description: item.description,
             tags: item.tags,
             engine,
+            engine_kind: item.engine_kind,
             env: item.env,
             host: item.host,
             port: item.port,
             database: item.database,
             file_folder: item.file_folder,
+            pooler: item.pooler.map(Into::into),
+            cleartext_password: item.cleartext_password,
+            databases: item.databases,
             user: item.user,
             password: match item.password_mode {
                 PasswordMode::None => PasswordChoice::None,
@@ -3326,11 +3531,15 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             description: draft.description,
             tags: draft.tags,
             engine: draft.engine.as_str().into(),
+            engine_kind: draft.engine_kind,
             env: draft.env,
             host: draft.host,
             port: draft.port,
             database: draft.database,
             file_folder: draft.file_folder,
+            pooler: draft.pooler.map(Into::into),
+            cleartext_password: draft.cleartext_password,
+            databases: draft.databases,
             user: draft.user,
             password_mode,
             password_env,
@@ -3803,7 +4012,7 @@ impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
 }
 
 /// Text format to copy or export rows in.
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum TextFormat {
     Tsv,
@@ -3813,6 +4022,12 @@ pub enum TextFormat {
     Markdown,
     InList,
     Html,
+    /// Files only (SDB-391).
+    Ndjson,
+    Parquet,
+    ArrowIpc,
+    /// Files only (SDB-390).
+    Xlsx,
 }
 
 /// How column names are copied (see `spelaion_core::NameStyle`).
@@ -4977,6 +5192,8 @@ pub struct CellRange {
 pub enum ConnectionTestOutcome {
     Tested {
         report: TestReportItem,
+        /// The connection's TLS does not check its server (SDB-395), from its resolved form.
+        tls_warning: Option<TlsWarningItem>,
     },
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
@@ -4988,9 +5205,7 @@ pub enum ConnectionTestOutcome {
         root: String,
     },
     /// Personal `${user.…}` variables to ask for first (ADR-022).
-    MissingVariables {
-        names: Vec<String>,
-    },
+    MissingVariables { names: Vec<String> },
 }
 
 impl ConnectionTestOutcome {
@@ -5058,6 +5273,7 @@ impl From<&spelaion_core::TestStep> for TestStepItem {
         Self {
             kind: match &step.kind {
                 StepKind::Resolve => TestStepKindItem::Resolve,
+                StepKind::SessionSetup => TestStepKindItem::SessionSetup,
                 StepKind::Proxy {
                     proxy_type,
                     host,
@@ -5138,6 +5354,7 @@ impl From<&spelaion_core::TestStep> for TestStepItem {
 )]
 pub enum TestStepKindItem {
     Resolve,
+    SessionSetup,
     Proxy {
         proxy_type: String,
         host: String,
@@ -5420,6 +5637,7 @@ pub enum McpAccessKindItem {
 #[serde(rename_all = "camelCase")]
 pub enum McpReadOnlyReasonItem {
     AllAgents,
+    ConnectionOverride,
     Connection,
     WritesDenied,
     ConfirmUnsupported,
@@ -5439,6 +5657,9 @@ pub struct McpAccessItem {
     /// For a visible connection.
     pub access: Option<McpAccessKindItem>,
     pub reason: Option<McpReadOnlyReasonItem>,
+    /// Scope of the local write restriction and whether it was read successfully.
+    pub restriction_workspace: Option<String>,
+    pub read_only_override: Option<bool>,
     pub kind: Option<ConnectionTypeItem>,
 }
 
@@ -5447,6 +5668,8 @@ impl McpAccessItem {
         entry: &spelaion_config::ConnectionEntry,
         view: spelaion_core::AgentView,
         kind: Option<ConnectionTypeItem>,
+        restriction_workspace: Option<String>,
+        read_only_override: Option<bool>,
     ) -> Self {
         use spelaion_core::{AgentAccess, AgentView, ReadOnlyBecause};
         let (visibility, access, reason) = match view {
@@ -5465,6 +5688,9 @@ impl McpAccessItem {
                 Some(McpAccessKindItem::ReadOnly),
                 Some(match because {
                     ReadOnlyBecause::AllAgents => McpReadOnlyReasonItem::AllAgents,
+                    ReadOnlyBecause::ConnectionOverride => {
+                        McpReadOnlyReasonItem::ConnectionOverride
+                    }
                     ReadOnlyBecause::Connection => McpReadOnlyReasonItem::Connection,
                     ReadOnlyBecause::WritesDenied => McpReadOnlyReasonItem::WritesDenied,
                     ReadOnlyBecause::ConfirmUnsupported => {
@@ -5485,6 +5711,8 @@ impl McpAccessItem {
             access,
             reason,
             kind,
+            restriction_workspace,
+            read_only_override,
         }
     }
 }
@@ -5631,7 +5859,7 @@ pub enum AuditFormatItem {
 }
 
 /// Character encoding of an exported file (see `spelaion_core::TextEncoding`).
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum TextEncodingItem {
     Utf8,
@@ -5665,9 +5893,118 @@ pub struct ExportFileOptions {
     pub encoding: TextEncodingItem,
     /// Columns of the result by position, in order (the shown ones); `None`: all.
     pub columns: Option<Vec<u32>>,
+    /// The file compressed with gzip (Parquet: its column chunks).
+    #[serde(default)]
+    pub gzip: bool,
+    #[serde(default)]
+    pub sql: SqlOptionsItem,
+    #[serde(default)]
+    pub json: JsonOptionsItem,
+}
+
+/// How a SQL export writes its statements (SDB-391); the core checks it.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlOptionsItem {
+    pub rows_per_insert: u32,
+    pub omit_schema: bool,
+    /// `upper` or `lower`.
+    pub keyword_case: String,
+    /// `asIs`, `lower` or `upper`.
+    pub name_case: String,
+    pub upsert: bool,
+}
+
+impl Default for SqlOptionsItem {
+    fn default() -> Self {
+        Self {
+            rows_per_insert: 1,
+            omit_schema: false,
+            keyword_case: "upper".into(),
+            name_case: "asIs".into(),
+            upsert: false,
+        }
+    }
+}
+
+impl SqlOptionsItem {
+    pub fn options(&self) -> Result<spelaion_core::SqlOptions, String> {
+        let options = spelaion_core::SqlOptions {
+            rows_per_insert: self.rows_per_insert as usize,
+            omit_schema: self.omit_schema,
+            keyword_case: match self.keyword_case.as_str() {
+                "upper" => spelaion_core::KeywordCase::Upper,
+                "lower" => spelaion_core::KeywordCase::Lower,
+                other => return Err(format!("{other} is not a keyword case")),
+            },
+            name_case: match self.name_case.as_str() {
+                "asIs" => spelaion_core::NameCase::AsIs,
+                "lower" => spelaion_core::NameCase::Lower,
+                "upper" => spelaion_core::NameCase::Upper,
+                other => return Err(format!("{other} is not a name case")),
+            },
+            upsert: self.upsert,
+        };
+        options.check()?;
+        Ok(options)
+    }
+}
+
+/// How JSON and NDJSON write values (SDB-391).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonOptionsItem {
+    pub iso_dates: bool,
+    pub json_as_json: bool,
+}
+
+impl Default for JsonOptionsItem {
+    fn default() -> Self {
+        Self {
+            iso_dates: false,
+            json_as_json: true,
+        }
+    }
+}
+
+impl From<JsonOptionsItem> for spelaion_core::JsonOptions {
+    fn from(item: JsonOptionsItem) -> Self {
+        Self {
+            iso_dates: item.iso_dates,
+            json_as_json: item.json_as_json,
+        }
+    }
+}
+
+/// How export files are named (SDB-391): `{table}`, `{schema}`, `{database}`, `{date}`,
+/// `{time}` and `{timestamp}` (with `timestamp_format`). The core checks and renders it.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FileNamePatternItem {
+    pub pattern: String,
+    pub timestamp_format: String,
+}
+
+impl From<FileNamePatternItem> for spelaion_core::FileNamePattern {
+    fn from(item: FileNamePatternItem) -> Self {
+        Self {
+            pattern: item.pattern,
+            timestamp_format: item.timestamp_format,
+        }
+    }
 }
 
 impl ExportFileOptions {
+    /// The file's options besides its format, checked by the core.
+    pub fn file_options(&self) -> Result<spelaion_core::FileOptions, String> {
+        Ok(spelaion_core::FileOptions {
+            encoding: self.encoding.into(),
+            gzip: self.gzip,
+            sql: self.sql.options()?,
+            json: self.json.into(),
+        })
+    }
+
     pub fn csv(&self) -> Result<spelaion_core::CsvOptions, String> {
         let mut chars = self.delimiter.chars();
         let (Some(delimiter), None) = (chars.next(), chars.next()) else {
@@ -5680,6 +6017,118 @@ impl ExportFileOptions {
         };
         csv.check()?;
         Ok(csv)
+    }
+}
+
+/// The export dialog's defaults (SDB-66): what the last export chose, offered by the next.
+/// The core checks them before they are saved and reads them back leniently.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportDefaultsItem {
+    pub format: TextFormat,
+    /// CSV's delimiter: one character.
+    pub delimiter: String,
+    pub header: bool,
+    pub null_text: String,
+    pub encoding: TextEncodingItem,
+    pub escape_formulas: bool,
+    pub gzip: bool,
+    pub names: FileNamePatternItem,
+    pub sql: SqlOptionsItem,
+    pub json: JsonOptionsItem,
+}
+
+impl From<spelaion_core::ExportDefaults> for ExportDefaultsItem {
+    fn from(defaults: spelaion_core::ExportDefaults) -> Self {
+        use spelaion_core::{ExportFileFormat, KeywordCase, NameCase, TextEncoding};
+        Self {
+            format: match defaults.format {
+                ExportFileFormat::Csv => TextFormat::Csv,
+                ExportFileFormat::Tsv => TextFormat::Tsv,
+                ExportFileFormat::Json => TextFormat::Json,
+                ExportFileFormat::SqlInsert => TextFormat::SqlInsert,
+                ExportFileFormat::Markdown => TextFormat::Markdown,
+                ExportFileFormat::Html => TextFormat::Html,
+                ExportFileFormat::Ndjson => TextFormat::Ndjson,
+                ExportFileFormat::Parquet => TextFormat::Parquet,
+                ExportFileFormat::ArrowIpc => TextFormat::ArrowIpc,
+                ExportFileFormat::Xlsx => TextFormat::Xlsx,
+            },
+            delimiter: defaults.csv.delimiter.to_string(),
+            header: defaults.header,
+            null_text: defaults.csv.null_text,
+            encoding: match defaults.encoding {
+                TextEncoding::Utf8 => TextEncodingItem::Utf8,
+                TextEncoding::Utf8Bom => TextEncodingItem::Utf8Bom,
+                TextEncoding::Utf16Le => TextEncodingItem::Utf16Le,
+                TextEncoding::Windows1252 => TextEncodingItem::Windows1252,
+            },
+            escape_formulas: defaults.csv.escape_formulas,
+            gzip: defaults.gzip,
+            names: FileNamePatternItem {
+                pattern: defaults.names.pattern,
+                timestamp_format: defaults.names.timestamp_format,
+            },
+            sql: SqlOptionsItem {
+                // Checked by the core: at most its MAX_ROWS_PER_INSERT.
+                rows_per_insert: u32::try_from(defaults.sql.rows_per_insert).unwrap_or(1),
+                omit_schema: defaults.sql.omit_schema,
+                keyword_case: match defaults.sql.keyword_case {
+                    KeywordCase::Upper => "upper",
+                    KeywordCase::Lower => "lower",
+                }
+                .into(),
+                name_case: match defaults.sql.name_case {
+                    NameCase::AsIs => "asIs",
+                    NameCase::Lower => "lower",
+                    NameCase::Upper => "upper",
+                }
+                .into(),
+                upsert: defaults.sql.upsert,
+            },
+            json: JsonOptionsItem {
+                iso_dates: defaults.json.iso_dates,
+                json_as_json: defaults.json.json_as_json,
+            },
+        }
+    }
+}
+
+impl ExportDefaultsItem {
+    /// The defaults as the core reads them; the core checks them before they are saved.
+    pub fn into_defaults(self) -> Result<spelaion_core::ExportDefaults, String> {
+        use spelaion_core::ExportFileFormat;
+        let format = match self.format {
+            TextFormat::Csv => ExportFileFormat::Csv,
+            TextFormat::Tsv => ExportFileFormat::Tsv,
+            TextFormat::Json => ExportFileFormat::Json,
+            TextFormat::SqlInsert => ExportFileFormat::SqlInsert,
+            TextFormat::Markdown => ExportFileFormat::Markdown,
+            TextFormat::Html => ExportFileFormat::Html,
+            TextFormat::Ndjson => ExportFileFormat::Ndjson,
+            TextFormat::Parquet => ExportFileFormat::Parquet,
+            TextFormat::ArrowIpc => ExportFileFormat::ArrowIpc,
+            TextFormat::Xlsx => ExportFileFormat::Xlsx,
+            TextFormat::InList => return Err("an IN list is not a file format".into()),
+        };
+        let mut chars = self.delimiter.chars();
+        let (Some(delimiter), None) = (chars.next(), chars.next()) else {
+            return Err("the delimiter must be exactly one character".into());
+        };
+        Ok(spelaion_core::ExportDefaults {
+            format,
+            header: self.header,
+            csv: spelaion_core::CsvOptions {
+                delimiter,
+                null_text: self.null_text,
+                escape_formulas: self.escape_formulas,
+            },
+            encoding: self.encoding.into(),
+            gzip: self.gzip,
+            names: self.names.into(),
+            sql: self.sql.options()?,
+            json: self.json.into(),
+        })
     }
 }
 
@@ -7266,4 +7715,272 @@ impl From<spelaion_core::LastPage> for LastPageItem {
             page: u32::try_from(last.page).unwrap_or(u32::MAX),
         }
     }
+}
+
+/// A connection whose TLS does not check its server (SDB-395), as the core decided it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsWarningItem {
+    /// `unencrypted` (`disable`) or `unverified` (`prefer`, `require`).
+    pub risk: String,
+    /// The TLS mode as the connection file writes it.
+    pub mode: String,
+    pub host: String,
+    /// Through an SSH tunnel, AWS SSM or a Kubernetes forward: the calmer warning.
+    pub tunneled: bool,
+}
+
+impl From<spelaion_core::TlsWarning> for TlsWarningItem {
+    fn from(w: spelaion_core::TlsWarning) -> Self {
+        Self {
+            risk: match w.risk {
+                spelaion_core::TlsRisk::Unencrypted => "unencrypted",
+                spelaion_core::TlsRisk::Unverified => "unverified",
+            }
+            .into(),
+            mode: w.mode.into(),
+            host: w.host,
+            tunneled: match w.route {
+                spelaion_core::TlsRoute::Tunneled => true,
+                spelaion_core::TlsRoute::Direct => false,
+            },
+        }
+    }
+}
+
+/// A part of a table, for what a duplicate keeps and what it does not (SDB-394).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TablePartItem {
+    Columns,
+    NotNull,
+    Defaults,
+    PrimaryKey,
+    Unique,
+    Checks,
+    Indexes,
+    ForeignKeys,
+    Identity,
+    IdentityPosition,
+    Comments,
+    Triggers,
+    Rows,
+}
+
+impl From<spelaion_core::TablePart> for TablePartItem {
+    fn from(part: spelaion_core::TablePart) -> Self {
+        use spelaion_core::TablePart as P;
+        match part {
+            P::Columns => Self::Columns,
+            P::NotNull => Self::NotNull,
+            P::Defaults => Self::Defaults,
+            P::PrimaryKey => Self::PrimaryKey,
+            P::Unique => Self::Unique,
+            P::Checks => Self::Checks,
+            P::Indexes => Self::Indexes,
+            P::ForeignKeys => Self::ForeignKeys,
+            P::Identity => Self::Identity,
+            P::IdentityPosition => Self::IdentityPosition,
+            P::Comments => Self::Comments,
+            P::Triggers => Self::Triggers,
+            P::Rows => Self::Rows,
+        }
+    }
+}
+
+/// An action of the explorer's Maintenance menu (SDB-392).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum MaintenanceKindItem {
+    Vacuum,
+    Analyze,
+    RefreshMaterializedView,
+    Truncate,
+    EnableTriggers,
+    DisableTriggers,
+    Check,
+    Repair,
+    Optimize,
+    RebuildTable,
+    RebuildIndexes,
+    IntegrityCheck,
+    Checkpoint,
+}
+
+impl From<spelaion_core::MaintenanceKind> for MaintenanceKindItem {
+    fn from(kind: spelaion_core::MaintenanceKind) -> Self {
+        use spelaion_core::MaintenanceKind as K;
+        match kind {
+            K::Vacuum => Self::Vacuum,
+            K::Analyze => Self::Analyze,
+            K::RefreshMaterializedView => Self::RefreshMaterializedView,
+            K::Truncate => Self::Truncate,
+            K::EnableTriggers => Self::EnableTriggers,
+            K::DisableTriggers => Self::DisableTriggers,
+            K::Check => Self::Check,
+            K::Repair => Self::Repair,
+            K::Optimize => Self::Optimize,
+            K::RebuildTable => Self::RebuildTable,
+            K::RebuildIndexes => Self::RebuildIndexes,
+            K::IntegrityCheck => Self::IntegrityCheck,
+            K::Checkpoint => Self::Checkpoint,
+        }
+    }
+}
+
+impl From<MaintenanceKindItem> for spelaion_core::MaintenanceKind {
+    fn from(kind: MaintenanceKindItem) -> Self {
+        use MaintenanceKindItem as K;
+        match kind {
+            K::Vacuum => Self::Vacuum,
+            K::Analyze => Self::Analyze,
+            K::RefreshMaterializedView => Self::RefreshMaterializedView,
+            K::Truncate => Self::Truncate,
+            K::EnableTriggers => Self::EnableTriggers,
+            K::DisableTriggers => Self::DisableTriggers,
+            K::Check => Self::Check,
+            K::Repair => Self::Repair,
+            K::Optimize => Self::Optimize,
+            K::RebuildTable => Self::RebuildTable,
+            K::RebuildIndexes => Self::RebuildIndexes,
+            K::IntegrityCheck => Self::IntegrityCheck,
+            K::Checkpoint => Self::Checkpoint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum IndexCleanupItem {
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckModeItem {
+    Quick,
+    Fast,
+    Medium,
+    Extended,
+    Changed,
+}
+
+/// The options of a maintenance action; each action reads only its own (the core's
+/// `MaintenanceOptions`).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceOptionsItem {
+    pub full: bool,
+    pub freeze: bool,
+    pub analyze: bool,
+    pub disable_page_skipping: bool,
+    pub skip_locked: bool,
+    pub index_cleanup: Option<IndexCleanupItem>,
+    pub truncate_pages: Option<bool>,
+    pub verbose: bool,
+    pub no_data: bool,
+    pub concurrently: bool,
+    pub only: bool,
+    pub restart_identity: bool,
+    pub cascade: bool,
+    pub check_mode: Option<CheckModeItem>,
+    pub quick: bool,
+    pub extended: bool,
+    pub use_frm: bool,
+    pub local: bool,
+}
+
+impl From<MaintenanceOptionsItem> for spelaion_core::MaintenanceOptions {
+    fn from(o: MaintenanceOptionsItem) -> Self {
+        Self {
+            full: o.full,
+            freeze: o.freeze,
+            analyze: o.analyze,
+            disable_page_skipping: o.disable_page_skipping,
+            skip_locked: o.skip_locked,
+            index_cleanup: o.index_cleanup.map(|c| match c {
+                IndexCleanupItem::Auto => spelaion_core::IndexCleanup::Auto,
+                IndexCleanupItem::On => spelaion_core::IndexCleanup::On,
+                IndexCleanupItem::Off => spelaion_core::IndexCleanup::Off,
+            }),
+            truncate_pages: o.truncate_pages,
+            verbose: o.verbose,
+            no_data: o.no_data,
+            concurrently: o.concurrently,
+            only: o.only,
+            restart_identity: o.restart_identity,
+            cascade: o.cascade,
+            check_mode: o.check_mode.map(|m| match m {
+                CheckModeItem::Quick => spelaion_core::CheckMode::Quick,
+                CheckModeItem::Fast => spelaion_core::CheckMode::Fast,
+                CheckModeItem::Medium => spelaion_core::CheckMode::Medium,
+                CheckModeItem::Extended => spelaion_core::CheckMode::Extended,
+                CheckModeItem::Changed => spelaion_core::CheckMode::Changed,
+            }),
+            quick: o.quick,
+            extended: o.extended,
+            use_frm: o.use_frm,
+            local: o.local,
+        }
+    }
+}
+
+/// "Duplicate table…": what to copy (the core's `DuplicateTable`).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateTableItem {
+    pub schema: String,
+    pub name: String,
+    pub new_schema: String,
+    pub new_name: String,
+    pub with_data: bool,
+    pub with_indexes: bool,
+}
+
+impl From<DuplicateTableItem> for spelaion_core::DuplicateTable {
+    fn from(item: DuplicateTableItem) -> Self {
+        Self {
+            schema: item.schema,
+            name: item.name,
+            new_schema: item.new_schema,
+            new_name: item.new_name,
+            with_data: item.with_data,
+            with_indexes: item.with_indexes,
+        }
+    }
+}
+
+/// What the app shows before a maintenance action runs (SDB-392).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenancePlanItem {
+    /// The statement as it runs, in a tab of its own.
+    pub sql: String,
+    /// The engine refuses it inside a transaction (VACUUM).
+    pub outside_transaction: bool,
+    /// What a TRUNCATE with CASCADE also empties.
+    pub also_empties: Vec<String>,
+}
+
+impl From<spelaion_core::MaintenancePlan> for MaintenancePlanItem {
+    fn from(plan: spelaion_core::MaintenancePlan) -> Self {
+        Self {
+            sql: plan.sql,
+            outside_transaction: plan.outside_transaction,
+            also_empties: plan.also_empties,
+        }
+    }
+}
+
+/// What the duplicate form shows before the copy runs (SDB-394).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicatePlanItem {
+    pub sql: String,
+    pub kept: Vec<TablePartItem>,
+    pub not_kept: Vec<TablePartItem>,
+    /// The indexes and constraints may be left out on this engine.
+    pub indexes_optional: bool,
 }

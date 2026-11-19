@@ -28,8 +28,11 @@ use spelaion_driver_api::{
 use crate::Session;
 use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comments};
 use crate::export::{
-    CsvOptions, ExportFormat, FileSummary, PartFile, RowWriter, TextEncoding, part_path,
+    CsvOptions, ExportFormat, FileSummary, JsonOptions, PartFile, RowWriter, SqlOptions, SqlTarget,
+    TextEncoding, part_path, upsert_supported,
 };
+use crate::export_binary::BinaryFile;
+use crate::export_xlsx::XlsxBook;
 use crate::guard::check_script;
 use crate::masking::{mask_batch, masked_schema};
 use crate::table_data::{PageError, table_export_sql};
@@ -44,6 +47,12 @@ pub struct StreamExport {
     pub header: bool,
     pub csv: CsvOptions,
     pub encoding: TextEncoding,
+    /// The file compressed with gzip (Parquet: its column chunks, with its own codec).
+    pub gzip: bool,
+    /// How SQL statements are written (SDB-391).
+    pub sql: SqlOptions,
+    /// How JSON and NDJSON write values (SDB-391).
+    pub json: JsonOptions,
     /// Columns of the result to write, by position and in this order; `None`: all of them.
     pub columns: Option<Vec<usize>>,
     /// Rows per batch asked of the driver: the most rows the export holds at once
@@ -235,7 +244,22 @@ pub async fn export_query(
     let sql = checked_read(dialect.as_ref(), sql)?;
     check_script(dialect.as_ref(), &sql, safeguards, confirmed)
         .map_err(|_| ExportError::NeedsConfirmation)?;
-    stream_read(session, &sql, path, export, cancel, progress).await
+    if export.sql.upsert {
+        return Err(ExportError::Invalid(
+            "an upsert is written for a table: export the table, or turn upsert off".into(),
+        ));
+    }
+    stream_read(
+        session,
+        &sql,
+        Target::file(path, &sheet_of(path)),
+        export,
+        &SqlTarget::default(),
+        cancel,
+        progress,
+    )
+    .await
+    .map(Written::summary)
 }
 
 /// Streams a table's rows to `path`: the table data tab's checked SELECT without its paging
@@ -258,25 +282,107 @@ pub async fn export_table(
     )?;
     let sql = checked_read(dialect.as_ref(), &sql)?;
     let mut export = export.clone();
-    if let ExportFormat::SqlInsert { table: target } = &mut export.format {
-        target.clone_from(&table.name);
+    let mut target = SqlTarget::default();
+    if let ExportFormat::SqlInsert { table: name } = &mut export.format {
+        name.clone_from(&table.name);
+        target.schema = Some(table.schema.clone());
+        if export.sql.upsert {
+            target.key = upsert_key(session, table).await?;
+        }
+    } else if export.sql.upsert {
+        return Err(ExportError::Invalid("an upsert is written as SQL".into()));
     }
-    stream_read(session, &sql, path, &export, cancel, progress).await
+    stream_read(
+        session,
+        &sql,
+        Target::file(path, &table.name),
+        &export,
+        &target,
+        cancel,
+        progress,
+    )
+    .await
+    .map(Written::summary)
+}
+
+/// [`export_table`]'s statement and options, for a sheet of a workbook.
+async fn table_sheet(
+    session: &Session,
+    table: &TableSource,
+    target: Target,
+    export: &StreamExport,
+    cancel: &ExportCancel,
+    progress: &(dyn Fn(ExportProgress) + Send + Sync),
+) -> Result<Written, ExportError> {
+    let dialect = session.dialect().clone();
+    let sql = table_export_sql(
+        dialect.as_ref(),
+        &table.schema,
+        &table.name,
+        &table.filter,
+        &table.order_by,
+    )?;
+    let sql = checked_read(dialect.as_ref(), &sql)?;
+    stream_read(
+        session,
+        &sql,
+        target,
+        export,
+        &SqlTarget::default(),
+        cancel,
+        progress,
+    )
+    .await
+}
+
+/// The primary key an upsert of `table` is written by, from the catalog: refused on an engine
+/// whose upsert form the export does not write, and for a table without a primary key.
+async fn upsert_key(session: &Session, table: &TableSource) -> Result<Vec<String>, ExportError> {
+    let engine = session.dialect().name();
+    if !upsert_supported(engine) {
+        return Err(ExportError::Invalid(format!(
+            "an upsert is not written for {engine}: turn upsert off"
+        )));
+    }
+    let info = session
+        .connection()
+        .describe_table(&table.schema, &table.name)
+        .await?;
+    if info.primary_key.is_empty() {
+        return Err(ExportError::Invalid(format!(
+            "{} has no primary key: an upsert needs one to find each row",
+            table.name
+        )));
+    }
+    Ok(info.primary_key)
 }
 
 /// Streams several tables, one after the other, each to its own file in `folder` named after
 /// it ([`file_name`]; never over an existing file). `progress` gets the table's position.
 /// A cancel or an error stops at that table; the files finished before stay.
+///
+/// As XLSX, the tables go into one workbook, a sheet each ([`export_workbook`]).
+#[allow(clippy::too_many_arguments)]
 pub async fn export_tables(
     session: &Session,
     tables: &[(String, String)],
     folder: &Path,
-    extension: &str,
+    names: &FileNamePattern,
+    database: Option<&str>,
     export: &StreamExport,
     cancel: &ExportCancel,
     progress: &(dyn Fn(usize, ExportProgress) + Send + Sync),
 ) -> Result<Vec<ExportedFile>, TablesError> {
+    if export.format == ExportFormat::Xlsx {
+        // Boxed: its future and this one's would otherwise share one large frame.
+        return Box::pin(export_workbook(
+            session, tables, folder, names, database, export, cancel, progress,
+        ))
+        .await;
+    }
     let mut done = Vec::new();
+    let now = chrono::Local::now();
+    let extension = export.format.extension(export.gzip);
     for (index, (schema, name)) in tables.iter().enumerate() {
         let failed = |done, error| TablesError {
             done,
@@ -286,14 +392,26 @@ pub async fn export_tables(
         if cancel.is_cancelled() {
             return Err(failed(done, ExportError::Cancelled));
         }
-        // The same name in two schemas: both files say which schema.
-        let shared = tables.iter().filter(|(_, other)| other == name).count() > 1;
-        let base = if shared {
-            format!("{schema}.{name}")
-        } else {
-            name.clone()
+        let base = match names.render(
+            &NameParts {
+                table: name,
+                schema,
+                database: database.unwrap_or(""),
+            },
+            now,
+        ) {
+            Ok(base) => base,
+            Err(message) => return Err(failed(done, ExportError::Invalid(message))),
         };
-        let path = free_path(folder, &file_name(&base), extension);
+        // The same name in two schemas, and a pattern that does not say the schema: both files
+        // say which schema.
+        let shared = tables.iter().filter(|(_, other)| other == name).count() > 1;
+        let base = if shared && !names.pattern.contains("{schema}") {
+            file_name(&format!("{schema}.{base}"))
+        } else {
+            base
+        };
+        let path = free_path(folder, &base, &extension);
         let table = TableSource {
             schema: schema.clone(),
             name: name.clone(),
@@ -312,6 +430,260 @@ pub async fn export_tables(
         }
     }
     Ok(done)
+}
+
+/// [`export_tables`] as XLSX: one workbook in `folder`, a sheet per table (the schema in front
+/// when two tables share a name), named by the pattern with the database for `{table}`
+/// (`tables` when the connection names none) and the tables' schema for `{schema}` when they
+/// share one. Each table is still its own read, run again in the read-only transaction and
+/// written a batch at a time. The workbook is renamed to its name only when every sheet is
+/// written: a cancel or an error leaves no file.
+#[allow(clippy::too_many_arguments)]
+async fn export_workbook(
+    session: &Session,
+    tables: &[(String, String)],
+    folder: &Path,
+    names: &FileNamePattern,
+    database: Option<&str>,
+    export: &StreamExport,
+    cancel: &ExportCancel,
+    progress: &(dyn Fn(usize, ExportProgress) + Send + Sync),
+) -> Result<Vec<ExportedFile>, TablesError> {
+    let failed = |table: usize, error| TablesError {
+        done: Vec::new(),
+        table,
+        error: Box::new(error),
+    };
+    if export.sql.upsert {
+        return Err(failed(
+            0,
+            ExportError::Invalid("an upsert is written as SQL".into()),
+        ));
+    }
+    let database = database.unwrap_or("");
+    let schema = match tables.split_first() {
+        Some(((first, _), rest)) if rest.iter().all(|(s, _)| s == first) => first.as_str(),
+        _ => "",
+    };
+    let base = names
+        .render(
+            &NameParts {
+                table: if database.is_empty() {
+                    "tables"
+                } else {
+                    database
+                },
+                schema,
+                database,
+            },
+            chrono::Local::now(),
+        )
+        .map_err(|message| failed(0, ExportError::Invalid(message)))?;
+    let path = free_path(folder, &base, &export.format.extension(false));
+    let bytes = Arc::new(AtomicU64::new(0));
+    let mut book: Option<Box<XlsxBook>> = None;
+    let mut sheets = Vec::with_capacity(tables.len());
+    for (index, (schema, name)) in tables.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Err(failed(index, ExportError::Cancelled));
+        }
+        let shared = tables.iter().filter(|(_, other)| other == name).count() > 1;
+        let sheet = if shared {
+            format!("{schema}.{name}")
+        } else {
+            name.clone()
+        };
+        let table = TableSource {
+            schema: schema.clone(),
+            name: name.clone(),
+            filter: String::new(),
+            order_by: String::new(),
+        };
+        let target = Target {
+            path: path.clone(),
+            sheet,
+            bytes: bytes.clone(),
+            book: book.take(),
+            keep_open: true,
+        };
+        let report = |p: ExportProgress| progress(index, p);
+        match Box::pin(table_sheet(
+            session, &table, target, export, cancel, &report,
+        ))
+        .await
+        {
+            Ok(Written::Sheet {
+                book: open,
+                rows,
+                peak_rows,
+            }) => {
+                book = Some(open);
+                sheets.push((schema.clone(), name.clone(), rows, peak_rows));
+            }
+            Ok(Written::File(_)) => {
+                return Err(failed(
+                    index,
+                    ExportError::Invalid("the workbook was closed before its last sheet".into()),
+                ));
+            }
+            Err(error) => return Err(failed(index, error)),
+        }
+    }
+    let last = tables.len().saturating_sub(1);
+    let Some(book) = book else {
+        return Err(failed(
+            0,
+            ExportError::Invalid("there is no table to export".into()),
+        ));
+    };
+    let summary = blocking(move || book.finish())
+        .await
+        .map_err(|error| failed(last, error))?
+        .map_err(|e| {
+            failed(
+                last,
+                ExportError::Io {
+                    path: path.display().to_string(),
+                    message: e.to_string(),
+                },
+            )
+        })?;
+    Ok(sheets
+        .into_iter()
+        .map(|(schema, name, rows, peak_rows)| ExportedFile {
+            schema,
+            name,
+            path: path.clone(),
+            summary: FileSummary {
+                rows,
+                bytes: summary.bytes,
+                replaced: 0,
+                peak_rows,
+            },
+        })
+        .collect())
+}
+
+/// Most characters of a [`FileNamePattern`]'s pattern or timestamp format.
+pub const MAX_NAME_PATTERN: usize = 200;
+
+/// How export files are named (SDB-391): a pattern with `{table}`, `{schema}`, `{database}`,
+/// `{date}` (`2026-11-18`), `{time}` (`14-05-09`) and `{timestamp}` (written with
+/// `timestamp_format`, a `strftime` pattern). What it renders is made a safe file name
+/// ([`file_name`]): a pattern cannot reach another folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileNamePattern {
+    pub pattern: String,
+    pub timestamp_format: String,
+}
+
+impl Default for FileNamePattern {
+    /// The table's name, as exports always named their files.
+    fn default() -> Self {
+        Self {
+            pattern: "{table}".into(),
+            timestamp_format: "%Y%m%d-%H%M%S".into(),
+        }
+    }
+}
+
+/// What a [`FileNamePattern`]'s variables stand for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameParts<'a> {
+    pub table: &'a str,
+    pub schema: &'a str,
+    pub database: &'a str,
+}
+
+/// The variables a pattern may use.
+const NAME_VARIABLES: [&str; 6] = ["table", "schema", "database", "date", "time", "timestamp"];
+
+impl FileNamePattern {
+    /// A pattern that names only known variables, closes every `{`, and a timestamp format
+    /// `strftime` can write; both bounded and without control characters.
+    pub fn check(&self) -> Result<(), String> {
+        for (what, text) in [
+            ("file name pattern", &self.pattern),
+            ("timestamp format", &self.timestamp_format),
+        ] {
+            if text.chars().count() > MAX_NAME_PATTERN {
+                return Err(format!(
+                    "the {what} has at most {MAX_NAME_PATTERN} characters"
+                ));
+            }
+            if text.chars().any(char::is_control) {
+                return Err(format!("the {what} cannot hold a control character"));
+            }
+        }
+        if self.pattern.trim().is_empty() {
+            return Err("the file name pattern is empty".into());
+        }
+        let mut rest = self.pattern.as_str();
+        while let Some(open) = rest.find('{') {
+            let after = &rest[open + 1..];
+            let close = after
+                .find('}')
+                .ok_or("a { in the file name pattern is not closed")?;
+            let name = &after[..close];
+            if !NAME_VARIABLES.contains(&name) {
+                return Err(format!(
+                    "{{{name}}} is not a variable of file names: use {}",
+                    NAME_VARIABLES
+                        .iter()
+                        .map(|v| format!("{{{v}}}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            rest = &after[close + 1..];
+        }
+        if rest.contains('}')
+            || self.pattern.matches('}').count() != self.pattern.matches('{').count()
+        {
+            return Err("a } in the file name pattern has no {".into());
+        }
+        if chrono::format::StrftimeItems::new(&self.timestamp_format)
+            .any(|item| matches!(item, chrono::format::Item::Error))
+        {
+            return Err(format!(
+                "{} is not a timestamp format strftime can write",
+                self.timestamp_format
+            ));
+        }
+        Ok(())
+    }
+
+    /// [`FileNamePattern::render`] at this moment, in this computer's time zone.
+    pub fn render_now(&self, parts: &NameParts<'_>) -> Result<String, String> {
+        self.render(parts, chrono::Local::now())
+    }
+
+    /// The file name (without its extension) for `parts` at `now`, made safe ([`file_name`]).
+    pub fn render(
+        &self,
+        parts: &NameParts<'_>,
+        now: chrono::DateTime<chrono::Local>,
+    ) -> Result<String, String> {
+        self.check()?;
+        let mut out = String::new();
+        let mut rest = self.pattern.as_str();
+        while let Some(open) = rest.find('{') {
+            out.push_str(&rest[..open]);
+            let after = &rest[open + 1..];
+            let close = after.find('}').expect("checked");
+            match &after[..close] {
+                "table" => out.push_str(parts.table),
+                "schema" => out.push_str(parts.schema),
+                "database" => out.push_str(parts.database),
+                "date" => out.push_str(&now.format("%Y-%m-%d").to_string()),
+                "time" => out.push_str(&now.format("%H-%M-%S").to_string()),
+                _ => out.push_str(&now.format(&self.timestamp_format).to_string()),
+            }
+            rest = &after[close + 1..];
+        }
+        out.push_str(rest);
+        Ok(file_name(&out))
+    }
 }
 
 /// A file name for `name`: characters that file systems refuse become `_`, trailing dots and
@@ -432,18 +804,23 @@ pub(crate) async fn enter(session: &Session, begin: &str) -> Result<(), DriverEr
 async fn stream_read(
     session: &Session,
     sql: &str,
-    path: &Path,
+    destination: Target,
     export: &StreamExport,
+    target: &SqlTarget,
     cancel: &ExportCancel,
     progress: &(dyn Fn(ExportProgress) + Send + Sync),
-) -> Result<FileSummary, ExportError> {
+) -> Result<Written, ExportError> {
     match export.format {
         ExportFormat::Csv
         | ExportFormat::Tsv
         | ExportFormat::Json
         | ExportFormat::SqlInsert { .. }
         | ExportFormat::Markdown
-        | ExportFormat::Html => {}
+        | ExportFormat::Html
+        | ExportFormat::Ndjson
+        | ExportFormat::Parquet
+        | ExportFormat::ArrowIpc
+        | ExportFormat::Xlsx => {}
         ExportFormat::InList | ExportFormat::SqlInsertBatch { .. } => {
             return Err(ExportError::Invalid(
                 "that format is for the clipboard, not for files".into(),
@@ -451,12 +828,13 @@ async fn stream_read(
         }
     }
     export.csv.check().map_err(ExportError::Invalid)?;
+    export.sql.check().map_err(ExportError::Invalid)?;
     if cancel.is_cancelled() {
         return Err(ExportError::Cancelled);
     }
     let (begin, end) = barrier(session)?;
     enter(session, begin).await?;
-    let result = write_stream(session, sql, path, export, cancel, progress).await;
+    let result = write_stream(session, sql, destination, export, target, cancel, progress).await;
     match (&result, end) {
         // A cancelled export's session is closed by its owner, which ends the transaction;
         // waiting here for the engine to discard the rest of the rows would only delay it.
@@ -469,9 +847,81 @@ async fn stream_read(
     result
 }
 
+/// Where a read is written: a file of its own, or one more sheet of a workbook being written.
+struct Target {
+    /// The file (for errors, and to create it).
+    path: PathBuf,
+    /// The sheet's name, when the file is a workbook.
+    sheet: String,
+    /// The bytes written so far, for progress.
+    bytes: Arc<AtomicU64>,
+    /// The open workbook of [`export_tables`], when the format is XLSX.
+    book: Option<Box<XlsxBook>>,
+    /// The workbook is handed back open ([`Written::Sheet`]) rather than finished.
+    keep_open: bool,
+}
+
+impl Target {
+    fn file(path: &Path, sheet: &str) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            sheet: sheet.to_string(),
+            bytes: Arc::new(AtomicU64::new(0)),
+            book: None,
+            keep_open: false,
+        }
+    }
+}
+
+/// What [`write_stream`] wrote.
+enum Written {
+    File(FileSummary),
+    /// A sheet of a workbook still open.
+    Sheet {
+        book: Box<XlsxBook>,
+        rows: u64,
+        peak_rows: u64,
+    },
+}
+
+impl Written {
+    fn summary(self) -> FileSummary {
+        match self {
+            Written::File(summary) => summary,
+            // A file of its own is always finished.
+            Written::Sheet {
+                rows, peak_rows, ..
+            } => FileSummary {
+                rows,
+                bytes: 0,
+                replaced: 0,
+                peak_rows,
+            },
+        }
+    }
+}
+
+/// A sheet's name for a file: its name without the extension.
+fn sheet_of(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Result");
+    name.split('.').next().unwrap_or(name).to_string()
+}
+
 /// The file being written: `<path>.part` until [`FileWriter::finish`] renames it. Each call
 /// runs on a blocking thread, one batch at a time.
-struct FileWriter {
+enum FileWriter {
+    /// A text format, written a row at a time.
+    Text(TextFile),
+    /// Parquet or Arrow, written a batch at a time.
+    Binary(BinaryFile),
+    /// A sheet of a workbook, written a batch at a time.
+    Xlsx(Box<XlsxBook>),
+}
+
+struct TextFile {
     file: PartFile,
     writer: RowWriter,
     columns: Vec<usize>,
@@ -480,47 +930,59 @@ struct FileWriter {
 }
 
 impl FileWriter {
-    fn create(
+    fn text(
         path: &Path,
         encoding: TextEncoding,
+        gzip: bool,
         mut writer: RowWriter,
         columns: Vec<usize>,
         logicals: Vec<LogicalType>,
         bytes: Arc<AtomicU64>,
     ) -> io::Result<Self> {
         // Dropped on any error: the temporary file goes.
-        let mut file = PartFile::create(path, encoding)?;
-        file.writer().report_to(bytes);
+        let mut file = PartFile::create(path, encoding, gzip)?;
+        file.report_to(bytes);
         writer.begin(file.writer())?;
-        Ok(Self {
+        Ok(Self::Text(TextFile {
             file,
             writer,
             values: Vec::with_capacity(columns.len()),
             columns,
             logicals,
-        })
+        }))
     }
 
     fn write(&mut self, batch: &RecordBatch) -> io::Result<()> {
+        let text = match self {
+            FileWriter::Binary(file) => return file.write(batch),
+            FileWriter::Xlsx(book) => return book.write(batch),
+            FileWriter::Text(text) => text,
+        };
         for row in 0..batch.num_rows() {
-            self.values.clear();
-            self.values.extend(
-                self.columns
+            text.values.clear();
+            text.values.extend(
+                text.columns
                     .iter()
-                    .zip(&self.logicals)
+                    .zip(&text.logicals)
                     .map(|(&c, &logical)| {
                         Value::from_array(batch.column(c).as_ref(), row, logical)
                             .unwrap_or(Value::Null)
                     }),
             );
-            self.writer.row(&self.values, self.file.writer())?;
+            text.writer.row(&text.values, text.file.writer())?;
         }
         Ok(())
     }
 
-    fn finish(mut self) -> io::Result<FileSummary> {
-        let written = self.writer.finish(self.file.writer())?;
-        self.file.commit(written as u64)
+    fn finish(self) -> io::Result<FileSummary> {
+        match self {
+            FileWriter::Binary(file) => file.finish(),
+            FileWriter::Xlsx(book) => book.finish(),
+            FileWriter::Text(mut text) => {
+                let written = text.writer.finish(text.file.writer())?;
+                text.file.commit(written as u64)
+            }
+        }
     }
 }
 
@@ -536,16 +998,24 @@ async fn blocking<T: Send + 'static>(
 async fn write_stream(
     session: &Session,
     sql: &str,
-    path: &Path,
+    destination: Target,
     export: &StreamExport,
+    target: &SqlTarget,
     cancel: &ExportCancel,
     progress: &(dyn Fn(ExportProgress) + Send + Sync),
-) -> Result<FileSummary, ExportError> {
+) -> Result<Written, ExportError> {
+    let path = destination.path.clone();
+    let path = path.as_path();
     let io_error = |e: io::Error| ExportError::Io {
         path: path.display().to_string(),
         message: e.to_string(),
     };
-    let bytes = Arc::new(AtomicU64::new(0));
+    let bytes = destination.bytes.clone();
+    let sheet = destination.sheet.clone();
+    // A workbook of several tables: this read is one more sheet of it, and the book is
+    // handed back open.
+    let keep_open = destination.keep_open;
+    let mut book = destination.book;
     let mut rows = 0u64;
     let mut peak_rows = 0u64;
     if cancel.is_cancelled() {
@@ -573,6 +1043,20 @@ async fn write_stream(
         }
         let Some(event) = events.next().await else {
             break match file.take() {
+                Some(FileWriter::Xlsx(mut book)) if keep_open => {
+                    let ended = blocking(move || book.end_sheet().map(|()| book))
+                        .await?
+                        .map_err(io_error)?;
+                    progress(ExportProgress {
+                        rows,
+                        bytes: bytes.load(Ordering::Relaxed),
+                    });
+                    return Ok(Written::Sheet {
+                        book: ended,
+                        rows,
+                        peak_rows,
+                    });
+                }
                 Some(writer) => {
                     let summary = blocking(move || writer.finish()).await?.map_err(io_error)?;
                     let summary = FileSummary {
@@ -583,7 +1067,7 @@ async fn write_stream(
                         rows: summary.rows,
                         bytes: summary.bytes,
                     });
-                    return Ok(summary);
+                    return Ok(Written::File(summary));
                 }
                 None => ExportError::Invalid("the statement returned no rows to export".into()),
             };
@@ -618,21 +1102,78 @@ async fn write_stream(
                     );
                 }
                 let metas: Vec<_> = columns.iter().map(|&c| schema.columns[c].clone()).collect();
-                let logicals: Vec<_> = metas.iter().map(|m| m.logical).collect();
-                let writer = RowWriter::new(
-                    export.format.clone(),
-                    export.header,
-                    export.csv.clone(),
-                    session.dialect().as_ref(),
-                    metas,
-                );
-                let target = path.to_path_buf();
-                let (encoding, bytes) = (export.encoding, bytes.clone());
-                match blocking(move || {
-                    FileWriter::create(&target, encoding, writer, columns, logicals, bytes)
-                })
-                .await?
+                // An upsert finds each row by the whole primary key.
+                if let Some(missing) = target
+                    .key
+                    .iter()
+                    .find(|key| !metas.iter().any(|m| &m.name == *key))
                 {
+                    break ExportError::Invalid(format!(
+                        "an upsert needs the primary key column {missing} in the export"
+                    ));
+                }
+                let destination = path.to_path_buf();
+                let (encoding, gzip, bytes) = (export.encoding, export.gzip, bytes.clone());
+                let created = if export.format == ExportFormat::Xlsx {
+                    let fields: Vec<_> = columns
+                        .iter()
+                        .map(|&c| schema.arrow.field(c).clone())
+                        .collect();
+                    let (open, sheet) = (book.take(), sheet.clone());
+                    blocking(move || {
+                        let mut book = match open {
+                            Some(book) => book,
+                            None => Box::new(XlsxBook::create(&destination, Some(bytes))?),
+                        };
+                        book.begin_sheet(&sheet, &fields, columns)?;
+                        Ok(FileWriter::Xlsx(book))
+                    })
+                    .await?
+                } else if export.format.is_binary() {
+                    let fields: Vec<_> = columns
+                        .iter()
+                        .map(|&c| schema.arrow.field(c).clone())
+                        .collect();
+                    let (format, batch_rows) = (export.format.clone(), export.batch_size.max(1));
+                    blocking(move || {
+                        BinaryFile::create(
+                            &destination,
+                            &format,
+                            gzip,
+                            &fields,
+                            columns,
+                            batch_rows,
+                            Some(bytes),
+                        )
+                        .map(FileWriter::Binary)
+                    })
+                    .await?
+                } else {
+                    let logicals: Vec<_> = metas.iter().map(|m| m.logical).collect();
+                    let dialect = session.dialect();
+                    let writer = RowWriter::new(
+                        export.format.clone(),
+                        export.header,
+                        export.csv.clone(),
+                        dialect.as_ref(),
+                        metas,
+                    )
+                    .with_json(export.json)
+                    .with_sql(dialect.as_ref(), &export.sql, target);
+                    blocking(move || {
+                        FileWriter::text(
+                            &destination,
+                            encoding,
+                            gzip,
+                            writer,
+                            columns,
+                            logicals,
+                            bytes,
+                        )
+                    })
+                    .await?
+                };
+                match created {
                     Ok(created) => file = Some(created),
                     Err(e) => break io_error(e),
                 }
@@ -802,5 +1343,73 @@ mod tests {
         ] {
             assert!(checked_read(&SqliteDialect, sql).is_err(), "SQLite: {sql}");
         }
+    }
+
+    #[test]
+    fn file_name_patterns_render_safe_names() {
+        use chrono::TimeZone;
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 11, 18, 14, 5, 9)
+            .single()
+            .unwrap();
+        let parts = NameParts {
+            table: "orders",
+            schema: "sales",
+            database: "shop",
+        };
+        let render = |pattern: &str, format: &str| {
+            FileNamePattern {
+                pattern: pattern.into(),
+                timestamp_format: format.into(),
+            }
+            .render(&parts, now)
+        };
+        assert_eq!(
+            FileNamePattern::default().render(&parts, now).unwrap(),
+            "orders"
+        );
+        assert_eq!(
+            render("{database}_{schema}.{table}_{date}_{time}", "%Y").unwrap(),
+            "shop_sales.orders_2026-11-18_14-05-09"
+        );
+        assert_eq!(
+            render("{table}-{timestamp}", "%Y%m%d-%H%M%S").unwrap(),
+            "orders-20261118-140509"
+        );
+        // Whatever the pattern and the names hold, the result is one file name in the folder.
+        assert_eq!(render("../../{table}", "%Y").unwrap(), ".._.._orders");
+        assert_eq!(render("{timestamp}", "%Y/%m/%d").unwrap(), "2026_11_18");
+        let odd = NameParts {
+            table: "..\\..\\x",
+            schema: "a/b",
+            database: "c:d",
+        };
+        assert_eq!(
+            FileNamePattern {
+                pattern: "{database}{schema}{table}".into(),
+                timestamp_format: "%Y".into(),
+            }
+            .render(&odd, now)
+            .unwrap(),
+            "c_da_b.._.._x"
+        );
+        assert_eq!(render("{table}", "%Y").unwrap(), "orders");
+        // Refused: unknown or open variables, an empty pattern, a format strftime cannot
+        // write, control characters, and too long.
+        for (pattern, format) in [
+            ("{tabel}", "%Y"),
+            ("{table", "%Y"),
+            ("table}", "%Y"),
+            ("}{table}{", "%Y"),
+            ("", "%Y"),
+            ("  ", "%Y"),
+            ("{table}", "%Q"),
+            ("{table}\n", "%Y"),
+            ("{table}", "%Y\t"),
+        ] {
+            assert!(render(pattern, format).is_err(), "{pattern:?} {format:?}");
+        }
+        assert!(render(&"x".repeat(MAX_NAME_PATTERN + 1), "%Y").is_err());
+        assert!(render("{table}", &"%Y".repeat(MAX_NAME_PATTERN)).is_err());
     }
 }

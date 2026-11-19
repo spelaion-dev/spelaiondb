@@ -44,7 +44,6 @@
     "gridLabel_one": "Result with {{formattedCount}} row",
     "gridLabel_other": "Result with {{formattedCount}} rows",
     "accessibleCell": "Row {{row}}, {{column}} ({{type}}): {{value}}",
-    "accessibleCellLoading": "Row {{row}}, {{column}}: loading value",
     "accessibleCellError": "Row {{row}}, {{column}}: could not load value",
     "accessibleTruncated": "{{value}}… Open the cell viewer for the full value.",
     "copied_one": "Copied {{formattedCount}} row × {{columns}} columns",
@@ -63,7 +62,11 @@
       "json": "JSON",
       "sqlInsert": "SQL INSERT statements",
       "markdown": "Markdown table",
-      "html": "HTML table"
+      "html": "HTML table",
+      "ndjson": "NDJSON (one JSON object per line)",
+      "parquet": "Parquet",
+      "arrowIpc": "Arrow IPC file",
+      "xlsx": "Excel (XLSX)"
     },
     "sortAsc": "Sort ascending",
     "sortDesc": "Sort descending",
@@ -94,6 +97,7 @@
     "jumpTitle": "Jump to column",
     "jumpPlaceholder": "Column name…",
     "jumpNone": "No column matches",
+    "selectAll": "Select all cells",
     "columnFilters": "Column filters",
     "filteredBy": "Filtered by",
     "removeFilter": "Remove the filter {{filter}}",
@@ -722,7 +726,37 @@
     "notARead": "It was not run again: {{reason}}",
     "failedAgain": "Running it again in a new session failed: {{reason}}",
     "loadedInstead_one": "Export the row loaded instead",
-    "loadedInstead_other": "Export the {{formattedCount}} rows loaded instead"
+    "loadedInstead_other": "Export the {{formattedCount}} rows loaded instead",
+    "fileOptions": "File name and compression",
+    "namePattern": "File name",
+    "namePatternHint": "{table}, {schema}, {database}, {date}, {time} and {timestamp} are replaced; the extension is added.",
+    "timestampFormat": "Timestamp format",
+    "gzip": "Compress with gzip",
+    "gzipParquet": "Parquet compresses its own columns: the file stays Parquet.",
+    "sqlOptions": "SQL options",
+    "rowsPerInsert": "Rows per INSERT",
+    "omitSchema": "Leave the schema out of the table's name",
+    "keywordCase": "Keywords",
+    "keywordCases": {
+      "upper": "UPPER CASE",
+      "lower": "lower case"
+    },
+    "nameCase": "Names",
+    "nameCases": {
+      "asIs": "As they are",
+      "lower": "lower case",
+      "upper": "UPPER CASE"
+    },
+    "upsert": "Write upserts by the primary key",
+    "upsertHint": "ON CONFLICT, ON DUPLICATE KEY UPDATE or MERGE, as the engine writes them.",
+    "upsertTableOnly": "Upserts need a table: export every row of a table to write them.",
+    "jsonOptions": "JSON options",
+    "isoDates": "Timestamps in ISO 8601",
+    "jsonAsJson": "JSON columns as JSON, not as text",
+    "tablesWorkbookHint": "One workbook in the folder you choose, a sheet per table, named by the file name pattern ({table} is the database). An existing file is kept: a new name is used instead.",
+    "workbookDone_one": "{{rows}} rows of {{formattedCount}} table written to {{path}}.",
+    "workbookDone_other": "{{rows}} rows of {{formattedCount}} tables written to {{path}}, a sheet each.",
+    "gzipWorkbook": "A workbook is compressed already."
   },
   "import": {
     "title": "Import data",
@@ -748,7 +782,8 @@
       "csv": "CSV",
       "tsv": "TSV (tab-separated)",
       "json": "JSON array",
-      "markdown": "Markdown table"
+      "markdown": "Markdown table",
+      "xlsx": "Excel workbook (XLSX)"
     },
     "encoding": "Encoding",
     "encodingAuto": "Detect ({{found}})",
@@ -834,7 +869,8 @@
     "cancelled_one": "Import cancelled: {{formattedCount}} row was committed before; the rest of its batch was rolled back.",
     "cancelled_other": "Import cancelled: {{formattedCount}} rows were committed before; the rest of their batch was rolled back.",
     "failed": "Could not import: {{reason}}",
-    "openTable": "Open table"
+    "openTable": "Open table",
+    "sheet": "Sheet"
   },
   "maximizeResults": "Maximize results (Ctrl+Alt+M)",
   "restoreResults": "Restore the editor (Ctrl+Alt+M)",
@@ -1555,5 +1591,16 @@
     "placeholder": "Row number",
     "of": "of {{total}}",
     "past": "The result has {{rows}} rows: row {{row}} is past its end."
-  }
+  },
+  "session": {
+    "reconnect": "Reconnect",
+    "readOnly": "Read-only for this session",
+    "readWrite": "End read-only for this session",
+    "readOnlyOn": "This session is read-only: writes are refused until it reconnects or you turn it off.",
+    "readOnlyOff": "This session can write again.",
+    "readOnlyFailed": "Could not change the session's read-only mode: {{detail}}",
+    "readOnlyChip": "Read-only session",
+    "readOnlyHint": "This tab's session refuses writes, as a read-only connection does. Click to end it."
+  },
+  "schemaPooled": "This connection goes through a pooler in transaction mode, which keeps no session settings: qualify names with their schema."
 }

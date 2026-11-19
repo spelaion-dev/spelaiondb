@@ -145,6 +145,7 @@ impl ConnectionDraft {
         if from == to {
             return (next, report);
         }
+        next.engine_kind = None;
         let (server_from, server_to) = (!from.is_file(), !to.is_file());
         let tunnel = filled(&self.tunnel);
         let remote_sqlite = from == Engine::Sqlite && tunnel.is_some();
@@ -299,6 +300,28 @@ impl ConnectionDraft {
                 next.session.isolation = None;
             }
             None => {}
+        }
+        // The engine's own settings (SDB-396): each only where its engine has it.
+        let pooler_kept = to == Engine::Postgres;
+        let cleartext_kept = matches!(to, Engine::Mysql | Engine::Mariadb);
+        let databases_kept = to.chooses_databases();
+        if pooler_kept {
+            report.keep_if("pooler", self.pooler.is_some());
+        } else {
+            report.drop_if("pooler", self.pooler.is_some());
+            next.pooler = None;
+        }
+        if cleartext_kept {
+            report.keep_if("cleartext_password", self.cleartext_password);
+        } else {
+            report.drop_if("cleartext_password", self.cleartext_password);
+            next.cleartext_password = false;
+        }
+        if databases_kept {
+            report.keep_if("databases", !self.databases.is_empty());
+        } else {
+            report.drop_if("databases", !self.databases.is_empty());
+            next.databases.clear();
         }
         (next, report)
     }

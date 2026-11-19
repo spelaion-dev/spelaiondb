@@ -623,6 +623,7 @@ fn connection_of(
             tags: Vec::new(),
             folder,
             engine,
+            engine_kind: None,
             host: String::new(),
             port: None,
             database: String::new(),
@@ -741,6 +742,7 @@ fn connection_of(
         tags: Vec::new(),
         folder,
         engine,
+        engine_kind: None,
         host: if file {
             String::new()
         } else {

@@ -27,10 +27,10 @@ import {
   type ServerObjectKindItem,
   type SqlTemplateItem,
   type TableDetails,
+  type PartitioningItem,
   type TableKeyItem,
 } from "../api";
 import {
-  confirmLeaving,
   connectTabFromExplorer,
   explorerDatabase,
   EXPLORER_REFRESH_EVENT,
@@ -47,7 +47,6 @@ import { sortByName } from "../explorerSort";
 import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
-import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
 import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
@@ -59,18 +58,24 @@ import { topDialog } from "../modalFocus";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 import { useFittingMarks } from "../connectionMarks";
+import { tlsWarningText } from "../tlsWarning";
+import { Icon } from "./Icons";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
+import { DuplicateTableDialog } from "./DuplicateTableDialog";
 import { StructureDialog } from "./StructureDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AccountDialog, usePrincipalActions, type AccountAction } from "./AccountDialog";
 import { PrivilegesDialog } from "./PrivilegesDialog";
-import type { PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } from "../bindings";
+import type { MaintenanceKindItem, PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } from "../bindings";
+import { MaintenanceDialog } from "./MaintenanceDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 import { ObjectMenu } from "./ObjectMenu";
 import { MissingPlugin } from "./MissingPlugin";
+import { FolderMenuButton } from "./FolderMenu";
+import { folderSwitchBlocked, switchFolder } from "../folders";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -199,8 +204,9 @@ function matchesFilter(name: string, filter: string): boolean {
 }
 
 /** A separate submenu, positioned outside the scrollable explorer menu. */
-function GenerateMenu({ children }: { children: ReactNode }) {
+function GenerateMenu({ children, label }: { children: ReactNode; label?: string }) {
   const { t } = useTranslation("shell");
+  const title = label ?? t("generateSql");
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const submenu = useRef<HTMLDivElement>(null);
@@ -228,13 +234,39 @@ function GenerateMenu({ children }: { children: ReactNode }) {
       if (!e.currentTarget.contains(e.relatedTarget) && !submenu.current?.contains(e.relatedTarget)) setOpen(false);
     }}>
       <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}>
-        {t("generateSql")} ▸
+        {title} ▸
       </button>
       {open && createPortal(
-        <div ref={submenu} className="grid-menu object-menu explorer-generate-items" role="menu" aria-label={t("generateSql")}>{children}</div>,
+        <div ref={submenu} className="grid-menu object-menu explorer-generate-items" role="menu" aria-label={title}>{children}</div>,
         document.body,
       )}
     </div>
+  );
+}
+
+/** The Maintenance submenu of a table, a materialized view or a SQLite / DuckDB schema
+ *  (SDB-392): the actions the core offers there on this engine, each opening its dialog. */
+function MaintenanceMenu({ session, target, onPick }: { session: string; target: ObjectTargetItem; onPick(kind: MaintenanceKindItem): void }) {
+  const { t } = useTranslation("shell");
+  const [kinds, setKinds] = useState<MaintenanceKindItem[]>([]);
+  const key = JSON.stringify(target);
+  useEffect(() => {
+    let current = true;
+    call(commands.maintenanceKinds(session, target))
+      .then((answer) => { if (current) setKinds(answer); })
+      .catch(() => { if (current) setKinds([]); });
+    return () => { current = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, key]);
+  if (kinds.length === 0) return null;
+  return (
+    <GenerateMenu label={t("maintenance.menu")}>
+      {kinds.map((kind) => (
+        <button key={kind} role="menuitem" onClick={() => onPick(kind)}>
+          {t("maintenance.menuItem", { action: t(`maintenance.kinds.${kind}`) })}
+        </button>
+      ))}
+    </GenerateMenu>
   );
 }
 
@@ -514,6 +546,32 @@ function CollectionNode({ session, connectionId, object }: { session: string; co
 }
 
 /** A constraint or foreign key of a table: its menu can drop it, where the engine can. */
+/** A table's metadata that is a view of its own, not a list in the tree (SDB-393). */
+function DetailRow({ label, icon, onOpen }: { label: string; icon: TreeIconKind; onOpen(): void }) {
+  const { t } = useTranslation("shell");
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        role="button"
+        tabIndex={0}
+        title={t("tableDetails.openHint")}
+        onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
+      >
+        <span className="twisty" />
+        <TreeIcon kind={icon} />
+        <span className="label">{label}</span>
+      </div>
+    </div>
+  );
+}
+
 function LeafRow({
   session,
   connectionId,
@@ -529,7 +587,7 @@ function LeafRow({
   schema: string;
   label: string;
   detail: string;
-  icon: "constraints" | "foreignKeys";
+  icon: TreeIconKind;
   /** What "Drop…" drops; none when it cannot be dropped from here. */
   target: ObjectTargetItem | null;
   onChanged(): void;
@@ -949,7 +1007,7 @@ function schemaObjectFolder(kind: SchemaObjectKindItem): SchemaFolder {
 
 const SERVER_FOLDERS = ["roles", "users", "logins", "tablespaces", "extensions"] as const;
 
-type TreeIconKind = "folder" | "table" | "view" | "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers" | "column";
+type TreeIconKind = "folder" | "table" | "view" | "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers" | "column" | "properties" | "partitions" | "dependencies";
 
 /** Small, neutral line icons distinguish explorer nodes without competing with their labels. */
 function TreeIcon({ kind }: { kind: TreeIconKind }) {
@@ -963,6 +1021,9 @@ function TreeIcon({ kind }: { kind: TreeIconKind }) {
       {kind === "foreignKeys" && <><path d="M6.5 10.8 5.3 12a2.5 2.5 0 0 1-3.5-3.5l2.3-2.3a2.5 2.5 0 0 1 3.5 0M9.5 5.2 10.7 4a2.5 2.5 0 0 1 3.5 3.5l-2.3 2.3a2.5 2.5 0 0 1-3.5 0M5.9 10.1l4.2-4.2" /></>}
       {kind === "indexes" && <><path d="M3 3.5h10M3 8h10M3 12.5h10" /><circle cx="5" cy="3.5" r="1" fill="var(--panel)" /><circle cx="10" cy="8" r="1" fill="var(--panel)" /><circle cx="6.5" cy="12.5" r="1" fill="var(--panel)" /></>}
       {kind === "triggers" && <path d="M8.9 1.8 3.7 8h3.7l-.4 6.2L12.4 7H8.7z" />}
+      {kind === "properties" && <><circle cx="8" cy="8" r="6" /><path d="M8 7.3v4M8 4.9v.1" /></>}
+      {kind === "partitions" && <><rect x="2" y="2.5" width="12" height="11" rx="1" /><path d="M2 6.2h12M2 9.8h12" /></>}
+      {kind === "dependencies" && <><circle cx="4" cy="4" r="1.8" /><circle cx="12" cy="12" r="1.8" /><path d="m5.3 5.3 5.4 5.4M10.7 7.4v3.3H7.4" /></>}
     </svg>
   );
 }
@@ -1071,7 +1132,9 @@ function Folder({
   children,
 }: {
   label: string;
-  count: number;
+  /** What it holds; none shown when it is not known (a partitioned table whose engine does not
+   * list its partitions). */
+  count?: number;
   icon?: TreeIconKind;
   initiallyOpen?: boolean;
   /** Shown open whatever its state (the quick filter shows what matches inside). */
@@ -1138,7 +1201,7 @@ function Folder({
             {t("filtered")}
           </span>
         )}
-        <span className="muted small">{count.toLocaleString(i18n.language)}</span>
+        {count !== undefined && <span className="muted small">{count.toLocaleString(i18n.language)}</span>}
       </div>
       {menu && (onConfigureFilter || create) && (
         <ObjectMenu at={menu}>
@@ -1181,14 +1244,9 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const { t, i18n } = useTranslation("shell");
   const workspace = useApp((s) => s.workspace);
   const connections = useApp((s) => s.connections);
-  const cannotSwitch = useApp(
-    (s) =>
-      s.workspaceChanging ||
-      s.historySaving.length > 0 ||
-      s.tabs.some((t) => t.status === "connecting" || t.run?.running),
-  );
+  const cannotSwitch = useApp((s) => folderSwitchBlocked(s));
   const [showProblems, setShowProblems] = useState(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
+  const folderError = useApp((s) => s.folderError);
   /** What the last paste of a connection (Ctrl+V) went wrong with. */
   const [pasteError, setPasteError] = useState<string | null>(null);
   const tree = useRef<HTMLDivElement>(null);
@@ -1348,54 +1406,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
 
   async function openFolder() {
     const path = await chooseFolder(t("openFolderTitle"), workspaceParent());
-    if (!path) return;
-    const app = useApp.getState();
-    // A connection ID can refer to a different server in the next folder: the tabs on screen
-    // are kept under this folder and the next folder's own tabs come back (ADR-036).
-    if (app.tabs.some((t) => t.status === "connecting") || app.historySaving.length > 0) return;
-    // Changing folder closes every tab's session (ADR-031): ask first, as before closing tabs,
-    // about open transactions, running queries and row edits not applied (SDB-140).
-    let open: string[] = [];
-    try {
-      open = await call(commands.sessionsToConfirm(app.tabs.map((t) => t.id)));
-    } catch {
-      // The sessions are gone: nothing is left to roll back.
-    }
-    if (!(await confirmLeaving("folder", open))) return;
-    // Saving started while the question was open, or a tab began connecting: nothing changes.
-    const now = useApp.getState();
-    if (now.tabs.some((t) => t.savingEdits || t.status === "connecting") || now.historySaving.length > 0) return;
-    app.setWorkspaceChanging(true);
-    setFolderError(null);
-    // Tabs belong to the folder they were opened in (ADR-036): the old folder's are written
-    // now, and the new folder's come back once it is open.
-    await flushTabs();
-    detachTabs();
-    try {
-      const sessions = [
-        ...now.tabs.map((t) => t.id),
-        ...now.connections.map((c) => `meta:${c.id}`),
-      ];
-      // The core stops the runs the user agreed to cancel, then the sessions close.
-      const running = now.tabs.filter((t) => t.run?.running).map((t) => t.id);
-      app.clearTabConnections();
-      app.setConnections([]);
-      await Promise.all(running.map((id) => call(commands.cancel(id)).catch(() => undefined)));
-      await Promise.all(
-        sessions.map((session) => call(commands.disconnect(session))),
-      );
-      await Promise.all(
-        now.tabs.map((tab) => call(commands.releaseResults(tab.id))),
-      );
-      app.setWorkspace(await call(commands.openWorkspace(path)));
-      await refreshConnections();
-    } catch (e) {
-      setFolderError(errorText(e));
-      await refreshConnections().catch(() => undefined);
-    } finally {
-      await restoreTabs();
-      app.setWorkspaceChanging(false);
-    }
+    if (path) await switchFolder(path);
   }
 
   async function trust() {
@@ -1492,14 +1503,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           <div className="workspace-name" title={workspace?.workspace ?? ""}>
             {folderName ?? t("noFolder")}
           </div>
-          <button
-            className="ghost"
-            onClick={() => void openFolder()}
-            title={t("openAnotherFolder")}
-            disabled={cannotSwitch}
-          >
-            {t("openFolder")}
-          </button>
+          {/* Open folder… and the recent folders (SDB-397). */}
+          <FolderMenuButton disabled={cannotSwitch} onOpenFolder={() => void openFolder()} />
         </div>
         <div className="sidebar-tools">
           <span className="sidebar-section-title">{t("connections")}</span>
@@ -1929,24 +1934,31 @@ function ConnectionNode({
         >
           {open ? "▾" : "▸"}
         </button>
-        <EngineIcon engine={connection.engine} />
+        <EngineIcon engine={connection.engineMark} fallback={connection.engine} />
         <span
           className="label"
           // The description, then the marks after the name, which may not fit.
           title={connectionTooltip(connection, [
             kind ? t("typeTooltip", { name: kind.name }) : null,
+            connection.tlsWarning ? tlsWarningText(t, connection.tlsWarning) : null,
             connection.tunnel ? t("tunnel", { name: connection.tunnel }) : null,
             connection.tags.length > 0 ? t("tagsTooltip", { tags: connection.tags.join(", ") }) : null,
           ])}
         >
           {connection.name}
         </span>
-        {(kind || connection.tunnel || connection.tags.length > 0) && (
+        {(kind || connection.tlsWarning || connection.tunnel || connection.tags.length > 0) && (
           // In order of importance: the type (its dot always stays), SSH, then a few quiet tags (a
           // click filters the explorer by one), each shown whole or not at all where it fits
           // (connectionMarks.ts). The name's tooltip has them all.
           <span ref={marksRef} className="connection-marks">
             {kind && <TypeBadge type={kind} small />}
+            {connection.tlsWarning && (
+              // Its TLS does not check the server (SDB-395): the core decided it.
+              <span className="tls-mark" role="img" aria-label={tlsWarningText(t, connection.tlsWarning)} title={tlsWarningText(t, connection.tlsWarning)}>
+                <Icon name="shieldAlert" size={14} />
+              </span>
+            )}
             {connection.tunnel && (
               <span
                 className="tag"
@@ -2123,6 +2135,9 @@ function SchemaNode({
   const [others, setOthers] = useState<SchemaObjectItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useContextMenu();
+  /** The maintenance action whose dialog is open (SDB-392). */
+  const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
+  const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
   /** Bumped by "Refresh schema": the tables already described read their details again. */
   const [refreshed, setRefreshed] = useState(0);
   const sort = useSortByName();
@@ -2366,6 +2381,14 @@ function SchemaNode({
                 {t(`create.${kind}`)}
               </button>
             ))}
+          <MaintenanceMenu
+            session={session}
+            target={{ kind: "schema", name: schema }}
+            onPick={(kind) => {
+              setMenu(null);
+              setMaintaining(kind);
+            }}
+          />
           {actions?.dropSchemas && (
             <>
               <hr />
@@ -2378,6 +2401,18 @@ function SchemaNode({
             </>
           )}
         </ObjectMenu>
+      )}
+      {maintaining && (
+        <MaintenanceDialog
+          session={session}
+          connectionId={connectionId}
+          engine={engine}
+          schema={schema}
+          name={schema}
+          target={{ kind: "schema", name: schema }}
+          kind={maintaining}
+          onClose={() => setMaintaining(null)}
+        />
       )}
       {creatingTable && (
         <CreateTableDialog
@@ -2508,6 +2543,8 @@ function ObjectNode({
   const [details, setDetails] = useState<TableDetails | null>(null);
   /** Foreign keys of other tables that point to this one; none when they cannot be read. */
   const [references, setReferences] = useState<TableKeyItem[]>([]);
+  /** How the table is partitioned, when it is and the engine tells (SDB-393). */
+  const [partitions, setPartitions] = useState<PartitioningItem | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [menu, setMenu] = useContextMenu();
   const sort = useSortByName();
@@ -2517,6 +2554,11 @@ function ObjectNode({
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [generatedSql, setGeneratedSql] = useState<string | null>(null);
+  /** The maintenance action whose dialog is open (SDB-392). */
+  const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
+  const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
+  /** "Duplicate table…" is open (SDB-394). */
+  const [duplicating, setDuplicating] = useState(false);
   const openDetails = (kind: TableDetailKind) => {
     const app = useApp.getState();
     const existing = app.tabs.some((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
@@ -2538,12 +2580,16 @@ function ObjectNode({
     setLoadingDetails(true);
     setError(null);
     try {
-      const [described, referencing] = await Promise.all([
+      const tableLike = object.kind === "table" || object.kind === "partitioned_table";
+      const [described, referencing, partitioning] = await Promise.all([
         call(commands.describeTable(session, object.schema, object.name, columnFilter)),
         call(commands.referencingKeys(session, object.schema, object.name)).catch((): TableKeyItem[] => []),
+        // Extra: a table whose partitions cannot be read still shows the rest.
+        tableLike ? call(commands.tablePartitions(session, object.schema, object.name)).catch(() => null) : Promise.resolve(null),
       ]);
       setDetails(described);
       setReferences(referencing);
+      setPartitions(partitioning);
     } catch (e) {
       setDetails(null);
       setError(errorText(e));
@@ -2798,6 +2844,17 @@ function ObjectNode({
           <hr />
           <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
           <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
+          {!view && object.kind !== "collection" && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                setDuplicating(true);
+              }}
+            >
+              {t("duplicate.menu")}
+            </button>
+          )}
           {canRename && (
             <button
               role="menuitem"
@@ -2847,6 +2904,14 @@ function ObjectNode({
               </button>
             ))}
           </GenerateMenu>
+          <MaintenanceMenu
+            session={session}
+            target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
+            onPick={(kind) => {
+              setMenu(null);
+              setMaintaining(kind);
+            }}
+          />
         </ObjectMenu>
       )}
       {error && (
@@ -2856,6 +2921,21 @@ function ObjectNode({
       )}
       {open && loadingDetails && <div className="children muted small" role="status">{t("loadingDetails")}</div>}
       {generatedSql !== null && <GeneratedSqlDialog initialSql={generatedSql} onClose={() => setGeneratedSql(null)} />}
+      {maintaining && (
+        <MaintenanceDialog
+          session={session}
+          connectionId={connectionId}
+          engine={engine}
+          schema={object.schema}
+          name={object.name}
+          target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
+          kind={maintaining}
+          onClose={() => setMaintaining(null)}
+        />
+      )}
+      {duplicating && (
+        <DuplicateTableDialog session={session} connectionId={connectionId} schema={object.schema} name={object.name} onClose={() => setDuplicating(false)} />
+      )}
       {renaming && (
         <ObjectChangeDialog
           session={session}
@@ -2999,6 +3079,25 @@ function ObjectNode({
               />
             ))}
           </Folder>
+          {(partitions || object.kind === "partitioned_table") && (
+            <Folder label={t("folders.partitions")} count={partitions?.partitions.length} icon="partitions" onOpenView={() => openDetails("partitions")}>
+              {(partitions?.partitions ?? []).map((partition) => (
+                <LeafRow
+                  key={`${partition.schema}.${partition.name}`}
+                  session={session}
+                  connectionId={connectionId}
+                  schema={object.schema}
+                  label={partition.schema === object.schema ? partition.name : `${partition.schema}.${partition.name}`}
+                  detail={partition.bound ?? t("tableDetails.defaultPartition")}
+                  icon="table"
+                  target={null}
+                  onChanged={refresh}
+                />
+              ))}
+            </Folder>
+          )}
+          <DetailRow label={t("folders.properties")} icon="properties" onOpen={() => openDetails("properties")} />
+          <DetailRow label={t("folders.dependencies")} icon="dependencies" onOpen={() => openDetails("dependencies")} />
         </div>
       )}
     </div>

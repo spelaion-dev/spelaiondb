@@ -318,6 +318,11 @@ pub enum OpenError {
     /// A folder of files could not be set up to be read alone (SDB-316); it was closed again.
     #[error("{0}")]
     FileFolder(String),
+
+    /// The connection allows MySQL's cleartext password plugin on a route the password could be
+    /// read on (SDB-396); the driver was never called.
+    #[error("{0}")]
+    Cleartext(String),
 }
 
 /// Open tunnels, shared between connections (ADR-004): two tabs against the same database,
@@ -523,6 +528,11 @@ pub async fn open_connection(
         });
     }
     let mut params = resolved.connect_params(options.password);
+    // Said before a tunnel or a port-forward is started for nothing; `connect_driver` asks
+    // again, the one gate every connection goes through (SDB-396).
+    if let Some(reason) = crate::cleartext::refusal(&resolved, &params) {
+        return Err(OpenError::Cleartext(reason));
+    }
     crate::mongodb_srv::resolve(&resolved, &mut params).await?;
     let tunnel = start_tunnel(
         &resolved,
@@ -533,7 +543,7 @@ pub async fn open_connection(
     )
     .await?;
 
-    let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
+    let connection = connect_driver(driver.as_ref(), &resolved, &params).await?;
     // A folder of files: before anything else runs, its session is set up to read that folder
     // alone, and locked (SDB-316). Only on the in-memory, read-only database the resolver made.
     let folder = match &resolved.file_folder {
@@ -559,6 +569,21 @@ pub async fn open_connection(
         .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
         // A read-only connection runs only reads, settings and transaction control (ADR-053).
         .with_read_only(resolved.params.read_only);
+    session = session.with_transaction_pooler(
+        resolved
+            .params
+            .options
+            .get(spelaion_config::engine_options::POOLER)
+            .map(String::as_str)
+            == Some("transaction"),
+    );
+    if let Some(names) = &resolved.databases {
+        session = session.with_shown_databases(
+            names,
+            &resolved.params.database,
+            matches!(resolved.engine, Engine::Mysql | Engine::Mariadb),
+        );
+    }
     let refusal = family.as_ref().and_then(|family| {
         let read_only = resolved
             .params
@@ -595,32 +620,38 @@ pub async fn open_connection(
         open.close().await;
         return Err(OpenError::NoReadOnlyBarrier(reason));
     }
-    match apply_session_setup(&open.session, &open.resolved, restricted).await {
+    match finish_session_setup(&open.session, &open.resolved, restricted).await {
         Ok(report) => open.setup = report,
         Err(error) => {
             open.close().await;
-            return Err(error.into());
+            return Err(error);
         }
     }
+    // Scripts split as the session reads text: its sql_mode, setup included (SDB-161).
+    open.session.refresh_sql_mode().await;
+    Ok(open)
+}
+
+/// Applies the setup and verifies the server's read-only mode for opening and testing.
+pub(crate) async fn finish_session_setup(
+    session: &Session,
+    resolved: &ResolvedConnection,
+    restricted: bool,
+) -> Result<SetupReport, OpenError> {
+    let report = apply_session_setup(session, resolved, restricted).await?;
     // The server must say the session is read-only now (SDB-170): one that accepted the
     // statement and stayed writable gets no read-only connection, whatever it calls itself.
-    if open.resolved.params.read_only
-        && crate::session_setup::read_only_statement(open.session.dialect().name()).is_some()
-        && !crate::server_family::read_only_confirmed(
-            open.session.connection().as_ref(),
-            open.session.dialect().name(),
-        )
-        .await
+    let engine = session.dialect().name();
+    if resolved.params.read_only
+        && crate::session_setup::read_only_statement(engine).is_some()
+        && !crate::server_family::read_only_confirmed(session.connection().as_ref(), engine).await
     {
-        open.close().await;
         return Err(OpenError::NoReadOnlyBarrier(
             "read-only mode is not available on this server: it accepted the session's              read-only mode and its session is still writable"
                 .into(),
         ));
     }
-    // Scripts split as the session reads text: its sql_mode, setup included (SDB-161).
-    open.session.refresh_sql_mode().await;
-    Ok(open)
+    Ok(report)
 }
 
 /// Opens the tunnel a connection goes through, if any, and points `params` at its local end:
@@ -840,10 +871,14 @@ pub(crate) fn remote_sqlite(tunnel: &Arc<Tunnel>, resolved: &ResolvedConnection)
 /// opened, not connected to: no limit there (DuckDB waits for another process's lock itself).
 pub(crate) async fn connect_driver(
     driver: &dyn Driver,
-    engine: Engine,
+    resolved: &ResolvedConnection,
     params: &ConnectParams,
 ) -> Result<Box<dyn Connection>, OpenError> {
-    if engine.is_file() && params.remote.is_none() {
+    // Before anything reaches the driver: the password is never let out in clear (SDB-396).
+    if let Some(reason) = crate::cleartext::refusal(resolved, params) {
+        return Err(OpenError::Cleartext(reason));
+    }
+    if resolved.engine.is_file() && params.remote.is_none() {
         return Ok(driver.connect(params).await?);
     }
     let after = params.connect_timeout();

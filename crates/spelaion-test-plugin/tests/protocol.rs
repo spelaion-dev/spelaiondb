@@ -12,9 +12,9 @@ use std::time::Duration;
 use arrow::array::{Array, Int64Array, StringArray};
 use futures_util::StreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, InsertTarget,
-    KeepAlive, LogicalType, NameFilter, ObjectKind, PlanMode, Result, Secret, TextRows, TlsMode,
-    TransactionState,
+    ConnectParams, Connection, DependencyKind, Driver, DriverError, ExecEvent, ExecOptions,
+    InsertTarget, KeepAlive, LogicalType, NameFilter, ObjectKind, PlanMode, Result, Secret,
+    TextRows, TlsMode, TransactionState,
 };
 use spelaion_plugin_host::{Plugin, REDACTED, VERSION};
 
@@ -442,6 +442,46 @@ async fn the_catalog_and_the_session_calls_answer_as_the_driver_does() {
             .is_empty()
     );
     assert!(within(c.list_server_objects()).await.unwrap().is_empty());
+
+    // A relation's properties, partitions and dependencies (1.2, SDB-393), as the driver gave
+    // them, an engine's own property name and a kind not tracked included.
+    let properties = within(c.object_properties("main", "people")).await.unwrap();
+    assert_eq!(properties.len(), 2);
+    assert_eq!(properties[0].name, "owner");
+    assert_eq!(properties[1].name, "made_up_flag");
+    let partitioning = within(c.table_partitions("main", "people"))
+        .await
+        .unwrap()
+        .expect("partitioned");
+    assert_eq!(partitioning.method, "range");
+    assert_eq!(partitioning.partitions.len(), 2);
+    assert_eq!(
+        partitioning.partitions[0].bound.as_deref(),
+        Some("FOR VALUES FROM (0) TO (100)")
+    );
+    assert!(partitioning.partitions[1].subpartitioned);
+    assert_eq!(
+        within(c.table_partitions("main", "adults")).await.unwrap(),
+        None
+    );
+    let dependencies = within(c.object_dependencies("main", "people"))
+        .await
+        .unwrap()
+        .expect("told");
+    assert_eq!(dependencies.uses[0].kind, DependencyKind::Sequence);
+    assert_eq!(dependencies.used_by[0].name, "adults");
+    assert_eq!(dependencies.untracked, [DependencyKind::Trigger]);
+    // An engine that cannot tell says so: never an empty list.
+    assert_eq!(
+        within(c.object_dependencies("main", "adults"))
+            .await
+            .unwrap(),
+        None
+    );
+    let refused = within(c.object_properties("main", "nope"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.to_string(), "no table main.nope");
 }
 
 #[tokio::test]
@@ -534,7 +574,26 @@ async fn a_plugin_of_version_1_0_is_never_sent_a_request_or_settings() {
         panic!("settings were sent to a plugin of 1.0");
     };
     assert!(error.to_string().contains("connection settings"), "{error}");
-    // It was refused in the core: the plugin is still there, and never saw either.
+    // 1.2's details are not asked of it: its engine tells none, as a driver without them.
+    assert!(
+        within(connection.object_properties("main", "people"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        within(connection.table_partitions("main", "people"))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        within(connection.object_dependencies("main", "people"))
+            .await
+            .unwrap(),
+        None
+    );
+    // It was refused in the core: the plugin is still there, and never saw any of it.
     assert!(within(plugin.is_running()).await);
     drop(connection);
     let _ = std::fs::remove_file(program);
@@ -853,6 +912,75 @@ async fn stopping_a_plugin_is_like_its_death() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn a_running_plugins_memory_processor_time_and_sessions_are_read() {
+    // SDB-399: read from the operating system for that one process, never by starting it.
+    let plugin = Plugin::new(PROGRAM);
+    assert_eq!(
+        within(plugin.usage()).await,
+        None,
+        "nothing runs, nothing is started"
+    );
+    assert!(!within(plugin.is_running()).await);
+    let first = connect(&plugin).await;
+    let usage = within(plugin.usage()).await.expect("it runs");
+    assert!(usage.pid > 0);
+    assert!(
+        usage.memory_bytes.is_some_and(|bytes| bytes > 1024 * 1024),
+        "{usage:?}"
+    );
+    assert!(
+        usage.cpu_seconds.is_some_and(|seconds| seconds >= 0.0),
+        "{usage:?}"
+    );
+    assert_eq!(usage.cpu_percent, None, "no share at the first reading");
+    assert_eq!(usage.sessions, 1);
+    let second = connect(&plugin).await;
+    // Work for the processor: a million rows read through.
+    let events = run(second.as_ref(), "rows 1000000").await;
+    assert!(events.iter().all(Result::is_ok));
+    let later = within(plugin.usage()).await.expect("it runs");
+    assert_eq!(later.pid, usage.pid, "the same process serves both");
+    assert_eq!(later.sessions, 2);
+    assert!(
+        later.cpu_seconds >= usage.cpu_seconds,
+        "{usage:?} then {later:?}"
+    );
+    assert!(
+        later.cpu_percent.is_some_and(|share| share >= 0.0),
+        "{later:?}"
+    );
+    assert!(later.uptime >= usage.uptime);
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn a_restart_loses_its_sessions_and_the_next_connection_starts_a_new_process() {
+    // SDB-399: what Settings › Plugins' Restart does. The sessions are lost (ADR-028), nothing
+    // is run again, and the next connection starts the program again.
+    let plugin = Plugin::new(PROGRAM);
+    let before = connect(&plugin).await;
+    let pid = within(plugin.usage()).await.expect("it runs").pid;
+    within(plugin.stop()).await;
+    assert!(before.is_closed(), "its session is lost");
+    assert_eq!(within(plugin.usage()).await, None);
+    let after = connect(&plugin).await;
+    let usage = within(plugin.usage()).await.expect("it runs again");
+    assert_ne!(usage.pid, pid, "a new process");
+    assert_eq!(
+        usage.sessions, 1,
+        "only the new session: the old one is not reopened"
+    );
+    assert!(before.is_closed());
+    assert!(
+        before
+            .execute("engine", &ExecOptions::default())
+            .await
+            .is_err()
+    );
+    assert_eq!(one(after.as_ref(), "engine").await, "test");
 }
 
 #[tokio::test]

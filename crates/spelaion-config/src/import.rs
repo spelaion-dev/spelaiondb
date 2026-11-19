@@ -70,6 +70,7 @@ pub struct ImportedConnection {
     pub folder: String,
     /// The engine, or why SpelaionDB cannot open it (yet).
     pub engine: Result<Engine, String>,
+    pub engine_kind: Option<String>,
     pub host: String,
     pub port: Option<u16>,
     /// Database name; for SQLite and DuckDB, the file path.
@@ -155,9 +156,25 @@ impl ImportedConnection {
         }
     }
 
-    /// Whether a password comes with it (read already, or from the keychain on import).
+    /// Whether a database password comes with it (read already, or from the keychain on import).
     pub fn has_password(&self) -> bool {
         self.password.is_some() || self.stored_password.is_some()
+    }
+
+    /// Whether importing this connection can save a database, SSH or SOCKS password.
+    pub fn has_importable_password(&self) -> bool {
+        let Ok(engine) = &self.engine else {
+            return false;
+        };
+        (!engine.is_file() && self.has_password())
+            || self.ssh.as_ref().is_some_and(|ssh| {
+                matches!(ssh.auth, SshAuth::Password | SshAuth::KeyboardInteractive)
+                    && ssh.password.is_some()
+            })
+            || self
+                .proxy
+                .as_ref()
+                .is_some_and(|proxy| !proxy.user.is_empty() && proxy.password.is_some())
     }
 }
 
@@ -391,6 +408,7 @@ pub fn import_plan(
             description: importable_description(&connection.description),
             tags: importable_tags(&connection.tags),
             engine,
+            engine_kind: connection.engine_kind.clone(),
             env: connection.env.clone(),
             host: if file {
                 String::new()
@@ -401,6 +419,9 @@ pub fn import_plan(
             database: connection.database.clone(),
             // No client this imports from has a folder of files as a connection.
             file_folder: false,
+            pooler: None,
+            cleartext_password: false,
+            databases: Vec::new(),
             user: if file {
                 String::new()
             } else {
@@ -449,6 +470,9 @@ pub fn import_plan(
 /// the client does not give are kept.
 pub fn replacement_draft(existing: &ConnectionEntry, plan: &ConnectionDraft) -> ConnectionDraft {
     let mut draft = ConnectionDraft::from_entry(existing);
+    if draft.engine != plan.engine || plan.engine_kind.is_some() {
+        draft.engine_kind.clone_from(&plan.engine_kind);
+    }
     draft.engine = plan.engine;
     draft.host = plan.host.clone();
     draft.port = plan.port;

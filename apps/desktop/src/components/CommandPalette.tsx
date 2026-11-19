@@ -21,6 +21,8 @@ import {
 } from "../commands";
 import { fuzzyMatch } from "../fuzzy";
 import { openFilePath, recentFiles } from "../sqlFiles";
+import { folderSwitchBlocked, isOpenFolder, recentFolders, switchFolder } from "../folders";
+import type { RecentFolderItem } from "../bindings";
 import { useApp } from "../store";
 
 /** At most this many matches are listed: typing more narrows them. */
@@ -30,6 +32,7 @@ type Entry =
   | { kind: "command"; key: string; id: CommandId; text: string; prefix: number; shortcut?: string }
   | { kind: "object"; key: string; item: PaletteObject; text: string; detail: string }
   | { kind: "file"; key: string; path: string; text: string; detail: string }
+  | { kind: "folder"; key: string; path: string; text: string; detail: string }
   | { kind: "action"; key: string; action: PaletteObjectAction; text: string };
 
 interface Shown {
@@ -74,6 +77,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
   const [error, setError] = useState<{ action: string; detail: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [recent, setRecent] = useState<RecentFileItem[]>([]);
+  // The recent folders (SDB-397), except the open one; none while the folder cannot change.
+  const [folders, setFolders] = useState<RecentFolderItem[]>([]);
   const list = useRef<HTMLUListElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const connections = useApp((s) => s.connections);
@@ -85,6 +90,9 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
   useEffect(() => {
     let alive = true;
     void recentFiles().then((files) => alive && setRecent(files.filter((file) => file.exists)));
+    if (!folderSwitchBlocked()) {
+      void recentFolders().then((list) => alive && setFolders(list.filter((folder) => folder.exists && !isOpenFolder(folder.path))));
+    }
     return () => {
       alive = false;
     };
@@ -144,8 +152,11 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
     for (const file of recent) {
       entries.push({ kind: "file", key: `file:${file.path}`, path: file.path, text: file.name, detail: file.path });
     }
+    for (const folder of folders) {
+      entries.push({ kind: "folder", key: `folder:${folder.path}`, path: folder.path, text: folder.name, detail: folder.path });
+    }
     return entries;
-  }, [connections, connected, catalog, recent, t]);
+  }, [connections, connected, catalog, recent, folders, t]);
 
   const actionEntries = useMemo<Entry[]>(
     () =>
@@ -201,6 +212,11 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
       case "file":
         onClose();
         window.setTimeout(() => void openFilePath(entry.path), 0);
+        break;
+      case "folder":
+        // As from the folder menu: it asks first about what closing the sessions would lose.
+        onClose();
+        window.setTimeout(() => void switchFolder(entry.path), 0);
         break;
       case "object":
         setChosen({ entry, query });
@@ -300,9 +316,9 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
               >
                 <Highlighted text={entry.text} positions={item.positions} muted={entry.kind === "command" ? entry.prefix : 0} />
                 {entry.kind === "command" && entry.shortcut && <span className="menu-shortcut">{entry.shortcut}</span>}
-                {(entry.kind === "object" || entry.kind === "file") && (
+                {(entry.kind === "object" || entry.kind === "file" || entry.kind === "folder") && (
                   <span className="palette-detail muted small">
-                    {entry.kind === "file" ? `${t("palette.recentFile")} · ${entry.detail}` : entry.detail}
+                    {entry.kind === "file" ? `${t("palette.recentFile")} · ${entry.detail}` : entry.kind === "folder" ? `${t("palette.recentFolder")} · ${entry.detail}` : entry.detail}
                   </span>
                 )}
               </li>

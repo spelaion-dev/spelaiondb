@@ -45,7 +45,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
   const client = clientInfo?.label ?? props.client;
   const hasWorkspace = useApp((s) => Boolean(s.workspace?.workspace));
   const [dir, setDir] = useState<string | null>(window.__spelaionImportDirs?.[props.client] ?? null);
-  const [found, setFound] = useState<{ dir: string; items: ImportItem[] } | null>(null);
+  const [found, setFound] = useState<{ dir: string; items: ImportItem[]; canSavePasswords: boolean } | null>(null);
   // An encrypted export: the password typed, the one the last read used, and whether it failed.
   const [typedPassword, setTypedPassword] = useState("");
   const [filePassword, setFilePassword] = useState("");
@@ -85,7 +85,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
           return;
         }
         setLocked(null);
-        setFound({ dir: scan.dir, items: scan.connections });
+        setFound({ dir: scan.dir, items: scan.connections, canSavePasswords: scan.canSavePasswords });
       })
       .catch((e: unknown) => active && setError(e instanceof Error ? e.message : String(e)));
     return () => {
@@ -131,7 +131,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
       const outcome = await call(
         commands.importConnections(props.client, dir, filePassword || null, choices, {
           personal,
-          savePasswords,
+          savePasswords: found.canSavePasswords && savePasswords,
           folder,
           keepClientFolders: keepFolders,
         }),
@@ -287,7 +287,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
                       }}
                       aria-label={c.name}
                     />
-                    <EngineIcon engine={c.engine} />
+                    <EngineIcon engine={c.engineKind ?? c.engine} fallback={c.engine} />
                     <span className="conn-import-main">
                       <span>
                         <strong>{c.name}</strong>
@@ -368,14 +368,16 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
               {t("importer.keepFolders", { client })}
             </label>
           </fieldset>
-          <fieldset className="conn-import-options">
-            <legend>{t("importer.passwords")}</legend>
-            <label>
-              <input type="checkbox" checked={savePasswords} onChange={(e) => setSavePasswords(e.target.checked)} />{" "}
-              {t("importer.savePasswords", { client })}
-            </label>
-            <p className="muted small">{t("importer.passwordsHint")}</p>
-          </fieldset>
+          {found.canSavePasswords && (
+            <fieldset className="conn-import-options">
+              <legend>{t("importer.passwords")}</legend>
+              <label>
+                <input type="checkbox" checked={savePasswords} onChange={(e) => setSavePasswords(e.target.checked)} />{" "}
+                {t("importer.savePasswords", { client })}
+              </label>
+              <p className="muted small">{t("importer.passwordsHint")}</p>
+            </fieldset>
+          )}
         </>
       )}
       <div className="wizard-footer">

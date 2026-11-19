@@ -50,6 +50,11 @@ import {
   type SchemaItem,
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
+  type PartitioningItem_Serialize,
+  type DependenciesItem_Serialize,
+  type DependencyKindItem,
+  type ObjectPropertyItem,
+  type ObjectPropertiesItem_Serialize,
   type TableKeyItem,
   type KeyTargetItem,
   type KeyRefItem,
@@ -95,6 +100,7 @@ import {
   type SqlTemplateItem,
   type SnippetItem,
   type TextFormat,
+  type PoolerItem,
   type TlsModeItem,
   type TunnelItem,
   type UrlFields_Serialize,
@@ -145,7 +151,7 @@ export type { BlockItem, BulkActionItem, CellInputItem };
 export type { CopySpecialItem, UpdateSourceItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
-export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
+export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, PoolerItem, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ProxyDraft = ProxyDraftItem_Deserialize;
@@ -179,6 +185,10 @@ export type { SchemaObjectKindItem, ServerObjectKindItem };
 // The channel delivers the deserialization variant (optional fields).
 export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
+export type PartitioningItem = PartitioningItem_Serialize;
+export type DependenciesItem = DependenciesItem_Serialize;
+export type ObjectPropertiesItem = ObjectPropertiesItem_Serialize;
+export type { DependencyKindItem, ObjectPropertyItem };
 export type { TableKeyItem, KeyTargetItem, KeyRefItem };
 export type RowReferenceItem = RowReferenceItem_Serialize;
 export type SelectionStatsItem = SelectionStatsItem_Serialize;

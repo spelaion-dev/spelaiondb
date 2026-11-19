@@ -528,7 +528,11 @@ fn creates_new_connection_files() {
         host: None,
         port: None,
         database: Some("data/analytics.db".into()),
+        engine_kind: None,
         file_folder: false,
+        pooler: None,
+        cleartext_password: false,
+        databases: None,
         user: None,
         password: None,
         tunnel: None,
@@ -634,7 +638,11 @@ fn postgres_draft() -> ConnectionDraft {
         host: " db.internal ".into(),
         port: Some(5432),
         database: "orders".into(),
+        engine_kind: None,
         file_folder: false,
+        pooler: None,
+        cleartext_password: false,
+        databases: Vec::new(),
         user: "app".into(),
         password: PasswordChoice::Keychain,
         tls_mode: TlsModeConfig::VerifyFull,
@@ -1457,7 +1465,11 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         host: String::new(),
         port: Some(5432),
         database: "orders".into(),
+        engine_kind: None,
         file_folder: false,
+        pooler: None,
+        cleartext_password: false,
+        databases: Vec::new(),
         user: "app".into(),
         password: PasswordChoice::Prompt,
         tls_mode: TlsModeConfig::Disable,
@@ -3147,6 +3159,44 @@ fn changed(result: Result<(), ResolveError>) -> spelaion_config::ItemChange {
         Err(ResolveError::Changed { change, .. }) => change,
         other => panic!("expected a change to review: {other:?}"),
     }
+}
+
+#[test]
+fn a_saved_kind_is_validated_and_included_in_the_trust_pin() {
+    let fx = Fixture::new("pinned-engine-kind");
+    let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
+    let trust = fx.trusted();
+    resolved(&fx, &trust).unwrap();
+
+    let with_kind = |kind: &str| {
+        PINNED_DB.replace(
+            "engine = \"postgres\"",
+            &format!("engine = \"postgres\"\nengine_kind = \"{kind}\""),
+        )
+    };
+    std::fs::write(&path, with_kind("cockroachdb")).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.connection(&ws("orders")).unwrap();
+    assert_eq!(entry.file.engine, Engine::Postgres);
+    assert_eq!(entry.file.engine_mark(), "cockroachdb");
+    assert_eq!(
+        ConnectionDraft::from_entry(entry).engine_kind.as_deref(),
+        Some("cockroachdb")
+    );
+    let change = changed(resolved(&fx, &trust));
+    assert_eq!(change.fields[0].field, "engine_kind");
+    assert_eq!(change.fields[0].after.as_deref(), Some("cockroachdb"));
+
+    std::fs::write(&path, with_kind("tidb")).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.connection(&ws("orders")).is_none());
+    assert!(
+        config
+            .problems
+            .iter()
+            .any(|problem| problem.to_string().contains("engine_kind"))
+    );
 }
 
 #[test]

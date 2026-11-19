@@ -11,11 +11,15 @@ import {
   type EngineChangeItem,
   type EngineItem,
   type PasswordMode,
+  type PoolerItem,
   type TlsModeItem,
   type TunnelItem,
   type UrlFields,
 } from "../api";
 import { tagsInUse } from "../connectionInfo";
+import { tlsWarningText } from "../tlsWarning";
+import type { TlsWarningItem } from "../bindings";
+import { Icon } from "./Icons";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./ConnectionTypePicker";
 import { EngineIcon } from "./EngineIcon";
@@ -27,6 +31,7 @@ import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
 import { saveHistoryPreference } from "../historyPreference";
 import { fieldList } from "../fieldNames";
+import { ObjectMenu } from "./ObjectMenu";
 import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
@@ -54,6 +59,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
    *  PostgreSQL connection, SDB-169): it names the form, the connection is `engine`'s. */
   const [kind, setKind] = useState<EngineItem | null>(null);
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
+  const [openImportMenu, setOpenImportMenu] = useState(dialog.kind === "add" && dialog.openImportMenu === true);
   const [importing, setImporting] = useState<ImportClientId | null>(null);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
@@ -70,6 +76,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
     const mapped = await call(commands.changeConnectionEngine(current, next.id));
     setInitial(mapped.draft as ConnectionDraft);
     setEngine(next);
+    setKind(engines.find((e) => e.id === (mapped.draft.fileFolder ? "file-folder" : mapped.draft.engineKind)) ?? null);
     setCarriedPassword(password);
     setEngineChange(next.id === savedEngine ? null : mapped.change);
   }
@@ -89,7 +96,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         setSavedEngine(draft.engine);
         setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
         // A folder of files (SDB-316) is shown as its catalog entry, like when it was added.
-        if (draft.fileFolder) setKind(catalog.find((e) => e.access === "folder") ?? null);
+        setKind(catalog.find((e) => e.id === (draft.fileFolder ? "file-folder" : draft.engineKind)) ?? null);
       } catch (e) {
         setLoadError(errorText(e));
       }
@@ -158,6 +165,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
           <ConnectionForm
             engine={engine}
             fileFolder={kind?.access === "folder"}
+            engineKind={kind?.access === "network" ? kind.id : null}
             prefill={prefill ?? undefined}
             onBack={() => {
               setEngine(null);
@@ -170,7 +178,11 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : (
           <EnginePicker
             engines={engines}
-            onImport={(client) => setImporting(client)}
+            openImportMenu={openImportMenu}
+            onImport={(client) => {
+              setOpenImportMenu(false);
+              setImporting(client);
+            }}
             onPick={(picked, fields) => {
               const base = connectionEngine(engines, picked);
               if (!base) return;
@@ -199,6 +211,71 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   );
 }
 
+function ImportMenu({ openInitially, onPick }: { openInitially: boolean; onPick(client: ImportClientId): void }) {
+  const { t } = useTranslation("connections");
+  const button = useRef<HTMLButtonElement>(null);
+  const row = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const items = () => Array.from(row.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? []);
+  const open = useCallback(() => {
+    const rect = button.current?.getBoundingClientRect();
+    if (rect) setAt({ x: rect.left, y: rect.bottom });
+  }, []);
+
+  useEffect(() => { if (openInitially) open(); }, [openInitially, open]);
+  useEffect(() => { if (at) items()[0]?.focus(); }, [at]);
+
+  return (
+    <div
+      ref={row}
+      className="import-row"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setAt(null);
+      }}
+      onKeyDown={(e) => {
+        if (!at) return;
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          setAt(null);
+          button.current?.focus();
+        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const choices = items();
+          const current = choices.indexOf(document.activeElement as HTMLButtonElement);
+          const next = e.key === "ArrowDown" ? current + 1 : current < 0 ? choices.length - 1 : current - 1;
+          choices[(next + choices.length) % choices.length]?.focus();
+        }
+      }}
+    >
+      <button
+        ref={button}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={at !== null}
+        onClick={() => at ? setAt(null) : open()}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !at) {
+            e.preventDefault();
+            open();
+          }
+        }}
+      >
+        {t("importer.open")}
+      </button>
+      {at && (
+        <ObjectMenu at={at} label={t("importer.open")}>
+          {IMPORT_CLIENTS.map((client) => (
+            <button key={client.id} role="menuitem" type="button" tabIndex={-1} onClick={() => onPick(client.id)}>
+              {client.label}
+            </button>
+          ))}
+        </ObjectMenu>
+      )}
+    </div>
+  );
+}
+
 function EngineBadge({ engine }: { engine: EngineItem }) {
   return (
     <EngineIcon engine={engine.id} fallback={engine.engine} />
@@ -214,10 +291,12 @@ function connectionEngine(engines: EngineItem[], picked: EngineItem): EngineItem
 
 function EnginePicker({
   engines,
+  openImportMenu,
   onPick,
   onImport,
 }: {
   engines: EngineItem[];
+  openImportMenu: boolean;
   onPick(engine: EngineItem, fields?: UrlFields): void;
   onImport(client: ImportClientId): void;
 }) {
@@ -282,14 +361,7 @@ function EnginePicker({
           {urlError}
         </p>
       )}
-      <div className="import-row">
-        <span className="muted small">{t("importer.or")}</span>
-        {IMPORT_CLIENTS.map((client) => (
-          <button key={client.id} onClick={() => onImport(client.id)}>
-            {t("importer.button", { client: client.label })}
-          </button>
-        ))}
-      </div>
+      <ImportMenu openInitially={openImportMenu} onPick={onImport} />
       <div className="engine-groups">
         {CATEGORIES.map((category) => {
           const items = visible.filter((e) => e.category === category);
@@ -425,6 +497,7 @@ function ConnectionForm(props: {
   prefill?: UrlFields;
   /** A new DuckDB connection to a folder of CSV, TSV and Parquet files (SDB-316). */
   fileFolder?: boolean;
+  engineKind?: string | null;
   /** A password typed before the engine was switched, kept in the new form. */
   initialPassword?: string;
   /** Editing: the engines it can switch to, the one on disk, and what the last switch did. */
@@ -490,11 +563,15 @@ function ConnectionForm(props: {
     description: "",
     tags: [],
     engine: engine.id,
+    engineKind: props.engineKind ?? null,
     env: "",
     host: prefill?.host || (network ? "localhost" : ""),
     port: prefill?.port ?? null,
     database: prefill?.database ?? "",
     fileFolder,
+    pooler: null,
+    cleartextPassword: false,
+    databases: [],
     user: prefill?.user ?? "",
     passwordEnv: "",
     passwordOther: "",
@@ -578,6 +655,15 @@ function ConnectionForm(props: {
     setSaveError(null);
   }, []);
 
+  // SDB-396: a pooler is PostgreSQL's, the cleartext password plugin MySQL's and MariaDB's,
+  // and a list of databases is chosen where the server has several to pick from.
+  const pooler = engine.id === "postgres";
+  const transactionPooled = pooler && draft.pooler === "transaction";
+  const cleartext = engine.id === "mysql" || engine.id === "mariadb";
+  const choosesDatabases = cleartext || engine.id === "sqlserver";
+  // A hint only: the core checks when it opens (a certificate checked, or a profile with SSH
+  // hops; a profile with only a proxy or SSM is refused there).
+  const cleartextSafeRoute = draft.tlsMode === "verify-ca" || draft.tlsMode === "verify-full" || (useTunnel && !useKubernetes);
   // Agents write only on an exposed connection that is not read-only (ADR-019), on an engine
   // whose writes the core can run (SDB-325).
   const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly && engine.agentWrites;
@@ -614,9 +700,41 @@ function ConnectionForm(props: {
       : { readOnly: false, mcpExposed: false, mcpWrites: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }),
     // Neither is offered where the core has no read barrier (Oracle, libSQL, Flight SQL).
     ...(engine.readBarrier ? {} : { readOnly: false, mcpExposed: false, mcpWrites: false }),
+    // SDB-396: each only on the engine that has it, as the core checks.
+    pooler: pooler ? draft.pooler : null,
+    cleartextPassword: cleartext && draft.cleartextPassword,
+    databases: choosesDatabases ? draft.databases : [],
+    // A pooler in transaction mode keeps nothing set for the session (the core refuses it).
+    ...(transactionPooled
+      ? { readOnly: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }
+      : {}),
   };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.running;
+
+  // A TLS mode that does not check the server, on a host that is not this machine (SDB-395):
+  // the core decides it from what is typed, and says it again with the test's result.
+  const [tlsWarning, setTlsWarning] = useState<TlsWarningItem | null>(null);
+  const [testTlsWarning, setTestTlsWarning] = useState<TlsWarningItem | null>(null);
+  const tlsKey = JSON.stringify([request.personal, request.engine, request.host, request.tlsMode, request.tunnel, request.kubernetes !== null, request.fileFolder, request.sqlite3]);
+  useEffect(() => {
+    let current = true;
+    const timer = window.setTimeout(() => {
+      call(commands.draftTlsWarning(request))
+        .then((warning) => { if (current) setTlsWarning(warning); })
+        .catch(() => { if (current) setTlsWarning(null); });
+    }, 250);
+    return () => { current = false; window.clearTimeout(timer); };
+    // Only what the rule reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tlsKey]);
+  const tlsNote = (warning: TlsWarningItem | null, className = "") =>
+    warning && (
+      <p className={`tls-warning small${className}`} role="status">
+        <Icon name="shieldAlert" size={14} />
+        <span>{tlsWarningText(t, warning)}</span>
+      </p>
+    );
 
   // A new connection is named by the personal pattern (ADR-030) until the user types a name.
   const suggestKey = JSON.stringify([request.engine, request.host, request.port, request.database, request.user, request.env]);
@@ -708,6 +826,7 @@ function ConnectionForm(props: {
         test.clear();
         return;
       }
+      setTestTlsWarning(reviewed.tlsWarning);
       test.finish(reviewed.report);
     } catch (e) {
       test.clear();
@@ -856,6 +975,7 @@ function ConnectionForm(props: {
                     />
                   </Field>
                 </div>
+                {tlsNote(tlsWarning)}
                 {/* A libSQL server serves one database per address (ADR-058). */}
                 {engine.id !== "libsql" && (
                   <Field label={engine.id === "oracle" ? t("fields.serviceName") : t("fields.database")}>
@@ -863,6 +983,23 @@ function ConnectionForm(props: {
                   </Field>
                 )}
                 {useKubernetes && <p className="muted small">{t("kubernetes.mainHint")}</p>}
+                {pooler && (
+                  <>
+                    <Field label={t("fields.pooler")}>
+                      <select
+                        aria-label={t("fields.pooler")}
+                        name="pooler"
+                        value={draft.pooler ?? ""}
+                        onChange={(e) => update({ pooler: (e.target.value || null) as PoolerItem | null })}
+                      >
+                        <option value="">{t("pooler.none")}</option>
+                        <option value="session">{t("pooler.session")}</option>
+                        <option value="transaction">{t("pooler.transaction")}</option>
+                      </select>
+                    </Field>
+                    <p className="muted small">{transactionPooled ? t("pooler.transactionHint") : t("pooler.hint")}</p>
+                  </>
+                )}
               </fieldset>
               <fieldset>
                 <legend>{t("sections.authentication")}</legend>
@@ -933,7 +1070,42 @@ function ConnectionForm(props: {
                     <p className="muted small">{t("auth.envHint")}</p>
                   </>
                 )}
+                {cleartext && (
+                  <>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        name="cleartextPassword"
+                        checked={draft.cleartextPassword}
+                        onChange={(e) => update({ cleartextPassword: e.target.checked })}
+                      />
+                      {t("fields.cleartextPassword")}
+                    </label>
+                    <p className="muted small">{t("fields.cleartextPasswordHint")}</p>
+                    {draft.cleartextPassword && !cleartextSafeRoute && (
+                      <p className="error small" role="alert">{t("fields.cleartextPasswordRoute")}</p>
+                    )}
+                  </>
+                )}
               </fieldset>
+              {choosesDatabases && (
+                <fieldset>
+                  <legend>{t("sections.databases")}</legend>
+                  {/* One name per line; the core trims them and keeps each once. */}
+                  <Field label={t("fields.databases")}>
+                    <textarea
+                      className="masking-patterns"
+                      name="databases"
+                      rows={3}
+                      spellCheck={false}
+                      value={draft.databases.join("\n")}
+                      placeholder={t("fields.databasesPlaceholder")}
+                      onChange={(e) => update({ databases: e.target.value.split("\n") })}
+                    />
+                  </Field>
+                  <p className="muted small">{t("fields.databasesHint")}</p>
+                </fieldset>
+              )}
             </>
           ) : (
             fileFolder ? (
@@ -1006,6 +1178,7 @@ function ConnectionForm(props: {
                 </button>
               </div>
               <p className="muted small">{t("fields.tlsHint")}</p>
+              {tlsNote(tlsWarning)}
               {passwordless && (
                 <>
                   <div className="form-pair">
@@ -1145,6 +1318,8 @@ function ConnectionForm(props: {
         )}
 
         <div id="connection-tab-session" role="tabpanel" hidden={tab !== "session"}>
+          {transactionPooled && <p className="banner" role="note">{t("pooler.noSession")}</p>}
+          <fieldset disabled={transactionPooled} className="plain-group">
           {(engine.sessionSchema || engine.isolationLevels.length > 0) && (
             <fieldset>
               <legend>{t("sections.session")}</legend>
@@ -1206,6 +1381,7 @@ function ConnectionForm(props: {
             </label>
             <p className="muted small">{t("fields.sessionSetupHint")}</p>
             {setupRestricted && <p className="muted small">{t("fields.sessionSetupRestricted")}</p>}
+          </fieldset>
           </fieldset>
         </div>
 
@@ -1308,9 +1484,15 @@ function ConnectionForm(props: {
           {engine.readBarrier ? <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">
-              <input type="checkbox" checked={draft.readOnly || fileFolder} disabled={fileFolder} onChange={(e) => update({ readOnly: e.target.checked })} />
+              <input
+                type="checkbox"
+                checked={(draft.readOnly || fileFolder) && !transactionPooled}
+                disabled={fileFolder || transactionPooled}
+                onChange={(e) => update({ readOnly: e.target.checked })}
+              />
               {t("fields.readOnly")}
             </label>
+            {transactionPooled && <p className="muted small">{t("pooler.noReadOnly")}</p>}
             <label className="check">
               <input type="checkbox" checked={draft.mcpExposed && !fileFolder} disabled={fileFolder} onChange={(e) => update({ mcpExposed: e.target.checked })} />
               {t("fields.mcpExposed")}
@@ -1381,6 +1563,7 @@ function ConnectionForm(props: {
         </div>
       </div>
 
+      {test.steps && test.report && tlsNote(testTlsWarning, " tls-warning-test")}
       {test.steps && (
         <ConnectionTestLog steps={test.steps} report={test.report} running={test.running} onStop={test.stop} onClose={test.clear} />
       )}

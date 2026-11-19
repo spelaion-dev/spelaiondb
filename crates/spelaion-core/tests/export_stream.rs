@@ -13,8 +13,8 @@ use futures_util::StreamExt;
 use spelaion_config::Safeguards;
 use spelaion_core::{
     CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportFormat,
-    ExportProgress, ResultStore, Session, StreamExport, TableSource, TextEncoding, export_query,
-    export_table, export_tables, rerun_check,
+    ExportProgress, FileNamePattern, ResultStore, Session, StreamExport, TableSource, TextEncoding,
+    export_query, export_table, export_tables, rerun_check,
 };
 use spelaion_driver_api::{ConnectParams, Driver, ExecOptions, Secret, TlsMode, Value};
 
@@ -104,6 +104,9 @@ fn csv(escape_formulas: bool) -> StreamExport {
             escape_formulas,
         },
         encoding: TextEncoding::Utf8,
+        gzip: false,
+        sql: spelaion_core::SqlOptions::default(),
+        json: spelaion_core::JsonOptions::default(),
         columns: None,
         batch_size: DEFAULT_BATCH_ROWS,
     }
@@ -242,6 +245,9 @@ async fn exercise(engine: Engine) {
             header: true,
             csv: CsvOptions::default(),
             encoding: TextEncoding::Utf8,
+            gzip: false,
+            sql: spelaion_core::SqlOptions::default(),
+            json: spelaion_core::JsonOptions::default(),
             columns: Some(vec![1, 0, 99]),
             batch_size: DEFAULT_BATCH_ROWS,
         };
@@ -307,7 +313,8 @@ async fn exercise(engine: Engine) {
             &session,
             &[(schema.to_string(), table.clone())],
             &tables_dir,
-            "csv",
+            &FileNamePattern::default(),
+            None,
             &csv(true),
             &ExportCancel::new(),
             &|_, _| {},

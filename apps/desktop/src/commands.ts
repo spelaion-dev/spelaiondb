@@ -9,10 +9,12 @@ import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./comma
 import { closeQueryTab, connectTabFromExplorer, explorerDatabase, newQueryOnConnection } from "./connect";
 import { readClipboardText } from "./clipboardText";
 import { duplicateConnection } from "./connectionCopies";
+import { disconnectAll, hasSessions } from "./connectionControl";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
 import { openDiagram } from "./diagramTabs";
 import { usePreferences } from "./preferences";
+import { copyDiagnostics, openIssuePage } from "./diagnostics";
 import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, GRID_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type ResultMeta, type Tab } from "./store";
 import {
   closable,
@@ -143,6 +145,7 @@ function stepTab(back: boolean) {
 const BINDINGS: Record<CommandId, CommandBinding> = {
   "palette.show": { run: () => useApp.getState().setPaletteOpen(true) },
   "object.openByName": { run: () => useApp.getState().setOpenObject({ connectionId: null }) },
+  "connection.import": { run: () => useApp.getState().setConnectionDialog({ kind: "add", openImportMenu: true }) },
   "connection.add": { run: () => useApp.getState().setConnectionDialog({ kind: "add" }) },
   "data.importClipboard": {
     enabled: (c) => importSession(c) !== null,
@@ -258,6 +261,24 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     },
   },
   "editor.variables": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("variables") },
+  "editor.reconnect": {
+    enabled: (c) => Boolean(editorTab(c)?.connectionId) && !editorTab(c)?.run?.running,
+    run: editorCommand("reconnect"),
+  },
+  "editor.sessionReadOnly": {
+    enabled: (c) => editorTab(c)?.status === "connected" && !editorTab(c)?.run?.running,
+    label: (c) => (editorTab(c)?.sessionReadOnly ? "editor:session.readWrite" : "editor:session.readOnly"),
+    run: editorCommand("sessionReadOnly"),
+  },
+  "connections.disconnectAll": {
+    enabled: () => hasSessions(null),
+    run: () => void disconnectAll(null),
+  },
+  // All but the active tab's connection.
+  "connections.disconnectOthers": {
+    enabled: (c) => Boolean(tabOf(c)?.connectionId) && hasSessions(tabOf(c)?.connectionId ?? null),
+    run: (c) => void disconnectAll(tabOf(c)?.connectionId ?? null),
+  },
   "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
   "editor.lineComment": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("lineComment") },
@@ -316,6 +337,9 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "view.mcp": { run: () => useApp.getState().setSidebarSection((current) => (current === "mcp" ? "connections" : "mcp")) },
   "view.settings": { run: () => useApp.getState().openSettings() },
   "view.plugins": { run: () => useApp.getState().openSettings("plugins") },
+  // The palette closes as it runs: a failure is shown where Settings › Updates offers the same.
+  "help.copyDiagnostics": { run: () => copyDiagnostics().catch(() => useApp.getState().openSettings("updates")) },
+  "help.openIssue": { run: () => openIssuePage().catch(() => useApp.getState().openSettings("updates")) },
 };
 
 export function commandEnabled(id: CommandId, context: CommandContext): boolean {

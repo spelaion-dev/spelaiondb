@@ -46,6 +46,37 @@ quoting must be the engine's.
    explorer filters (ADR-025): an object by its schema, name and kind. A bookmark whose object
    is gone stays until it is removed, and opening it says so.
 
+## Maintenance actions (2026-11-18, SDB-392)
+The explorer's Maintenance menu (a table, a materialized view, a SQLite or DuckDB schema) follows
+this ADR: the core writes each statement from the action and its options (`objects/maintenance.rs`:
+VACUUM with its options, ANALYZE, REFRESH MATERIALIZED VIEW, TRUNCATE with ONLY, RESTART
+IDENTITY and CASCADE, a table's own triggers on and off on PostgreSQL; CHECK, REPAIR, ANALYZE,
+OPTIMIZE and TRUNCATE on MySQL and MariaDB; a table or its indexes rebuilt and triggers on and off
+on SQL Server; the integrity check and VACUUM on SQLite, VACUUM and CHECKPOINT on DuckDB), and the
+dialog shows it before anything runs. Unlike a rename or a drop, it runs in an editor tab of its
+own, as shown: the guard asks there what it asks of any run (a TRUNCATE), a read-only connection
+refuses it there too (ADR-053), the engine's output (notices, the rows a check returns) lands in
+that tab's results and Messages, and VACUUM, which no engine runs inside a transaction, meets none
+(a new tab has none open, and the core never opens one before it, ADR-031). The plan refuses a
+read-only connection, or a session made read-only (SDB-395), before reading anything, checks that `CONCURRENTLY` can refresh the view
+(populated, with a unique index on plain columns), and lists what a TRUNCATE with CASCADE also
+empties, read from the catalog's foreign keys. PostgreSQL's triggers are switched with `USER`:
+`ALL` would also stop the foreign keys' triggers, which only a superuser may do.
+
+## Duplicating a table (2026-11-18, SDB-394)
+"Duplicate table…" follows this ADR as the maintenance actions do: the core writes the copy's
+statements from the catalog read again (`objects/duplicate.rs`), each engine in its own form, and
+the dialog shows them, with what the copy keeps and what it does not, before they run as shown in
+an editor tab of their own (the guard and the connection type's confirmation ask there, a
+read-only connection or session refuses). PostgreSQL: `CREATE TABLE … (LIKE … INCLUDING …)`, with or without
+its indexes and constraints, never its foreign keys or triggers, and its identity restarting from
+its start value. MySQL and MariaDB: `CREATE TABLE … LIKE`, which always keeps the keys, indexes and
+checks. SQL Server: `SELECT … INTO`, columns, nullability and identity only. SQLite and DuckDB: the
+table's kept `CREATE TABLE` text under the new name, and each kept index under a new name. Rows
+are copied by the server (`INSERT … SELECT`, generated columns left to compute, or `SELECT …
+INTO`), never through the app. What the plan says it keeps is what `tests/object_actions.rs`
+checks on every engine.
+
 ## Consequences
 - An object action can never run SQL the user has not seen, nor anything else than what the
   core writes for the object chosen.

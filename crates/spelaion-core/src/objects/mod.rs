@@ -9,6 +9,8 @@
 mod alter;
 mod create;
 mod ddl;
+mod duplicate;
+mod maintenance;
 mod privileges;
 mod rebuild;
 mod source;
@@ -20,6 +22,13 @@ pub use alter::{
 };
 pub use create::{
     NewColumn, NewForeignKey, NewIndex, NewTable, apply_create_table, create_table_plan,
+};
+pub use duplicate::{
+    DuplicateOptions, DuplicatePlan, DuplicateTable, TablePart, duplicate_options, duplicate_plan,
+};
+pub use maintenance::{
+    CheckMode, IndexCleanup, MaintenanceKind, MaintenanceOptions, MaintenancePlan,
+    MaintenanceRequest, maintenance_kinds, maintenance_plan, maintenance_statement,
 };
 pub use privileges::{
     GrantedPrivilege, PrivilegeChange, PrivilegeScope, PrivilegeScopeFields, PrivilegeTarget,
@@ -165,10 +174,17 @@ pub async fn search_objects(
     Ok(found)
 }
 
+/// Why a session behind a pooler in transaction mode has no schema of its own (SDB-396).
+pub const TRANSACTION_POOLED_SCHEMA: &str = "this connection goes through a pooler in transaction mode, which keeps no session settings: qualify the names with their schema";
+
 /// Makes `schema` where this session finds unqualified names: `search_path` on PostgreSQL (the
 /// schema, then `public`), the database on MySQL and MariaDB, `SET schema` on DuckDB. Only the
 /// session changes, never the saved connection.
 pub async fn set_active_schema(session: &Session, schema: &str) -> Result<(), ObjectError> {
+    // The next transaction may run on another server connection, without it (SDB-396).
+    if session.is_transaction_pooled() {
+        return Err(ObjectError::Unsupported(TRANSACTION_POOLED_SCHEMA.into()));
+    }
     let dialect = session.dialect();
     let failed = |message: String| ObjectError::Failed {
         index: 1,

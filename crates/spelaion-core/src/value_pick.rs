@@ -23,9 +23,7 @@ use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use spelaion_driver_api::{
     ColumnInfo, ConstraintKind, Dialect, ForeignKeyInfo, LogicalType, TableInfo, Value,
 };
-use sqlparser::ast::{
-    BinaryOperator, ColumnOption, Expr, Statement, TableConstraint, Value as SqlValue,
-};
+use sqlparser::ast::{BinaryOperator, Expr, Value as SqlValue};
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
 
@@ -233,11 +231,7 @@ pub async fn value_picker(
             })));
         }
     }
-    let checks = if engine == "sqlite" {
-        sqlite_check_lists(session, schema, table, &info.name).await?
-    } else {
-        check_lists(engine, &described, &info.name)
-    };
+    let checks = check_lists(engine, &described, &info.name);
     if let Some(values) = only_list(checks) {
         return Ok(Some(ValuePicker::Choice(ChoicePicker {
             source: ChoiceSource::Check,
@@ -626,55 +620,6 @@ fn only_list(lists: Vec<Vec<String>>) -> Option<Vec<String>> {
         Ok([values]) if !values.is_empty() => Some(values),
         _ => None,
     }
-}
-
-/// SQLite keeps no catalog of its checks: they are read from the table's own `CREATE TABLE`
-/// text (column and table constraints alike), and a text that cannot be read gives none.
-async fn sqlite_check_lists(
-    session: &Session,
-    schema: &str,
-    table: &str,
-    column: &str,
-) -> Result<Vec<Vec<String>>, PickError> {
-    let sql = format!(
-        "SELECT sql FROM {}.sqlite_master WHERE type = 'table' AND name = {}",
-        session.dialect().quote_identifier(schema),
-        sql_literal(&Value::Text(table.to_string()), "sqlite")
-    );
-    let (_, rows) = short_rows(session, &sql, true)
-        .await
-        .map_err(PickError::Catalog)?;
-    let Some(Value::Text(create)) = rows.into_iter().next().and_then(|r| r.into_iter().next())
-    else {
-        return Ok(Vec::new());
-    };
-    Ok(create_table_checks(&create)
-        .iter()
-        .filter_map(|expr| expr_list(expr, column))
-        .collect())
-}
-
-/// Every `CHECK` condition of a SQLite `CREATE TABLE` statement.
-pub fn create_table_checks(create: &str) -> Vec<Expr> {
-    let Ok(statements) = Parser::parse_sql(sql_dialect("sqlite").as_ref(), create) else {
-        return Vec::new();
-    };
-    let [Statement::CreateTable(table)] = statements.as_slice() else {
-        return Vec::new();
-    };
-    let columns = table
-        .columns
-        .iter()
-        .flat_map(|c| &c.options)
-        .filter_map(|o| match &o.option {
-            ColumnOption::Check(check) => Some(check.expr.as_ref().clone()),
-            _ => None,
-        });
-    let constraints = table.constraints.iter().filter_map(|c| match c {
-        TableConstraint::Check(check) => Some(check.expr.as_ref().clone()),
-        _ => None,
-    });
-    columns.chain(constraints).collect()
 }
 
 /// The values of a check definition (`CHECK (…)`, as `describe_table` writes it) that is

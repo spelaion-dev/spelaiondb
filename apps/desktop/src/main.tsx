@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { ScreenBoundary } from "./components/ScreenBoundary";
 import "./i18n";
 import { usePreferences } from "./preferences";
 import { useSnippets } from "./snippetStore";
@@ -25,7 +26,8 @@ void usePreferences
   .getState()
   .load()
   .finally(() => {
-    createRoot(root).render(<App />);
+    // A screen that fails shows its own panel (SDB-398); this one catches whatever is left.
+    createRoot(root).render(<ScreenBoundary screen="app" className="screen-failed-app"><App /></ScreenBoundary>);
     // The user's snippets and the template of new scripts: read once, before a tab is opened
     // by hand. They are text for the editor; a failure only leaves the built-in snippets.
     void useSnippets.getState().load();

@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, events, type EngineItem, type PluginItem } from "../api";
+import type { PluginProcessItem } from "../bindings";
 import { chooseOpenFile } from "../dialogs";
 import { engineCatalog } from "../engines";
 import { byteSize, usePlugins } from "../plugins";
@@ -32,6 +33,9 @@ interface Install {
 
 let nextInstall = 1;
 
+/** How often the running processes' numbers are read again while the page is open. */
+const PROCESS_REFRESH_MS = 2000;
+
 export function PluginsSettings() {
   const { t } = useTranslation("settings");
   const overview = usePlugins((s) => s.overview);
@@ -45,6 +49,11 @@ export function PluginsSettings() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileDone, setFileDone] = useState(false);
   const [removing, setRemoving] = useState<{ plugin: PluginItem; version: string; openSessions: number } | null>(null);
+  /** The running plugin processes (SDB-399), by plugin name: the core's numbers. */
+  const [processes, setProcesses] = useState<Record<string, PluginProcessItem>>({});
+  const [restarting, setRestarting] = useState<{ plugin: PluginItem; sessions: string[] } | null>(null);
+  /** Plugins restarted from this page, to say what happened under their row. */
+  const [restarted, setRestarted] = useState<Record<string, boolean>>({});
   const mounted = useRef(true);
 
   async function checkCatalogue() {
@@ -76,8 +85,16 @@ export function PluginsSettings() {
         return { ...current, [entry[0]]: { id: install, received: received ?? 0, total: total ?? 0 } };
       });
     });
+    // The running processes, read again while the page is open; nothing is started for it.
+    const readProcesses = () =>
+      void call(commands.pluginProcesses())
+        .then((list) => mounted.current && setProcesses(Object.fromEntries(list.map((process) => [process.name, process]))))
+        .catch(() => undefined);
+    readProcesses();
+    const timer = window.setInterval(readProcesses, PROCESS_REFRESH_MS);
     return () => {
       mounted.current = false;
+      window.clearInterval(timer);
       void progress.then((unlisten) => unlisten());
     };
   }, []);
@@ -126,6 +143,34 @@ export function PluginsSettings() {
       }
     } catch (e) {
       const message = t("plugins.removeError", { detail: errorText(e) });
+      if (confirmed) throw new Error(message);
+      rowError(plugin.name, message);
+    }
+  }
+
+  /** Restarts a plugin's process (SDB-399): its sessions are lost and nothing is run again;
+   *  with a transaction open in one of them it asks first. */
+  async function restart(plugin: PluginItem, confirmed: boolean) {
+    rowError(plugin.name, null);
+    try {
+      const outcome = await call(commands.pluginRestart(plugin.name, confirmed));
+      switch (outcome.kind) {
+        case "needsConfirmation":
+          setRestarting({ plugin, sessions: outcome.sessions });
+          return;
+        case "restarted":
+        case "notRunning":
+          setRestarting(null);
+          setRestarted((current) => ({ ...current, [plugin.name]: true }));
+          setProcesses((current) => {
+            const next = { ...current };
+            delete next[plugin.name];
+            return next;
+          });
+          return;
+      }
+    } catch (e) {
+      const message = t("plugins.restartError", { detail: errorText(e) });
       if (confirmed) throw new Error(message);
       rowError(plugin.name, message);
     }
@@ -185,6 +230,9 @@ export function PluginsSettings() {
               onInstall={() => void install(plugin)}
               onCancel={(id) => void commands.pluginsCancelInstall(id)}
               onRemove={(version) => void remove(plugin, version, false)}
+              process={processes[plugin.name] ?? null}
+              restarted={restarted[plugin.name] ?? false}
+              onRestart={() => void restart(plugin, false)}
             />
           ))}
         </ul>
@@ -201,6 +249,14 @@ export function PluginsSettings() {
         <p className="error small" role="alert">
           {fileError}
         </p>
+      )}
+      {restarting && (
+        <RestartDialog
+          plugin={restarting.plugin}
+          sessions={restarting.sessions}
+          onCancel={() => setRestarting(null)}
+          onRestart={() => restart(restarting.plugin, true)}
+        />
       )}
       {removing && (
         <RemoveDialog
@@ -224,6 +280,9 @@ function PluginRow({
   onInstall,
   onCancel,
   onRemove,
+  process,
+  restarted,
+  onRestart,
 }: {
   plugin: PluginItem;
   engineName(id: string): string;
@@ -232,6 +291,11 @@ function PluginRow({
   onInstall(): void;
   onCancel(id: number): void;
   onRemove(version: string): void;
+  /** Its running process, if any (SDB-399). */
+  process: PluginProcessItem | null;
+  /** Restarted from this page since it opened. */
+  restarted: boolean;
+  onRestart(): void;
 }) {
   const { t, i18n } = useTranslation("settings");
   const size = (bytes: number) => byteSize(bytes, i18n.language);
@@ -269,7 +333,18 @@ function PluginRow({
         {plugin.missing && !plugin.message && (
           <div className="small plugin-why">{t("plugins.missing", { version: plugin.missing.version, program: plugin.missing.program })}</div>
         )}
-        {plugin.openSessions > 0 && <div className="small muted">{t("plugins.sessions", { count: plugin.openSessions })}</div>}
+        {/* The running process's line says its sessions too (SDB-399). */}
+        {plugin.openSessions > 0 && !process && <div className="small muted">{t("plugins.sessions", { count: plugin.openSessions })}</div>}
+        {process && (
+          <div className="small plugin-process" data-pid={process.pid}>
+            {t("plugins.process", {
+              memory: process.memoryBytes == null ? t("plugins.unknown") : size(process.memoryBytes),
+              cpu: process.cpuPercent == null ? t("plugins.measuring") : `${Math.round(process.cpuPercent)}%`,
+              count: process.sessions,
+            })}
+          </div>
+        )}
+        {restarted && !process && <div className="small muted" role="status">{t("plugins.restarted")}</div>}
         {install && (
           <div className="small plugin-progress" role="status">
             {install.total > 0
@@ -296,6 +371,11 @@ function PluginRow({
         )}
       </div>
       <div className="plugin-actions">
+        {process && !install && (
+          <button onClick={onRestart} title={t("plugins.restartHint")}>
+            {t("plugins.restart")}
+          </button>
+        )}
         {install ? (
           <button onClick={() => onCancel(install.id)}>{t("plugins.cancelInstall")}</button>
         ) : (
@@ -375,6 +455,78 @@ function RemoveDialog({
           </button>
           <button className="danger" onClick={() => void confirm()} disabled={busy}>
             {busy ? t("plugins.removing") : t("plugins.removeConfirm")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Restarting a plugin whose sessions hold open transactions (ADR-031): what is rolled back,
+ *  in which tabs; Cancel is the safe choice and has the focus. */
+function RestartDialog({
+  plugin,
+  sessions,
+  onCancel,
+  onRestart,
+}: {
+  plugin: PluginItem;
+  sessions: string[];
+  onCancel(): void;
+  onRestart(): Promise<void>;
+}) {
+  const { t } = useTranslation("settings");
+  const tabs = useApp((s) => s.tabs);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  useEffect(() => cancel.current?.focus(), []);
+  const names = sessions.map((id) => tabs.find((tab) => tab.id === id)?.title ?? id);
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onRestart();
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plugin-restart-title"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            if (!busy) onCancel();
+          }
+        }}
+      >
+        <h2 id="plugin-restart-title">{t("plugins.restartTitle", { name: plugin.name })}</h2>
+        <p>{t("plugins.restartTransactions", { count: names.length })}</p>
+        <ul className="unsaved-edits-list">
+          {names.map((name) => (
+            <li key={name}>{name}</li>
+          ))}
+        </ul>
+        <p className="muted small">{t("plugins.restartAvoid")}</p>
+        {error && (
+          <p className="error small" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <button ref={cancel} onClick={onCancel} disabled={busy}>
+            {t("plugins.cancel")}
+          </button>
+          <button className="danger" onClick={() => void confirm()} disabled={busy}>
+            {busy ? t("plugins.restarting") : t("plugins.restartConfirm")}
           </button>
         </div>
       </div>

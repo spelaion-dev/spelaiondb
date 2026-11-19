@@ -44,7 +44,6 @@
     "gridLabel_one": "Resultado con {{formattedCount}} fila",
     "gridLabel_other": "Resultado con {{formattedCount}} filas",
     "accessibleCell": "Fila {{row}}, {{column}} ({{type}}): {{value}}",
-    "accessibleCellLoading": "Fila {{row}}, {{column}}: cargando valor",
     "accessibleCellError": "Fila {{row}}, {{column}}: no se pudo cargar el valor",
     "accessibleTruncated": "{{value}}… Abre el visor de celda para ver el valor completo.",
     "copied_one": "Copiada {{formattedCount}} fila × {{columns}} columnas",
@@ -63,7 +62,11 @@
       "json": "JSON",
       "sqlInsert": "Sentencias INSERT de SQL",
       "markdown": "Tabla Markdown",
-      "html": "Tabla HTML"
+      "html": "Tabla HTML",
+      "ndjson": "NDJSON (un objeto JSON por línea)",
+      "parquet": "Parquet",
+      "arrowIpc": "Archivo Arrow IPC",
+      "xlsx": "Excel (XLSX)"
     },
     "sortAsc": "Ordenar ascendente",
     "sortDesc": "Ordenar descendente",
@@ -94,6 +97,7 @@
     "jumpTitle": "Ir a la columna",
     "jumpPlaceholder": "Nombre de columna…",
     "jumpNone": "Ninguna columna coincide",
+    "selectAll": "Seleccionar todas las celdas",
     "columnFilters": "Filtros de columna",
     "filteredBy": "Filtrado por",
     "removeFilter": "Quitar el filtro {{filter}}",
@@ -722,7 +726,37 @@
     "notARead": "No se volvió a ejecutar: {{reason}}",
     "failedAgain": "Falló al volver a ejecutarla en una sesión nueva: {{reason}}",
     "loadedInstead_one": "Exportar la fila cargada",
-    "loadedInstead_other": "Exportar las {{formattedCount}} filas cargadas"
+    "loadedInstead_other": "Exportar las {{formattedCount}} filas cargadas",
+    "fileOptions": "Nombre del archivo y compresión",
+    "namePattern": "Nombre del archivo",
+    "namePatternHint": "Se sustituyen {table}, {schema}, {database}, {date}, {time} y {timestamp}; la extensión se añade.",
+    "timestampFormat": "Formato de la marca de tiempo",
+    "gzip": "Comprimir con gzip",
+    "gzipParquet": "Parquet comprime sus propias columnas: el archivo sigue siendo Parquet.",
+    "sqlOptions": "Opciones de SQL",
+    "rowsPerInsert": "Filas por INSERT",
+    "omitSchema": "Quitar el esquema del nombre de la tabla",
+    "keywordCase": "Palabras clave",
+    "keywordCases": {
+      "upper": "MAYÚSCULAS",
+      "lower": "minúsculas"
+    },
+    "nameCase": "Nombres",
+    "nameCases": {
+      "asIs": "Tal como son",
+      "lower": "minúsculas",
+      "upper": "MAYÚSCULAS"
+    },
+    "upsert": "Escribir upserts por la clave primaria",
+    "upsertHint": "ON CONFLICT, ON DUPLICATE KEY UPDATE o MERGE, según los escribe el motor.",
+    "upsertTableOnly": "Los upserts necesitan una tabla: exporta todas las filas de una tabla para escribirlos.",
+    "jsonOptions": "Opciones de JSON",
+    "isoDates": "Marcas de tiempo en ISO 8601",
+    "jsonAsJson": "Columnas JSON como JSON, no como texto",
+    "tablesWorkbookHint": "Un libro en la carpeta que elijas, una hoja por tabla, con el nombre del patrón de nombre de archivo ({table} es la base de datos). Un archivo existente se conserva: se usa otro nombre.",
+    "workbookDone_one": "{{rows}} filas de {{formattedCount}} tabla escritas en {{path}}.",
+    "workbookDone_other": "{{rows}} filas de {{formattedCount}} tablas escritas en {{path}}, una hoja cada una.",
+    "gzipWorkbook": "Un libro ya está comprimido."
   },
   "import": {
     "title": "Importar datos",
@@ -748,7 +782,8 @@
       "csv": "CSV",
       "tsv": "TSV (separado por tabuladores)",
       "json": "Array JSON",
-      "markdown": "Tabla Markdown"
+      "markdown": "Tabla Markdown",
+      "xlsx": "Libro de Excel (XLSX)"
     },
     "encoding": "Codificación",
     "encodingAuto": "Detectar ({{found}})",
@@ -834,7 +869,8 @@
     "cancelled_one": "Importación cancelada: se confirmó {{formattedCount}} fila antes; el resto de su lote se deshizo.",
     "cancelled_other": "Importación cancelada: se confirmaron {{formattedCount}} filas antes; el resto de su lote se deshizo.",
     "failed": "No se pudo importar: {{reason}}",
-    "openTable": "Abrir tabla"
+    "openTable": "Abrir tabla",
+    "sheet": "Hoja"
   },
   "maximizeResults": "Maximizar los resultados (Ctrl+Alt+M)",
   "restoreResults": "Mostrar el editor (Ctrl+Alt+M)",
@@ -1555,5 +1591,16 @@
     "placeholder": "Número de fila",
     "of": "de {{total}}",
     "past": "El resultado tiene {{rows}} filas: la fila {{row}} está más allá del final."
-  }
+  },
+  "session": {
+    "reconnect": "Reconectar",
+    "readOnly": "Solo lectura en esta sesión",
+    "readWrite": "Quitar solo lectura de esta sesión",
+    "readOnlyOn": "Esta sesión es de solo lectura: se rechaza toda escritura hasta que se reconecte o la quites.",
+    "readOnlyOff": "Esta sesión vuelve a poder escribir.",
+    "readOnlyFailed": "No se pudo cambiar el modo de solo lectura de la sesión: {{detail}}",
+    "readOnlyChip": "Sesión de solo lectura",
+    "readOnlyHint": "La sesión de esta pestaña rechaza escrituras, como una conexión de solo lectura. Haz clic para quitarlo."
+  },
+  "schemaPooled": "Esta conexión pasa por un pooler en modo transacción, que no conserva ajustes de sesión: cualifica los nombres con su esquema."
 }

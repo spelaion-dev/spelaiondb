@@ -165,6 +165,32 @@ pub async fn set_mcp_read_only(read_only: bool, state: State<'_, AppState>) -> C
         .map_err(|e| e.to_string())
 }
 
+/// Changes only the local write restriction, in the workspace that the user was shown.
+#[command]
+pub async fn set_mcp_connection_read_only(
+    connection: String,
+    workspace: String,
+    read_only: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let config = state.config.read().await;
+    let id = crate::parse_id(&connection);
+    let entry = config
+        .connection(&id)
+        .ok_or_else(|| format!("unknown connection: {connection}"))?;
+    if !entry.file_path.is_file()
+        || spelaion_core::agent_workspace(&config, entry.id.source).as_deref()
+            != Some(workspace.as_str())
+    {
+        return Err("the workspace has changed or cannot be read".into());
+    }
+    state
+        .history
+        .set_mcp_connection_read_only(workspace, entry.id.to_string(), read_only)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[command]
 pub async fn set_mcp_output_format(
     format: ToolOutputItem,
@@ -193,22 +219,38 @@ pub async fn mcp_access(state: State<'_, AppState>) -> CmdResult<Vec<McpAccessIt
         .as_deref()
         .is_some_and(|root| trust.is_trusted(root));
     let types = spelaion_config::ConnectionTypes::load(&config, &trust);
-    Ok(config
-        .connections
-        .iter()
-        .map(|entry| {
-            McpAccessItem::new(
-                entry,
-                spelaion_core::agent_view(entry, trusted, all_read_only),
-                entry
-                    .file
-                    .env
-                    .as_deref()
-                    .and_then(|env| types.get(env))
-                    .map(ConnectionTypeItem::from),
-            )
-        })
-        .collect())
+    let mut access = Vec::with_capacity(config.connections.len());
+    for entry in &config.connections {
+        let workspace = spelaion_core::agent_workspace(&config, entry.id.source);
+        let read_only_override = match &workspace {
+            Some(workspace) => state
+                .history
+                .mcp_connection_read_only(workspace.clone(), entry.id.to_string())
+                .await
+                .ok(),
+            None => None,
+        };
+        let view = spelaion_core::agent_view_with_override(
+            entry,
+            trusted,
+            all_read_only,
+            read_only_override.unwrap_or(true),
+        );
+        let kind = entry
+            .file
+            .env
+            .as_deref()
+            .and_then(|env| types.get(env))
+            .map(ConnectionTypeItem::from);
+        access.push(McpAccessItem::new(
+            entry,
+            view,
+            kind,
+            workspace,
+            read_only_override,
+        ));
+    }
+    Ok(access)
 }
 
 /// The MCP activity the filter keeps, newest first (ADR-033); secrets masked by the core.

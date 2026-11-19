@@ -1,13 +1,15 @@
 // The export dialog (ADR-034): what to export (the loaded rows, a selection, or every row by
-// running the query or the table's SELECT again in a new session), the format and the CSV
-// options. The core writes the file; only counts and the options pass through here.
+// running the query or the table's SELECT again in a new session), the format and its options
+// (CSV, SQL, JSON, the file's name and gzip: SDB-391). The core writes the file and names it;
+// only counts and the options pass through here. It opens with the last export's choices,
+// which the core keeps and checks as personal settings (SDB-66).
 
 import { useEffect, useMemo, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { create } from "zustand";
 import { call, commands, type CellRange, type TextFormat } from "../api";
-import type { ExportFileOptions, ExportOutcome, ExportProgressItem, RerunCheckItem } from "../bindings";
+import type { ExportDefaultsItem, ExportFileOptions, ExportOutcome, ExportProgressItem, FileNamePatternItem, JsonOptionsItem, RerunCheckItem, SqlOptionsItem } from "../bindings";
 import { chooseFolder, chooseSavePath } from "../dialogs";
 import { useApp, useDialogs, type ResultMeta } from "../store";
 
@@ -38,14 +40,22 @@ export const useExport = create<{ request: ExportRequest | null; open(request: E
 
 const FORMATS: { format: TextFormat; extension: string }[] = [
   { format: "csv", extension: "csv" },
+  { format: "xlsx", extension: "xlsx" },
   { format: "tsv", extension: "tsv" },
   { format: "json", extension: "json" },
   { format: "sqlInsert", extension: "sql" },
   { format: "markdown", extension: "md" },
   { format: "html", extension: "html" },
+  { format: "ndjson", extension: "ndjson" },
+  { format: "parquet", extension: "parquet" },
+  { format: "arrowIpc", extension: "arrow" },
 ];
 
 const DELIMITERS = [",", ";", "\t", "|"];
+/** Most rows an INSERT may hold: the core's `MAX_ROWS_PER_INSERT`, which checks it again. */
+const MAX_ROWS_PER_INSERT = 10_000;
+type SqlOptions = SqlOptionsItem;
+type JsonOptions = JsonOptionsItem;
 type Encoding = ExportFileOptions["encoding"];
 const ENCODINGS: Encoding[] = ["utf8Bom", "utf8", "utf16Le", "windows1252"];
 
@@ -92,9 +102,45 @@ function ExportForm({ request }: { request: ExportRequest }) {
   const [nullText, setNullText] = useState("");
   const [encoding, setEncoding] = useState<Encoding>("utf8Bom");
   const [escapeFormulas, setEscapeFormulas] = useState(true);
+  const [gzip, setGzip] = useState(false);
+  const [names, setNames] = useState<FileNamePatternItem>({ pattern: "{table}", timestampFormat: "%Y%m%d-%H%M%S" });
+  const [sql, setSql] = useState<SqlOptions>({ rowsPerInsert: 1, omitSchema: false, keywordCase: "upper", nameCase: "asIs", upsert: false });
+  const [json, setJson] = useState<JsonOptions>({ isoDates: false, jsonAsJson: true });
   const [phase, setPhase] = useState<Phase>({ kind: "options" });
   const [exportId, setExportId] = useState<number | null>(null);
   const [lastPath, setLastPath] = useState<string | null>(null);
+  // The options are shown once the last export's choices are in (or could not be read).
+  const [ready, setReady] = useState(false);
+
+  // The last export's choices, as the core read them back (each unusable one at its default).
+  useEffect(() => {
+    let current = true;
+    void call(commands.exportDefaults())
+      .then((d) => {
+        if (!current) return;
+        setFormat(d.format);
+        if (DELIMITERS.includes(d.delimiter)) setDelimiter(d.delimiter);
+        else {
+          setDelimiter("other");
+          setOtherDelimiter(d.delimiter);
+        }
+        setHeader(d.header);
+        setNullText(d.nullText);
+        setEncoding(d.encoding);
+        setEscapeFormulas(d.escapeFormulas);
+        setGzip(d.gzip);
+        setNames(d.names);
+        setSql(d.sql);
+        setJson(d.json);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (current) setReady(true);
+      });
+    return () => {
+      current = false;
+    };
+  }, []);
 
   // The core says whether the query may run again and whether the tab holds a transaction.
   useEffect(() => {
@@ -124,7 +170,14 @@ function ExportForm({ request }: { request: ExportRequest }) {
   }, [running, close]);
 
   const text = format === "csv" || format === "tsv";
-  const extension = FORMATS.find((f) => f.format === format)?.extension ?? "txt";
+  // Parquet compresses inside the file and a workbook is a zip already; the other formats
+  // become `.gz` files (as the core says).
+  const workbook = format === "xlsx";
+  const baseExtension = FORMATS.find((f) => f.format === format)?.extension ?? "txt";
+  const useGzip = gzip && !workbook;
+  const extension = useGzip && format !== "parquet" ? `${baseExtension}.gz` : baseExtension;
+  // An upsert needs a table, whose key the core reads from the catalog: a table's every row.
+  const upsertPossible = request.kind === "tables" || (request.kind === "result" && request.table !== null && scope === "all");
   const chosenDelimiter = delimiter === "other" ? otherDelimiter : delimiter;
   const hidden = request.kind === "result" ? request.hidden : [];
   const columns =
@@ -139,14 +192,31 @@ function ExportForm({ request }: { request: ExportRequest }) {
     escapeFormulas,
     encoding: text ? encoding : "utf8",
     columns,
+    gzip: useGzip,
+    sql: { ...sql, upsert: sql.upsert && upsertPossible },
+    json,
+  });
+  /** What the dialog shows, kept as the next export's defaults. */
+  const defaults = (): ExportDefaultsItem => ({
+    format,
+    delimiter: chosenDelimiter,
+    header,
+    nullText,
+    encoding,
+    escapeFormulas,
+    gzip,
+    names,
+    sql,
+    json,
   });
   const allRefused = request.kind === "result" && (!canStream || !!check?.refused);
-  const base =
+  /** The table a single file is named after, if any (the core names a query's `result`). */
+  const namedTable =
     request.kind === "tables"
-      ? (request.tables[0]?.name ?? "export")
+      ? (request.tables[0] ?? null)
       : request.kind === "result" && request.table
-        ? request.table.name
-        : "result";
+        ? { schema: request.table.schema, name: request.table.name }
+        : null;
 
   function bytes(n: number): string {
     if (n < 1024) return `${numbers.format(n)} B`;
@@ -161,8 +231,10 @@ function ExportForm({ request }: { request: ExportRequest }) {
 
   async function askPath(): Promise<string | null> {
     if (request.kind === "tables" && request.tables.length > 1) return chooseFolder(t("export.chooseFolder"));
+    // The name the pattern gives, written by the core; the save dialog picks the folder.
+    const name = await call(commands.exportFileName(request.session, names, format, useGzip, namedTable));
     return chooseSavePath({
-      defaultPath: `${base}.${extension}`,
+      defaultPath: name,
       filters: [{ name: t(`results.export.${format}`), extensions: [extension] }],
     });
   }
@@ -185,6 +257,9 @@ function ExportForm({ request }: { request: ExportRequest }) {
     }));
     if (!target) return;
     setLastPath(target);
+    // The choices of an export that starts are the next one's defaults; the core refuses
+    // options it could not use again, and the export then says what is wrong with them.
+    if (path === undefined) await call(commands.setExportDefaults(defaults())).catch(() => undefined);
     if (request.kind === "selection") return exportLoaded(target, request.range);
     if (request.kind === "result" && scope === "loaded") return exportLoaded(target, null);
     // A new run: a connection type that confirms execution asks first (the core refuses
@@ -201,9 +276,12 @@ function ExportForm({ request }: { request: ExportRequest }) {
     channel.onmessage = (p) => setPhase((current) => (current.kind === "running" ? { kind: "running", rows: p.rows ?? 0, bytes: p.bytes ?? 0, table: p.table ?? null } : current));
     try {
       if (request.kind === "tables" && request.tables.length > 1) {
-        const outcome = await call(commands.exportTables(request.session, id, request.tables, target, extension, options(), channel));
+        const outcome = await call(commands.exportTables(request.session, id, request.tables, target, names, options(), channel));
         const rows = outcome.files.reduce((sum, f) => sum + (f.summary.rows ?? 0), 0);
-        const written = t("export.tablesDone", { count: outcome.files.length, formattedCount: numbers.format(outcome.files.length), rows: numbers.format(rows), folder: target });
+        // As XLSX the tables are the sheets of one workbook.
+        const written = workbook
+          ? t("export.workbookDone", { count: outcome.files.length, formattedCount: numbers.format(outcome.files.length), rows: numbers.format(rows), path: outcome.files[0]?.path ?? target })
+          : t("export.tablesDone", { count: outcome.files.length, formattedCount: numbers.format(outcome.files.length), rows: numbers.format(rows), folder: target });
         if (outcome.cancelled) setPhase({ kind: "done", text: `${t("export.cancelled")} ${written}` });
         else if (outcome.error != null) {
           const failed = request.tables[outcome.failedTable ?? 0]?.name ?? "";
@@ -265,7 +343,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
     <div className="modal-backdrop">
       <div className="modal export-dialog" role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
-        {phase.kind === "options" && (
+        {phase.kind === "options" && ready && (
           <>
             {request.kind === "result" && (
               <fieldset className="export-scope">
@@ -305,7 +383,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
                 })}
               </p>
             )}
-            {request.kind === "tables" && request.tables.length > 1 && <p className="muted small">{t("export.tablesHint")}</p>}
+            {request.kind === "tables" && request.tables.length > 1 && <p className="muted small">{t(workbook ? "export.tablesWorkbookHint" : "export.tablesHint")}</p>}
             {hidden.length > 0 && (
               <label className="check">
                 <input type="checkbox" checked={shownOnly} onChange={(e) => setShownOnly(e.target.checked)} />
@@ -365,6 +443,76 @@ function ExportForm({ request }: { request: ExportRequest }) {
                 </label>
               </fieldset>
             )}
+            {format === "sqlInsert" && (
+              <fieldset className="export-csv">
+                <legend>{t("export.sqlOptions")}</legend>
+                <label className="field">
+                  {t("export.rowsPerInsert")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_ROWS_PER_INSERT}
+                    value={sql.rowsPerInsert}
+                    onChange={(e) => setSql({ ...sql, rowsPerInsert: Math.max(1, Math.min(MAX_ROWS_PER_INSERT, Math.trunc(Number(e.target.value) || 1))) })}
+                  />
+                </label>
+                <label className="field">
+                  {t("export.keywordCase")}
+                  <select value={sql.keywordCase} onChange={(e) => setSql({ ...sql, keywordCase: e.target.value })}>
+                    <option value="upper">{t("export.keywordCases.upper")}</option>
+                    <option value="lower">{t("export.keywordCases.lower")}</option>
+                  </select>
+                </label>
+                <label className="field">
+                  {t("export.nameCase")}
+                  <select value={sql.nameCase} onChange={(e) => setSql({ ...sql, nameCase: e.target.value })}>
+                    <option value="asIs">{t("export.nameCases.asIs")}</option>
+                    <option value="lower">{t("export.nameCases.lower")}</option>
+                    <option value="upper">{t("export.nameCases.upper")}</option>
+                  </select>
+                </label>
+                <label className="check">
+                  <input type="checkbox" checked={sql.omitSchema} onChange={(e) => setSql({ ...sql, omitSchema: e.target.checked })} />
+                  {t("export.omitSchema")}
+                </label>
+                <label className="check" title={t("export.upsertHint")}>
+                  <input type="checkbox" checked={sql.upsert && upsertPossible} disabled={!upsertPossible} onChange={(e) => setSql({ ...sql, upsert: e.target.checked })} />
+                  {t("export.upsert")}
+                </label>
+                <p className="muted small">{t(upsertPossible ? "export.upsertHint" : "export.upsertTableOnly")}</p>
+              </fieldset>
+            )}
+            {(format === "json" || format === "ndjson") && (
+              <fieldset className="export-csv">
+                <legend>{t("export.jsonOptions")}</legend>
+                <label className="check">
+                  <input type="checkbox" checked={json.isoDates} onChange={(e) => setJson({ ...json, isoDates: e.target.checked })} />
+                  {t("export.isoDates")}
+                </label>
+                <label className="check">
+                  <input type="checkbox" checked={json.jsonAsJson} onChange={(e) => setJson({ ...json, jsonAsJson: e.target.checked })} />
+                  {t("export.jsonAsJson")}
+                </label>
+              </fieldset>
+            )}
+            <details className="export-file">
+              <summary>{t("export.fileOptions")}</summary>
+              <label className="field">
+                {t("export.namePattern")}
+                <input name="export-name-pattern" value={names.pattern} spellCheck={false} onChange={(e) => setNames({ ...names, pattern: e.target.value })} />
+              </label>
+              <p className="muted small">{t("export.namePatternHint")}</p>
+              <label className="field">
+                {t("export.timestampFormat")}
+                <input name="export-timestamp-format" value={names.timestampFormat} spellCheck={false} onChange={(e) => setNames({ ...names, timestampFormat: e.target.value })} />
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={useGzip} disabled={workbook} onChange={(e) => setGzip(e.target.checked)} />
+                {t("export.gzip")}
+              </label>
+              {gzip && format === "parquet" && <p className="muted small">{t("export.gzipParquet")}</p>}
+              {workbook && <p className="muted small">{t("export.gzipWorkbook")}</p>}
+            </details>
             <div className="modal-actions">
               <button onClick={close}>{t("export.close")}</button>
               <button className="primary" disabled={format === "csv" && chosenDelimiter.length !== 1} onClick={() => void start()}>

@@ -503,6 +503,78 @@ async fn the_switch_takes_writes_away_from_a_running_server() {
 }
 
 #[tokio::test]
+async fn one_local_override_restricts_a_running_server_and_fails_closed() {
+    let p = personal(false);
+    assert!(!refused(&write(&p.server, "~/notes", INSERT).await));
+    let store = app_store(&p.user_dir);
+    store
+        .set_mcp_connection_read_only("", "~/notes", true)
+        .unwrap();
+    let result = write(&p.server, "~/notes", INSERT).await;
+    assert!(refused(&result), "{}", body(&result));
+    assert!(body(&result).contains("local MCP restriction"));
+    assert!(listed(&p.server).await.contains("local MCP restriction"));
+    assert_eq!(rows(&p.db), 2);
+    assert!(!refused(
+        &query(&p.server, "~/notes", "select count(*) from notes").await
+    ));
+    assert_eq!(store.recent(2).unwrap()[1].decision, Decision::Rejected);
+
+    store
+        .set_mcp_connection_read_only("", "~/notes", false)
+        .unwrap();
+    assert!(!refused(&write(&p.server, "~/notes", INSERT).await));
+    assert_eq!(rows(&p.db), 3);
+
+    // Failing to read the connection-specific preference does not fall back to the file's
+    // write permission. The global preference remains readable and off.
+    rusqlite::Connection::open(spelaion_config::state_db(&p.user_dir))
+        .unwrap()
+        .execute_batch("drop table mcp_read_only_connections")
+        .unwrap();
+    assert!(!store.mcp_read_only().unwrap());
+    assert!(refused(&write(&p.server, "~/notes", INSERT).await));
+    assert_eq!(rows(&p.db), 3);
+}
+
+#[tokio::test]
+async fn repository_overrides_do_not_collide_or_grant_writes() {
+    let user = temp("connection-override-user");
+    let setup = |extra: &str| {
+        let repo = temp("connection-override-repo");
+        let db = database(&repo);
+        let connections = repo.join(".spelaion/connections");
+        std::fs::create_dir_all(&connections).unwrap();
+        std::fs::write(
+            connections.join("notes.toml"),
+            writable_connection(&db, extra),
+        )
+        .unwrap();
+        let config = spelaion_config::load(Some(&repo), &user);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        TrustStore::load(&user).unwrap().trust(&config).unwrap();
+        let workspace = agent_workspace(&config, Source::Workspace).unwrap();
+        (server(Some(&repo), &user, false), db, workspace)
+    };
+    let (restricted, restricted_db, restricted_workspace) = setup("env = 'prod'");
+    let (other, other_db, _) = setup("");
+    let (denied, denied_db, denied_workspace) = setup("read_only = true");
+    let store = app_store(&user);
+    store
+        .set_mcp_connection_read_only(&restricted_workspace, "notes", true)
+        .unwrap();
+    store
+        .set_mcp_connection_read_only(&denied_workspace, "notes", false)
+        .unwrap();
+    assert!(refused(&write(&restricted, "notes", INSERT).await));
+    assert_eq!(rows(&restricted_db), 1);
+    assert!(!refused(&write(&other, "notes", INSERT).await));
+    assert_eq!(rows(&other_db), 2);
+    assert!(refused(&write(&denied, "notes", INSERT).await));
+    assert_eq!(rows(&denied_db), 1);
+}
+
+#[tokio::test]
 async fn a_trusted_repository_cannot_give_agents_writes_back() {
     let user_dir = temp("repo-user");
     let repo = temp("repo");

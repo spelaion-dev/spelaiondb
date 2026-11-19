@@ -233,6 +233,7 @@ pub struct ImportItem {
     /// `postgres`, `mysql`, `mariadb`, `sqlserver`, `sqlite`, `duckdb`; `None` when SpelaionDB
     /// cannot open it.
     pub engine: Option<String>,
+    pub engine_kind: Option<String>,
     /// Why it cannot be imported, if it cannot.
     pub unsupported: Option<String>,
     /// `host:port/database`, or the file for SQLite and DuckDB.
@@ -269,6 +270,7 @@ fn item(config: &Config, c: &ImportedConnection) -> ImportItem {
         name: c.name.clone(),
         folder: c.folder.clone(),
         engine: c.engine.as_ref().ok().map(|e| e.as_str().to_string()),
+        engine_kind: c.engine_kind.clone(),
         unsupported: c.engine.as_ref().err().cloned(),
         target: if file {
             c.database.clone()
@@ -313,6 +315,8 @@ pub struct ImportScan {
     /// Nothing was read: nothing was chosen, and the client keeps nothing this system can read
     /// on its own, so the user chooses a folder or file first.
     pub needs_choice: bool,
+    /// At least one connection can be imported with a saved password.
+    pub can_save_passwords: bool,
     /// The client keeps its connections somewhere this system reads when nothing is chosen
     /// (its folders, or HeidiSQL's registry on Windows), so the UI can offer to go back to it.
     pub default_source: bool,
@@ -338,6 +342,7 @@ pub async fn scan_connections(
         needs_password,
         wrong_password,
         needs_choice,
+        can_save_passwords: false,
         default_source,
     };
     let (dir, found) = match read_blocking(client, path, file_password).await {
@@ -353,6 +358,9 @@ pub async fn scan_connections(
         needs_password: false,
         wrong_password: false,
         needs_choice: false,
+        can_save_passwords: found
+            .iter()
+            .any(ImportedConnection::has_importable_password),
         default_source,
     })
 }

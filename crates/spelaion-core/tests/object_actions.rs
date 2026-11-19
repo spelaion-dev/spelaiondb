@@ -9,6 +9,10 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
 use spelaion_core::{
+    CheckMode, IndexCleanup, MaintenanceKind, MaintenanceOptions, MaintenanceRequest, RunRefused,
+    check_run, maintenance_kinds, maintenance_plan,
+};
+use spelaion_core::{
     ColumnEdit, CoreEvent, CreateKind, DroppedConstraint, EditableColumn, FoundObject, NewColumn,
     NewForeignKey, NewIndex, NewIndexKind, NewTable, NewTableElement, ObjectChange, ObjectError,
     ObjectTarget, ResultStore, SEARCH_LIMIT, Session, SourceTarget, TableAlteration,
@@ -17,6 +21,7 @@ use spelaion_core::{
     new_table_element_sql, object_actions, search_objects, set_active_schema,
     supports_added_checks, table_structure,
 };
+use spelaion_core::{DuplicateTable, TablePart, duplicate_options, duplicate_plan};
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, NameFilter, ObjectKind, SchemaObject, SchemaObjectKind,
     Secret, TlsMode, Value,
@@ -1133,6 +1138,7 @@ async fn structure_forms_change_columns_on_every_engine() {
             table: "oa_alter_t".into(),
             columns: before.columns.iter().map(edit_of).collect(),
             drop: Vec::new(),
+            comment: None,
         };
         assert!(
             matches!(
@@ -1249,6 +1255,30 @@ async fn structure_forms_change_columns_on_every_engine() {
             "{label}: {qty:?}\n{script}"
         );
         assert_eq!(column(&last, "note").comment, None, "{label}\n{script}");
+
+        // The table's own comment (SDB-393): set with a quote in it, changed, then removed.
+        if label == "sqlite" {
+            let refused = alteration_plan(
+                &session,
+                &TableAlteration {
+                    comment: Some(Some("x".into())),
+                    ..unchanged.clone()
+                },
+            )
+            .await;
+            assert!(refused.is_err(), "{label}: SQLite tables have no comments");
+        } else {
+            for comment in [Some("the orders' table"), Some("changed"), None] {
+                let alteration = TableAlteration {
+                    columns: Vec::new(),
+                    comment: Some(comment.map(String::from)),
+                    ..unchanged.clone()
+                };
+                let script = apply_form(label, &session, &alteration).await;
+                let read = structure(label, &session, schema, "oa_alter_t").await;
+                assert_eq!(read.comment.as_deref(), comment, "{label}\n{script}");
+            }
+        }
         run(label, &session, &cleanup, true).await;
     }
 }
@@ -1287,6 +1317,7 @@ async fn mysql_restates_every_attribute_of_a_modified_column() {
                 table: "oa_modify_t".into(),
                 columns: vec![edit, n],
                 drop: Vec::new(),
+                comment: None,
             },
         )
         .await;
@@ -1364,6 +1395,7 @@ async fn constraints_drop_with_the_column_changes() {
                     DroppedConstraint::Constraint { name: unique },
                     DroppedConstraint::ForeignKey { name: fk },
                 ],
+                comment: None,
             },
         )
         .await;
@@ -1449,6 +1481,7 @@ async fn sqlite_rebuild_keeps_rows_indexes_triggers_views_and_keys() {
         table: "item".into(),
         columns: vec![qty, code],
         drop: Vec::new(),
+        comment: None,
     };
     let plan = alteration_plan(&session, &alteration).await.unwrap();
     assert!(plan.rebuilds() && plan.transactional());
@@ -1621,6 +1654,7 @@ async fn a_sqlite_rebuild_that_breaks_a_key_changes_nothing() {
         table: "item".into(),
         columns: vec![qty],
         drop: Vec::new(),
+        comment: None,
     };
     let script = alteration_plan(&session, &alteration)
         .await
@@ -1669,6 +1703,7 @@ async fn a_form_runs_only_the_script_it_showed() {
         table: "t".into(),
         columns: vec![a],
         drop: Vec::new(),
+        comment: None,
     };
     let script = alteration_plan(&session, &alteration)
         .await
@@ -2007,4 +2042,511 @@ DELIMITER ;",
         );
         run(label, &session, cleanup, true).await;
     }
+}
+
+/// The maintenance actions the explorer offers for `target` (SDB-392), each with options that
+/// exercise its SQL: several variants where an action has several shapes.
+fn maintenance_requests(label: &str, target: &ObjectTarget) -> Vec<MaintenanceRequest> {
+    let dialect = spelaion_dialect::for_engine(match label {
+        "mariadb" => "mysql",
+        other => other,
+    })
+    .unwrap();
+    let mut out = Vec::new();
+    for kind in maintenance_kinds(dialect.as_ref(), target) {
+        let variants: Vec<MaintenanceOptions> = match (label, kind) {
+            ("postgres", MaintenanceKind::Vacuum) => vec![
+                MaintenanceOptions::default(),
+                MaintenanceOptions {
+                    full: true,
+                    freeze: true,
+                    analyze: true,
+                    verbose: true,
+                    ..Default::default()
+                },
+                MaintenanceOptions {
+                    disable_page_skipping: true,
+                    skip_locked: true,
+                    index_cleanup: Some(IndexCleanup::Off),
+                    truncate_pages: Some(false),
+                    ..Default::default()
+                },
+            ],
+            ("postgres", MaintenanceKind::Analyze) => vec![MaintenanceOptions {
+                verbose: true,
+                ..Default::default()
+            }],
+            ("postgres", MaintenanceKind::Truncate) => vec![MaintenanceOptions {
+                only: true,
+                restart_identity: true,
+                ..Default::default()
+            }],
+            ("mysql" | "mariadb", MaintenanceKind::Check) => vec![
+                MaintenanceOptions::default(),
+                MaintenanceOptions {
+                    check_mode: Some(CheckMode::Extended),
+                    ..Default::default()
+                },
+            ],
+            ("mysql" | "mariadb", MaintenanceKind::Repair) => vec![MaintenanceOptions {
+                quick: true,
+                local: true,
+                ..Default::default()
+            }],
+            // OPTIMIZE NO_WRITE_TO_BINLOG needs MySQL's OPTIMIZE_LOCAL_TABLE privilege, which
+            // the test user has not got: OPTIMIZE runs plain.
+            ("mysql" | "mariadb", MaintenanceKind::Analyze) => vec![MaintenanceOptions {
+                local: true,
+                ..Default::default()
+            }],
+            _ => vec![MaintenanceOptions::default()],
+        };
+        for options in variants {
+            out.push(MaintenanceRequest {
+                target: target.clone(),
+                kind,
+                options,
+            });
+        }
+    }
+    out
+}
+
+/// Runs one statement; `Err` with the first error.
+async fn ran(session: &Session, sql: &str) -> Result<(), String> {
+    let events: Vec<CoreEvent> = session.run_script(sql).collect().await;
+    for event in &events {
+        match event {
+            CoreEvent::StatementFailed { error, .. } => return Err(error.message.clone()),
+            CoreEvent::ResultStarted { result, .. } => {
+                session.results().remove(*result);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Drops and creates the table the maintenance tests act on, with two rows.
+fn maintenance_setup(label: &str, schema: &str, table: &str, child: &str) -> Vec<String> {
+    let drop = |name: &str| match label {
+        "sqlserver" => {
+            format!("IF OBJECT_ID('{schema}.{name}') IS NOT NULL DROP TABLE {schema}.{name}")
+        }
+        _ => format!("DROP TABLE IF EXISTS {schema}.{name}"),
+    };
+    vec![
+        drop(child),
+        drop(table),
+        format!("CREATE TABLE {schema}.{table} (id INT PRIMARY KEY, v INT)"),
+        format!("INSERT INTO {schema}.{table} VALUES (1, 10), (2, 20)"),
+    ]
+}
+
+#[tokio::test]
+async fn maintenance_actions_run_on_each_engine() {
+    let mut tested = Vec::new();
+    for (label, session, schema) in engines().await {
+        let table = "maint_orders";
+        let child = "maint_lines";
+        let setup = maintenance_setup(label, schema, table, child);
+        let refs: Vec<&str> = setup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, false).await;
+        let tables = relation(schema, table, ObjectKind::Table);
+        let database = ObjectTarget::Schema {
+            name: schema.to_string(),
+        };
+        let mut count = 0;
+        for target in [&tables, &database] {
+            for request in maintenance_requests(label, target) {
+                let plan = maintenance_plan(&session, &request, false)
+                    .await
+                    .unwrap_or_else(|e| panic!("{label}: {:?}: {e}", request.kind));
+                ran(&session, &plan.sql)
+                    .await
+                    .unwrap_or_else(|e| panic!("{label}: {}\n→ {e}", plan.sql));
+                // Never on a read-only connection or session: refused before anything is read.
+                assert_eq!(
+                    maintenance_plan(&session, &request, true).await,
+                    Err(ObjectError::ReadOnly),
+                    "{label}: {:?}",
+                    request.kind
+                );
+                count += 1;
+            }
+        }
+        assert!(count > 0, "{label}: no maintenance action ran");
+        if label == "sqlite" {
+            // The integrity check's answer is its rows: "ok".
+            let plan = maintenance_plan(
+                &session,
+                &MaintenanceRequest {
+                    target: database.clone(),
+                    kind: MaintenanceKind::IntegrityCheck,
+                    options: MaintenanceOptions::default(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+            assert_eq!(text(&session, &plan.sql).await, "ok");
+        }
+        if label == "postgres" {
+            // TRUNCATE … CASCADE says what else it empties, and empties it.
+            let fill = [
+                format!("INSERT INTO {schema}.{table} VALUES (1, 10)"),
+                format!(
+                    "CREATE TABLE {schema}.{child} (id INT PRIMARY KEY, order_id INT REFERENCES {schema}.{table} (id))"
+                ),
+                format!("INSERT INTO {schema}.{child} VALUES (1, 1)"),
+            ];
+            let refs: Vec<&str> = fill.iter().map(String::as_str).collect();
+            run(label, &session, &refs, false).await;
+            let cascade = MaintenanceRequest {
+                target: tables.clone(),
+                kind: MaintenanceKind::Truncate,
+                options: MaintenanceOptions {
+                    cascade: true,
+                    ..Default::default()
+                },
+            };
+            let plan = maintenance_plan(&session, &cascade, false).await.unwrap();
+            assert_eq!(plan.also_empties, [format!("{schema}.{child}")]);
+            assert!(!plan.outside_transaction);
+            ran(&session, &plan.sql).await.unwrap();
+            assert_eq!(
+                text(&session, &format!("SELECT count(*) FROM {schema}.{child}")).await,
+                "0"
+            );
+            // A materialized view: refreshed with and without data; CONCURRENTLY only with a
+            // unique index, which the plan checks first.
+            let view_sql = [
+                format!("DROP MATERIALIZED VIEW IF EXISTS {schema}.maint_view"),
+                format!(
+                    "CREATE MATERIALIZED VIEW {schema}.maint_view AS SELECT id, v FROM {schema}.{table}"
+                ),
+            ];
+            let refs: Vec<&str> = view_sql.iter().map(String::as_str).collect();
+            run(label, &session, &refs, false).await;
+            let view = relation(schema, "maint_view", ObjectKind::MaterializedView);
+            let refresh = |options: MaintenanceOptions| MaintenanceRequest {
+                target: view.clone(),
+                kind: MaintenanceKind::RefreshMaterializedView,
+                options,
+            };
+            let concurrently = MaintenanceOptions {
+                concurrently: true,
+                ..Default::default()
+            };
+            assert!(matches!(
+                maintenance_plan(&session, &refresh(concurrently.clone()), false).await,
+                Err(ObjectError::Unsupported(_))
+            ));
+            let index = format!("CREATE UNIQUE INDEX maint_view_id ON {schema}.maint_view (id)");
+            run(label, &session, &[index.as_str()], false).await;
+            for options in [
+                MaintenanceOptions {
+                    no_data: true,
+                    ..Default::default()
+                },
+                MaintenanceOptions::default(),
+                concurrently,
+            ] {
+                let plan = maintenance_plan(&session, &refresh(options), false)
+                    .await
+                    .unwrap();
+                ran(&session, &plan.sql)
+                    .await
+                    .unwrap_or_else(|e| panic!("{}\n→ {e}", plan.sql));
+            }
+            for request in maintenance_requests(label, &view) {
+                let plan = maintenance_plan(&session, &request, false)
+                    .await
+                    .unwrap_or_else(|e| panic!("{:?}: {e}", request.kind));
+                ran(&session, &plan.sql)
+                    .await
+                    .unwrap_or_else(|e| panic!("{}\n→ {e}", plan.sql));
+            }
+            let drop_view = format!("DROP MATERIALIZED VIEW IF EXISTS {schema}.maint_view");
+            run(label, &session, &[drop_view.as_str()], true).await;
+        }
+        let cleanup = [
+            format!("DROP TABLE IF EXISTS {schema}.{child}"),
+            format!("DROP TABLE IF EXISTS {schema}.{table}"),
+        ];
+        let refs: Vec<&str> = cleanup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, true).await;
+        tested.push(label);
+    }
+    eprintln!("tested on {tested:?}");
+}
+
+#[tokio::test]
+async fn maintenance_statements_are_refused_on_read_only_connections_on_each_engine() {
+    let mut tested = Vec::new();
+    for (label, session, schema) in engines().await {
+        let table = "maint_ro";
+        let setup = maintenance_setup(label, schema, table, "maint_ro_child");
+        let refs: Vec<&str> = setup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, false).await;
+        let tables = relation(schema, table, ObjectKind::Table);
+        let database = ObjectTarget::Schema {
+            name: schema.to_string(),
+        };
+        // The statements as the app shows them, written while the session could write.
+        let mut statements = Vec::new();
+        for target in [&tables, &database] {
+            for request in maintenance_requests(label, target) {
+                statements.push(
+                    maintenance_plan(&session, &request, false)
+                        .await
+                        .unwrap()
+                        .sql,
+                );
+            }
+        }
+        // The same session, read-only as a read-only connection's is (ADR-053): the app's check
+        // refuses each statement, and so does the session's own run, before sending it.
+        let read_only = session.with_read_only(true);
+        for sql in &statements {
+            assert!(
+                matches!(
+                    check_run(&read_only, sql, &Safeguards::default(), true),
+                    Err(RunRefused::ReadOnly(_))
+                ),
+                "{label}: {sql}"
+            );
+            let error = ran(&read_only, sql)
+                .await
+                .expect_err(&format!("{label}: {sql} ran"));
+            assert!(error.contains("nothing was run"), "{label}: {sql}: {error}");
+        }
+        let writable = read_only.with_read_only(false);
+        let cleanup = format!("DROP TABLE IF EXISTS {schema}.{table}");
+        run(label, &writable, &[cleanup.as_str()], true).await;
+        tested.push(label);
+    }
+    eprintln!("tested on {tested:?}");
+}
+
+/// What a table holds, as the comparison of a copy reads it: its columns, primary key, other
+/// indexes, checks, the default of `v`, and its rows.
+#[derive(Debug, PartialEq)]
+struct Shape {
+    columns: Vec<String>,
+    primary_key: Vec<String>,
+    indexes: usize,
+    /// A row that breaks the check is refused.
+    check_enforced: bool,
+    default: bool,
+    rows: String,
+}
+
+async fn shape(label: &str, session: &Session, schema: &str, table: &str) -> Shape {
+    let info = session
+        .connection()
+        .describe_table(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {table}: {e}"));
+    let qualified = format!("{schema}.{table}");
+    Shape {
+        columns: info.columns.iter().map(|c| c.name.to_lowercase()).collect(),
+        primary_key: info.primary_key.iter().map(|c| c.to_lowercase()).collect(),
+        indexes: info.indexes.iter().filter(|i| !i.primary).count(),
+        check_enforced: {
+            let refused = session
+                .run_script(&format!("INSERT INTO {qualified} (id, v) VALUES (100, -1)"))
+                .collect::<Vec<CoreEvent>>()
+                .await
+                .iter()
+                .any(|e| matches!(e, CoreEvent::StatementFailed { .. }));
+            if !refused {
+                run(
+                    label,
+                    session,
+                    &[&format!("DELETE FROM {qualified} WHERE id = 100")],
+                    false,
+                )
+                .await;
+            }
+            refused
+        },
+        default: info
+            .columns
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case("v"))
+            .is_some_and(|c| c.default.is_some()),
+        rows: text(session, &format!("SELECT COUNT(*) FROM {qualified}")).await,
+    }
+}
+
+#[tokio::test]
+async fn duplicate_tables_keep_what_each_engine_says_on_every_engine() {
+    let mut tested = Vec::new();
+    for (label, session, schema) in engines().await {
+        let source = "dup_src";
+        let copy = "dup_copy";
+        let drop = |name: &str| match label {
+            "sqlserver" => {
+                format!("IF OBJECT_ID('{schema}.{name}') IS NOT NULL DROP TABLE {schema}.{name}")
+            }
+            _ => format!("DROP TABLE IF EXISTS {schema}.{name}"),
+        };
+        let setup = [
+            drop(copy),
+            drop(source),
+            format!(
+                "CREATE TABLE {schema}.{source} (id INT PRIMARY KEY, v INT DEFAULT 5, CHECK (v > 0))"
+            ),
+            match label {
+                // SQLite and DuckDB name the index's table bare, in its schema.
+                "sqlite" => format!("CREATE INDEX {schema}.dup_src_v ON {source} (v)"),
+                _ => format!("CREATE INDEX dup_src_v ON {schema}.{source} (v)"),
+            },
+            format!("INSERT INTO {schema}.{source} (id, v) VALUES (1, 10), (2, 20), (3, 30)"),
+        ];
+        let refs: Vec<&str> = setup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, false).await;
+        let original = shape(label, &session, schema, source).await;
+        assert_eq!(original.indexes, 1, "{label}: {original:?}");
+        assert!(original.check_enforced, "{label}: {original:?}");
+        let index_choices: &[bool] = if duplicate_options(match label {
+            "mariadb" => "mysql",
+            other => other,
+        })
+        .indexes_optional
+        {
+            &[true, false]
+        } else {
+            &[true]
+        };
+        for &with_indexes in index_choices {
+            for with_data in [false, true] {
+                let request = DuplicateTable {
+                    schema: schema.into(),
+                    name: source.into(),
+                    new_schema: schema.into(),
+                    new_name: copy.into(),
+                    with_data,
+                    with_indexes,
+                };
+                let what = format!("{label} (data: {with_data}, indexes: {with_indexes})");
+                let plan = duplicate_plan(&session, &request, false)
+                    .await
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                // Every part is either kept or said not to be.
+                for part in [
+                    TablePart::PrimaryKey,
+                    TablePart::Indexes,
+                    TablePart::Checks,
+                    TablePart::Defaults,
+                ] {
+                    assert!(
+                        plan.kept.contains(&part) != plan.not_kept.contains(&part),
+                        "{what}: {part:?} in {plan:?}"
+                    );
+                }
+                let mut events = session.run_script(&plan.sql);
+                while let Some(event) = events.next().await {
+                    match event {
+                        CoreEvent::StatementFailed { error, .. } => {
+                            panic!("{what}: {}\n→ {}", plan.sql, error.message)
+                        }
+                        CoreEvent::ResultStarted { result, .. } => {
+                            session.results().remove(result);
+                        }
+                        _ => {}
+                    }
+                }
+                let duplicate = shape(label, &session, schema, copy).await;
+                let keeps = |part: TablePart| plan.kept.contains(&part);
+                assert_eq!(duplicate.columns, original.columns, "{what}");
+                assert_eq!(
+                    duplicate.primary_key,
+                    if keeps(TablePart::PrimaryKey) {
+                        original.primary_key.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    "{what}: {}",
+                    plan.sql
+                );
+                assert_eq!(
+                    duplicate.indexes,
+                    if keeps(TablePart::Indexes) {
+                        original.indexes
+                    } else {
+                        0
+                    },
+                    "{what}: {}",
+                    plan.sql
+                );
+                assert_eq!(
+                    duplicate.check_enforced,
+                    keeps(TablePart::Checks),
+                    "{what}: {}",
+                    plan.sql
+                );
+                assert_eq!(
+                    duplicate.default,
+                    keeps(TablePart::Defaults),
+                    "{what}: {}",
+                    plan.sql
+                );
+                assert_eq!(duplicate.rows, if with_data { "3" } else { "0" }, "{what}");
+                assert_eq!(plan.kept.contains(&TablePart::Rows), with_data, "{what}");
+                // The source is untouched.
+                assert_eq!(
+                    shape(label, &session, schema, source).await,
+                    original,
+                    "{what}"
+                );
+                let cleanup = drop(copy);
+                run(label, &session, &[cleanup.as_str()], false).await;
+            }
+        }
+        // Refused before anything is read on a read-only connection, and the statements as
+        // shown are refused by a read-only session too.
+        let request = DuplicateTable {
+            schema: schema.into(),
+            name: source.into(),
+            new_schema: schema.into(),
+            new_name: copy.into(),
+            with_data: true,
+            with_indexes: true,
+        };
+        assert_eq!(
+            duplicate_plan(&session, &request, true).await,
+            Err(ObjectError::ReadOnly),
+            "{label}"
+        );
+        let sql = duplicate_plan(&session, &request, false).await.unwrap().sql;
+        assert_eq!(
+            duplicate_plan(
+                &session,
+                &DuplicateTable {
+                    new_name: source.into(),
+                    ..request.clone()
+                },
+                false
+            )
+            .await,
+            Err(ObjectError::SameName),
+            "{label}"
+        );
+        let read_only = session.with_read_only(true);
+        assert!(
+            matches!(
+                check_run(&read_only, &sql, &Safeguards::default(), true),
+                Err(RunRefused::ReadOnly(_))
+            ),
+            "{label}: {sql}"
+        );
+        let session = read_only.with_read_only(false);
+        let cleanup = [drop(copy), drop(source)];
+        let refs: Vec<&str> = cleanup.iter().map(String::as_str).collect();
+        run(label, &session, &refs, true).await;
+        tested.push(label);
+    }
+    eprintln!("tested on {tested:?}");
 }

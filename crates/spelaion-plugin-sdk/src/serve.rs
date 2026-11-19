@@ -733,6 +733,36 @@ async fn on_session(
             };
             json!({ "sql": sql.map_err(driver_error)? })
         }
+        method::OBJECT_PROPERTIES => {
+            let properties = connection
+                .object_properties(
+                    needs(&request.schema, "schema")?,
+                    needs(&request.name, "name")?,
+                )
+                .await
+                .map_err(driver_error)?;
+            json!({ "properties": properties })
+        }
+        method::TABLE_PARTITIONS => {
+            let partitioning = connection
+                .table_partitions(
+                    needs(&request.schema, "schema")?,
+                    needs(&request.name, "name")?,
+                )
+                .await
+                .map_err(driver_error)?;
+            json!({ "partitioning": partitioning })
+        }
+        method::OBJECT_DEPENDENCIES => {
+            let dependencies = connection
+                .object_dependencies(
+                    needs(&request.schema, "schema")?,
+                    needs(&request.name, "name")?,
+                )
+                .await
+                .map_err(driver_error)?;
+            json!({ "dependencies": dependencies })
+        }
         method::RELATION_DEFINITION => {
             let sql = connection
                 .relation_definition(

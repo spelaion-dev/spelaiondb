@@ -257,6 +257,27 @@ async fn agents_reads_make_the_session_read_only_in_the_engine() {
     .await;
 }
 
+/// SDB-359: an agent's read stops past its row cap, and the statement the editor runs right
+/// after it on the same session is not refused because the server still held the session for
+/// the stopped one (`SESSION_IS_LOCKED`). Many times over, since that is a race.
+#[tokio::test]
+async fn a_statement_right_after_a_capped_read_finds_the_session_free() {
+    let Some(session) = session_as("spelaion", "spelaion").await else {
+        return;
+    };
+    for round in 0..30 {
+        let r = session
+            .run_read_only("select number from system.numbers", &limits(5))
+            .await
+            .unwrap_or_else(|e| panic!("round {round}: {e:?}"));
+        assert_eq!((r.rows.len(), r.truncated), (5, true), "round {round}");
+        assert_eq!(
+            value(&session, &format!("select toString({round})")).await,
+            round.to_string()
+        );
+    }
+}
+
 /// ClickHouse's primary key is a sorting key: two rows may share it, so a query is never paged
 /// by it (ADR-054, SDB-405). Paged, a page boundary between two such rows would hide one; the
 /// query runs as written and every row is there.
@@ -365,6 +386,9 @@ fn csv() -> StreamExport {
             escape_formulas: true,
         },
         encoding: TextEncoding::Utf8,
+        gzip: false,
+        sql: spelaion_core::SqlOptions::default(),
+        json: spelaion_core::JsonOptions::default(),
         columns: None,
         batch_size: DEFAULT_BATCH_ROWS,
     }

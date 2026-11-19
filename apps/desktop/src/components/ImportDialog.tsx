@@ -72,7 +72,7 @@ const PASTE_SHORTCUT = "Ctrl+V";
 const SHOWN_ROWS = 8;
 const DELIMITERS = [",", ";", "\t", "|"];
 const ENCODINGS: ImportOptionsItem["encoding"][] = ["auto", "utf8", "utf16Le", "utf16Be", "windows1252"];
-const FORMATS: ImportOptionsItem["format"][] = ["csv", "tsv", "json", "markdown"];
+const FORMATS: ImportOptionsItem["format"][] = ["csv", "tsv", "json", "markdown", "xlsx"];
 
 let nextImport = Math.floor(Math.random() * 1_000_000);
 
@@ -219,7 +219,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
   async function chooseFile() {
     try {
       const path = await chooseOpenFile(t("import.chooseFile"), [
-        { name: t("import.dataFiles"), extensions: ["csv", "tsv", "tab", "txt", "json", "md"] },
+        { name: t("import.dataFiles"), extensions: ["csv", "tsv", "tab", "txt", "json", "md", "xlsx", "xlsm"] },
         { name: t("import.allFiles"), extensions: ["*"] },
       ]);
       if (!path) return;
@@ -402,7 +402,19 @@ function ImportForm({ request }: { request: ImportRequest }) {
                       ))}
                     </select>
                   </label>
-                  {source?.kind === "file" && (
+                  {preview && preview.sheets.length > 0 && (
+                    <label className="field">
+                      {t("import.sheet")}
+                      <select name="import-sheet" value={options.sheet || preview.sheets[0]} onChange={(e) => setOption("sheet", e.target.value)}>
+                        {preview.sheets.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {source?.kind === "file" && options.format !== "xlsx" && (
                     <label className="field">
                       {t("import.encoding")}
                       <select value={options.encoding} onChange={(e) => setOption("encoding", e.target.value as ImportOptionsItem["encoding"])}>
