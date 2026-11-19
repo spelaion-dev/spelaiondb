@@ -497,7 +497,7 @@ async fn hops_go_on_from_an_ssm_session() {
     let plugin_port = fake.plugin_port();
     let state = tunnel.state();
     tunnel.close().await;
-    assert!(matches!(*state.borrow(), TunnelState::Down { .. }));
+    assert_eq!(*state.borrow(), TunnelState::Closed);
     assert!(StdStream::connect(("127.0.0.1", plugin_port)).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }

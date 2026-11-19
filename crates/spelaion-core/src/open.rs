@@ -340,7 +340,7 @@ impl TunnelPool {
         Self::default()
     }
 
-    /// Live, active tunnels.
+    /// Live tunnels that are up.
     pub async fn active(&self) -> usize {
         let ssh = self
             .tunnels
@@ -348,7 +348,7 @@ impl TunnelPool {
             .await
             .values()
             .filter_map(Weak::upgrade)
-            .filter(|t| *t.state().borrow() == TunnelState::Up)
+            .filter(|t| is_up(&t.state().borrow()))
             .count();
         let kube = self
             .kube
@@ -356,7 +356,7 @@ impl TunnelPool {
             .await
             .values()
             .filter_map(Weak::upgrade)
-            .filter(|t| *t.state().borrow() == TunnelState::Up)
+            .filter(|t| is_up(&t.state().borrow()))
             .count();
         ssh + kube
     }
@@ -385,11 +385,11 @@ impl TunnelPool {
         let mut tunnels = self.kube.lock().await;
         tunnels.retain(|_, t| t.strong_count() > 0);
         if let Some(tunnel) = tunnels.get(&key).and_then(Weak::upgrade)
-            && *tunnel.state().borrow() == TunnelState::Up
+            && reusable(&tunnel.state().borrow())
         {
             return tunnel;
         }
-        // Down or missing: a new one (a downed tunnel is never restarted on its own).
+        // Down, closed or missing: a new one (a downed tunnel is never restarted on its own).
         let tunnel = Arc::new(KubeTunnel::new(spec.clone()));
         tunnels.insert(key, Arc::downgrade(&tunnel));
         tunnel
@@ -405,14 +405,31 @@ impl TunnelPool {
         let mut tunnels = self.tunnels.lock().await;
         tunnels.retain(|_, t| t.strong_count() > 0);
         if let Some(tunnel) = tunnels.get(&key).and_then(Weak::upgrade)
-            && *tunnel.state().borrow() == TunnelState::Up
+            && reusable(&tunnel.state().borrow())
         {
             return Ok(tunnel);
         }
-        // Down or missing: a new one (a downed tunnel is never reopened on its own).
+        // Down, closed or missing: a new one (a downed tunnel is never reopened on its own).
         let tunnel = Arc::new(Tunnel::connect(spec, known_hosts, ui).await?);
         tunnels.insert(key, Arc::downgrade(&tunnel));
         Ok(tunnel)
+    }
+}
+
+fn is_up(state: &TunnelState) -> bool {
+    match state {
+        TunnelState::Up => true,
+        TunnelState::Opening | TunnelState::Down { .. } | TunnelState::Closed => false,
+    }
+}
+
+/// Whether a pooled tunnel can serve another connection: one still opening ends up or fails
+/// on its own (a Kubernetes tunnel is pooled before its first kubectl listens); one down or
+/// closed is never reused, nor reopened (ADR-007).
+fn reusable(state: &TunnelState) -> bool {
+    match state {
+        TunnelState::Opening | TunnelState::Up => true,
+        TunnelState::Down { .. } | TunnelState::Closed => false,
     }
 }
 

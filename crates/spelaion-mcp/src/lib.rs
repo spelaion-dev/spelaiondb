@@ -115,7 +115,7 @@ impl Cached {
         };
         let tunnel_up = self.tunnel.as_ref().is_none_or(|t| match &*t.borrow() {
             TunnelState::Up => true,
-            TunnelState::Down { .. } => false,
+            TunnelState::Opening | TunnelState::Down { .. } | TunnelState::Closed => false,
         });
         alive && tunnel_up && !self.connection.is_closed()
     }

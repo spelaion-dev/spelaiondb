@@ -36,6 +36,156 @@ fn spec(kubeconfig: &std::path::Path, resource: &str) -> ResolvedKubernetes {
     }
 }
 
+/// The stand-in for kubectl (`tests/support/fake_kubectl.rs`), with a folder of its own. These
+/// tests need no cluster and always run.
+struct FakeKubectl {
+    dir: PathBuf,
+}
+
+impl FakeKubectl {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "spelaion-fake-kubectl-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self { dir }
+    }
+
+    fn spec(&self, resource: &str) -> ResolvedKubernetes {
+        ResolvedKubernetes {
+            context: None,
+            namespace: None,
+            resource: resource.into(),
+            kubeconfig: Some(self.dir.join("kubeconfig")),
+            kubectl: env!("CARGO_BIN_EXE_spelaion-test-fake-kubectl").into(),
+        }
+    }
+
+    /// Lets a `svc/gated` forward listen.
+    fn release(&self) {
+        std::fs::write(self.dir.join("release"), "").unwrap();
+    }
+}
+
+impl Drop for FakeKubectl {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Waits until nothing listens on `local` any more; false if something still does after
+/// `limit`.
+async fn stops_listening(local: std::net::SocketAddr, limit: std::time::Duration) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < limit {
+        if tokio::net::TcpStream::connect(local).await.is_err() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    false
+}
+
+async fn down_reason(state: &mut tokio::sync::watch::Receiver<TunnelState>) -> String {
+    let down = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        state.wait_for(|s| matches!(s, TunnelState::Down { .. })),
+    )
+    .await
+    .expect("the tunnel goes down")
+    .expect("the tunnel is still there");
+    match &*down {
+        TunnelState::Down { reason } => reason.clone(),
+        other => panic!("not down: {other:?}"),
+    }
+}
+
+/// SDB-366: a Kubernetes tunnel is not up before its first kubectl listens.
+#[tokio::test]
+async fn a_kubernetes_tunnel_is_opening_until_its_first_forward_listens() {
+    let fake = FakeKubectl::new("opening");
+    let tunnel = Arc::new(KubeTunnel::new(fake.spec("svc/gated")));
+    let state = tunnel.state();
+    assert_eq!(
+        *state.borrow(),
+        TunnelState::Opening,
+        "no kubectl has run yet"
+    );
+    let forwarding = tokio::spawn({
+        let tunnel = tunnel.clone();
+        async move { tunnel.forward(5432).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        *state.borrow(),
+        TunnelState::Opening,
+        "kubectl has not listened yet"
+    );
+    fake.release();
+    let local = tokio::time::timeout(std::time::Duration::from_secs(20), forwarding)
+        .await
+        .expect("kubectl listens once released")
+        .unwrap()
+        .unwrap();
+    assert!(local.ip().is_loopback());
+    assert_eq!(*state.borrow(), TunnelState::Up);
+    tunnel.close().await;
+}
+
+/// SDB-366: the first forward failing fails the opening with kubectl's words; the tunnel is
+/// down, never up.
+#[tokio::test]
+async fn a_first_forward_that_fails_takes_the_opening_tunnel_down() {
+    let fake = FakeKubectl::new("missing");
+    let tunnel = Arc::new(KubeTunnel::new(fake.spec("svc/missing")));
+    let err = tunnel.forward(5432).await.unwrap_err();
+    assert!(
+        matches!(&err, KubeError::Kubectl(m) if m.contains("not found")),
+        "{err}"
+    );
+    let state = tunnel.state().borrow().clone();
+    assert!(
+        matches!(&state, TunnelState::Down { reason } if reason.contains("not found")),
+        "{state:?}"
+    );
+}
+
+/// SDB-366: when one kubectl ends, the tunnel goes down with its words and the other forwards
+/// are stopped (nothing listens on their ports); closing it later keeps that reason.
+#[tokio::test]
+async fn when_one_forward_ends_the_others_are_stopped() {
+    let fake = FakeKubectl::new("ends");
+    let tunnel = Arc::new(KubeTunnel::new(fake.spec("svc/postgres")));
+    let kept = tunnel.forward(5432).await.unwrap();
+    let ending = tunnel.forward(6379).await.unwrap();
+    assert!(tokio::net::TcpStream::connect(kept).await.is_ok());
+    let mut state = tunnel.state();
+    // The stand-in ends this forward on its first connection.
+    let _ = tokio::net::TcpStream::connect(ending).await;
+    assert_eq!(
+        down_reason(&mut state).await,
+        "error: lost connection to pod"
+    );
+    assert!(
+        stops_listening(kept, std::time::Duration::from_secs(10)).await,
+        "the other kubectl was left running"
+    );
+    assert!(matches!(
+        tunnel.forward(5432).await,
+        Err(KubeError::Down(_))
+    ));
+    tunnel.close().await;
+    assert_eq!(
+        *tunnel.state().borrow(),
+        TunnelState::Down {
+            reason: "error: lost connection to pod".into()
+        },
+        "closing keeps why it went down"
+    );
+}
+
 /// A personal connection to the cluster's PostgreSQL through its `[kubernetes]` section,
 /// opened from its file like the app does; two of them share one `kubectl port-forward`.
 #[tokio::test]
@@ -115,8 +265,9 @@ async fn connections_reach_a_database_inside_the_cluster() {
         "still used by the second one"
     );
     second.close().await;
-    assert!(
-        matches!(*state.borrow(), TunnelState::Down { .. }),
+    assert_eq!(
+        *state.borrow(),
+        TunnelState::Closed,
         "closed with the last one"
     );
     assert_eq!(pool.active().await, 0);
@@ -125,10 +276,59 @@ async fn connections_reach_a_database_inside_the_cluster() {
     let third = open().await.expect("a new port-forward");
     let state = third.tunnel_state().expect("goes through a tunnel");
     pool.close_all().await;
-    assert!(matches!(*state.borrow(), TunnelState::Down { .. }));
+    assert_eq!(*state.borrow(), TunnelState::Closed);
     assert_eq!(pool.active().await, 0);
     drop(third);
     let _ = std::fs::remove_dir_all(base);
+}
+
+/// Stops the program listening on local `port` (a kubectl), as if it had died.
+fn kill_listener(port: u16) {
+    #[cfg(windows)]
+    let status = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "Stop-Process -Force -Id (Get-NetTCPConnection -State Listen -LocalPort {port}).OwningProcess"
+            ),
+        ])
+        .status()
+        .unwrap();
+    #[cfg(not(windows))]
+    let status = std::process::Command::new("sh")
+        .args(["-c", &format!("kill $(lsof -t -iTCP:{port} -sTCP:LISTEN)")])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "could not stop the kubectl on port {port}"
+    );
+}
+
+/// SDB-366 with a real kubectl: the tunnel is opening until it listens; when one kubectl dies,
+/// the tunnel goes down and the other one is stopped; closing keeps the reason.
+#[tokio::test]
+async fn with_a_cluster_one_forward_ending_stops_the_others() {
+    let Some(kubeconfig) = kubeconfig() else {
+        return;
+    };
+    let tunnel = Arc::new(KubeTunnel::new(spec(&kubeconfig, "deployment/postgres")));
+    assert_eq!(*tunnel.state().borrow(), TunnelState::Opening);
+    let kept = tunnel.forward(5432).await.unwrap();
+    assert_eq!(*tunnel.state().borrow(), TunnelState::Up);
+    // Nothing listens on this port in the pod, but kubectl forwards it.
+    let ending = tunnel.forward(9999).await.unwrap();
+    assert!(tokio::net::TcpStream::connect(kept).await.is_ok());
+    let mut state = tunnel.state();
+    kill_listener(ending.port());
+    let reason = down_reason(&mut state).await;
+    assert!(
+        stops_listening(kept, std::time::Duration::from_secs(30)).await,
+        "the other kubectl was left running"
+    );
+    tunnel.close().await;
+    assert_eq!(*tunnel.state().borrow(), TunnelState::Down { reason });
 }
 
 /// What kubectl says is what the user sees; checking finds the resource or explains why not.

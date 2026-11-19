@@ -358,10 +358,7 @@ async fn postgres_through_two_bastions_with_verify_full() {
     );
 
     conn.close().await;
-    assert!(matches!(
-        &*state.borrow_and_update(),
-        TunnelState::Down { .. }
-    ));
+    assert_eq!(*state.borrow_and_update(), TunnelState::Closed);
 }
 
 /// ADR-004: a shared tunnel. Two tabs against the same database and another database behind
@@ -417,7 +414,7 @@ async fn connections_share_one_tunnel() {
     assert_eq!(*state.borrow(), TunnelState::Up, "tab2 still uses it");
     assert_eq!(first_value(&tab2, "select 1").await, "1");
     tab2.close().await;
-    assert!(matches!(&*state.borrow(), TunnelState::Down { .. }));
+    assert_eq!(*state.borrow(), TunnelState::Closed);
     assert_eq!(ws.tunnels.active().await, 0);
 }
 

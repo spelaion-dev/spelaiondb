@@ -1,8 +1,9 @@
 //! Kubernetes tunnels (ADR-015): `kubectl port-forward` to a resource of a cluster, using the
 //! user's `kubectl` and kubeconfig (so their authentication plugins just work). One process
 //! per remote port, started on the first connection that needs it and stopped with the
-//! tunnel; if one exits, the tunnel goes down with kubectl's message and is never restarted
-//! on its own, like an SSH tunnel.
+//! tunnel. The tunnel is opening until its first process listens; if one exits, the tunnel
+//! goes down with kubectl's message, the others are stopped, and none is restarted on its
+//! own, like an SSH tunnel.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -64,12 +65,25 @@ struct Forward {
     task: Option<JoinHandle<()>>,
 }
 
+impl Forward {
+    /// Stops its `kubectl` and waits until it has exited.
+    async fn stop(mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+    }
+}
+
 impl KubeTunnel {
+    /// A tunnel that is opening until its first `kubectl port-forward` listens.
     pub fn new(spec: ResolvedKubernetes) -> Self {
         Self {
             spec,
             forwards: Mutex::new(HashMap::new()),
-            state: watch::channel(TunnelState::Up).0,
+            state: watch::channel(TunnelState::Opening).0,
         }
     }
 
@@ -77,37 +91,60 @@ impl KubeTunnel {
         self.state.subscribe()
     }
 
-    /// The local address that reaches `remote_port` of the resource, starting
-    /// `kubectl port-forward` the first time.
-    pub async fn forward(self: &Arc<Self>, remote_port: u16) -> Result<SocketAddr, KubeError> {
-        if let TunnelState::Down { reason } = &*self.state.borrow() {
-            return Err(KubeError::Down(reason.clone()));
+    /// Why nothing more can be forwarded, if it cannot.
+    fn usable(&self) -> Result<(), KubeError> {
+        match &*self.state.borrow() {
+            TunnelState::Opening | TunnelState::Up => Ok(()),
+            TunnelState::Down { reason } => Err(KubeError::Down(reason.clone())),
+            TunnelState::Closed => Err(KubeError::Down("closed".into())),
         }
+    }
+
+    /// The local address that reaches `remote_port` of the resource, starting
+    /// `kubectl port-forward` the first time. The first one that listens makes the tunnel up;
+    /// the first one failing fails the opening, and the tunnel is down with kubectl's words.
+    pub async fn forward(self: &Arc<Self>, remote_port: u16) -> Result<SocketAddr, KubeError> {
+        self.usable()?;
         let mut forwards = self.forwards.lock().await;
+        // It may have gone down while another forward started.
+        self.usable()?;
         if let Some(forward) = forwards.get(&remote_port) {
             return Ok(forward.local);
         }
-        let forward = self.start(remote_port).await?;
+        let forward = match self.start(remote_port).await {
+            Ok(forward) => forward,
+            Err(error) => {
+                self.state.send_if_modified(|state| match state {
+                    TunnelState::Opening => state.lose(error.to_string()),
+                    // A later forward failing leaves the others as they are.
+                    TunnelState::Up | TunnelState::Down { .. } | TunnelState::Closed => false,
+                });
+                return Err(error);
+            }
+        };
+        // Another forward ended while this one started: the tunnel is down, nothing is added.
+        if let Err(down) = self.usable() {
+            forward.stop().await;
+            return Err(down);
+        }
         let local = forward.local;
         forwards.insert(remote_port, forward);
+        self.state.send_if_modified(TunnelState::open);
         Ok(local)
     }
 
-    /// Stops every port-forward and waits for each `kubectl` to exit; the tunnel is down from
-    /// then on.
+    /// Stops every port-forward and waits for each `kubectl` to exit; the tunnel is closed from
+    /// then on, unless it was already down: then it keeps the reason.
     pub async fn close(&self) {
+        self.stop_forwards().await;
+        self.state.send_if_modified(TunnelState::close);
+    }
+
+    async fn stop_forwards(&self) {
         let forwards: Vec<Forward> = self.forwards.lock().await.drain().map(|(_, f)| f).collect();
-        for mut forward in forwards {
-            if let Some(stop) = forward.stop.take() {
-                let _ = stop.send(());
-            }
-            if let Some(task) = forward.task.take() {
-                let _ = task.await;
-            }
+        for forward in forwards {
+            forward.stop().await;
         }
-        self.state.send_replace(TunnelState::Down {
-            reason: "closed".into(),
-        });
     }
 
     async fn start(self: &Arc<Self>, remote_port: u16) -> Result<Forward, KubeError> {
@@ -186,13 +223,16 @@ impl KubeTunnel {
                     let _ = errors.await;
                     let message = last_error.lock().map(|m| m.clone()).unwrap_or_default();
                     if let Some(tunnel) = tunnel.upgrade() {
-                        tunnel.state.send_replace(TunnelState::Down {
-                            reason: if message.is_empty() {
-                                "kubectl port-forward exited".into()
-                            } else {
-                                message
-                            },
-                        });
+                        let reason = if message.is_empty() {
+                            "kubectl port-forward exited".into()
+                        } else {
+                            message
+                        };
+                        tunnel.state.send_if_modified(|state| state.lose(reason));
+                        // A tunnel that is down carries nothing: its other kubectl processes
+                        // are stopped too, and none is restarted (ADR-007). Stopping waits for
+                        // this task, so it runs on its own.
+                        tokio::spawn(async move { tunnel.stop_forwards().await });
                     }
                 }
             }
