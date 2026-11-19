@@ -35,7 +35,11 @@
     "empty": "Write a query and press Ctrl+Enter.",
     "result": "Result {{number}}",
     "messages": "Messages",
-    "running": "Running…",
+    "running": "Running query…",
+    "cancelling": "Cancelling query…",
+    "elapsed": "{{seconds}} s",
+    "cancelQuery": "Cancel query",
+    "cancelFailed": "Could not cancel the query: {{detail}}",
     "loading": " (loading)",
     "partial": {
       "cancelled_one": "Partial: cancelled after {{formattedCount}} row",

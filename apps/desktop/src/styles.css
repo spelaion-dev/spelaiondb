@@ -1185,7 +1185,8 @@ select {
 }
 .tab-tx-failed { color: var(--danger-fg); background: var(--danger-soft); }
 /* A query is running on the tab: the spinner appears after 300ms, so quick runs do not flash. */
-.tab-running {
+.tab-running,
+.result-run-spinner {
   box-sizing: border-box;
   width: 10px;
   height: 10px;
@@ -1200,7 +1201,8 @@ select {
 @keyframes tab-running-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   /* Only opacity changes remain: a still ring after the same delay. */
-  .tab-running { border-right-color: var(--accent); animation: tab-running-show 0s linear 300ms forwards; }
+  .tab-running,
+  .result-run-spinner { border-right-color: var(--accent); animation: tab-running-show 0s linear 300ms forwards; }
 }
 .tab.dragging { opacity: 0.55; cursor: grabbing; }
 /* Where a dragged tab lands: a 2px accent line in the gap before or after a tab. */
@@ -1878,6 +1880,35 @@ select {
 .result-tabs button.active {
   color: var(--fg);
   box-shadow: inset 0 -2px var(--accent);
+}
+.result-tools .result-refresh {
+  display: grid;
+  place-items: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+.result-run-progress {
+  display: flex;
+  align-items: center;
+  flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-md);
+  min-height: var(--bar-h);
+  padding: var(--space-xs) var(--space-lg);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+}
+.result-run-elapsed {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.result-run-progress button {
+  margin-inline-start: auto;
+  min-height: var(--control-sm);
+  padding: 0 var(--space-md);
+  font-size: inherit;
 }
 /* Settings: how values are shown (SDB-385). */
 .display-format-row { display: flex; gap: var(--space-lg); align-items: flex-end; margin-top: var(--space-md); }

@@ -811,6 +811,76 @@ try {
   assert.equal(await editorDivider.getAttribute("aria-valuenow"), "42");
   await run(panel);
   await panel.locator(".statusline", { hasText: "6 rows" }).waitFor();
+  step("results: elapsed time, cancellation and toolbar Refresh (SDB-430)");
+  {
+    const tabStrip = page.locator(".tabbar");
+    const previousTab = await tabStrip.locator(".tab.active").elementHandle();
+    const busy = await newQuery("Shop (SQLite)", "with recursive spin(i) as (values(1) union all select i + 1 from spin) select count(*) from spin;");
+    const runningTab = await tabStrip.locator(".tab.active").elementHandle();
+    const progress = busy.locator(".result-run-progress");
+    const timer = progress.getByRole("timer");
+    const cancel = progress.getByRole("button", { name: "Cancel query", exact: true });
+    await run(busy);
+    await progress.getByText("Running query…", { exact: true }).waitFor();
+    assert.equal(await busy.locator(".grid-host").count(), 0);
+    const firstTick = await timer.textContent();
+    assert.match(firstTick, /^\d+\.\d s$/);
+    await page.waitForFunction(
+      ([el, first]) => el.textContent !== first,
+      [await timer.elementHandle(), firstTick],
+    );
+    await previousTab.click();
+    assert.equal(await progress.count(), 0);
+    await runningTab.click();
+    assert.notEqual(await timer.textContent(), firstTick);
+    await busy.getByRole("button", { name: "Maximize results (Ctrl+Alt+M)" }).click();
+    await busy.locator(".editor-pane").waitFor({ state: "hidden" });
+    const spinner = await progress.locator(".result-run-spinner").elementHandle();
+    await page.waitForFunction((el) => getComputedStyle(el).opacity === "1", spinner);
+    await shot("sdb-430-query-progress");
+    await cancel.click();
+    await progress.waitFor({ state: "detached" });
+    await busy.locator(".messages").getByText("Statement 1: Query cancelled", { exact: true }).waitFor();
+    await busy.getByRole("button", { name: "Restore the editor (Ctrl+Alt+M)" }).click();
+
+    // Send several batches, then block on the last row so cancellation can be tested during streaming.
+    await replaceQuery(busy, `with recursive
+      rows(i) as (values(1) union all select i + 1 from rows where i < 100000),
+      spin(n) as (values(1) union all select n + 1 from spin)
+      select i, case when i = 100000 then (select count(*) from spin) else i end as value from rows;`);
+    await run(busy);
+    await busy.locator('.grid-scroller[aria-label^="Result with "]:not([aria-label="Result with 0 rows"])').waitFor();
+    await busy.getByRole("button", { name: "Messages", exact: true }).click();
+    await cancel.click();
+    await progress.waitFor({ state: "detached" });
+    await busy.locator(".result-tab-list").getByRole("button", { name: /^Messages/ }).click();
+    await busy.locator(".messages").getByText("Statement 1: Query cancelled", { exact: true }).waitFor();
+
+    await replaceQuery(busy, "select id, name from customer order by id limit 1;");
+    await run(busy);
+    await busy.locator(".statusline", { hasText: /^1 row · \d+ ms$/ }).waitFor();
+    assert.equal(await progress.count(), 0);
+    const refresh = busy.locator(".result-tools").getByRole("button", { name: "Refresh", exact: true });
+    assert.equal(await busy.getByRole("button", { name: "Refresh", exact: true }).count(), 1);
+    assert.ok(await refresh.evaluate((button) => button.compareDocumentPosition(button.closest(".result-tools").querySelector("input")) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const before = await busy.locator(".result-tab-item.active").getAttribute("data-result");
+    await busy.getByRole("button", { name: "Add row", exact: true }).click();
+    await page.getByRole("dialog", { name: "New row" }).getByRole("button", { name: "Add", exact: true }).click();
+    await busy.getByRole("button", { name: "Discard new row 1" }).waitFor();
+    await refresh.click();
+    await busy.getByText("Apply or discard the pending changes first", { exact: true }).waitFor();
+    assert.equal(await busy.locator(".result-tab-item.active").getAttribute("data-result"), before);
+    await busy.getByRole("button", { name: "Discard new row 1" }).click();
+    await busy.getByText("No pending changes", { exact: true }).waitFor();
+    await refresh.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((old) => {
+      const active = document.querySelector(".tab-panel:not([hidden]) .result-tab-item.active");
+      return active !== null && active.getAttribute("data-result") !== old;
+    }, before);
+    await busy.locator(".statusline", { hasText: /^1 row · \d+ ms$/ }).waitFor();
+    await page.keyboard.press("Control+w");
+  }
   step("SQL syntax remains legible when switching themes");
   const originalSql = await panel.locator(".cm-content").innerText();
   await replaceQuery(panel, "SELECT 'soft red', 42 AS n;");
@@ -4414,7 +4484,7 @@ try {
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   await panel.getByText("This page only", { exact: true }).waitFor();
   const beforeRefresh = await panel.locator(".result-tab-item.active").getAttribute("data-result");
-  await panel.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true }).click();
+  await panel.locator(".result-tools").getByRole("button", { name: "Refresh", exact: true }).click();
   await page.waitForFunction(([old]) => document.querySelector('.tab-panel:not([hidden]) .result-tab-item.active')?.getAttribute("data-result") !== old, [beforeRefresh]);
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   // Export takes every row the WHERE keeps, in the ORDER BY, not only the page on screen.
@@ -4886,7 +4956,7 @@ try {
     // Match all the two conditions keep no row, and without Match case "ada" keeps both Adas,
     // so only "2 of 3 rows" says both were kept.
     {
-      const refresh = names.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true });
+      const refresh = names.locator(".result-tools").getByRole("button", { name: "Refresh", exact: true });
       const shown = await names.locator(".result-tab-item.active").getAttribute("data-result");
       await refresh.click();
       await page.waitForFunction(([old]) => {
@@ -4895,7 +4965,7 @@ try {
       }, [shown]);
       await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
       await page.waitForFunction(() => {
-        const button = document.querySelector('.tab-panel:not([hidden]) .grid-footer button[aria-label="Refresh"]');
+        const button = document.querySelector('.tab-panel:not([hidden]) .result-tools button[aria-label="Refresh"]');
         return button !== null && !button.disabled;
       });
       assert.equal(await matchMode.getByRole("button", { name: "Match any", exact: true }).getAttribute("aria-pressed"), "true");
@@ -6987,7 +7057,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.type("edited", { delay: 10 });
     assert.equal(await editor.inputValue(), "edited");
     await editor.press("Enter");
-    await panel.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true }).click();
+    await panel.locator(".result-tools").getByRole("button", { name: "Refresh", exact: true }).click();
     await panel.getByText("Apply or discard the pending changes first").waitFor();
     await panel.locator(".grid-scroller").focus();
     // The full value panel edits the same pending cell, and can be undone by row.

@@ -324,14 +324,14 @@ try {
     await wd.insertText("ew");
     await wd.press("Enter");
     await visibleText(P, "Updated: 1");
-    await wd.click(await button("Refresh", `${P} .grid-footer`));
+    await wd.click(await button("Refresh", `${P} .result-tools`));
     await visibleText(P, "Apply or discard the pending changes first");
     await visibleText(P, "Updated: 1");
     await wd.evaluate((p) => document.querySelector(`${p} .grid-scroller`).focus(), P);
     await wd.press("Control+z");
     await visibleText(P, "No pending changes");
     const oldResult = await wd.evaluate((p) => document.querySelector(`${p} .result-tab-item.active`)?.dataset.result, P);
-    await wd.click(await button("Refresh", `${P} .grid-footer`));
+    await wd.click(await button("Refresh", `${P} .result-tools`));
     await wd.waitFor((p, old) => {
       const active = document.querySelector(`${p} .result-tab-item.active`);
       return active && active.dataset.result !== old;
@@ -341,7 +341,7 @@ try {
     await fill(filter, "Customer 1");
     await statusline("1 of 3 rows");
     const filteredResult = await wd.evaluate((p) => document.querySelector(`${p} .result-tab-item.active`)?.dataset.result, P);
-    await wd.click(await button("Refresh", `${P} .grid-footer`));
+    await wd.click(await button("Refresh", `${P} .result-tools`));
     await wd.waitFor((p, old) => {
       const active = document.querySelector(`${p} .result-tab-item.active`);
       return active && active.dataset.result !== old && document.querySelector(`${p} input.result-filter`)?.value === "Customer 1";
@@ -387,7 +387,7 @@ try {
     await wd.click(await button("Run", '[role="dialog"], .modal'));
     await wd.waitDetached(first, { what: "the first execution confirmation to close" });
     await statusline("1 row");
-    await wd.click(await button("Refresh", `${P} .grid-footer`));
+    await wd.click(await button("Refresh", `${P} .result-tools`));
     const againParams = await dialog("Query parameters");
     assert.equal(await wd.evaluate((d) => d.querySelector("input").value, againParams), "1", "refresh asks again and remembers the parameter");
     await wd.click(await button("Run", '[role="dialog"], .modal'));
@@ -418,7 +418,7 @@ try {
     await newQuery("analytics", "create table sales as select range as id, [range, range * 2] as pair, {'city': 'Madrid'} as place from range(3);\nselect * from sales order by id;");
     await run();
     await statusline("3 rows");
-    assert.equal(await wd.evaluate((p) => document.querySelectorAll(`${p} .grid-footer button[aria-label="Refresh"]`).length, P), 0, "a multi-statement run has no grid refresh");
+    assert.equal(await wd.evaluate((p) => document.querySelectorAll(`${p} button[aria-label="Refresh"]`).length, P), 0, "a multi-statement run has no Refresh");
     await shot("04-duckdb");
   });
 
