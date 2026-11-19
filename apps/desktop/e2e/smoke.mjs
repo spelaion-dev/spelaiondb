@@ -6690,8 +6690,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await head.getByRole("button").click();
     const lockDetails = monitor.getByRole("complementary", { name: "Lock details" });
     await lockDetails.locator(".process-sql-detail", { hasText: "pg_sleep(120)" }).waitFor();
-    // Ending the blocking session goes through the process monitor's checks and confirmation.
-    assert.ok(!(await lockDetails.getByRole("button", { name: "End connection" }).isDisabled()), "the blocking session can be ended from here");
+    // Ending the blocking session goes through the process monitor's checks and confirmation. The
+    // button stays disabled while a refresh is loading, so wait for it to turn on rather than
+    // reading it once.
+    await lockDetails.locator("button:enabled", { hasText: "End connection" }).waitFor({ timeout: 15_000 })
+      .catch(() => assert.fail("the blocking session can be ended from here"));
     await shot("07c-lock-view");
     await setTheme("dark", "dark");
     await head.getByText("Blocks 1 session", { exact: true }).waitFor();
