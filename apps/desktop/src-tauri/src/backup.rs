@@ -10,16 +10,16 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_core::backup::{
-    self, BackupCancel, BackupError, BackupEvent, ColumnStatistics, DumpContent, DumpOptions,
-    DumpRequest, MysqlConsistency, MysqlDumpOptions, MysqlRestoreOptions, PgDumpOptions, PgFormat,
-    PgRestoreOptions, RestoreFormat, RestoreOptions, RestoreRequest, ToolSource,
+    self, BackupEvent, ColumnStatistics, DumpContent, DumpOptions, DumpRequest, MysqlConsistency,
+    MysqlDumpOptions, MysqlRestoreOptions, PgDumpOptions, PgFormat, PgRestoreOptions,
+    RestoreFormat, RestoreOptions, RestoreRequest, ToolSource,
 };
-use spelaion_core::{BackupPreferences, RouteOptions};
+use spelaion_core::{BackupPreferences, JobCancel, RouteOptions};
 use spelaion_ssh::KnownHosts;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
-use crate::dto::TableRefItem;
+use crate::dto::{JobOutcome, TableRefItem};
 use crate::interaction::AppInteraction;
 use crate::{AppState, CmdResult};
 
@@ -380,29 +380,21 @@ impl From<BackupEvent> for BackupEventItem {
     }
 }
 
+/// A finished backup: where it is, its size and how long it took.
 #[derive(Debug, Clone, Serialize, Type)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum BackupOutcome {
-    Done {
-        path: String,
-        bytes: f64,
-        millis: f64,
-    },
-    /// The password must be asked first.
-    PasswordRequired,
-    Cancelled,
-    Failed {
-        message: String,
-    },
+#[serde(rename_all = "camelCase")]
+pub struct BackupDoneItem {
+    pub path: String,
+    pub bytes: f64,
+    pub millis: f64,
 }
 
+/// How a backup ended (a partial backup is removed).
+pub type BackupOutcome = JobOutcome<BackupDoneItem, ()>;
+
 /// Registers a run so `cancel_backup` can stop it.
-fn register(state: &AppState, run_id: u32) -> CmdResult<Arc<BackupCancel>> {
-    let cancel = Arc::new(BackupCancel::new());
+fn register(state: &AppState, run_id: u32) -> CmdResult<Arc<JobCancel>> {
+    let cancel = Arc::new(JobCancel::new());
     let mut runs = state.backups.lock().expect("lock poisoned");
     if runs.contains_key(&run_id) {
         return Err("a backup with this id is already running".into());
@@ -462,32 +454,15 @@ pub async fn run_backup(
     )
     .await;
     state.backups.lock().expect("lock poisoned").remove(&run_id);
-    Ok(match outcome {
-        Ok(summary) => BackupOutcome::Done {
+    Ok(BackupOutcome::from_end(
+        outcome.into(),
+        |summary| BackupDoneItem {
             path: summary.path.display().to_string(),
             bytes: summary.bytes as f64,
             millis: summary.elapsed.as_millis() as f64,
         },
-        Err(e) => outcome_error(e),
-    })
-}
-
-fn outcome_error(e: BackupError) -> BackupOutcome {
-    match e {
-        BackupError::Cancelled => BackupOutcome::Cancelled,
-        BackupError::Open(spelaion_core::OpenError::PasswordRequired { .. }) => {
-            BackupOutcome::PasswordRequired
-        }
-        e @ (BackupError::Tool(_)
-        | BackupError::ReadOnly
-        | BackupError::NeedsConfirmation
-        | BackupError::Open(_)
-        | BackupError::Io { .. }
-        | BackupError::Invalid(_)
-        | BackupError::Failed(_)) => BackupOutcome::Failed {
-            message: e.to_string(),
-        },
-    }
+        |()| (),
+    ))
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -614,19 +589,16 @@ pub async fn preview_restore(
     })
 }
 
+/// A finished restore: the bytes of the file fed to the tool and how long it took.
 #[derive(Debug, Clone, Serialize, Type)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum RestoreOutcome {
-    Done { bytes: f64, millis: f64 },
-    NeedsConfirmation,
-    PasswordRequired,
-    Cancelled,
-    Failed { message: String },
+#[serde(rename_all = "camelCase")]
+pub struct RestoreDoneItem {
+    pub bytes: f64,
+    pub millis: f64,
 }
+
+/// How a restore, or an import of a DuckDB export, ended.
+pub type RestoreOutcome = JobOutcome<RestoreDoneItem, ()>;
 
 /// Restores a file into the connection's database with its vendor's tool, through its tunnel.
 /// The core refuses a read-only connection and an unconfirmed restore.
@@ -657,21 +629,14 @@ pub async fn run_restore(
     )
     .await;
     state.backups.lock().expect("lock poisoned").remove(&run_id);
-    Ok(match outcome {
-        Ok(summary) => RestoreOutcome::Done {
+    Ok(RestoreOutcome::from_end(
+        outcome.into(),
+        |summary| RestoreDoneItem {
             bytes: summary.bytes as f64,
             millis: summary.elapsed.as_millis() as f64,
         },
-        Err(BackupError::NeedsConfirmation) => RestoreOutcome::NeedsConfirmation,
-        Err(e) => match outcome_error(e) {
-            BackupOutcome::Cancelled => RestoreOutcome::Cancelled,
-            BackupOutcome::PasswordRequired => RestoreOutcome::PasswordRequired,
-            BackupOutcome::Failed { message } => RestoreOutcome::Failed { message },
-            BackupOutcome::Done { .. } => RestoreOutcome::Failed {
-                message: "the restore ended in an unexpected state".into(),
-            },
-        },
-    })
+        |()| (),
+    ))
 }
 
 /// Stops a running backup or restore: the tool is killed and a partial backup removed.
@@ -787,16 +752,17 @@ pub async fn run_embedded_backup(
             )
             .await;
             open.close().await;
-            match result {
-                Ok(summary) => BackupOutcome::Done {
+            BackupOutcome::from_end(
+                result.into(),
+                |summary| BackupDoneItem {
                     path: summary.path.display().to_string(),
                     bytes: summary.bytes as f64,
                     millis: summary.elapsed.as_millis() as f64,
                 },
-                Err(e) => outcome_error(e),
-            }
+                |()| (),
+            )
         }
-        Err(message) => BackupOutcome::Failed { message },
+        Err(message) => BackupOutcome::failed(message),
     };
     state.backups.lock().expect("lock poisoned").remove(&run_id);
     Ok(outcome)
@@ -830,19 +796,16 @@ pub async fn run_duckdb_import(
             )
             .await;
             open.close().await;
-            match result {
-                Ok(elapsed) => RestoreOutcome::Done {
+            RestoreOutcome::from_end(
+                result.into(),
+                |elapsed| RestoreDoneItem {
                     bytes: 0.0,
                     millis: elapsed.as_millis() as f64,
                 },
-                Err(BackupError::NeedsConfirmation) => RestoreOutcome::NeedsConfirmation,
-                Err(BackupError::Cancelled) => RestoreOutcome::Cancelled,
-                Err(e) => RestoreOutcome::Failed {
-                    message: e.to_string(),
-                },
-            }
+                |()| (),
+            )
         }
-        Err(message) => RestoreOutcome::Failed { message },
+        Err(message) => RestoreOutcome::failed(message),
     };
     state.backups.lock().expect("lock poisoned").remove(&run_id);
     Ok(outcome)
@@ -894,25 +857,18 @@ pub async fn plan_sql_file(
     })
 }
 
+/// A file run that went to the end: statements run, failed and in the file, and how long.
 #[derive(Debug, Clone, Serialize, Type)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum FileRunOutcome {
-    Done {
-        done: f64,
-        failed: f64,
-        total: f64,
-        millis: f64,
-    },
-    NeedsConfirmation,
-    Cancelled,
-    Failed {
-        message: String,
-    },
+#[serde(rename_all = "camelCase")]
+pub struct FileRunDoneItem {
+    pub done: f64,
+    pub failed: f64,
+    pub total: f64,
+    pub millis: f64,
 }
+
+/// How running an `.sql` file ended.
+pub type FileRunOutcome = JobOutcome<FileRunDoneItem, ()>;
 
 /// Runs an `.sql` file in a session of its own, statement by statement. The core refuses a
 /// read-only connection and an unconfirmed run.
@@ -945,21 +901,18 @@ pub async fn run_sql_file(
             )
             .await;
             open.close().await;
-            match result {
-                Ok(summary) => FileRunOutcome::Done {
+            FileRunOutcome::from_end(
+                result.into(),
+                |summary| FileRunDoneItem {
                     done: summary.done as f64,
                     failed: summary.failed as f64,
                     total: summary.total as f64,
                     millis: summary.elapsed.as_millis() as f64,
                 },
-                Err(BackupError::NeedsConfirmation) => FileRunOutcome::NeedsConfirmation,
-                Err(BackupError::Cancelled) => FileRunOutcome::Cancelled,
-                Err(e) => FileRunOutcome::Failed {
-                    message: e.to_string(),
-                },
-            }
+                |()| (),
+            )
         }
-        Err(message) => FileRunOutcome::Failed { message },
+        Err(message) => FileRunOutcome::failed(message),
     };
     state.backups.lock().expect("lock poisoned").remove(&run_id);
     Ok(outcome)

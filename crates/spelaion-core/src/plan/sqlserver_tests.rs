@@ -120,7 +120,7 @@ fn utf16_sqlplan_roundtrips_with_original_encoding() {
         let store = PlanStore::new();
         let id = store.insert(doc).unwrap().id;
         store
-            .save_raw(id, &output, &crate::ExportCancel::default())
+            .save_raw(id, &output, &crate::JobCancel::default())
             .unwrap();
         assert_eq!(std::fs::read(&output).unwrap(), bytes);
         assert!(read_plan(&output).is_ok());

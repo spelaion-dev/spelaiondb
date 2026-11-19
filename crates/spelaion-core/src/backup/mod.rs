@@ -35,11 +35,12 @@ pub use options::{
     MysqlRestoreOptions, PgDumpOptions, PgFormat, PgRestoreOptions, RestoreFormat, RestoreOptions,
     RestoreRequest,
 };
-pub use process::{BackupCancel, BackupEvent};
+pub use process::BackupEvent;
 pub use run_file::{FilePlan, FileRunSummary, RUN_FILE_MAX_BYTES, plan_sql_file, run_sql_file};
 pub use tools::{Tool, ToolError, ToolFlavor, ToolName, ToolSource, ToolVersion, locate};
 
 use crate::conn_test::{Recording, learn_connection_secrets};
+use crate::job::JobCancel;
 use crate::open::{OpenError, RouteOptions, open_route};
 use crate::{Redactor, Session};
 use args::Endpoint;
@@ -427,7 +428,7 @@ pub async fn run_dump(
     route_options: RouteOptions,
     request: &DumpRequest,
     catalog: Option<&Session>,
-    cancel: &BackupCancel,
+    cancel: &JobCancel,
     events: &(dyn Fn(BackupEvent) + Send + Sync),
 ) -> Result<DumpSummary, BackupError> {
     let started = Instant::now();
@@ -577,7 +578,7 @@ async fn open_with_cancel(
     resolved: &ResolvedConnection,
     options: RouteOptions,
     redactor: &Arc<Redactor>,
-    cancel: &BackupCancel,
+    cancel: &JobCancel,
 ) -> Result<crate::open::Route, BackupError> {
     let options = RouteOptions {
         interaction: Arc::new(Recording {
@@ -711,7 +712,7 @@ pub async fn run_restore(
     route_options: RouteOptions,
     request: &RestoreRequest,
     confirmed: bool,
-    cancel: &BackupCancel,
+    cancel: &JobCancel,
     events: &(dyn Fn(BackupEvent) + Send + Sync),
 ) -> Result<RestoreSummary, BackupError> {
     if resolved.params.read_only {

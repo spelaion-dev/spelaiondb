@@ -17,7 +17,7 @@ use spelaion_config::{
     ConnectionId, Resolver, Safeguards, Source, SystemBackend, TrustStore, load,
 };
 use spelaion_core::{
-    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportCancel, ExportError, ExportFormat,
+    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportError, ExportFormat, JobCancel,
     OpenConnection, OpenOptions, ReadError, ReadLimits, ResultStore, Session, StreamExport,
     TextEncoding, TunnelPool, WriteError, WriteLimits, export_query, open_connection,
 };
@@ -263,7 +263,7 @@ async fn exports_stream_rows_in_a_read_only_transaction() {
             false,
             &path,
             &csv(),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await
@@ -288,7 +288,7 @@ async fn exports_stream_rows_in_a_read_only_transaction() {
                 false,
                 &dir.join("refused.csv"),
                 &csv(),
-                &ExportCancel::new(),
+                &JobCancel::new(),
                 &|_| {},
             )
             .await;

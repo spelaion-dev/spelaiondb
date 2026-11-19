@@ -15,7 +15,7 @@ import {
   commands,
   type DataSearchEventItem,
   type DataSearchLimitsItem,
-  type DataSearchSummaryItem,
+  type DataSearchOutcome,
   type SearchHitItem,
   type TableStatusItem,
 } from "../api";
@@ -227,7 +227,7 @@ interface Run {
   total: number;
   current: { index: number; schema: string; table: string } | null;
   outcomes: Outcome[];
-  summary: DataSearchSummaryItem | null;
+  summary: DataSearchOutcome | null;
   error: string | null;
   cancelling: boolean;
 }
@@ -349,9 +349,24 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
     }
     const s = run.summary;
     if (!s) return null;
-    if (s.cancelled) return t("search.cancelled", { tables: s.tables, total: run.total, count: s.hits });
-    if (s.stopped) return t("search.stopped", { count: s.hits });
-    return t("search.done", { count: s.hits, tables: s.tables });
+    switch (s.kind) {
+      case "cancelled":
+        return t("search.cancelled", { tables: s.kept.tables, total: run.total, count: s.kept.hits });
+      case "stoppedAtLimit":
+        return t("search.stopped", { count: s.result.hits });
+      case "done":
+        return t("search.done", { count: s.result.hits, tables: s.result.tables });
+      // A search that ran always ends with what it read; one it refuses is an error.
+      case "failed":
+      case "needsConfirmation":
+      case "passwordRequired":
+      case "notARead":
+        return null;
+      default: {
+        const unexpected: never = s;
+        return unexpected;
+      }
+    }
   }
 
   return (

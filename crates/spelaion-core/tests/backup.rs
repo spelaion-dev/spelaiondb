@@ -17,13 +17,13 @@ use spelaion_config::{
     ConnectionId, ResolvedConnection, Resolver, Source, SystemBackend, TrustStore, load,
 };
 use spelaion_core::backup::{
-    BackupCancel, BackupError, BackupEvent, DumpOptions, DumpRequest, MysqlDumpOptions,
-    MysqlRestoreOptions, PgDumpOptions, PgFormat, PgRestoreOptions, RestoreFormat, RestoreOptions,
-    RestoreRequest, ToolSource, run_dump, run_restore,
+    BackupError, BackupEvent, DumpOptions, DumpRequest, MysqlDumpOptions, MysqlRestoreOptions,
+    PgDumpOptions, PgFormat, PgRestoreOptions, RestoreFormat, RestoreOptions, RestoreRequest,
+    ToolSource, run_dump, run_restore,
 };
 use spelaion_core::{
-    CoreEvent, Engines, OpenConnection, OpenOptions, ResultStore, RouteOptions, TunnelPool,
-    open_connection,
+    CoreEvent, Engines, JobCancel, OpenConnection, OpenOptions, ResultStore, RouteOptions,
+    TunnelPool, open_connection,
 };
 use spelaion_driver_api::{Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, SecretRequest};
@@ -356,7 +356,7 @@ async fn postgres_dumps_and_restores_through_two_hops() {
                 ws.route(),
                 &request,
                 None,
-                &BackupCancel::new(),
+                &JobCancel::new(),
                 &log.sink(),
             )
             .await
@@ -383,7 +383,7 @@ async fn postgres_dumps_and_restores_through_two_hops() {
                 ws.route(),
                 &restore,
                 true,
-                &BackupCancel::new(),
+                &JobCancel::new(),
                 &|_| panic!("nothing runs on a read-only connection"),
             )
             .await;
@@ -394,7 +394,7 @@ async fn postgres_dumps_and_restores_through_two_hops() {
                 ws.route(),
                 &restore,
                 false,
-                &BackupCancel::new(),
+                &JobCancel::new(),
                 &|_| panic!("nothing runs unconfirmed"),
             )
             .await;
@@ -407,7 +407,7 @@ async fn postgres_dumps_and_restores_through_two_hops() {
                 ws.route(),
                 &restore,
                 true,
-                &BackupCancel::new(),
+                &JobCancel::new(),
                 &log.sink(),
             )
             .await
@@ -421,7 +421,7 @@ async fn postgres_dumps_and_restores_through_two_hops() {
         }
 
         // A cancelled dump leaves nothing behind.
-        let cancel = BackupCancel::new();
+        let cancel = JobCancel::new();
         cancel.cancel().await;
         let cancelled = run_dump(
             &resolved,
@@ -538,7 +538,7 @@ async fn mysql_round_trip(engine: &str, server_var: &str, host_in_network: &str,
             ws.route(),
             &request,
             None,
-            &BackupCancel::new(),
+            &JobCancel::new(),
             &log.sink(),
         )
         .await
@@ -574,7 +574,7 @@ async fn mysql_round_trip(engine: &str, server_var: &str, host_in_network: &str,
                 }),
             },
             true,
-            &BackupCancel::new(),
+            &JobCancel::new(),
             &log.sink(),
         )
         .await

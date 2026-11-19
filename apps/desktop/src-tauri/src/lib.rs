@@ -32,7 +32,7 @@ use spelaion_config::{
     TrustStore, default_user_dir, load,
 };
 use spelaion_core::{
-    AppLog, Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect,
+    AppLog, Engines, ExportFormat, ExportOptions, FindQuery, GenericDialect, JobCancel,
     OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth,
     StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
     start_over,
@@ -84,11 +84,11 @@ struct AppState {
     close_request: AtomicU8,
     tests: ConnectionTests,
     /// Streaming exports running, by the id the UI gave them (ADR-034).
-    exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
+    exports: std::sync::Mutex<HashMap<u32, Arc<JobCancel>>>,
     /// Imports running, by the id the UI gave them (ADR-038).
-    imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ImportCancel>>>,
+    imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::JobCancel>>>,
     /// Backups and restores running, by the id the UI gave them (ADR-049).
-    backups: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::backup::BackupCancel>>>,
+    backups: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::JobCancel>>>,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
     /// Loads of query rows running ("Load every row", page and row jumps; SDB-386), by the id
@@ -148,24 +148,23 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
 
 /// Connection tests running now, by the id the UI gave them, to stop them (ADR-032).
 #[derive(Default)]
-struct ConnectionTests(std::sync::Mutex<HashMap<u32, tokio::sync::oneshot::Sender<()>>>);
+struct ConnectionTests(std::sync::Mutex<HashMap<u32, Arc<JobCancel>>>);
 
 impl ConnectionTests {
-    /// Registers a test; the future completes when it is stopped.
+    /// Registers a test; the future completes when it is stopped (never, if it ends first).
     fn start(&self, test: u32) -> impl std::future::Future<Output = ()> + Send + 'static {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.0.lock().expect("lock poisoned").insert(test, tx);
-        async move {
-            // Forgotten without a stop (the test ended): never completes.
-            if rx.await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        }
+        let cancel = Arc::new(JobCancel::new());
+        self.0
+            .lock()
+            .expect("lock poisoned")
+            .insert(test, cancel.clone());
+        async move { cancel.cancelled().await }
     }
 
     fn stop(&self, test: u32) {
-        if let Some(tx) = self.0.lock().expect("lock poisoned").remove(&test) {
-            let _ = tx.send(());
+        let cancel = self.0.lock().expect("lock poisoned").remove(&test);
+        if let Some(cancel) = cancel {
+            tauri::async_runtime::spawn(async move { cancel.cancel().await });
         }
     }
 
@@ -3466,7 +3465,7 @@ async fn open_export_session(
     app: &AppHandle,
     source: &str,
     export_id: u32,
-) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<ExportCancel>)> {
+) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<JobCancel>)> {
     let (source_open, password) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -3474,7 +3473,7 @@ async fn open_export_session(
             .ok_or("the connection of this export is closed")?;
         (source.open.clone(), source.password.clone())
     };
-    let cancel = Arc::new(ExportCancel::new());
+    let cancel = Arc::new(JobCancel::new());
     {
         let mut exports = state.exports.lock().expect("lock poisoned");
         if exports.contains_key(&export_id) {
@@ -3498,10 +3497,7 @@ async fn open_export_session(
     )
     .await
     {
-        Ok(open) => {
-            cancel.attach(&open.session);
-            Ok((source_open, Arc::new(open), cancel))
-        }
+        Ok(open) => Ok((source_open, Arc::new(open), cancel)),
         Err(e) => {
             state
                 .exports
@@ -3671,30 +3667,11 @@ async fn export_tables(
     )
     .await;
     close_export_session(&state, export_id, open).await;
-    let file = |f: spelaion_core::ExportedFile| ExportedFileItem {
-        schema: f.schema,
-        name: f.name,
-        path: f.path.display().to_string(),
-        summary: f.summary.into(),
-    };
-    Ok(match result {
-        Ok(files) => ExportTablesOutcome {
-            files: files.into_iter().map(file).collect(),
-            cancelled: false,
-            failed_table: None,
-            error: None,
-        },
-        Err(stopped) => {
-            let cancelled = matches!(*stopped.error, spelaion_core::ExportError::Cancelled);
-            ExportTablesOutcome {
-                files: stopped.done.into_iter().map(file).collect(),
-                cancelled,
-                failed_table: (!cancelled)
-                    .then(|| u32::try_from(stopped.table).unwrap_or(u32::MAX)),
-                error: (!cancelled).then(|| stopped.error.to_string()),
-            }
-        }
-    })
+    Ok(ExportTablesOutcome::from_end(
+        result.into(),
+        |files| files.into_iter().map(ExportedFileItem::from).collect(),
+        TablesStoppedItem::from,
+    ))
 }
 
 /// Stops a running streaming export: its statement and its writer; no file is left.
@@ -4272,17 +4249,17 @@ async fn column_stats(
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     drop(tab);
     let outcome = match context {
-        Err(message) => Err(message),
-        Ok(()) => match spelaion_core::column_stats(&open.session, &request, &cancel).await {
-            Ok(stats) => Ok(ColumnStatsOutcome::Done {
-                stats: Box::new(ColumnStatsItem::new(stats, request.sample_rows)),
-            }),
-            Err(spelaion_core::ColumnStatsError::Cancelled) => Ok(ColumnStatsOutcome::Cancelled),
-            Err(e) => Err(e.to_string()),
-        },
+        Err(message) => ColumnStatsOutcome::failed(message),
+        Ok(()) => ColumnStatsOutcome::from_end(
+            spelaion_core::column_stats(&open.session, &request, &cancel)
+                .await
+                .into(),
+            |stats| Box::new(ColumnStatsItem::new(stats, request.sample_rows)),
+            |()| (),
+        ),
     };
     close_export_session(&state, stats_id, open).await;
-    outcome
+    Ok(outcome)
 }
 
 /// A table data tab column's most frequent values, to pick a filter's value from: counted by
@@ -4507,7 +4484,7 @@ async fn data_search(
     on_event: Channel<DataSearchEventItem>,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CmdResult<DataSearchSummaryItem> {
+) -> CmdResult<DataSearchOutcome> {
     let request = spelaion_core::DataSearchRequest::from(request);
     // Checked before connecting: a request out of bounds never opens a session.
     request.check().map_err(|e| e.to_string())?;
@@ -4527,7 +4504,13 @@ async fn data_search(
         Err(message) => Err(message),
         Ok(()) => spelaion_core::data_search(&open.session, &request, &cancel, &progress)
             .await
-            .map(DataSearchSummaryItem::from)
+            .map(|summary| {
+                DataSearchOutcome::from_end(
+                    summary.into(),
+                    DataSearchSummaryItem::from,
+                    DataSearchSummaryItem::from,
+                )
+            })
             .map_err(|e| e.to_string()),
     };
     close_export_session(&state, search_id, open).await;

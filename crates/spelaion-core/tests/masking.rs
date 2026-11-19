@@ -18,8 +18,8 @@ use spelaion_core::masking::is_masked_field;
 use spelaion_core::{
     Block, BulkAction, CellBlock, CellContent, CellEdit, CellInput, ColumnFilter, ColumnStatsError,
     ColumnStatsRequest, CoreEvent, CsvOptions, DataSearchOptions, DataSearchRequest, EditError,
-    ExportCancel, ExportFormat, ExportOptions, FilterOp, FindQuery, FollowError, KeyDirection,
-    MASK, MaskPolicy, PendingEdit, ReadLimits, ResultId, ResultStore, RevealError, RowChange,
+    ExportFormat, ExportOptions, FilterOp, FindQuery, FollowError, JobCancel, KeyDirection, MASK,
+    MaskPolicy, PendingEdit, ReadLimits, ResultId, ResultStore, RevealError, RowChange,
     SearchTable, Session, SortKey, StoredResult, StreamExport, TableKey, TableStatus, TextEncoding,
     ViewError, cell_filter_value, column_in_list, column_stats, column_top_values, data_search,
     edit_statements, export_query, follow, view_cell, write_result,
@@ -634,7 +634,7 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
                     columns: None,
                     batch_size: 1,
                 },
-                &ExportCancel::new(),
+                &JobCancel::new(),
                 &|_| {},
             )
             .await
@@ -659,7 +659,7 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
                     sample_rows: 100_000,
                     top: 10,
                 },
-                &ExportCancel::new(),
+                &JobCancel::new(),
             )
             .await
             .unwrap_or_else(|e| panic!("{label}: {e}"));
@@ -690,7 +690,7 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
                     top: 10,
                 };
                 assert_eq!(
-                    column_top_values(&session, &request, &ExportCancel::new()).await,
+                    column_top_values(&session, &request, &JobCancel::new()).await,
                     Err(ColumnStatsError::Masked),
                     "{label}: {name} where {filter:?}"
                 );
@@ -703,7 +703,7 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
                             column: spelling.clone(),
                             ..request.clone()
                         },
-                        &ExportCancel::new(),
+                        &JobCancel::new(),
                     )
                     .await;
                     assert_no_secret(label, "the values to pick", &format!("{offered:?}"));
@@ -723,7 +723,7 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
                 sample_rows: 100_000,
                 top: 10,
             },
-            &ExportCancel::new(),
+            &JobCancel::new(),
         )
         .await
         .unwrap_or_else(|e| panic!("{label}: {e}"));
@@ -751,7 +751,7 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
                     ],
                     options: DataSearchOptions::default(),
                 },
-                &ExportCancel::new(),
+                &JobCancel::new(),
                 &|event| {
                     if let spelaion_core::DataSearchEvent::Finished(outcome) = event {
                         found.lock().unwrap().push(format!("{outcome:?}"));
@@ -884,7 +884,7 @@ async fn an_alias_does_not_unmask_a_column_where_the_engine_reports_its_origin()
                 columns: None,
                 batch_size: 1,
             },
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await

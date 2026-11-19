@@ -36,6 +36,7 @@ mod health;
 mod history;
 mod import;
 pub mod instance;
+mod job;
 pub mod kube;
 pub mod launch;
 mod load_rows;
@@ -148,7 +149,7 @@ pub use export::{
 };
 pub use export_defaults::{ExportDefaults, ExportFileFormat, MAX_EXPORT_NULL_TEXT};
 pub use export_stream::{
-    DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, FileNamePattern,
+    DEFAULT_BATCH_ROWS, ExportError, ExportProgress, ExportedFile, FileNamePattern,
     MAX_NAME_PATTERN, NameParts, RerunCheck, StreamExport, TableSource, TablesError, export_query,
     export_table, export_tables, file_name, follow_session_context, rerun_check,
 };
@@ -172,12 +173,13 @@ pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, HistoryScope, QueryHistory};
 pub use import::{
     ColumnKind, ColumnMapping, DEFAULT_COMMIT_EVERY, DEFAULT_SAMPLE_ROWS, IMPORT_BATCH_ROWS,
-    IMPORT_PREVIEW_CHARS, IMPORT_PREVIEW_ROWS, IfExists, ImportCancel, ImportError, ImportFormat,
-    ImportPlan, ImportPreview, ImportProgress, ImportRequest, ImportSource, ImportSummary,
-    ImportTarget, MAX_COLUMNS, MAX_RECORD_BYTES, MAX_SAMPLE_ROWS, MAX_WHOLE_FILE, ParseOptions,
-    PreviewColumn, SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import,
-    preview, run_import, suggested_table, text_format,
+    IMPORT_PREVIEW_CHARS, IMPORT_PREVIEW_ROWS, IfExists, ImportError, ImportFormat, ImportPlan,
+    ImportPreview, ImportProgress, ImportRequest, ImportSource, ImportSummary, ImportTarget,
+    MAX_COLUMNS, MAX_RECORD_BYTES, MAX_SAMPLE_ROWS, MAX_WHOLE_FILE, ParseOptions, PreviewColumn,
+    SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import, preview,
+    run_import, suggested_table, text_format,
 };
+pub use job::{JobCancel, JobEnd, Refusal, TablesStopped};
 pub use load_rows::{
     LOAD_PAGE_ROWS, LoadCancel, LoadEstimate, LoadOutcome, LoadedRows, MAX_LOADED_ROWS,
     estimate_query_load, estimate_table_load, load_query_rows,

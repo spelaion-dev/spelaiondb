@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 
-use super::process::{BackupCancel, BackupEvent};
+use super::process::BackupEvent;
 use super::{BackupError, io_error};
 use crate::guard::{Risk, script_risks};
+use crate::job::JobCancel;
 use crate::script::{OnError, ScriptOptions};
 use crate::{CoreEvent, Session};
 
@@ -93,7 +94,7 @@ pub async fn run_sql_file(
     read_only: bool,
     confirmed: bool,
     on_error: OnError,
-    cancel: &BackupCancel,
+    cancel: &JobCancel,
     events: &(dyn Fn(BackupEvent) + Send + Sync),
 ) -> Result<FileRunSummary, BackupError> {
     if read_only {
@@ -119,10 +120,9 @@ pub async fn run_sql_file(
             statement_timeout: None,
         },
     );
-    cancel.attach(session);
-    if cancel.is_cancelled() {
+    let Some(_attached) = cancel.attach(session) else {
         return Err(BackupError::Cancelled);
-    }
+    };
     let (mut done, mut failed) = (0u64, 0u64);
     let mut last = Instant::now();
     events(BackupEvent::Statements { done: 0, total });

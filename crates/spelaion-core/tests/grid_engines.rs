@@ -1013,7 +1013,7 @@ async fn mysql_zero_dates_far_down_sort_filter_and_export() {
             false,
             &path,
             &export,
-            &spelaion_core::ExportCancel::new(),
+            &spelaion_core::JobCancel::new(),
             &nothing,
         )
         .await

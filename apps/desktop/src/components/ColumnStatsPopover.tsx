@@ -47,7 +47,33 @@ export function ColumnStatsPopover(props: {
     runningId.current = id;
     setState({ kind: "running", id });
     call(commands.columnStats(session, id, table, resultId, column))
-      .then((outcome) => active && setState(outcome.kind === "done" ? { kind: "done", stats: outcome.stats } : { kind: "cancelled" }))
+      .then((outcome) => {
+        if (!active) return;
+        switch (outcome.kind) {
+          case "done":
+          case "stoppedAtLimit":
+            setState({ kind: "done", stats: outcome.result });
+            break;
+          case "cancelled":
+            setState({ kind: "cancelled" });
+            break;
+          case "failed":
+          case "notARead":
+            setState({ kind: "failed", error: outcome.message });
+            break;
+          // Statistics are reads in a session of their own: nothing is asked before they run.
+          case "needsConfirmation":
+            setState({ kind: "failed", error: t("runFile.notConfirmed") });
+            break;
+          case "passwordRequired":
+            setState({ kind: "failed", error: t("backup.passwordRequired") });
+            break;
+          default: {
+            const unexpected: never = outcome;
+            return unexpected;
+          }
+        }
+      })
       .catch((e: unknown) => active && setState({ kind: "failed", error: e instanceof Error ? e.message : String(e) }))
       .finally(() => {
         if (runningId.current === id) runningId.current = null;

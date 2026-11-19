@@ -13,12 +13,12 @@ use spelaion_config::{
     ConnectionId, Engine, ResolvedConnection, Resolver, Source, SystemBackend, TrustStore, load,
 };
 use spelaion_core::backup::{
-    BackupCancel, BackupError, BackupEvent, DuckdbExportFormat, EmbeddedDumpRequest, duckdb_import,
+    BackupError, BackupEvent, DuckdbExportFormat, EmbeddedDumpRequest, duckdb_import,
     embedded_dump, plan_sql_file, run_sql_file,
 };
 use spelaion_core::{
-    CoreEvent, Engines, OnError, OpenConnection, OpenOptions, ResultStore, Risk, TunnelPool,
-    open_connection,
+    CoreEvent, Engines, JobCancel, OnError, OpenConnection, OpenOptions, ResultStore, Risk,
+    TunnelPool, open_connection,
 };
 use spelaion_driver_api::{Secret, Value};
 use spelaion_ssh::{KnownHosts, NonInteractive};
@@ -199,7 +199,7 @@ async fn sqlite_is_copied_with_vacuum_into_even_read_only() {
         &read_only.session,
         &read_only.resolved,
         &request,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &log.sink(),
     )
     .await
@@ -212,7 +212,7 @@ async fn sqlite_is_copied_with_vacuum_into_even_read_only() {
         &read_only.session,
         &read_only.resolved,
         &request,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await;
@@ -261,7 +261,7 @@ async fn duckdb_exports_a_folder_and_imports_it_into_another_database() {
                 name_pattern: format!("export_{format:?}"),
                 duckdb_format: format,
             },
-            &BackupCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await
@@ -279,7 +279,7 @@ async fn duckdb_exports_a_folder_and_imports_it_into_another_database() {
         &read_only.resolved,
         &export,
         true,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await;
@@ -291,7 +291,7 @@ async fn duckdb_exports_a_folder_and_imports_it_into_another_database() {
         &target.resolved,
         &export,
         false,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await;
@@ -302,7 +302,7 @@ async fn duckdb_exports_a_folder_and_imports_it_into_another_database() {
         &target.resolved,
         &ws.out(),
         true,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await;
@@ -312,7 +312,7 @@ async fn duckdb_exports_a_folder_and_imports_it_into_another_database() {
         &target.resolved,
         &export,
         true,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await
@@ -364,7 +364,7 @@ async fn sql_files_run_with_progress_and_are_refused_unconfirmed_or_read_only() 
         read_only.resolved.params.read_only,
         true,
         OnError::Stop,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await;
@@ -375,7 +375,7 @@ async fn sql_files_run_with_progress_and_are_refused_unconfirmed_or_read_only() 
         false,
         false,
         OnError::Stop,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await;
@@ -388,7 +388,7 @@ async fn sql_files_run_with_progress_and_are_refused_unconfirmed_or_read_only() 
         false,
         true,
         OnError::Stop,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &log.sink(),
     )
     .await
@@ -416,7 +416,7 @@ async fn sql_files_run_with_progress_and_are_refused_unconfirmed_or_read_only() 
         false,
         true,
         OnError::Stop,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &log.sink(),
     )
     .await;
@@ -440,7 +440,7 @@ async fn sql_files_run_with_progress_and_are_refused_unconfirmed_or_read_only() 
         false,
         true,
         OnError::Continue,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await
@@ -474,7 +474,7 @@ async fn sql_files_run_with_progress_and_are_refused_unconfirmed_or_read_only() 
         false,
         true,
         OnError::Stop,
-        &BackupCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await
@@ -527,7 +527,7 @@ async fn sql_files_run_on_servers_and_stop_on_cancel() {
             false,
             true,
             OnError::Stop,
-            &BackupCancel::new(),
+            &JobCancel::new(),
             &log.sink(),
         )
         .await
@@ -548,7 +548,7 @@ async fn sql_files_run_on_servers_and_stop_on_cancel() {
             format!("{sleep};\ncreate table after_cancel (id int);\n"),
         )
         .unwrap();
-        let cancel = Arc::new(BackupCancel::new());
+        let cancel = Arc::new(JobCancel::new());
         let stopper = cancel.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(800)).await;
@@ -607,7 +607,7 @@ async fn a_cancelled_file_run_runs_nothing_after_the_cancel() {
     )
     .unwrap();
     for on_error in [OnError::Continue, OnError::Stop] {
-        let cancel = Arc::new(BackupCancel::new());
+        let cancel = Arc::new(JobCancel::new());
         let stopper = cancel.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -643,7 +643,7 @@ async fn a_cancelled_file_run_runs_nothing_after_the_cancel() {
     }
 
     // A cancel that came before the run started: nothing of the file is sent.
-    let cancel = BackupCancel::new();
+    let cancel = JobCancel::new();
     cancel.cancel().await;
     let early = tokio::time::timeout(
         Duration::from_secs(15),

@@ -48,7 +48,7 @@ pub async fn export_history(
     path: String,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
-    let cancel = std::sync::Arc::new(spelaion_core::ExportCancel::new());
+    let cancel = std::sync::Arc::new(spelaion_core::JobCancel::new());
     {
         let mut exports = state.exports.lock().expect("lock poisoned");
         if exports.contains_key(&export_id) {

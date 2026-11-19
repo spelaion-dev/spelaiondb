@@ -10,8 +10,9 @@ use chrono::Local;
 use futures_util::StreamExt;
 use spelaion_config::{Engine, ResolvedConnection};
 
-use super::process::{BackupCancel, BackupEvent};
+use super::process::BackupEvent;
 use super::{BackupError, io_error, part_path, remove_path, render_file_name, size_of};
+use crate::job::JobCancel;
 use crate::{CoreEvent, Session};
 
 /// DuckDB's export format.
@@ -122,16 +123,15 @@ pub fn embedded_dump_path(
 async fn run_one(
     session: &Session,
     sql: &str,
-    cancel: &BackupCancel,
+    cancel: &JobCancel,
     events: &(dyn Fn(BackupEvent) + Send + Sync),
 ) -> Result<(), BackupError> {
     // Requested, not started: nothing is sent until the stream is polled, and a cancel from
     // here on stops it.
     let mut stream = session.run_generated(sql);
-    cancel.attach(session);
-    if cancel.is_cancelled() {
+    let Some(_attached) = cancel.attach(session) else {
         return Err(BackupError::Cancelled);
-    }
+    };
     events(BackupEvent::Started {
         command_line: sql.to_string(),
     });
@@ -169,7 +169,7 @@ pub async fn embedded_dump(
     session: &Session,
     resolved: &ResolvedConnection,
     request: &EmbeddedDumpRequest,
-    cancel: &BackupCancel,
+    cancel: &JobCancel,
     events: &(dyn Fn(BackupEvent) + Send + Sync),
 ) -> Result<EmbeddedSummary, BackupError> {
     let started = Instant::now();
@@ -251,7 +251,7 @@ pub async fn duckdb_import(
     resolved: &ResolvedConnection,
     folder: &Path,
     confirmed: bool,
-    cancel: &BackupCancel,
+    cancel: &JobCancel,
     events: &(dyn Fn(BackupEvent) + Send + Sync),
 ) -> Result<Duration, BackupError> {
     if resolved.engine != Engine::Duckdb {

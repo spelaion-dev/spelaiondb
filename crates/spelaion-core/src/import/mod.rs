@@ -22,14 +22,11 @@ mod detect;
 mod source;
 mod xlsx;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use spelaion_config::Safeguards;
 use spelaion_driver_api::{
-    CancelHandle, Dialect, DriverError, InsertTarget, ObjectKind, TableInfo, TextRows,
-    TransactionState,
+    Dialect, DriverError, InsertTarget, ObjectKind, TableInfo, TextRows, TransactionState,
 };
 
 pub use detect::ColumnKind;
@@ -41,6 +38,7 @@ pub use source::{
 use crate::Session;
 use crate::edit::run_one;
 use crate::guard::{Risk, script_risks};
+use crate::job::JobCancel;
 use crate::objects::qualified_name;
 use detect::{Formats, KindDetector, Normalizer, TargetKind, parse_offset, target_kind};
 use source::RowReader;
@@ -641,38 +639,6 @@ pub struct ImportSummary {
     pub elapsed: Duration,
 }
 
-/// Stops a running import: the statement running (the engine's cancel) and the load, which
-/// rolls back the batch it was in. Created before the import's session exists, so a cancel that
-/// comes while it is still connecting is not lost.
-#[derive(Default)]
-pub struct ImportCancel {
-    cancelled: AtomicBool,
-    handle: std::sync::Mutex<Option<Arc<dyn CancelHandle>>>,
-}
-
-impl ImportCancel {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The session whose statement [`ImportCancel::cancel`] stops.
-    pub fn attach(&self, session: &Session) {
-        *self.handle.lock().expect("lock poisoned") = Some(session.connection().cancel_handle());
-    }
-
-    pub async fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        let handle = self.handle.lock().expect("lock poisoned").clone();
-        if let Some(handle) = handle {
-            let _ = handle.cancel().await;
-        }
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-}
-
 /// How often progress is reported.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
@@ -686,7 +652,7 @@ pub async fn run_import(
     safeguards: &Safeguards,
     read_only: bool,
     confirmed: bool,
-    cancel: &ImportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(ImportProgress) + Send + Sync),
 ) -> Result<ImportSummary, ImportError> {
     let started = Instant::now();
@@ -709,9 +675,9 @@ pub async fn run_import(
             "a transaction is open on this session: commit or roll it back first".into(),
         ));
     }
-    if cancel.is_cancelled() {
+    let Some(_attached) = cancel.attach(session) else {
         return Err(ImportError::Cancelled { committed: 0 });
-    }
+    };
     for statement in &resolved.plan.statements {
         run_one(session, statement)
             .await
@@ -825,7 +791,7 @@ async fn load(
     request: &ImportRequest,
     resolved: &Resolved,
     normalizer: &Normalizer,
-    cancel: &ImportCancel,
+    cancel: &JobCancel,
     progress: &(dyn Fn(ImportProgress) + Send + Sync),
 ) -> Result<u64, ImportError> {
     let dialect = session.dialect().name();
@@ -908,12 +874,16 @@ async fn load(
             taken += length;
             let count = length as u64;
             if !open {
-                run_one(session, begin)
-                    .await
-                    .map_err(|message| ImportError::Statement {
+                if let Err(message) = run_one(session, begin).await {
+                    // The session's cancel also stops what the import runs itself.
+                    if cancel.is_cancelled() {
+                        return Err(ImportError::Cancelled { committed });
+                    }
+                    return Err(ImportError::Statement {
                         statement: begin.into(),
                         message,
-                    })?;
+                    });
+                }
                 open = true;
             }
             let inserted = session
@@ -939,14 +909,22 @@ async fn load(
                     rollback(open).await;
                     return Err(ImportError::Cancelled { committed });
                 }
-                commit(
+                let done = commit(
                     session,
                     &mut open,
                     read,
                     &mut committed,
                     &mut in_transaction,
                 )
-                .await?;
+                .await;
+                // A commit the cancel stopped was rolled back: what was committed before stays.
+                if let Err(e) = done {
+                    return Err(if cancel.is_cancelled() {
+                        ImportError::Cancelled { committed }
+                    } else {
+                        e
+                    });
+                }
             }
             if reported.elapsed() >= PROGRESS_EVERY {
                 progress(ImportProgress { read, committed });
@@ -1039,7 +1017,7 @@ mod tests {
                 .await
                 .unwrap(),
             spelaion_dialect::for_engine("sqlite").expect("a dialect"),
-            Arc::new(crate::ResultStore::new()),
+            std::sync::Arc::new(crate::ResultStore::new()),
         );
         crate::edit::run_one(&session, "create table t (id integer, name text)")
             .await
@@ -1081,7 +1059,7 @@ mod tests {
                 &safeguards,
                 false,
                 true,
-                &ImportCancel::new(),
+                &JobCancel::new(),
                 &nothing,
             ),
         )
