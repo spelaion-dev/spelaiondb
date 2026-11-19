@@ -54,3 +54,9 @@
   `spelaiondb` with its pinned hash). Its jobs only read the repository, never name a secret and
   build without update artifacts (`tauri.rehearsal.conf.json`); only the tagged jobs have
   `contents: write`. Pushing such a branch is a maintainer's step, never an agent's.
+- Lifecycles in the app (ADR-060): `src-tauri` hands on the core's state types, and the page
+  reads them from `bindings.ts`; it does not rebuild a state from events or derive it from
+  flags. A state that exists only in the page (a dialog's phase, a value being loaded) is a
+  discriminated union whose `switch` ends in a `never` check. The app's own lifecycles (the
+  registry of running work, a tab's connection, the dialogs, the update, the folder switch,
+  quitting) are SDB-369, SDB-371, SDB-375 and SDB-377.
