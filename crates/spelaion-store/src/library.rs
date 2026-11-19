@@ -31,11 +31,44 @@ pub enum HistoryStatus {
     Cancelled,
 }
 impl HistoryStatus {
-    fn text(self) -> &'static str {
+    pub(crate) fn text(self) -> &'static str {
         match self {
             Self::Success => "success",
             Self::Error => "error",
             Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// How a statement of the history ended, with its error when it failed (SDB-376): what the
+/// page shows, in place of the `error` and `cancelled` columns it is kept in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryOutcome {
+    Succeeded,
+    Failed {
+        error: String,
+    },
+    /// Cancelled: its error, if any, is the engine's word for the cancel.
+    Cancelled,
+}
+
+impl HistoryEntry {
+    /// The same rule as the store's `status` column, which the filter reads.
+    pub fn outcome(&self) -> HistoryOutcome {
+        match (self.cancelled, &self.error) {
+            (true, _) => HistoryOutcome::Cancelled,
+            (false, Some(error)) => HistoryOutcome::Failed {
+                error: error.clone(),
+            },
+            (false, None) => HistoryOutcome::Succeeded,
+        }
+    }
+
+    pub fn status(&self) -> HistoryStatus {
+        match self.outcome() {
+            HistoryOutcome::Succeeded => HistoryStatus::Success,
+            HistoryOutcome::Failed { .. } => HistoryStatus::Error,
+            HistoryOutcome::Cancelled => HistoryStatus::Cancelled,
         }
     }
 }

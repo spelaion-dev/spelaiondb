@@ -1274,7 +1274,9 @@ export type AuditSessionItem = {
 	failed: number,
 };
 
-export type AuditStatusItem = "ok" | "error" | "refused" | "cleared";
+export type AuditStatusItem = "ok" | "error" | "refused" | "cleared" | 
+/**  A record whose decision this build does not know (SDB-376). */
+"unknown";
 
 /**  A finished backup: where it is, its size and how long it took. */
 export type BackupDoneItem = {
@@ -1386,11 +1388,16 @@ export type BookmarkItem = {
 	/**  The schema the object is in, or the schema itself (with an empty `name`). */
 	schema: string,
 	name: string,
-	/**  `table`, `view`… for a relation, `function`, `sequence`… for another object, `schema`. */
-	kind: string,
+	kind: BookmarkKindItem,
 	/**  A function's arguments…; empty if nothing tells it apart from others of its name. */
 	detail: string,
 };
+
+/**
+ *  What a bookmark points at: `schema`, a relation's kind or another object's, as the drivers
+ *  name them. Any other word is refused when the command is called (SDB-376).
+ */
+export type BookmarkKindItem = "schema" | "table" | "partitioned_table" | "view" | "materialized_view" | "foreign_table" | "collection" | "node_label" | "relationship_type" | "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
 
 /**  A rectangle in the geometry's own units. */
 export type Bounds = {
@@ -3269,8 +3276,7 @@ export type HistoryItem_Deserialize = {
 	statement: string,
 	durationMs: number,
 	rows: number,
-	error?: string | null,
-	cancelled: boolean,
+	outcome: HistoryOutcomeItem,
 	database?: string | null,
 	pinned: boolean,
 };
@@ -3282,11 +3288,13 @@ export type HistoryItem_Serialize = {
 	statement: string,
 	durationMs: number,
 	rows: number,
-	error: string | null,
-	cancelled: boolean,
+	outcome: HistoryOutcomeItem,
 	database: string | null,
 	pinned: boolean,
 };
+
+/**  How a statement of the history ended (`spelaion_core::HistoryOutcome`). */
+export type HistoryOutcomeItem = { kind: "succeeded" } | { kind: "failed"; error: string } | { kind: "cancelled" };
 
 export type HistoryPageItem = HistoryPageItem_Serialize | HistoryPageItem_Deserialize;
 
@@ -3335,11 +3343,18 @@ export type HopDraftItem_Serialize = {
 
 export type IfExistsItem = "fail" | "append" | "replace";
 
+/**
+ *  What to do with a connection that already exists. Any other word is refused when the
+ *  command is called, never read as one of these (SDB-376).
+ */
+export type ImportAction = 
+/**  Import it as a copy when the name is taken. */
+"import" | "replace" | "skip";
+
 /**  One connection to import, and what to do if it already exists. */
 export type ImportChoice = {
 	id: string,
-	/**  `import` (as a copy when the name is taken), `replace` or `skip`. */
-	action: string,
+	action: ImportAction,
 };
 
 /**  What a finished import did. */

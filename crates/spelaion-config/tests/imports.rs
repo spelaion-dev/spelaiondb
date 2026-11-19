@@ -7,10 +7,10 @@ mod common;
 
 use common::{FakeBackend, Fixture, personal, team};
 use spelaion_config::{
-    ConnectionDraft, Engine, ImportClient, ImportedConnection, ImportedProxy, ImportedSsh,
-    ImportedTls, KeychainItem, PasswordChoice, Source, TargetFolder, TlsModeConfig, add_connection,
-    connection_account, find_duplicate, import_names, import_plan, read_stored_passwords,
-    replacement_draft, update_connection,
+    ConnectionDraft, Engine, ImportClient, ImportedConnection, ImportedPassword, ImportedProxy,
+    ImportedSsh, ImportedTls, KeychainItem, PasswordChoice, Source, TargetFolder, TlsModeConfig,
+    add_connection, connection_account, find_duplicate, import_names, import_plan,
+    read_stored_passwords, replacement_draft, update_connection,
 };
 use spelaion_driver_api::Secret;
 
@@ -42,8 +42,7 @@ fn imported(name: &str) -> ImportedConnection {
         port: Some(5432),
         database: "orders".into(),
         user: "app".into(),
-        password: None,
-        stored_password: None,
+        password: ImportedPassword::None,
         env: String::new(),
         read_only: false,
         ssh: None,
@@ -234,7 +233,7 @@ fn replacing_takes_the_clients_settings_and_keeps_everything_else() {
     incoming.host = "db2.internal".into();
     incoming.port = Some(6432);
     incoming.user = "app2".into();
-    incoming.password = Some(Secret::new("from-the-client"));
+    incoming.password = ImportedPassword::Read(Secret::new("from-the-client"));
     incoming.tls = Some(ImportedTls {
         mode: TlsModeConfig::Require,
         ca: String::new(),
@@ -306,7 +305,7 @@ fn passwords_in_another_apps_keychain_are_read_only_when_asked_and_never_written
     );
     let mut connections = vec![
         ImportedConnection {
-            stored_password: Some(KeychainItem {
+            password: ImportedPassword::InKeychain(KeychainItem {
                 service: "IntelliJ Platform DB — 1234".into(),
                 account: "app".into(),
             }),
@@ -314,7 +313,7 @@ fn passwords_in_another_apps_keychain_are_read_only_when_asked_and_never_written
         },
         // Saved, but the entry is gone: asked when connecting.
         ImportedConnection {
-            stored_password: Some(KeychainItem {
+            password: ImportedPassword::InKeychain(KeychainItem {
                 service: "IntelliJ Platform DB — 5678".into(),
                 account: "app".into(),
             }),
@@ -329,7 +328,7 @@ fn passwords_in_another_apps_keychain_are_read_only_when_asked_and_never_written
     assert!(failed.is_empty());
     assert_eq!(backend.other_app_reads.lock().unwrap().len(), 2);
     assert_eq!(
-        connections[0].password.as_ref().map(Secret::expose),
+        connections[0].password.secret().map(Secret::expose),
         Some("kept-by-datagrip")
     );
     assert!(connections[1].password.is_none() && connections[2].password.is_none());
@@ -371,7 +370,7 @@ fn passwords_in_another_apps_keychain_are_read_only_when_asked_and_never_written
         ..FakeBackend::default()
     };
     let mut again = vec![ImportedConnection {
-        stored_password: Some(KeychainItem {
+        password: ImportedPassword::InKeychain(KeychainItem {
             service: "IntelliJ Platform DB — 1234".into(),
             account: "app".into(),
         }),

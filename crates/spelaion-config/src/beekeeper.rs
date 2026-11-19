@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 use spelaion_driver_api::Secret;
 
 use crate::datagrip::shown;
-use crate::import::{ImportedConnection, ImportedSsh, ImportedTls};
+use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls};
 use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
@@ -628,8 +628,7 @@ fn connection_of(
             port: None,
             database: String::new(),
             user: String::new(),
-            password: None,
-            stored_password: None,
+            password: ImportedPassword::None,
             env: String::new(),
             read_only: false,
             ssh: None,
@@ -759,8 +758,7 @@ fn connection_of(
         } else {
             row.text("username")
         },
-        password: if file { None } else { password },
-        stored_password: None,
+        password: if file { None } else { password }.into(),
         env: String::new(),
         read_only: row.flag("readOnlyMode"),
         ssh,

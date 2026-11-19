@@ -11,8 +11,8 @@ use std::path::PathBuf;
 
 use common::{FakeBackend, Fixture};
 use spelaion_config::{
-    Engine, ImportedConnection, KeychainItem, Source, SshAuth, TargetFolder, TlsModeConfig,
-    WorkbenchError, WorkbenchPasswords, add_connection, add_tunnel, import_plan,
+    Engine, ImportedConnection, ImportedPassword, KeychainItem, Source, SshAuth, TargetFolder,
+    TlsModeConfig, WorkbenchError, WorkbenchPasswords, add_connection, add_tunnel, import_plan,
     read_stored_passwords, read_workbench,
 };
 
@@ -62,7 +62,7 @@ fn every_connection_comes_with_its_address_user_and_default_schema() {
         assert_eq!(c.database, db, "{name}");
         assert_eq!(c.user, user, "{name}");
         assert!(
-            c.password.is_none() && c.stored_password.is_none(),
+            c.password.is_none() && c.password.keychain_item().is_none(),
             "{name}"
         );
         assert!(c.description.is_empty() && c.tags.is_empty(), "{name}");
@@ -177,7 +177,7 @@ fn on_windows_the_vault_is_never_read_and_the_preview_says_so() {
     for name in ["Shop MySQL", "Shop MariaDB TLS", "Orders via bastion"] {
         let c = named(&all, name);
         assert!(
-            c.password.is_none() && c.stored_password.is_none(),
+            c.password.is_none() && c.password.keychain_item().is_none(),
             "{name}"
         );
         assert!(
@@ -195,21 +195,21 @@ fn on_macos_passwords_come_from_the_keychain_only_when_importing_with_them() {
     let mut all = read_as(WorkbenchPasswords::Keychain);
     // Workbench's keychain items: its host identifier as the service, the user as the account.
     assert_eq!(
-        named(&all, "Shop MySQL").stored_password,
-        Some(KeychainItem {
+        named(&all, "Shop MySQL").password,
+        ImportedPassword::InKeychain(KeychainItem {
             service: "Mysql@127.0.0.1:13306".into(),
             account: "spelaion".into(),
         })
     );
     assert_eq!(
-        named(&all, "Orders via bastion").stored_password,
-        Some(KeychainItem {
+        named(&all, "Orders via bastion").password,
+        ImportedPassword::InKeychain(KeychainItem {
             service: "Mysql@mysql:3306@127.0.0.1:2221".into(),
             account: "spelaion".into(),
         })
     );
-    assert!(named(&all, "Local pipe").stored_password.is_none());
-    assert!(all.iter().all(|c| c.password.is_none()));
+    assert!(named(&all, "Local pipe").password.keychain_item().is_none());
+    assert!(all.iter().all(|c| c.password.secret().is_none()));
     assert!(named(&all, "Shop MySQL").has_password());
     // Nothing about the vault on a Mac.
     assert!(
@@ -227,7 +227,7 @@ fn on_macos_passwords_come_from_the_keychain_only_when_importing_with_them() {
     assert_eq!(
         named(&all, "Shop MySQL")
             .password
-            .as_ref()
+            .secret()
             .map(|p| p.expose().to_string()),
         Some("fake-password-123".into())
     );
@@ -241,7 +241,7 @@ fn on_linux_keychain_passwords_are_not_read_and_the_preview_says_so() {
     let all = read_as(WorkbenchPasswords::SecretService);
     for name in ["Shop MySQL", "Shop MariaDB TLS", "Orders via bastion"] {
         let c = named(&all, name);
-        assert!(c.stored_password.is_none(), "{name}");
+        assert!(c.password.keychain_item().is_none(), "{name}");
         assert!(
             c.unmapped
                 .iter()
@@ -373,7 +373,7 @@ fn secret_looking_options_show_their_name_only_and_passwords_in_the_file_are_sec
     .unwrap();
     let c = &all[0];
     assert_eq!(
-        c.password.as_ref().map(|p| p.expose().to_string()),
+        c.password.secret().map(|p| p.expose().to_string()),
         Some("old-plain-pw".into())
     );
     let ssh = c.ssh.clone().unwrap();

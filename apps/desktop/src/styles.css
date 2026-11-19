@@ -4602,6 +4602,7 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .mcp-status-error { color: var(--danger); border-color: var(--danger); }
 .mcp-status-refused { color: var(--tone-amber); border-color: var(--tone-amber); }
 .mcp-status-cleared { color: var(--muted); }
+.mcp-status-unknown { color: var(--muted); }
 .mcp-empty { padding: 32px 12px; text-align: center; color: var(--muted); }
 .mcp-session-filter { margin: 0 0 8px; }
 

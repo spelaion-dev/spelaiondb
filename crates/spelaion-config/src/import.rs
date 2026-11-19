@@ -76,11 +76,8 @@ pub struct ImportedConnection {
     /// Database name; for SQLite and DuckDB, the file path.
     pub database: String,
     pub user: String,
-    /// A password the reader already has (DBeaver's saved credentials).
-    pub password: Option<Secret>,
-    /// Where the client keeps the password in the system keychain, read only when importing
-    /// with passwords (never while previewing); `None` when it keeps none there.
-    pub stored_password: Option<KeychainItem>,
+    /// The database password it comes with.
+    pub password: ImportedPassword,
     /// The built-in connection type closest to the client's (`dev`, `test` or `prod`,
     /// ADR-029); empty for none.
     pub env: String,
@@ -93,6 +90,51 @@ pub struct ImportedConnection {
     /// What the client had that SpelaionDB does not import, as `what: value` lines for the
     /// preview: nothing is dropped silently.
     pub unmapped: Vec<String>,
+}
+
+/// The database password an imported connection comes with (SDB-376): one of three, so a
+/// password that was read cannot be mistaken for one still to read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportedPassword {
+    /// None: it is asked when connecting.
+    None,
+    /// The reader already has it (DBeaver's saved credentials), or read it from the keychain.
+    Read(Secret),
+    /// The client keeps it in the system keychain, still to read: only when importing with
+    /// passwords (never while previewing), by [`read_stored_passwords`].
+    InKeychain(KeychainItem),
+}
+
+impl ImportedPassword {
+    /// The password, once read.
+    pub fn secret(&self) -> Option<&Secret> {
+        match self {
+            Self::Read(secret) => Some(secret),
+            Self::None | Self::InKeychain(_) => None,
+        }
+    }
+
+    /// Where the client keeps it in the system keychain, while it is still to read.
+    pub fn keychain_item(&self) -> Option<&KeychainItem> {
+        match self {
+            Self::InKeychain(item) => Some(item),
+            Self::None | Self::Read(_) => None,
+        }
+    }
+
+    /// No password comes with it, read or to read.
+    pub fn is_none(&self) -> bool {
+        match self {
+            Self::None => true,
+            Self::Read(_) | Self::InKeychain(_) => false,
+        }
+    }
+}
+
+impl From<Option<Secret>> for ImportedPassword {
+    fn from(secret: Option<Secret>) -> Self {
+        secret.map_or(Self::None, Self::Read)
+    }
 }
 
 /// An entry another client wrote in the system keychain.
@@ -158,7 +200,7 @@ impl ImportedConnection {
 
     /// Whether a database password comes with it (read already, or from the keychain on import).
     pub fn has_password(&self) -> bool {
-        self.password.is_some() || self.stored_password.is_some()
+        !self.password.is_none()
     }
 
     /// Whether importing this connection can save a database, SSH or SOCKS password.
@@ -179,26 +221,29 @@ impl ImportedConnection {
 }
 
 /// Reads the passwords another client keeps in the system keychain into the connections
-/// that have one ([`ImportedConnection::stored_password`]). Only called when the user imports
+/// that keep one there ([`ImportedPassword::InKeychain`]). Only called when the user imports
 /// with passwords: on macOS the system asks before letting SpelaionDB read another app's
-/// entry. An entry that is missing leaves the password to be asked when connecting; one that
-/// cannot be read is returned with why, by connection name, and never stops the import.
+/// entry. Afterwards none is left to read: an entry that is missing, or that cannot be read,
+/// leaves the password to be asked when connecting; one that cannot be read is returned with
+/// why, by connection name, and never stops the import.
 pub fn read_stored_passwords(
     connections: &mut [ImportedConnection],
     backend: &dyn SecretBackend,
 ) -> Vec<(String, String)> {
     let mut failed = Vec::new();
     for connection in connections.iter_mut() {
-        let Some(item) = &connection.stored_password else {
+        let ImportedPassword::InKeychain(item) = &connection.password else {
             continue;
         };
-        match backend.other_app_keychain_get(&item.service, &item.account) {
-            Ok(Some(secret)) if !secret.is_empty() => {
-                connection.password = Some(Secret::new(secret))
+        let read = backend.other_app_keychain_get(&item.service, &item.account);
+        connection.password = match read {
+            Ok(Some(secret)) if !secret.is_empty() => ImportedPassword::Read(Secret::new(secret)),
+            Ok(_) => ImportedPassword::None,
+            Err(message) => {
+                failed.push((connection.name.clone(), message));
+                ImportedPassword::None
             }
-            Ok(_) => {}
-            Err(message) => failed.push((connection.name.clone(), message)),
-        }
+        };
     }
     failed
 }
@@ -430,7 +475,7 @@ pub fn import_plan(
             password: if file {
                 PasswordChoice::None
             } else {
-                choice(&connection.password)
+                choice(&connection.password.secret().cloned())
             },
             tls_mode: tls.as_ref().map(|t| t.mode).unwrap_or_default(),
             tls_ca: tls.as_ref().map(|t| t.ca.clone()).unwrap_or_default(),
@@ -457,7 +502,7 @@ pub fn import_plan(
         password: if file {
             None
         } else {
-            keep(&connection.password)
+            keep(&connection.password.secret().cloned())
         },
         tunnel,
     }

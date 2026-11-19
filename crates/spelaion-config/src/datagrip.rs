@@ -17,7 +17,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use crate::conn_url::parse_connection_url;
-use crate::import::{ImportedConnection, ImportedSsh, ImportedTls, KeychainItem};
+use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls, KeychainItem};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
 /// The keychain service DataGrip saves a data source's password under (JetBrains'
@@ -646,8 +646,7 @@ fn connection_of(
         port: parsed.as_ref().and_then(|p| p.port),
         database,
         user,
-        password: None,
-        stored_password,
+        password: stored_password.map_or(ImportedPassword::None, ImportedPassword::InKeychain),
         env: String::new(),
         read_only: source.flag("read-only"),
         ssh,

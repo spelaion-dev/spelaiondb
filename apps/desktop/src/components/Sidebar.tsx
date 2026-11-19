@@ -2707,7 +2707,8 @@ function ObjectNode({
   }, [menu, view, session, tableMenu]);
   // Until the engine's list arrives, only what every engine has.
   const templates: SqlTemplateItem[] = view ? ["select"] : (tableMenu ?? ["select", "insert", "update", "delete"]);
-  const bookmark: BookmarkItem = { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind, detail: "" };
+  // A relation's kind comes from the driver as text; the core refuses one it does not know.
+  const bookmark: BookmarkItem = { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind as BookmarkItem["kind"], detail: "" };
   /** What "Copy" takes: every table chosen with Ctrl+click, or this one. */
   const copyPaths: ObjectPathItem[] = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, names: [o.name] }));
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
