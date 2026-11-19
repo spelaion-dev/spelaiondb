@@ -226,6 +226,17 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> ImportedC
         ("sqlserver", _) | ("mssql", _) => Ok(Engine::Sqlserver),
         (p, d) => Err(format!("{p}/{d} is not supported yet")),
     };
+    // These driver IDs are declared by DBeaver's PostgreSQL provider.
+    let driver_kind = match driver.as_str() {
+        "postgres-cockroach-jdbc" => "cockroachdb",
+        "postgres-yugabytedb-jdbc" => "yugabytedb",
+        "postgres-timescale-jdbc" => "timescaledb",
+        id => id,
+    };
+    let engine_kind = [driver_kind, provider.as_str()]
+        .into_iter()
+        .find(|kind| crate::engine_kind_base(kind).is_some_and(|base| engine.as_ref() == Ok(&base)))
+        .map(str::to_owned);
     let saved = credentials.and_then(|c| c.get("#connection"));
     let mut database = text(config.get("database"));
     if engine.as_ref().is_ok_and(|e| e.is_file()) && database.is_empty() {
@@ -265,6 +276,7 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> ImportedC
             .unwrap_or_default(),
         folder: text(json.get("folder")),
         engine,
+        engine_kind,
         host: text(config.get("host")),
         port: port(config.get("port")),
         database,
@@ -394,6 +406,24 @@ fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<ImportedSsh> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_explicit_dbeaver_driver_gives_the_kind_but_a_port_does_not() {
+        let source = serde_json::json!({
+            "provider": "postgresql",
+            "driver": "postgres-cockroach-jdbc",
+            "configuration": { "host": "localhost", "port": "26257" },
+        });
+        let connection = super::connection_of("one", &source, None);
+        assert_eq!(connection.engine, Ok(super::Engine::Postgres));
+        assert_eq!(connection.engine_kind.as_deref(), Some("cockroachdb"));
+        let mut ordinary = source;
+        ordinary["driver"] = "postgres-jdbc".into();
+        assert_eq!(
+            super::connection_of("two", &ordinary, None).engine_kind,
+            None
+        );
+    }
+
     use super::*;
     use crate::draft::PasswordChoice;
     use crate::import::{TargetFolder, import_plan};

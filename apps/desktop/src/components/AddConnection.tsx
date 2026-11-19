@@ -76,6 +76,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
     const mapped = await call(commands.changeConnectionEngine(current, next.id));
     setInitial(mapped.draft as ConnectionDraft);
     setEngine(next);
+    setKind(engines.find((e) => e.id === (mapped.draft.fileFolder ? "file-folder" : mapped.draft.engineKind)) ?? null);
     setCarriedPassword(password);
     setEngineChange(next.id === savedEngine ? null : mapped.change);
   }
@@ -95,7 +96,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         setSavedEngine(draft.engine);
         setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
         // A folder of files (SDB-316) is shown as its catalog entry, like when it was added.
-        if (draft.fileFolder) setKind(catalog.find((e) => e.access === "folder") ?? null);
+        setKind(catalog.find((e) => e.id === (draft.fileFolder ? "file-folder" : draft.engineKind)) ?? null);
       } catch (e) {
         setLoadError(errorText(e));
       }
@@ -164,6 +165,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
           <ConnectionForm
             engine={engine}
             fileFolder={kind?.access === "folder"}
+            engineKind={kind?.access === "network" ? kind.id : null}
             prefill={prefill ?? undefined}
             onBack={() => {
               setEngine(null);
@@ -495,6 +497,7 @@ function ConnectionForm(props: {
   prefill?: UrlFields;
   /** A new DuckDB connection to a folder of CSV, TSV and Parquet files (SDB-316). */
   fileFolder?: boolean;
+  engineKind?: string | null;
   /** A password typed before the engine was switched, kept in the new form. */
   initialPassword?: string;
   /** Editing: the engines it can switch to, the one on disk, and what the last switch did. */
@@ -560,6 +563,7 @@ function ConnectionForm(props: {
     description: "",
     tags: [],
     engine: engine.id,
+    engineKind: props.engineKind ?? null,
     env: "",
     host: prefill?.host || (network ? "localhost" : ""),
     port: prefill?.port ?? null,

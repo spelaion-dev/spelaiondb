@@ -7508,6 +7508,62 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await shot("sdb-363-engine-marks-light");
     await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, themeBefore);
   }
+  // A named kind keeps the picker mark after saving, and a folder keeps its folder icon.
+  {
+    const markCases = [
+      { picker: "CockroachDB", name: "Marked CockroachDB", selector: "img.engine-icon", field: "Host", value: "localhost" },
+      { picker: "CSV / Parquet folder", name: "Marked file folder", selector: ".engine-icon-fallback svg", field: "Folder", value: join(demo, "data") },
+    ];
+    const recorded = [];
+    for (const spec of markCases) {
+      const card = wizard.locator(".engine-card", { hasText: spec.picker });
+      const mark = await card.locator(spec.selector).evaluate((element) => element.outerHTML);
+      await card.click();
+      await wizard.getByLabel("Name", { exact: true }).fill(spec.name);
+      await wizard.getByRole("textbox", { name: spec.field, exact: true }).fill(spec.value);
+      await wizard.getByRole("tab", { name: "Options" }).click();
+      await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+      await wizard.getByRole("button", { name: "Save", exact: true }).click();
+      await wizard.waitFor({ state: "detached" });
+      const row = page.locator(".connection-row", { hasText: spec.name });
+      assert.equal(await row.locator(spec.selector).evaluate(element => element.outerHTML), mark);
+      recorded.push({ ...spec, mark });
+      if (spec !== markCases.at(-1)) {
+        await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+      }
+    }
+    await activities.getByRole("button", { name: "Processes", exact: true }).click();
+    for (const spec of recorded) {
+      const item = page.locator(".process-connection", { hasText: spec.name });
+      assert.equal(await item.locator(spec.selector).evaluate(element => element.outerHTML), spec.mark);
+    }
+    await activities.getByRole("button", { name: "Connections", exact: true }).click();
+    for (const spec of recorded) {
+      await (await connectionMenu(spec.name)).getByRole("menuitem", { name: "Delete…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Delete connection?" });
+      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
+    }
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    wizard = page.getByRole("dialog", { name: "Add connection" });
+    // DBeaver explicitly saved the named driver. The preview needs no database connection.
+    const source = join(userDir, "mark-import");
+    const directory = join(source, "General", ".dbeaver");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "data-sources.json"), JSON.stringify({
+      connections: { fixture: {
+        provider: "postgresql", driver: "postgres-cockroach-jdbc", name: "CockroachDB import fixture",
+        configuration: { host: "localhost", port: "26257", database: "defaultdb" },
+      } },
+    }));
+    await page.evaluate((dir) => (window.__spelaionImportDirs = { dbeaver: dir }), source);
+    await wizard.getByRole("button", { name: "Import connections from another client…" }).click();
+    await wizard.getByRole("menuitem", { name: "DBeaver", exact: true }).click();
+    const preview = wizard.getByRole("listitem").filter({ hasText: "CockroachDB import fixture" });
+    assert.equal(await preview.locator("img.engine-icon").evaluate(element => element.outerHTML), recorded[0].mark);
+    await wizard.getByRole("button", { name: "Back", exact: true }).click();
+    await page.evaluate(() => delete window.__spelaionImportDirs);
+  }
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");
   await wizard.getByRole("button", { name: "Use URL" }).click();

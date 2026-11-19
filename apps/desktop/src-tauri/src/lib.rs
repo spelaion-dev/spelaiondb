@@ -120,6 +120,32 @@ fn definition_now(
     config.connection_definition(id, trusted)
 }
 
+/// A compatible kind recognized by the core when opening the session.
+fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
+    open.session.server_family().and_then(|family| {
+        use spelaion_core::ServerFamily;
+        let mark = match family {
+            ServerFamily::CockroachDb => "cockroachdb",
+            ServerFamily::YugabyteDb => "yugabytedb",
+            ServerFamily::OceanBase => "oceanbase",
+            ServerFamily::TiDb => "tidb",
+            ServerFamily::SingleStore => "singlestore",
+            ServerFamily::GreptimeDb => "greptimedb",
+            ServerFamily::PostgreSql
+            | ServerFamily::RisingWave
+            | ServerFamily::Materialize
+            | ServerFamily::CrateDb
+            | ServerFamily::Unchecked(_)
+            | ServerFamily::MySql
+            | ServerFamily::MariaDb
+            | ServerFamily::Doris
+            | ServerFamily::Databend => return None,
+        };
+        (spelaion_config::engine_kind_base(mark) == Some(open.resolved.engine))
+            .then(|| mark.to_owned())
+    })
+}
+
 /// Connection tests running now, by the id the UI gave them, to stop them (ADR-032).
 #[derive(Default)]
 struct ConnectionTests(std::sync::Mutex<HashMap<u32, tokio::sync::oneshot::Sender<()>>>);
@@ -799,6 +825,28 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
     let connections = config.connections.clone();
+    let marks: Vec<_> = {
+        let sessions = state.sessions.lock().await;
+        connections
+            .iter()
+            .map(|entry| {
+                let saved = entry.file.engine_mark();
+                if saved != entry.file.engine.as_str() {
+                    return saved.to_owned();
+                }
+                sessions
+                    .values()
+                    .filter(|session| session.open.resolved.id == entry.id)
+                    .find_map(|session| {
+                        let mark = detected_engine_mark(&session.open)?;
+                        let opened = session.definition.as_ref()?;
+                        (definition_now(&config, &trust, &entry.id).as_ref() == Some(opened))
+                            .then_some(mark)
+                    })
+                    .unwrap_or_else(|| saved.to_owned())
+            })
+            .collect()
+    };
     let tls_warnings: Vec<Option<TlsWarningItem>> = connections
         .iter()
         .map(|c| spelaion_core::file_tls_warning(&config, c).map(TlsWarningItem::from))
@@ -807,7 +855,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
     let workspace = history_workspace(&config, Source::Workspace);
     drop(config);
     let mut items = Vec::with_capacity(connections.len());
-    for (c, tls_warning) in connections.into_iter().zip(tls_warnings) {
+    for ((c, tls_warning), engine_mark) in connections.into_iter().zip(tls_warnings).zip(marks) {
         let scope = match c.id.source {
             Source::User => String::new(),
             Source::Workspace => workspace.clone(),
@@ -823,6 +871,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             description: c.file.description.clone(),
             tags: c.file.tags.clone(),
             engine: c.file.engine.as_str().into(),
+            engine_mark,
             env: c.file.env.clone(),
             kind: c
                 .file
@@ -1986,6 +2035,7 @@ async fn connect(
         open.close().await;
         return Err("the folder changed while connecting; select a connection again".into());
     }
+    let engine_mark = detected_engine_mark(&open);
     let open = Arc::new(open);
     watch_session(&app, session.clone(), &open);
     let old = sessions.insert(
@@ -2003,6 +2053,7 @@ async fn connect(
     }
     Ok(ConnectOutcome::Connected {
         server_version,
+        engine_mark,
         setup_skipped,
     })
 }

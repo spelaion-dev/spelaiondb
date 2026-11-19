@@ -679,6 +679,7 @@ fn connection_of(id: &str, map: &Map<String, Value>, origin: Origin) -> Imported
         tags,
         folder: server.text("Group"),
         engine,
+        engine_kind: None,
         host: if importable { host } else { String::new() },
         port: if importable {
             port_of(server.number("Port"))

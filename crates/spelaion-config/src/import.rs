@@ -70,6 +70,7 @@ pub struct ImportedConnection {
     pub folder: String,
     /// The engine, or why SpelaionDB cannot open it (yet).
     pub engine: Result<Engine, String>,
+    pub engine_kind: Option<String>,
     pub host: String,
     pub port: Option<u16>,
     /// Database name; for SQLite and DuckDB, the file path.
@@ -407,6 +408,7 @@ pub fn import_plan(
             description: importable_description(&connection.description),
             tags: importable_tags(&connection.tags),
             engine,
+            engine_kind: connection.engine_kind.clone(),
             env: connection.env.clone(),
             host: if file {
                 String::new()
@@ -468,6 +470,9 @@ pub fn import_plan(
 /// the client does not give are kept.
 pub fn replacement_draft(existing: &ConnectionEntry, plan: &ConnectionDraft) -> ConnectionDraft {
     let mut draft = ConnectionDraft::from_entry(existing);
+    if draft.engine != plan.engine || plan.engine_kind.is_some() {
+        draft.engine_kind.clone_from(&plan.engine_kind);
+    }
     draft.engine = plan.engine;
     draft.host = plan.host.clone();
     draft.port = plan.port;

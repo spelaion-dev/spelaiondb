@@ -34,6 +34,13 @@
     "engine": {
       "$ref": "#/$defs/Engine"
     },
+    "engine_kind": {
+      "description": "A named protocol-compatible server chosen in the picker. For display only.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "env": {
       "description": "Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type\nin `connection-types.toml`; its badge and safeguards apply. Any other text is a plain\nlabel with no behaviour.",
       "type": [

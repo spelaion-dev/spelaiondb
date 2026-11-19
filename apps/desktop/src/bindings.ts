@@ -1801,7 +1801,7 @@ export type ColumnStatsTarget = {
 
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
 
-export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string; 
+export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string; engineMark?: string | null; 
 /**
  *  Session setup statements that failed and were skipped (ADR-037): the connection
  *  ignores setup errors, and the tab says which.
@@ -1828,7 +1828,7 @@ item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string 
  */
 { kind: "missingVariables"; names: string[] };
 
-export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string; 
+export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string; engineMark: string | null; 
 /**
  *  Session setup statements that failed and were skipped (ADR-037): the connection
  *  ignores setup errors, and the tab says which.
@@ -1875,6 +1875,7 @@ export type ConnectionDraftItem_Deserialize = {
 	tags: string[],
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
+	engineKind?: string | null,
 	env: string,
 	host: string,
 	port?: number | null,
@@ -1944,6 +1945,7 @@ export type ConnectionDraftItem_Serialize = {
 	tags: string[],
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
+	engineKind: string | null,
 	env: string,
 	host: string,
 	port: number | null,
@@ -2010,6 +2012,8 @@ export type ConnectionItem_Deserialize = {
 	/**  Short labels to find the connection; filtered on in the explorer. */
 	tags: string[],
 	engine: string,
+	/**  Presentation identifier. The base engine still drives commands. */
+	engineMark: string,
 	env?: string | null,
 	/**  The type `env` names (ADR-029); `None` for no label or a plain one. */
 	kind?: ConnectionTypeItem_Deserialize | null,
@@ -2044,6 +2048,8 @@ export type ConnectionItem_Serialize = {
 	/**  Short labels to find the connection; filtered on in the explorer. */
 	tags: string[],
 	engine: string,
+	/**  Presentation identifier. The base engine still drives commands. */
+	engineMark: string,
 	env: string | null,
 	/**  The type `env` names (ADR-029); `None` for no label or a plain one. */
 	kind: ConnectionTypeItem_Serialize | null,
@@ -3385,6 +3391,7 @@ export type ImportItem_Deserialize = {
 	 *  cannot open it.
 	 */
 	engine?: string | null,
+	engineKind?: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported?: string | null,
 	/**  `host:port/database`, or the file for SQLite and DuckDB. */
@@ -3422,6 +3429,7 @@ export type ImportItem_Serialize = {
 	 *  cannot open it.
 	 */
 	engine: string | null,
+	engineKind: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported: string | null,
 	/**  `host:port/database`, or the file for SQLite and DuckDB. */
