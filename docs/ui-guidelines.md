@@ -340,6 +340,10 @@ Loading, empty, populated, disabled, success and error are all states to design.
   lost connection shows "Connection lost" in the tab with Reconnect.
 - Never only in a tooltip, a color or the console. An error goes away when the user changes what
   caused it or retries.
+- **A result cut short** (a cancel, an error, a timeout or a lost connection after some rows,
+  SDB-367) says so in the status line, in words: "Partial: cancelled after 120,000 rows". The
+  calc panel, the chart and the export dialog repeat that they work on a partial result. A result
+  the core no longer keeps says so where the grid is, with "Run again".
 - **Disabled actions** say why when it is not obvious, in their tooltip or a note: "Apply or
   discard the pending changes first", "The connection is read-only: the SQL can only be opened
   in the editor."

@@ -5,6 +5,14 @@
   continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
   ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
   IPC windows).
+  A stored result's end is one type, `ResultEnd` (SDB-367, ADR-060): `Loading`, `Whole`, or
+  `Partial(PartialReason)` (cancelled, failed, timed out, connection lost). Only `session.rs`
+  sets it, where a statement's stream stops (and `end_on_panic` for a run that panics), and it
+  announces it with `CoreEvent::ResultEnded` before the statement's own end; a partial result
+  keeps its rows and is still sorted, filtered and charted as the rows it has (SDB-275). Ask
+  `StoredResult::end()`, never the statement's messages. A freed result is `ResultFreed`
+  (`ResultStore::stored`), one typed error with one text. `src/result_end_tests.rs` pins every
+  ending.
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included); a
   server that speaks another engine's protocol is a kind of that engine's connection there
   (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169; TiDB, OceanBase

@@ -37,6 +37,26 @@
     "messages": "Messages",
     "running": "Running…",
     "loading": " (loading)",
+    "partial": {
+      "cancelled_one": "Partial: cancelled after {{formattedCount}} row",
+      "cancelled_other": "Partial: cancelled after {{formattedCount}} rows",
+      "failed_one": "Partial: failed after {{formattedCount}} row",
+      "failed_other": "Partial: failed after {{formattedCount}} rows",
+      "timedOut_one": "Partial: timed out after {{formattedCount}} row",
+      "timedOut_other": "Partial: timed out after {{formattedCount}} rows",
+      "connectionLost_one": "Partial: connection lost after {{formattedCount}} row",
+      "connectionLost_other": "Partial: connection lost after {{formattedCount}} rows",
+      "hint": "The statement stopped before its last row: only the rows that arrived are shown. Run it again for the whole result."
+    },
+    "partialCalc": "{{partial}}. These numbers cover only the rows that arrived.",
+    "partialChart": "{{partial}}. The chart shows only the rows that arrived.",
+    "partialExport": "{{partial}}. The loaded rows are only the ones that arrived.",
+    "rowsFailed": "Could not load rows: {{detail}}",
+    "freed": {
+      "title": "This result is no longer kept",
+      "body": "Its rows were freed. Run its query again to read them.",
+      "rerun": "Run again"
+    },
     "rows_one": "{{formattedCount}} row",
     "rows_other": "{{formattedCount}} rows",
     "duration": "{{duration}} ms",

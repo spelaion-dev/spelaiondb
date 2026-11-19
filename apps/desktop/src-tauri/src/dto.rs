@@ -1882,6 +1882,13 @@ pub enum ScriptEvent {
         result: u32,
         total_rows: u32,
     },
+    /// No more rows arrive for this result (SDB-367): whole, or cut short and why. Comes
+    /// before its statement's end.
+    ResultEnded {
+        index: u32,
+        result: u32,
+        end: ResultEndItem,
+    },
     Notice {
         index: u32,
         severity: String,
@@ -1922,6 +1929,73 @@ pub enum ScriptEvent {
     HistoryWarning {
         message: String,
     },
+}
+
+/// How far a stored result got (SDB-367), as the core says it: the page shows it and never
+/// works it out from the statement's messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ResultEndItem {
+    /// Rows may still arrive.
+    Loading,
+    /// Every row of the statement.
+    Whole,
+    /// The statement stopped before its last row: the rows shown are not the whole answer.
+    Partial { reason: PartialReasonItem },
+}
+
+/// Why a window of rows could not be read (`fetch_window`, SDB-367).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WindowErrorItem {
+    /// The result is no longer kept: its query must run again.
+    Freed { message: String },
+    /// Anything else, as the core said it.
+    Failed { message: String },
+}
+
+impl From<spelaion_core::ResultFreed> for WindowErrorItem {
+    fn from(freed: spelaion_core::ResultFreed) -> Self {
+        Self::Freed {
+            message: freed.to_string(),
+        }
+    }
+}
+
+/// Why a result was cut short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PartialReasonItem {
+    Cancelled,
+    Failed,
+    TimedOut,
+    ConnectionLost,
+}
+
+impl From<spelaion_core::ResultEnd> for ResultEndItem {
+    fn from(end: spelaion_core::ResultEnd) -> Self {
+        use spelaion_core::{PartialReason, ResultEnd};
+        match end {
+            ResultEnd::Loading => Self::Loading,
+            ResultEnd::Whole => Self::Whole,
+            ResultEnd::Partial(reason) => Self::Partial {
+                reason: match reason {
+                    PartialReason::Cancelled => PartialReasonItem::Cancelled,
+                    PartialReason::Failed => PartialReasonItem::Failed,
+                    PartialReason::TimedOut => PartialReasonItem::TimedOut,
+                    PartialReason::ConnectionLost => PartialReasonItem::ConnectionLost,
+                },
+            },
+        }
+    }
 }
 
 fn u32_of(n: usize) -> u32 {
@@ -2241,6 +2315,11 @@ impl From<CoreEvent> for ScriptEvent {
                 index: u32_of(index),
                 result: u32::try_from(result.0).unwrap_or(u32::MAX),
                 total_rows: u32_of(total_rows),
+            },
+            CoreEvent::ResultEnded { index, result, end } => ScriptEvent::ResultEnded {
+                index: u32_of(index),
+                result: result_number(result),
+                end: ResultEndItem::from(end),
             },
             CoreEvent::Notice { index, notice } => ScriptEvent::Notice {
                 index: u32_of(index),

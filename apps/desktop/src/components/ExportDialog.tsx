@@ -12,6 +12,7 @@ import { call, commands, type CellRange, type TextFormat } from "../api";
 import type { ExportDefaultsItem, ExportFileOptions, ExportOutcome, ExportProgressItem, FileNamePatternItem, JsonOptionsItem, RerunCheckItem, SqlOptionsItem } from "../bindings";
 import { chooseFolder, chooseSavePath } from "../dialogs";
 import { useApp, useDialogs, type ResultMeta } from "../store";
+import { ended, partialText } from "../resultEnd";
 
 /** What the dialog exports. */
 export type ExportRequest =
@@ -90,7 +91,9 @@ function ExportForm({ request }: { request: ExportRequest }) {
   const result = request.kind === "tables" ? null : request.result;
   const canStream = request.kind === "result" && (request.sql !== null || request.table !== null);
   const [check, setCheck] = useState<RerunCheckItem | null>(null);
-  const loadedAll = !!result?.complete && !result.paging?.hasMore && !(request.kind === "result" && request.table);
+  // A partial result (SDB-367) is not every row: exporting all of them runs the query again.
+  const partial = result ? partialText(result.end, result.total ?? result.rows, t, numbers) : null;
+  const loadedAll = !!result && result.end.kind === "whole" && !result.paging?.hasMore && !(request.kind === "result" && request.table);
   const [scope, setScope] = useState<Scope>(
     request.kind === "selection" ? "selection" : request.kind === "tables" ? "all" : loadedAll || !canStream ? "loaded" : "all",
   );
@@ -299,7 +302,7 @@ function ExportForm({ request }: { request: ExportRequest }) {
       } else {
         outcome = await call(commands.exportQuery(request.session, id, request.sql ?? "", target, options(), confirmed, channel));
       }
-      const fallback = result?.complete ? target : null;
+      const fallback = ended(result) ? target : null;
       switch (outcome.kind) {
         case "done":
           setPhase({ kind: "done", text: doneText(outcome.summary.rows ?? 0, target, outcome.summary.replaced ?? 0) });
@@ -349,9 +352,14 @@ function ExportForm({ request }: { request: ExportRequest }) {
               <fieldset className="export-scope">
                 <legend>{t("export.rows")}</legend>
                 <label className="check">
-                  <input type="radio" name="export-scope" checked={scope === "loaded"} disabled={!request.result.complete} onChange={() => setScope("loaded")} />
+                  <input type="radio" name="export-scope" checked={scope === "loaded"} disabled={!ended(request.result)} onChange={() => setScope("loaded")} />
                   {t("export.loaded", { count: request.result.rows, formattedCount: numbers.format(request.result.rows) })}
                 </label>
+                {partial && (
+                  <p className="warning small" role="note">
+                    {t("results.partialExport", { partial })}
+                  </p>
+                )}
                 <label className="check">
                   <input type="radio" name="export-scope" checked={scope === "all"} disabled={allRefused} onChange={() => setScope("all")} />
                   {request.table ? t("export.allTable") : t("export.allQuery")}

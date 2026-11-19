@@ -3428,6 +3428,21 @@ try {
     await shown.getByRole("button", { name: "Cancel", exact: true }).click();
     await activeTab.locator(".tab-running").waitFor({ state: "detached" });
     await activeTab.locator(".dot-connected").waitFor();
+    // A result cut short says so (SDB-367): cancelling a query while its rows arrive keeps the
+    // rows shown, and the strip reads "Partial: cancelled after N rows", not a whole result.
+    await replaceQuery(shown, "with recursive spin(i) as (select 1 union all select i + 1 from spin) select i from spin;");
+    await run(shown);
+    await shown.locator(".grid-host").waitFor();
+    await activeTab.locator(".tab-running").waitFor();
+    await shown.getByRole("button", { name: "Cancel", exact: true }).click();
+    await activeTab.locator(".tab-running").waitFor({ state: "detached" });
+    const partialStrip = shown.locator(".statusline .status-partial");
+    await partialStrip.waitFor();
+    assert.match(await partialStrip.innerText(), /^Partial: cancelled after [\d,]+ rows?$/);
+    assert.equal(await shown.locator(".statusline", { hasText: "(loading)" }).count(), 0, "a cut-short result is not loading any more");
+    await shown.getByRole("grid").focus();
+    await shown.getByRole("grid").getByRole("gridcell", { name: /^Row 1, i \(.*\): 1$/ }).waitFor();
+    await shot("sdb-367-partial-cancelled");
     // Maximize the results (button or Ctrl+Alt+M): the editor hides and comes back unchanged.
     await replaceQuery(shown, "select 1 as maximized;");
     await run(shown);

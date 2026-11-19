@@ -306,6 +306,7 @@ async fn run_statement(session: &Session, sql: &str) -> Result<(), String> {
             CoreEvent::StatementStarted { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::ScriptFinished { .. }
             | CoreEvent::ErrorPaused { .. }

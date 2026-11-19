@@ -576,8 +576,8 @@ async fn column_map(
 ) -> CmdResult<ColumnMapItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
@@ -3152,8 +3152,8 @@ async fn copy_rows(
         let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
         let stored = state
             .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
+            .stored(ResultId(result.into()))
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
         // The rows chosen one by one, or the block (#315's selection).
@@ -3176,8 +3176,8 @@ async fn copy_rows(
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let options = ExportOptions {
         format: match format {
@@ -3273,8 +3273,8 @@ async fn copy_special(
         .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
     spelaion_core::copy_special(&stored, &rows, &columns, &options).map_err(|e| e.to_string())
@@ -3300,8 +3300,8 @@ async fn copy_updates(
             .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
     spelaion_core::copy_updates(&update, &stored, &rows, &columns).map_err(|e| e.to_string())
@@ -3330,14 +3330,21 @@ async fn export_result(
     let file_options = options.file_options()?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let summary = tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
             .map_err(|_| "result lock poisoned".to_string())?;
-        if !stored.is_complete() {
-            return Err("the result is still loading: export it when every row has arrived".into());
+        // A partial result exports the rows it has; the export dialog says they are partial
+        // (SDB-367).
+        match stored.end() {
+            spelaion_core::ResultEnd::Loading => {
+                return Err(
+                    "the result is still loading: export it when every row has arrived".into(),
+                );
+            }
+            spelaion_core::ResultEnd::Whole | spelaion_core::ResultEnd::Partial(_) => {}
         }
         let all = (0..stored.schema().columns.len()).collect::<Vec<_>>();
         let (rows, columns) = match range {
@@ -3856,8 +3863,8 @@ async fn sort_result(
 ) -> CmdResult<()> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let keys = sort_keys(keys);
     tokio::task::spawn_blocking(move || {
         stored
@@ -3883,8 +3890,8 @@ async fn filter_columns(
     let mode = spelaion_core::FilterMode::from(mode.unwrap_or_default());
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let filters: Vec<spelaion_core::ColumnFilter> = filters.into_iter().map(Into::into).collect();
     tokio::task::spawn_blocking(move || {
         let mut stored = stored
@@ -3915,8 +3922,8 @@ async fn find_in_result(
 ) -> CmdResult<Option<FindOutcome>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let query = FindQuery {
         text,
         match_case,
@@ -3961,8 +3968,8 @@ async fn find_matches(
 ) -> CmdResult<Vec<FindMatchItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
     Ok(stored.find().map_or_else(Vec::new, |found| {
@@ -3989,8 +3996,8 @@ async fn find_step(
 ) -> CmdResult<Option<FindStepItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
     Ok(stored.find().and_then(|found| {
@@ -4028,8 +4035,8 @@ async fn selection_stats(
 ) -> CmdResult<Option<SelectionStatsItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let selected_rows = range
         .selected_rows
         .map(|rows| rows.into_iter().map(|row| row as usize).collect::<Vec<_>>());
@@ -4068,8 +4075,8 @@ async fn group_result(
 ) -> CmdResult<Option<GroupingItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let request = spelaion_core::GroupRequest {
         columns: columns.into_iter().map(|c| c as usize).collect(),
         duplicates_only,
@@ -4118,8 +4125,8 @@ async fn filter_to_group(
 ) -> CmdResult<GroupFilterOutcome> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let columns: Vec<usize> = columns.into_iter().map(|c| c as usize).collect();
     if !(first_row >= 0.0 && generation >= 0.0) {
         return Err("no such group".into());
@@ -4171,8 +4178,8 @@ async fn result_chart(
 ) -> CmdResult<Option<ChartPointsItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let request = spelaion_core::ChartRequest::from(request);
     tokio::task::spawn_blocking(move || {
         let read = stored
@@ -4234,8 +4241,8 @@ async fn column_stats(
     let (name, logical) = {
         let stored = state
             .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
+            .stored(ResultId(result.into()))
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         let meta = stored
             .schema()
@@ -4296,8 +4303,8 @@ async fn column_top_values(
     let (name, logical) = {
         let stored = state
             .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
+            .stored(ResultId(result.into()))
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         let meta = stored
             .schema()
@@ -4588,8 +4595,8 @@ async fn table_filter_condition(
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let (name, logical, typed) = {
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         let meta = stored
@@ -4623,8 +4630,8 @@ async fn copy_column_names(
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let columns: Vec<usize> = columns.into_iter().map(|c| c as usize).collect();
     spelaion_core::column_names(
@@ -4649,8 +4656,8 @@ async fn copy_column_in_list(
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
@@ -4671,8 +4678,8 @@ async fn row_values(
 ) -> CmdResult<Vec<Option<String>>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let batch = stored
         .window(row as usize, 1)
@@ -4703,8 +4710,8 @@ async fn filter_result(
 ) -> CmdResult<FilterOutcome> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let mut stored = stored
             .write()
@@ -4731,8 +4738,8 @@ async fn cell_value(
 ) -> CmdResult<Option<String>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let column = column as usize;
     let meta = stored
@@ -4766,8 +4773,8 @@ async fn view_cell(
 ) -> CmdResult<CellViewItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
@@ -4791,8 +4798,8 @@ async fn reveal_cell(
 ) -> CmdResult<RevealedCellItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     stored
         .reveal(row as usize, column as usize)
@@ -4812,8 +4819,8 @@ async fn save_cell_value(
 ) -> CmdResult<f64> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
@@ -5391,8 +5398,8 @@ async fn follow_key(
     .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     spelaion_core::follow(open.session.dialect().as_ref(), &stored, row as usize, &key)
         .map(KeyTargetItem::from)
@@ -5420,8 +5427,8 @@ async fn row_references(
     let targets = {
         let stored = state
             .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
+            .stored(ResultId(result.into()))
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         spelaion_core::reference_targets(
             open.session.dialect().as_ref(),
@@ -6027,8 +6034,8 @@ async fn editable_source(
 async fn pending_edits(result: u32, state: State<'_, AppState>) -> CmdResult<PendingEditsItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     Ok(PendingEditsItem::new(
         stored.pending(),
@@ -6047,8 +6054,8 @@ async fn edit_pending(
 ) -> CmdResult<PendingEditsItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let mut stored = stored.write().map_err(|_| "result lock poisoned")?;
     let outcome = stored
         .edit_pending(edit.into())
@@ -6124,8 +6131,8 @@ async fn table_edit_statements(
         .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let changes = stored.pending().changes();
     spelaion_core::edit_statements(&target, &table, &stored, &changes).map_err(|e| e.to_string())
@@ -6206,8 +6213,8 @@ async fn load_file_statements(
         .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     // Written only through this session, for rows it read in its current database (SDB-137).
     let target = open
         .session
@@ -6247,23 +6254,33 @@ async fn answer_interaction(
 ///
 /// It is the only command outside `tauri-specta`, which does not type binary responses; its
 /// TS wrapper is in `src/api.ts`.
+///
+/// Its error is a [`WindowErrorItem`] (SDB-367): the grid tells a freed result, which it shows
+/// with Run again, from a window that could not be read.
 #[tauri::command]
 fn fetch_window(
     result: u32,
     start: u32,
     len: u32,
     state: State<'_, AppState>,
-) -> Result<Response, String> {
+) -> Result<Response, WindowErrorItem> {
+    let failed = |message: String| WindowErrorItem::Failed { message };
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
-    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        .stored(ResultId(result.into()))
+        .map_err(WindowErrorItem::from)?;
+    let stored = stored
+        .read()
+        .map_err(|_| failed("result lock poisoned".into()))?;
     // Each cell as the database prints it and, where the user's display settings show it
     // otherwise, as they show it (SDB-385): the core writes both.
-    let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
+    let display = state
+        .display
+        .read()
+        .map_err(|_| failed("lock poisoned".into()))?
+        .clone();
     let out = spelaion_core::window_ipc(&stored, start as usize, len as usize, &display)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| failed(e.to_string()))?;
     Ok(Response::new(out))
 }
 
@@ -6608,6 +6625,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             quit_cancelled,
             quit_app,
         ])
+        .typ::<WindowErrorItem>()
         .events(tauri_specta::collect_events![
             InteractionRequest,
             InteractionClosed,

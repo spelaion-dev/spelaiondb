@@ -56,6 +56,8 @@ mod progress;
 mod query_page;
 mod readonly;
 mod references;
+#[cfg(test)]
+mod result_end_tests;
 mod result_tabs;
 mod results;
 mod save_name;
@@ -227,7 +229,10 @@ pub use result_tabs::{
     DEFAULT_RESULT_TABS, MAX_RESULT_NAME, MAX_RESULT_TABS, Placed, Placement, ResultTab,
     ResultTabs, ResultTabsError, RunResults, statement_title,
 };
-pub use results::{ResultId, ResultSource, ResultStore, RevealError, RevealedCell, StoredResult};
+pub use results::{
+    PartialReason, ResultEnd, ResultFreed, ResultId, ResultSource, ResultStore, RevealError,
+    RevealedCell, StoredResult,
+};
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,

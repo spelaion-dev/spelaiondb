@@ -4,7 +4,11 @@
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
-  text). Every other command is `#[command]` (`crates/spelaion-desktop-macros`), never
+  text); its error is the generated `WindowErrorItem` (freed or failed, SDB-367), which the
+  grid's row cache keeps per block instead of asking again at every paint, and a freed result
+  shows "Run again" where the grid is. A result's end reaches the page as the
+  `resultEnded` script event (`ResultEndItem`); `src/resultEnd.ts` words it, and the page never
+  works it out from a statement's failure. Every other command is `#[command]` (`crates/spelaion-desktop-macros`), never
   `#[tauri::command]` by hand: it adds `#[specta::specta]` and runs an async command's body
   through `src-tauri/src/panics.rs`'s `guard`, so a command that panics answers the page with an
   error instead of leaving it waiting (SDB-163); an async command therefore returns `CmdResult`.

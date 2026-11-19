@@ -405,6 +405,7 @@ impl RunResults {
                     .place(&self.editor, self.run, *result, title, self.limit)
             }
             CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::StatementFailed { .. }

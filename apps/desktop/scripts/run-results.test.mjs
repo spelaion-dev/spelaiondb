@@ -2,7 +2,8 @@
 // `node --test`.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { afterRun, endStatementResults, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../src/runResults.ts";
+import { afterRun, endResult, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../src/runResults.ts";
+import { ended, hasEnded, partialKey, partialReason, partialText } from "../src/resultEnd.ts";
 
 test("refresh does not reuse column positions when result columns change", () => {
   const col = { name: "name", logical: "text", nativeType: "text", masked: false };
@@ -23,58 +24,83 @@ test("only successful single-statement runs offer grid refresh", () => {
   assert.equal(markRefreshable([...results, { id: 3, run: 2 }], 2, good)[1].refreshable, false, "a multi-result batch cannot be refreshed into one result tab");
 });
 
-const started = (statement, rows, paging) => ({ id: 10 + statement, statement, rows, complete: false, ...(paging ? { paging } : {}) });
+const LOADING = { kind: "loading" };
+const WHOLE = { kind: "whole" };
+const partial = (reason) => ({ kind: "partial", reason });
+const started = (statement, rows, paging) => ({ id: 10 + statement, statement, rows, end: LOADING, ...(paging ? { paging } : {}) });
 
-test("a statement that failed after its result started leaves it complete, not loading", () => {
+test("a result ends as the core says: whole, or cut short and why (SDB-367)", () => {
   // `select pg_terminate_backend(pg_backend_pid())`: its column arrives, then it fails.
-  const results = [started(0, 0)];
-  assert.deepEqual(endStatementResults(results, 0, "failed"), [{ id: 10, statement: 0, rows: 0, complete: true }]);
+  assert.deepEqual(endResult([started(0, 0)], 10, partial("connectionLost")), [{ id: 10, statement: 0, rows: 0, end: partial("connectionLost") }]);
+  assert.deepEqual(endResult([started(0, 5)], 10, WHOLE), [{ id: 10, statement: 0, rows: 5, end: WHOLE }]);
 });
 
-test("a cancelled or timed-out statement keeps the rows that arrived", () => {
-  // A cancel and a timeout end the statement with a failure too.
-  const [ended] = endStatementResults([started(0, 1234)], 0, "failed");
-  assert.equal(ended.complete, true);
-  assert.equal(ended.rows, 1234);
+test("a cancelled or timed-out result keeps the rows that arrived and says it is partial", () => {
+  for (const reason of ["cancelled", "timedOut", "failed"]) {
+    const [ended] = endResult([started(0, 1234)], 10, partial(reason));
+    assert.deepEqual(ended.end, partial(reason));
+    assert.equal(ended.rows, 1234);
+    assert.equal(hasEnded(ended.end), true);
+    assert.equal(partialReason(ended.end), reason);
+  }
 });
 
-test("only the statement that ended is touched", () => {
-  const results = [{ ...started(0, 3), complete: true }, started(1, 2), started(2, 0)];
-  const ended = endStatementResults(results, 1, "failed");
-  assert.deepEqual(ended.map((r) => r.complete), [true, true, false]);
+test("only the result that ended is touched, whatever its statement or run", () => {
+  const results = [{ ...started(0, 3), end: WHOLE }, started(1, 2), started(2, 0)];
+  const ended = endResult(results, 11, partial("failed"));
+  assert.deepEqual(ended.map((r) => r.end.kind), ["whole", "partial", "loading"]);
   assert.equal(ended[0], results[0]);
   assert.equal(ended[2], results[2]);
 });
 
-test("every result of a statement ends with it (several result sets of one batch)", () => {
-  const ended = endStatementResults([started(0, 1), started(0, 0), started(1, 0)], 0, "failed");
-  assert.deepEqual(ended.map((r) => r.complete), [true, true, false]);
-});
-
-test("a full page may have another after it only when its statement finished", () => {
+test("a full page may have another after it only when it is whole", () => {
   const page = { sql: "select * from t", pageSize: 100, hasMore: false, loading: false };
-  assert.equal(endStatementResults([started(0, 100, page)], 0, "finished")[0].paging.hasMore, true);
-  assert.equal(endStatementResults([started(0, 40, page)], 0, "finished")[0].paging.hasMore, false);
-  assert.equal(endStatementResults([started(0, 100, page)], 0, "failed")[0].paging.hasMore, false);
+  assert.equal(endResult([started(0, 100, page)], 10, WHOLE)[0].paging.hasMore, true);
+  assert.equal(endResult([started(0, 40, page)], 10, WHOLE)[0].paging.hasMore, false);
+  assert.equal(endResult([started(0, 100, page)], 10, partial("cancelled"))[0].paging.hasMore, false);
 });
 
-test("a statement that finished completes its results as before", () => {
-  assert.deepEqual(endStatementResults([started(0, 5)], 0, "finished"), [{ id: 10, statement: 0, rows: 5, complete: true }]);
+test("the strip words a partial result by its reason and rows, and says nothing otherwise", () => {
+  const numbers = new Intl.NumberFormat("en");
+  const said = [];
+  const t = (key, values) => {
+    said.push([key, values.count]);
+    return `${key}:${values.formattedCount}`;
+  };
+  assert.equal(partialText(partial("cancelled"), 120000, t, numbers), "results.partial.cancelled:120,000");
+  assert.equal(partialText(partial("connectionLost"), 1, t, numbers), "results.partial.connectionLost:1");
+  assert.equal(partialText(WHOLE, 5, t, numbers), null);
+  assert.equal(partialText(LOADING, 5, t, numbers), null);
+  assert.deepEqual(said, [["results.partial.cancelled", 120000], ["results.partial.connectionLost", 1]]);
+  assert.equal(hasEnded(LOADING), false);
+  assert.equal(ended(undefined), false);
+  assert.equal(ended({ end: WHOLE }), true);
+});
+
+test("every reason has its words in English and Spanish", async () => {
+  const { readFile } = await import("node:fs/promises");
+  for (const language of ["en", "es"]) {
+    const texts = JSON.parse(await readFile(new URL(`../src/locales/${language}/editor.json`, import.meta.url), "utf8"));
+    for (const reason of ["cancelled", "failed", "timedOut", "connectionLost"]) {
+      const key = partialKey(reason).split(".").pop();
+      assert.ok(texts.results.partial[`${key}_one`] && texts.results.partial[`${key}_other`], `${language}: ${reason}`);
+    }
+  }
 });
 
 // Results kept from earlier runs (SDB-378): the core says what a run replaces and where each
 // new result goes; these only draw it.
-const kept = (id, run, more = {}) => ({ id, run, statement: 0, rows: 1, complete: true, ...more });
+const kept = (id, run, more = {}) => ({ id, run, statement: 0, rows: 1, end: WHOLE, ...more });
 const ids = (state) => state.results.map((r) => r.id);
 
-test("a statement that ends does not touch the results kept from other runs", () => {
+test("a result that ends does not touch the results kept from other runs", () => {
   const page = { sql: "select * from t", pageSize: 100, hasMore: true, loading: false };
   const pinned = kept(1, 1, { rows: 100, paging: page, pinned: true });
-  const running = { id: 2, run: 2, statement: 0, rows: 7, complete: false };
-  const ended = endStatementResults([pinned, running], 0, "failed", 2);
+  const running = { id: 2, run: 2, statement: 0, rows: 7, end: LOADING };
+  const ended = endResult([pinned, running], 2, partial("failed"));
   assert.equal(ended[0], pinned, "same statement number, another run");
   assert.equal(ended[0].paging.hasMore, true);
-  assert.equal(ended[1].complete, true);
+  assert.deepEqual(ended[1].end, partial("failed"));
 });
 
 test("the results a run replaced go away; a closed active tab gives way to its neighbour", () => {

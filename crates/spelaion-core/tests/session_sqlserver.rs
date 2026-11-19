@@ -6,7 +6,9 @@ mod engines;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use spelaion_core::{CellInput, CoreEvent, EditError, ResultStore, RowChange, Session, TablePage};
+use spelaion_core::{
+    CellInput, CoreEvent, EditError, ResultEnd, ResultStore, RowChange, Session, TablePage,
+};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
 
 async fn session(database: &str) -> Option<Session> {
@@ -239,15 +241,7 @@ async fn batches_with_several_result_sets_give_several_results() {
     let ids = results(&events);
     assert_eq!(ids.len(), 2, "{events:#?}");
     for id in ids {
-        assert!(
-            session
-                .results()
-                .get(id)
-                .unwrap()
-                .read()
-                .unwrap()
-                .is_complete()
-        );
+        assert!(session.results().get(id).unwrap().read().unwrap().end() == ResultEnd::Whole);
     }
 }
 

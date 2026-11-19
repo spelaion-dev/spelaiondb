@@ -522,6 +522,7 @@ async fn scalar_result(
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }
@@ -567,6 +568,7 @@ pub(crate) async fn short_rows(
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }

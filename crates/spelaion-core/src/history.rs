@@ -1798,6 +1798,7 @@ impl QueryHistory {
                         }
                     }
                     CoreEvent::ResultStarted { .. }
+                    | CoreEvent::ResultEnded { .. }
                     | CoreEvent::Notice { .. }
                     | CoreEvent::ScriptFinished { .. }
                     | CoreEvent::ErrorPaused { .. }

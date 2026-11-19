@@ -11,7 +11,7 @@ import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { connectionTooltip } from "../connectionInfo";
-import { afterRun, endStatementResults, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../runResults";
+import { afterRun, endResult, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../runResults";
 import { ResultTabList } from "./ResultTabs";
 import { VariablesDialog } from "./VariablesDialog";
 import { byteToIndex } from "../text";
@@ -39,6 +39,7 @@ import { MissingPlugin } from "./MissingPlugin";
 import { useCompletionCatalog } from "../useCompletionCatalog";
 import { mayChangeCompletionCatalog } from "../sqlCompletion";
 import { useEngineInfo } from "../engines";
+import { ended, partialText } from "../resultEnd";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 /** No header sort: one list, so the grid sees the same value between renders. */
@@ -250,7 +251,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const result = tab.run?.results.find((item) => item.id === tab.run?.activeResult);
     // Only a result that is the whole answer of its run: the core resolves that run's text.
     const request = result?.run === undefined ? undefined : runTexts.current.get(result.run);
-    if (!result?.complete || !request || request.results !== 1) return;
+    if (!result || !ended(result) || !request || request.results !== 1) return;
     let active = true;
     call(commands.editableQueryTable(tab.id, result.id, request.text))
       .then((table) => { if (active) { setQueryTable(table ? { ...table, result: result.id } : null); setQueryChecked(result.id); } })
@@ -270,7 +271,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     : (queryTable && queryTable.result === activeResult?.id ? queryTable : null);
 
   // A page shown again (another result tab, a tab restored) shows the edits its core holds.
-  const activeResultId = activeResult?.complete ? activeResult.id : null;
+  const activeResultId = activeResult && ended(activeResult) ? activeResult.id : null;
   useEffect(() => {
     if (activeResultId === null) return;
     let live = true;
@@ -329,7 +330,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   });
 
   const editing: GridEditing | undefined =
-    editTarget && activeResult?.complete && tab.status === "connected"
+    editTarget && ended(activeResult) && tab.status === "connected"
       ? {
           cells: pending.cells,
           defaults: pending.defaults,
@@ -652,7 +653,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   function showPendingRow() {
     const index = pendingRow.current;
     const result = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results[0];
-    if (index === null || !result?.complete) return;
+    if (index === null || !result || !ended(result)) return;
     pendingRow.current = null;
     const row = Math.min(index, Math.max(0, result.rows - 1));
     if (index >= result.rows) setNotice({ text: t("goToRow.past", { rows: numbers.format((tab.table?.page ?? 0) * (tab.table?.pageSize ?? 0) + result.rows), row: numbers.format((tab.table?.page ?? 0) * (tab.table?.pageSize ?? 0) + index + 1) }), error: false });
@@ -661,9 +662,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
   const firstResult = tab.run?.results[0];
   useEffect(() => {
-    if (tab.table && !tab.run?.running && firstResult?.complete) showPendingRow();
+    if (tab.table && !tab.run?.running && ended(firstResult)) showPendingRow();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstResult?.id, firstResult?.complete, tab.run?.running]);
+  }, [firstResult?.id, ended(firstResult), tab.run?.running]);
 
   /** A load of many keyset pages of a paged query ("Load every row", or a page or a row past
    *  the ones loaded; SDB-386), and its id for Cancel. */
@@ -676,7 +677,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const current = useApp.getState().tabs.find((item) => item.id === tab.id);
     const result = current?.run?.results.find((item) => item.id === resultId);
     const paging = result?.paging;
-    if (!result || !result.complete || !paging || paging.loading || current?.run?.running || queryPageBusy.current ||
+    if (!result || !ended(result) || !paging || paging.loading || current?.run?.running || queryPageBusy.current ||
         savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return null;
     if (!paging.hasMore || (until !== null && result.rows >= until)) return result.rows;
     if (until === null && !(await confirmLoadAll(resultId, { kind: "query", sql: paging.sql }))) return null;
@@ -727,7 +728,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const current = useApp.getState().tabs.find((item) => item.id === tab.id);
     const result = current?.run?.results.find((item) => item.id === resultId);
     const paging = result?.paging;
-    if (!result || !result.complete || !paging || !paging.hasMore || paging.loading || current?.run?.running ||
+    if (!result || !ended(result) || !paging || !paging.hasMore || paging.loading || current?.run?.running ||
         queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length ||
         (paging.total !== undefined && result.rows >= paging.total)) return 0;
     queryPageBusy.current = true;
@@ -750,7 +751,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   async function countQueryResult(resultId: number) {
     const result = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.id === resultId);
-    if (!result?.complete || !result.paging || tab.run?.running || queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return;
+    if (!result || !ended(result) || !result.paging || tab.run?.running || queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return;
     queryPageBusy.current = true;
     updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
       ? { ...item, paging: { ...item.paging, loading: true } } : item) }));
@@ -1157,6 +1158,16 @@ export function EditorTab({ tab }: { tab: Tab }) {
     void run({ text, from: 0 }, refreshingEdits, pageSize, sort ?? result.paging?.sort ?? [], { kind: "into", result: resultId }, result.refreshSql);
   }
 
+  /** Runs again the query of a result the core no longer keeps (SDB-367): its tab, which
+   *  nothing backs any more, gives way to the new result. */
+  function runFreedAgain(resultId: number) {
+    const result = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.id === resultId);
+    const text = result?.paging?.sql ?? result?.sql;
+    if (!result || !text) return;
+    updateRun(tab.id, (r) => withoutResults(r, [resultId]));
+    void run({ text, from: 0 }, false, queryPageSize, result.paging?.sort ?? [], { kind: "newTab" }, result.refreshSql);
+  }
+
   /** Refresh a single-statement result through Run, then restore its local view. */
   async function refreshQuery(resultId: number, row: number) {
     const before = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.id === resultId);
@@ -1169,7 +1180,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (runSeq.current !== previousRun + 1) return;
     const find = () => useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.run === previousRun + 1);
     let result = find();
-    if (!result?.complete || !result.refreshable) return;
+    if (!result || !ended(result) || !result.refreshable) return;
     if (!sameResultColumns(before.columns, result.columns)) {
       setNotice({ text: t("results.refreshColumnsChanged"), error: true });
       return;
@@ -1365,7 +1376,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         if (produced) produced.results += 1;
         // Where the core put it: last, or in the place of the result it ran again; and the
         // tabs it closed to stay within the limit.
-        const started: ResultMeta = { id: event.result, statement: event.index, run: runId, columns: event.columns, rows: 0, complete: false, pinned: event.pinned, renamed: event.renamed, ...(event.name ? { name: event.name } : {}), ...(sql ? { sql } : {}), ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) };
+        const started: ResultMeta = { id: event.result, statement: event.index, run: runId, columns: event.columns, rows: 0, end: { kind: "loading" }, pinned: event.pinned, renamed: event.renamed, ...(event.name ? { name: event.name } : {}), ...(sql ? { sql } : {}), ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) };
         updateRun(tab.id, (r) => withStartedResult(r, started, event.replaces ?? null, event.closed));
         break;
       }
@@ -1374,6 +1385,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
           ...r,
           results: r.results.map((x) => (x.id === event.result ? { ...x, rows: event.totalRows } : x)),
         }));
+        break;
+      case "resultEnded":
+        // Whole, or cut short and why, as the core says it (SDB-367). A result cut short keeps
+        // the rows that arrived (SDB-275).
+        updateRun(tab.id, (r) => ({ ...r, results: endResult(r.results, event.result, event.end) }));
         break;
       case "notice":
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: `${event.severity}: ${event.message}` }] }));
@@ -1388,7 +1404,6 @@ export function EditorTab({ tab }: { tab: Tab }) {
           : { key: "messages.statementRows", values: { index: event.index + 1, count: event.rowsAffected, ...timing } };
         updateRun(tab.id, (r) => ({
           ...r,
-          results: endStatementResults(r.results, event.index, "finished", runId),
           messages: [...r.messages, { kind: "info", text: "", translation }],
         }));
         break;
@@ -1401,8 +1416,6 @@ export function EditorTab({ tab }: { tab: Tab }) {
         const key = event.cancelled ? "messages.statementCancelled" : event.timedOut ? "messages.statementTimedOut" : "messages.statementFailed";
         updateRun(tab.id, (r) => ({
           ...r,
-          // A result it had started keeps its rows and is not "(loading)" any more (SDB-275).
-          results: endStatementResults(r.results, event.index, "failed", runId),
           error: { message: event.message, offset, diagnostic },
           messages: [...r.messages, { kind: "error", text: event.message, translation: { key, values: { index: event.index + 1, reason: event.message } } }],
         }));
@@ -1483,7 +1496,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const failed = (e: unknown) => setNotice({ text: message(e), error: true });
     switch (command) {
       case "resultRerun":
-        if (!current?.running && result.complete) rerun(result.id);
+        if (!current?.running && ended(result)) rerun(result.id);
         break;
       case "resultPin":
         void call(commands.pinResult(tab.id, result.id, !result.pinned)).then(drawn).catch(failed);
@@ -1500,7 +1513,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         break;
       case "resultClose":
         // Closing frees the result in the core, pinned or not; never with unsaved edits.
-        if (!result.complete) break;
+        if (!result || !ended(result)) break;
         if (pendingCount > 0 || savingEditsRef.current) { setNotice({ text: t("edit.applyFirst"), error: true }); break; }
         void call(commands.releaseResult(result.id))
           .then(() => updateRun(tab.id, (r) => withoutResults(r, [result.id])))
@@ -1763,6 +1776,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
               else void refreshQuery(result, row);
             }}
             onLoadMore={loadMoreQueryRows}
+            onRunAgain={runFreedAgain}
             onCountQuery={(id) => void countQueryResult(id)}
             onQueryPageSize={changeQueryPageSize}
             rowOffset={tab.table && !tab.table.all ? tab.table.page * tab.table.pageSize : 0}
@@ -1828,6 +1842,7 @@ function Results({
   restoringView,
   onRefresh,
   onLoadMore,
+  onRunAgain,
   onCountQuery,
   onQueryPageSize,
   rowOffset,
@@ -1858,6 +1873,8 @@ function Results({
   restoringView: boolean;
   onRefresh(result: number, row: number): void;
   onLoadMore(result: number): Promise<number>;
+  /** Runs again the query of a result the core no longer keeps (SDB-367). */
+  onRunAgain(result: number): void;
   onCountQuery(result: number): void;
   onQueryPageSize(size: number): void;
   /** Rows before the first one shown (a table data tab's page): the grid numbers from there. */
@@ -2014,7 +2031,7 @@ function Results({
             viewerWidth={viewerWidth}
             onViewerWidth={setViewerWidth}
             pagingLocked={restoringView || pendingEdits || run.running || filteringResult === active.id || !!active.paging?.loading || !!editing?.busy}
-            refresh={table || active.refreshable ? { disabled: refreshDisabled || filteringResult === active.id || !!active.paging?.loading || !active.complete, run: (row) => onRefresh(active.id, row) } : undefined}
+            refresh={table || active.refreshable ? { disabled: refreshDisabled || filteringResult === active.id || !!active.paging?.loading || !ended(active), run: (row) => onRefresh(active.id, row) } : undefined}
             onLoadMore={() => onLoadMore(active.id)}
             onCountQuery={() => onCountQuery(active.id)}
             onQueryPageSize={onQueryPageSize}
@@ -2025,6 +2042,7 @@ function Results({
             onCancelLoad={onCancelLoad}
             onSelectedRows={(rows) => { selectedRows.current[active.id] = rows; }}
             onTranspose={(rows) => setTransposed((current) => ({ ...current, [active.id]: rows }))}
+            onRunAgain={!run.running && (active.paging?.sql ?? active.sql) ? () => onRunAgain(active.id) : undefined}
           />
           </div>
         ) : (
@@ -2044,13 +2062,26 @@ function Results({
           <span>{t("results.running")}</span>
         ) : (
           <span>
-            {active
-              ? `${
-                  active.filter || active.columnFilters?.length
-                    ? t("results.rowsFiltered", { count: active.rows, formattedCount: numbers.format(active.rows), total: numbers.format(active.total ?? active.rows) })
-                    : t("results.rows", { count: active.rows, formattedCount: numbers.format(active.rows) })
-                }${active.complete ? "" : t("results.loading")} · `
-              : ""}
+            {(() => {
+              if (!active) return "";
+              const filtered = !!(active.filter || active.columnFilters?.length);
+              // A result cut short says so, and why, in words (SDB-367).
+              const partial = partialText(active.end, active.total ?? active.rows, t, numbers);
+              const rows = filtered
+                ? t("results.rowsFiltered", { count: active.rows, formattedCount: numbers.format(active.rows), total: numbers.format(active.total ?? active.rows) })
+                : t("results.rows", { count: active.rows, formattedCount: numbers.format(active.rows) });
+              return (
+                <>
+                  {partial && !filtered ? "" : `${rows}${ended(active) ? "" : t("results.loading")} · `}
+                  {partial && (
+                    <>
+                      <span className="status-partial" title={t("results.partial.hint")}>{partial}</span>
+                      {" · "}
+                    </>
+                  )}
+                </>
+              );
+            })()}
             {(() => {
               const short = summaryShort(run.summary);
               return short ? `${translated(short, t, numbers)} · ` : "";

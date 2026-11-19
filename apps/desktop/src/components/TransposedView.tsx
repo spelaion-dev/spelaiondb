@@ -36,7 +36,7 @@ export function TransposedView(props: {
           return;
         }
         made = item.result;
-        setView({ id: item.result, statement: source.statement, run: source.run, columns: item.columns, rows: item.rows, complete: true, pinned: false });
+        setView({ id: item.result, statement: source.statement, run: source.run, columns: item.columns, rows: item.rows, end: { kind: "whole" }, pinned: false });
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
     return () => {

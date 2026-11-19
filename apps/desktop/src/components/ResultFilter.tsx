@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { ResultMeta } from "../store";
+import { ended } from "../resultEnd";
 
 const DELAY_MS = 250;
 
@@ -64,8 +65,8 @@ export function ResultFilter(props: {
         aria-label={t("results.filter")}
         aria-invalid={!!error}
         aria-describedby={[props.scope ? scopeId : null, error ? props.errorId : null].filter(Boolean).join(" ") || undefined}
-        title={error ?? (!result.complete ? t("results.filterWhenComplete") : props.locked ? t("results.filterLocked") : props.scope === "page" ? t("results.filterPageHint") : props.scope === "loaded" ? t("queryPaging.filterLoaded") : t("results.filterHint"))}
-        disabled={!result.complete || props.locked}
+        title={error ?? (!ended(result) ? t("results.filterWhenComplete") : props.locked ? t("results.filterLocked") : props.scope === "page" ? t("results.filterPageHint") : props.scope === "loaded" ? t("queryPaging.filterLoaded") : t("results.filterHint"))}
+        disabled={!ended(result) || props.locked}
         value={text}
         onChange={(e) => { callbacks.current.onPending(true); setText(e.target.value); }}
         onKeyDown={(e) => {

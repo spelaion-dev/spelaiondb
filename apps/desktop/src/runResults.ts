@@ -3,27 +3,25 @@
 // replaces, a result's name and its pin are the core's (SDB-378): this only draws what the
 // core's events say.
 
+import type { ResultEndItem } from "./bindings";
+
 interface EndingResult {
-  statement: number;
-  /** The run that produced it: an editor tab keeps results of several runs. */
-  run?: number;
+  id: number;
   rows: number;
-  complete: boolean;
+  end: ResultEndItem;
   paging?: { pageSize: number; hasMore: boolean };
 }
 
-/** The results of statement `index` of run `run` once it has ended: complete, as the core's
- *  stored results are once their statement is done or has failed (a failed statement keeps the
- *  rows that arrived, and nothing more comes; a cancel or a timeout fails it too). A page that
- *  filled up may have another after it, only when its statement finished. Results kept from
- *  other runs are not touched. */
-export function endStatementResults<R extends EndingResult>(results: R[], index: number, outcome: "finished" | "failed", run?: number): R[] {
+/** Result `id` once the core says how it ended (SDB-367): whole, or cut short and why. Its rows
+ *  stay as they are (SDB-275). A page that filled up may have another after it, only when it is
+ *  whole. Other results are not touched. */
+export function endResult<R extends EndingResult>(results: R[], id: number, end: ResultEndItem): R[] {
   return results.map((result) =>
-    result.statement === index && result.run === run
+    result.id === id
       ? {
           ...result,
-          complete: true,
-          ...(result.paging ? { paging: { ...result.paging, hasMore: outcome === "finished" && result.rows === result.paging.pageSize } } : {}),
+          end,
+          ...(result.paging ? { paging: { ...result.paging, hasMore: end.kind === "whole" && result.rows === result.paging.pageSize } } : {}),
         }
       : result,
   );
