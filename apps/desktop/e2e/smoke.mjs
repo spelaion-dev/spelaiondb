@@ -10424,7 +10424,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await chip.waitFor({ state: "detached" });
     await run(controlPanel);
     await controlPanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
-    await controlPanel.getByText("this session is read-only, so nothing was run", { exact: false }).waitFor({ state: "detached" });
+    // The refusal shows twice (the error box and the Messages tab) until the new run replaces
+    // both: wait for every copy to go, not for one locator that may still match two.
+    await page.waitForFunction(() => ![...document.querySelectorAll(".tab-panel:not([hidden]) .error-box, .tab-panel:not([hidden]) .message")]
+      .some((element) => element.textContent.includes("this session is read-only, so nothing was run")));
     // A transaction open: Disconnect all asks first, and Cancel keeps it.
     await controlPanel.locator(".transaction-controls").getByRole("checkbox", { name: "Auto-commit" }).click();
     await controlPanel.locator(".transaction-controls input[type=checkbox]:not(:checked)").waitFor();
