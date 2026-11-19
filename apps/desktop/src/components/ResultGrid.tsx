@@ -2854,7 +2854,9 @@ export function ResultGrid({
         />
       )}
     </div>
-    {(hidden.size > 0 || selectionText) && <div className="grid-footer">
+    {/* Always there, even empty: a footer that appeared with the first selection would shrink
+        the grid under the pointer, and a right-click on the last rows would miss its cell. */}
+    <div className="grid-footer">
       {hidden.size > 0 && (
         <button
           type="button"
@@ -2870,7 +2872,7 @@ export function ResultGrid({
         </button>
       )}
       <span className="grid-selection">{selectionText}</span>
-    </div>}
+    </div>
     {(editing || paging) && (
       <div className="result-editing">
         {editing && editing.inserts.length > 0 && <div className="pending-rows" aria-label={t("edit.newRows")}>
