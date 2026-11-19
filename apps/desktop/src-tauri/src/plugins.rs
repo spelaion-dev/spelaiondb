@@ -52,37 +52,169 @@ pub(crate) struct PluginOps {
     /// rebuilding the engines from what is on disk, so none swaps in engines another did not
     /// see. A second install waits for the first.
     changing: tokio::sync::Mutex<()>,
-    /// The installs running, by the id the page gave them, to stop them.
-    installs: std::sync::Mutex<HashMap<u32, Arc<Notify>>>,
+    /// Each plugin's install, by plugin name, when it is not idle. Held here, not in the page,
+    /// so the Plugins page, the "add connection" picker and a connection that could not open
+    /// show the same thing (SDB-373). Changed only by the methods below.
+    installs: std::sync::Mutex<HashMap<String, Install>>,
+}
+
+/// A plugin's install that is not idle.
+enum Install {
+    /// Its archive is downloading. `install` is the id the page gave it, to stop it.
+    Downloading {
+        install: u32,
+        stop: Arc<Notify>,
+        received: u64,
+        total: u64,
+    },
+    /// The last install failed or was stopped: why. Until the next install of it, or until a
+    /// file installed or a build removed changes what is here.
+    Failed { why: String },
 }
 
 impl PluginOps {
-    fn start(&self, install: u32) -> Arc<Notify> {
+    /// `name` starts downloading as the install `install`, of `total` bytes.
+    fn begin(&self, name: &str, install: u32, total: u64) -> Arc<Notify> {
         let stop = Arc::new(Notify::new());
-        self.installs
-            .lock()
-            .expect("lock poisoned")
-            .insert(install, stop.clone());
+        self.installs.lock().expect("lock poisoned").insert(
+            name.to_string(),
+            Install::Downloading {
+                install,
+                stop: stop.clone(),
+                received: 0,
+                total,
+            },
+        );
         stop
     }
 
-    fn stop(&self, install: u32) {
-        if let Some(stop) = self
-            .installs
-            .lock()
-            .expect("lock poisoned")
-            .remove(&install)
+    /// `received` bytes of the install `install` of `name` have arrived.
+    fn progress(&self, name: &str, install: u32, received: u64) {
+        if let Some(Install::Downloading {
+            install: running,
+            received: so_far,
+            ..
+        }) = self.installs.lock().expect("lock poisoned").get_mut(name)
+            && *running == install
         {
-            // Kept for the install if it is not waiting yet.
-            stop.notify_one();
+            *so_far = received;
         }
     }
 
-    fn end(&self, install: u32) {
+    /// The install `install` of `name` ended: idle again when it worked, failed with why when
+    /// not. A later install of the same plugin has replaced it, and is left alone.
+    fn end(&self, name: &str, install: u32, outcome: &Result<(), String>) {
+        let mut installs = self.installs.lock().expect("lock poisoned");
+        let ours = match installs.get(name) {
+            Some(Install::Downloading {
+                install: running, ..
+            }) => *running == install,
+            Some(Install::Failed { .. }) | None => false,
+        };
+        if !ours {
+            return;
+        }
+        match outcome {
+            Ok(()) => {
+                installs.remove(name);
+            }
+            Err(why) => {
+                installs.insert(name.to_string(), Install::Failed { why: why.clone() });
+            }
+        }
+    }
+
+    /// Stops the install `install`, whichever plugin it is for. It ends as failed ("stopped").
+    fn stop(&self, install: u32) {
+        let installs = self.installs.lock().expect("lock poisoned");
+        for entry in installs.values() {
+            match entry {
+                Install::Downloading {
+                    install: running,
+                    stop,
+                    ..
+                } if *running == install => {
+                    // Kept for the install if it is not waiting yet.
+                    stop.notify_one();
+                }
+                Install::Downloading { .. } | Install::Failed { .. } => {}
+            }
+        }
+    }
+
+    /// What was here changed (a file installed, a build removed): old failures no longer say
+    /// anything about it.
+    fn forget_failures(&self) {
         self.installs
             .lock()
             .expect("lock poisoned")
-            .remove(&install);
+            .retain(|_, install| match install {
+                Install::Downloading { .. } => true,
+                Install::Failed { .. } => false,
+            });
+    }
+
+    /// The install of `name`, as the page sees it.
+    fn of(&self, name: &str) -> PluginInstall {
+        match self.installs.lock().expect("lock poisoned").get(name) {
+            None => PluginInstall::Idle,
+            Some(Install::Downloading {
+                install,
+                received,
+                total,
+                ..
+            }) => PluginInstall::Downloading {
+                install: *install,
+                received: *received as f64,
+                total: *total as f64,
+            },
+            Some(Install::Failed { why }) => PluginInstall::Failed { why: why.clone() },
+        }
+    }
+}
+
+/// A plugin's install, as every view shows it (SDB-373).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PluginInstall {
+    /// No install of it is running, and the last one did not fail.
+    Idle,
+    /// Its archive is downloading: bytes received of the total the catalogue gives (0 when it
+    /// gives none). `install` is the id to stop it with `pluginsCancelInstall`.
+    #[serde(rename_all = "camelCase")]
+    Downloading {
+        install: u32,
+        received: f64,
+        total: f64,
+    },
+    /// The last install failed or was stopped, in the core's words.
+    #[serde(rename_all = "camelCase")]
+    Failed { why: String },
+}
+
+/// What a plugin's engines get on this machine: the core's one answer
+/// (`PluginState::availability`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PluginAvailability {
+    /// A build is started: its engines use it.
+    InUse,
+    /// Builds are here and none may be started (`message` says why).
+    Refused,
+    /// The pinned build should be next to the app and is not (`message` says which file).
+    Missing,
+    /// Nothing of it is here: it needs installing.
+    NotInstalled,
+}
+
+impl From<&choice::Availability> for PluginAvailability {
+    fn from(availability: &choice::Availability) -> Self {
+        match availability {
+            choice::Availability::InUse(_) => Self::InUse,
+            choice::Availability::Refused(_) => Self::Refused,
+            choice::Availability::Missing(_) => Self::Missing,
+            choice::Availability::NotInstalled => Self::NotInstalled,
+        }
     }
 }
 
@@ -156,6 +288,10 @@ pub struct PluginItem {
     pub name: String,
     /// Every engine anything here says it serves.
     pub engines: Vec<String>,
+    /// What its engines get: the core's one answer.
+    pub availability: PluginAvailability,
+    /// Its install, wherever it was started from.
+    pub install: PluginInstall,
     /// The build started for its engines, if any.
     pub in_use: Option<PluginInUse>,
     /// The builds on this machine that are not started, newest first.
@@ -311,15 +447,15 @@ pub async fn plugin_restart(
     Ok(PluginRestart::Restarted)
 }
 
-/// How far an install's download is. Sent a few times a second at most.
+/// A plugin's install changed: it started, more of it arrived (a few times a second at most),
+/// it failed or was stopped, or it ended (idle again; the overview has changed then). Every
+/// view that shows the plugin reads it, wherever the install was started (SDB-373).
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginInstallProgress {
-    /// The id the page gave `pluginsInstall`.
-    pub install: u32,
-    pub received: f64,
-    /// The archive's size, from the catalogue.
-    pub total: f64,
+pub struct PluginInstallChanged {
+    /// The plugin's name.
+    pub name: String,
+    pub install: PluginInstall,
 }
 
 /// A catalogue was accepted without the page asking (where the app checks for its own
@@ -358,17 +494,33 @@ pub(crate) async fn sessions_by_engine(state: &AppState) -> HashMap<String, u32>
     counts
 }
 
+/// Every plugin of ours as this machine has it: the one place the adapter asks the core.
+fn plugin_states(
+    store: &PluginStore,
+    catalogue: Option<&spelaion_core::plugins::catalogue::Catalogue>,
+) -> Vec<PluginState> {
+    choice::states(
+        Pins::shipped(),
+        spelaion_core::plugins::shipped_folder().as_deref(),
+        Some(store),
+        catalogue,
+        &AppBuild::this(),
+    )
+}
+
+/// Tells every view that `name`'s install is now what `PluginOps` holds.
+fn install_changed(app: &AppHandle, ops: &PluginOps, name: &str) {
+    let _ = PluginInstallChanged {
+        name: name.to_string(),
+        install: ops.of(name),
+    }
+    .emit(app);
+}
+
 pub(crate) async fn overview(state: &AppState) -> PluginsOverview {
     let store = store_of(state);
     let catalogue = store.catalogue();
-    let shipped = spelaion_core::plugins::shipped_folder();
-    let states = choice::states(
-        Pins::shipped(),
-        shipped.as_deref(),
-        Some(&store),
-        catalogue.as_ref(),
-        &AppBuild::this(),
-    );
+    let states = plugin_states(&store, catalogue.as_ref());
     let installed = store.installed();
     let sessions = sessions_by_engine(state).await;
     PluginsOverview {
@@ -394,7 +546,7 @@ pub(crate) async fn overview(state: &AppState) -> PluginsOverview {
                     .filter(|build| Some(build.version.as_str()) != pinned)
                     .map(|build| build.version.clone())
                     .collect();
-                item(plugin, versions, &sessions)
+                item(plugin, versions, &sessions, state.plugins.of(&plugin.name))
             })
             .collect(),
     }
@@ -404,6 +556,7 @@ fn item(
     state: &PluginState,
     installed: Vec<String>,
     sessions: &HashMap<String, u32>,
+    install: PluginInstall,
 ) -> PluginItem {
     let engines: BTreeSet<String> = state
         .chosen
@@ -421,6 +574,8 @@ fn item(
     PluginItem {
         name: state.name.clone(),
         engines: engines.into_iter().collect(),
+        availability: (&state.availability()).into(),
+        install,
         in_use: state.chosen.as_ref().map(|build| PluginInUse {
             version: build.version.clone(),
             source: build.source.into(),
@@ -514,7 +669,18 @@ pub async fn plugins_install(
     install: u32,
     name: String,
 ) -> CmdResult<PluginsOverview> {
-    let stop = state.plugins.start(install);
+    // What the download will fetch, from the catalogue's entry for what it offers.
+    let total = {
+        let store = store_of(&state);
+        let catalogue = store.catalogue();
+        plugin_states(&store, catalogue.as_ref())
+            .into_iter()
+            .find(|plugin| plugin.name == name)
+            .and_then(|plugin| plugin.offered)
+            .map_or(0, |offered| offered.archive_size)
+    };
+    let stop = state.plugins.begin(&name, install, total);
+    install_changed(&app, &state.plugins, &name);
     let work = async {
         let transport = HttpsTransport::new().map_err(|error| error.0)?;
         let _changing = state.plugins.changing.lock().await;
@@ -522,7 +688,7 @@ pub async fn plugins_install(
         let catalogue = store
             .catalogue()
             .ok_or_else(|| fetch::FetchError::NotOffered(name.clone()).to_string())?;
-        let report = progress_reporter(app.clone(), install, &store, &catalogue, &name);
+        let report = progress_reporter(app.clone(), name.clone(), install);
         let transport = Counting {
             inner: transport,
             report,
@@ -538,7 +704,8 @@ pub async fn plugins_install(
         result = work => result,
         _ = stop.notified() => Err(format!("installing {name} was stopped")),
     };
-    state.plugins.end(install);
+    state.plugins.end(&name, install, &result);
+    install_changed(&app, &state.plugins, &name);
     result?;
     Ok(overview(&state).await)
 }
@@ -555,6 +722,7 @@ pub fn plugins_cancel_install(state: State<'_, AppState>, install: u32) {
 /// the one kept). The engines are swapped.
 #[command]
 pub async fn plugins_install_file(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
 ) -> CmdResult<PluginsOverview> {
@@ -593,7 +761,26 @@ pub async fn plugins_install_file(
             .map_err(|error| error.to_string())?;
     }
     swap_engines(&state);
+    forget_failures(&app, &state.plugins);
     Ok(overview(&state).await)
+}
+
+/// What is here changed: installs that failed before no longer say anything about it.
+fn forget_failures(app: &AppHandle, ops: &PluginOps) {
+    let failed: Vec<String> = ops
+        .installs
+        .lock()
+        .expect("lock poisoned")
+        .iter()
+        .filter_map(|(name, install)| match install {
+            Install::Failed { .. } => Some(name.clone()),
+            Install::Downloading { .. } => None,
+        })
+        .collect();
+    ops.forget_failures();
+    for name in failed {
+        install_changed(app, ops, &name);
+    }
 }
 
 /// Removes the build `version` of the plugin `name` from the user's personal folder (one the
@@ -602,6 +789,7 @@ pub async fn plugins_install_file(
 /// swapped, so the next connection starts whatever build is left.
 #[command]
 pub async fn plugins_remove(
+    app: AppHandle,
     state: State<'_, AppState>,
     name: String,
     version: String,
@@ -620,17 +808,12 @@ pub async fn plugins_remove(
     if !confirmed && spelaion_core::plugins::is_running(&build.program).await {
         let sessions = sessions_by_engine(&state).await;
         let catalogue = store.catalogue();
-        let states = choice::states(
-            Pins::shipped(),
-            spelaion_core::plugins::shipped_folder().as_deref(),
-            Some(&store),
-            catalogue.as_ref(),
-            &AppBuild::this(),
-        );
-        let open_sessions = states
+        let open_sessions = plugin_states(&store, catalogue.as_ref())
             .iter()
             .find(|plugin| plugin.name == name)
-            .map(|plugin| item(plugin, Vec::new(), &sessions).open_sessions)
+            .map(|plugin| {
+                item(plugin, Vec::new(), &sessions, state.plugins.of(&name)).open_sessions
+            })
             .unwrap_or(0);
         return Ok(PluginRemoval::NeedsConfirmation { open_sessions });
     }
@@ -639,6 +822,7 @@ pub async fn plugins_remove(
         .await
         .map_err(|error| format!("{name} {version} could not be removed: {error}"))?;
     swap_engines(&state);
+    forget_failures(&app, &state.plugins);
     Ok(PluginRemoval::Removed {
         overview: overview(&state).await,
     })
@@ -654,34 +838,12 @@ fn version_numbers(text: &str) -> Option<(u32, u32, u32)> {
 /// What sends an install's progress: the bytes received so far.
 type Report = Arc<dyn Fn(u64) + Send + Sync>;
 
-/// Sends `PluginInstallProgress` for `install`, against the archive size the catalogue gives
-/// for what it offers of `name`.
-fn progress_reporter(
-    app: AppHandle,
-    install: u32,
-    store: &PluginStore,
-    catalogue: &spelaion_core::plugins::catalogue::Catalogue,
-    name: &str,
-) -> Report {
-    let total = choice::states(
-        &Pins::none(),
-        None,
-        Some(store),
-        Some(catalogue),
-        &AppBuild::this(),
-    )
-    .into_iter()
-    .find(|state| state.name == name)
-    .and_then(|state| state.offered)
-    .map(|offered| offered.archive_size as f64)
-    .unwrap_or(0.0);
+/// Notes how much of the install `install` of `name` has arrived, and tells every view.
+fn progress_reporter(app: AppHandle, name: String, install: u32) -> Report {
     Arc::new(move |received| {
-        let _ = PluginInstallProgress {
-            install,
-            received: received as f64,
-            total,
-        }
-        .emit(&app);
+        let state = app.state::<AppState>();
+        state.plugins.progress(&name, install, received);
+        install_changed(&app, &state.plugins, &name);
     })
 }
 
@@ -739,5 +901,87 @@ impl Body for CountingBody {
             None => {}
         }
         Ok(chunk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DUCKDB: &str = "spelaiondb-plugin-duckdb";
+
+    fn downloading(install: u32, received: f64, total: f64) -> PluginInstall {
+        PluginInstall::Downloading {
+            install,
+            received,
+            total,
+        }
+    }
+
+    #[test]
+    fn an_install_downloads_then_is_idle_or_failed_with_why() {
+        let ops = PluginOps::default();
+        assert_eq!(ops.of(DUCKDB), PluginInstall::Idle);
+        ops.begin(DUCKDB, 1, 1000);
+        assert_eq!(ops.of(DUCKDB), downloading(1, 0.0, 1000.0));
+        ops.progress(DUCKDB, 1, 400);
+        assert_eq!(ops.of(DUCKDB), downloading(1, 400.0, 1000.0));
+        // Another plugin is not touched.
+        assert_eq!(ops.of("spelaiondb-plugin-mysql"), PluginInstall::Idle);
+        ops.end(DUCKDB, 1, &Ok(()));
+        assert_eq!(ops.of(DUCKDB), PluginInstall::Idle);
+
+        ops.begin(DUCKDB, 2, 1000);
+        ops.end(DUCKDB, 2, &Err("the archive's SHA-256 is wrong".into()));
+        assert_eq!(
+            ops.of(DUCKDB),
+            PluginInstall::Failed {
+                why: "the archive's SHA-256 is wrong".into()
+            }
+        );
+        // Progress of an install that ended changes nothing.
+        ops.progress(DUCKDB, 2, 999);
+        assert!(matches!(ops.of(DUCKDB), PluginInstall::Failed { .. }));
+        // The next install starts clean.
+        ops.begin(DUCKDB, 3, 1000);
+        assert_eq!(ops.of(DUCKDB), downloading(3, 0.0, 1000.0));
+    }
+
+    #[test]
+    fn a_later_install_is_never_overwritten_by_an_earlier_one_ending() {
+        let ops = PluginOps::default();
+        ops.begin(DUCKDB, 1, 10);
+        ops.begin(DUCKDB, 2, 10);
+        ops.progress(DUCKDB, 1, 9);
+        assert_eq!(ops.of(DUCKDB), downloading(2, 0.0, 10.0));
+        ops.end(DUCKDB, 1, &Err("stopped".into()));
+        assert_eq!(ops.of(DUCKDB), downloading(2, 0.0, 10.0));
+        ops.end(DUCKDB, 1, &Ok(()));
+        assert_eq!(ops.of(DUCKDB), downloading(2, 0.0, 10.0));
+    }
+
+    #[tokio::test]
+    async fn stopping_wakes_only_that_install_and_failures_are_forgotten_once_things_change() {
+        let ops = PluginOps::default();
+        let stop = ops.begin(DUCKDB, 7, 10);
+        let other = ops.begin("spelaiondb-plugin-mysql", 8, 10);
+        ops.stop(7);
+        tokio::time::timeout(std::time::Duration::from_secs(5), stop.notified())
+            .await
+            .expect("the stopped install is woken");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), other.notified())
+                .await
+                .is_err(),
+            "another install was stopped"
+        );
+        ops.end(DUCKDB, 7, &Err("installing it was stopped".into()));
+        ops.forget_failures();
+        assert_eq!(ops.of(DUCKDB), PluginInstall::Idle);
+        assert_eq!(
+            ops.of("spelaiondb-plugin-mysql"),
+            downloading(8, 0.0, 10.0),
+            "a download running is not forgotten"
+        );
     }
 }

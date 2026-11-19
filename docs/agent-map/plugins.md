@@ -21,7 +21,10 @@
     read and written on threads of their own with blocking calls, as the SDK's are (never
     `tokio::spawn` or tokio's own pipes there: the runtime that connected first may end before
     the others, and each read would be a trip through the runtime's blocking pool); `PluginDriver`
-    and its connection are the `Driver` and `Connection` the core already uses. A plugin that
+    and its connection are the `Driver` and `Connection` the core already uses. Its process has
+    one state, `Plugin::state()` (`ProcessState`: not started, starting, running, stopping, dead
+    with why), changed only by `Plugin::process` and `Plugin::stop`; a process that dies on its
+    own reads as dead at once (`tests/process_state.rs`). A plugin that
     stops loses its sessions (`is_closed`, ADR-028) and nothing is re-run. Stopping one
     (`Plugin::stop`, or the last of it dropped) closes its input and kills it only if it has
     not ended after `STOP_GRACE` (5 s): a plugin killed at once could leave a file half written. The password goes
@@ -62,7 +65,10 @@
   this app is not too old for and that was not withdrawn; when builds are here and none may be
   started, its engines say why and do not fall back; when the pinned build's program is not
   next to the app, an engine served only by its plugin says which file is missing (one whose
-  driver is compiled in is still served by it). The app and `spelaiondb mcp` take their
+  driver is compiled in is still served by it). `PluginState::availability` is the one answer
+  of what its engines get (in use, refused, missing, not installed: a build in use wins, then
+  the newest refused, then the missing pin), and `message` is written from it. The app and
+  `spelaiondb mcp` take their
   engines from `Engines::builtin_with(store)`; neither downloads. The installers carry the
   pinned builds as their release archives, never the programs (ADR-057: a signed macOS app and
   an AppImage change the programs inside): `builtin_with` first installs into the store each

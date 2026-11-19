@@ -4,8 +4,11 @@
 // the core's, through the commands of `src-tauri/src/plugins.rs`.
 
 import { create } from "zustand";
-import { call, commands, events, type PluginItem, type PluginsOverview } from "./api";
+import { call, commands, events, type PluginsOverview } from "./api";
+import type { PluginInstall } from "./bindings";
 import { useApp } from "./store";
+
+export { byteSize, installable, installText, needsInstalling, pluginNeeded } from "./pluginStatus";
 
 interface PluginsState {
   /** The last overview the core gave; null until it is first read. */
@@ -14,6 +17,8 @@ interface PluginsState {
   load(): Promise<void>;
   /** What a command answered with. */
   set(overview: PluginsOverview): void;
+  /** A plugin's install, as the adapter holds it (`pluginInstallChanged`). */
+  setInstall(name: string, install: PluginInstall): void;
 }
 
 export const usePlugins = create<PluginsState>((set) => ({
@@ -26,25 +31,36 @@ export const usePlugins = create<PluginsState>((set) => ({
     }
   },
   set: (overview) => set({ overview }),
+  setInstall: (name, install) =>
+    set((state) =>
+      state.overview
+        ? {
+            overview: {
+              ...state.overview,
+              plugins: state.overview.plugins.map((plugin) => (plugin.name === name ? { ...plugin, install } : plugin)),
+            },
+          }
+        : state,
+    ),
 }));
 
 let listening = false;
 
-/** Reads the overview once, and again whenever the core accepts a catalogue on its own. */
+/**
+ * Reads the overview once, and again whenever the core accepts a catalogue on its own or an
+ * install ends; follows every install, wherever it was started, so each view shows it.
+ */
 export function watchPlugins() {
   if (listening) return;
   listening = true;
   void usePlugins.getState().load();
   void events.pluginsChanged.listen(() => void usePlugins.getState().load());
-}
-
-/**
- * The plugin of ours that serves `engine` when no build of it is started here: the engine
- * needs it installed. Null for an engine compiled into the app, or whose plugin runs.
- */
-export function pluginNeeded(overview: PluginsOverview | null, engine: string): PluginItem | null {
-  if (!overview) return null;
-  return overview.plugins.find((plugin) => plugin.inUse === null && plugin.engines.includes(engine)) ?? null;
+  void events.pluginInstallChanged.listen((event) => {
+    const { name, install } = event.payload;
+    usePlugins.getState().setInstall(name, install);
+    // Idle again: what is installed may have changed.
+    if (install.kind === "idle") void usePlugins.getState().load();
+  });
 }
 
 /** Opens Settings on the Plugins page, closing the "add connection" wizard if it is open. */
@@ -52,17 +68,4 @@ export function openPluginsPage() {
   const app = useApp.getState();
   app.setConnectionDialog(null);
   app.openSettings("plugins");
-}
-
-/** A size in bytes, for an archive to download. */
-export function byteSize(bytes: number, locale: string): string {
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const digits = unit === 0 || value >= 10 ? 0 : 1;
-  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(value)} ${units[unit]}`;
 }
