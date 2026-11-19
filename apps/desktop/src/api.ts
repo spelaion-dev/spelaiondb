@@ -94,6 +94,7 @@ import {
   type CellInputItem,
   type UpdateMethod,
   type UpdateStatus_Serialize,
+  type InstallStatus_Serialize,
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
   type FilterOpItem,
@@ -212,6 +213,7 @@ export type { McpInstallPlanItem, McpSettingsItem, ToolOutputItem };
 export type AuditEventItem = AuditEventItem_Serialize;
 export type { AuditSessionItem, AuditStatusItem };
 export type UpdateStatus = UpdateStatus_Serialize;
+export type InstallStatus = InstallStatus_Serialize;
 /** How this copy of the app gets a new version: only `inApp` may offer "Install and restart". */
 export type { UpdateMethod };
 /** What `connect` returns. */

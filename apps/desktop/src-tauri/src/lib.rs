@@ -1,6 +1,7 @@
 //! SpelaionDB desktop app: a thin Tauri adapter over `spelaion-core` (ADR-002). There is no
 //! database or security logic here: only translation between UI commands and the core.
 
+mod app_lifecycle;
 mod backup;
 mod clipboard_text;
 mod connection_import;
@@ -19,12 +20,12 @@ mod plans;
 mod plugins;
 mod startup;
 mod update;
+mod update_state;
 
 use spelaion_desktop_macros::command;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use futures_util::StreamExt;
 use spelaion_config::{
@@ -53,7 +54,8 @@ use spelaion_driver_api::NameFilter;
 struct AppState {
     user_dir: PathBuf,
     workspace: RwLock<Option<PathBuf>>,
-    workspace_version: AtomicU64,
+    /// The open folder's generation, and whether it is changing (SDB-377).
+    folder: app_lifecycle::Folder,
     config: RwLock<Config>,
     /// The engines the next connection uses. Swapped whole when the plugins change (ADR-055):
     /// a connection already open keeps the plugin process it has. Read with `engines()`.
@@ -77,11 +79,8 @@ struct AppState {
     /// Writes the open tabs to the local store on a deadline (ADR-036).
     tabs: TabKeeper,
     pending: Pending,
-    /// The app is quitting: the user confirmed, or there was nothing to ask (ADR-031).
-    quitting: AtomicBool,
-    /// Where the window's last close request stands: `CLOSE_IDLE`, `CLOSE_SENT` or
-    /// `CLOSE_ASKING` (`on_close_requested`).
-    close_request: AtomicU8,
+    /// Where quitting stands (ADR-031, SDB-377): one phase, changed only by `Quit`'s methods.
+    quit: app_lifecycle::Quit,
     tests: ConnectionTests,
     /// Streaming exports running, by the id the UI gave them (ADR-034).
     exports: std::sync::Mutex<HashMap<u32, Arc<JobCancel>>>,
@@ -221,13 +220,13 @@ impl AppState {
     }
 
     async fn reload(&self) {
-        let version = self.workspace_version.load(Ordering::Acquire);
+        let moment = self.folder.moment();
         let workspace = self.workspace.read().await.clone();
         let loaded = load(workspace.as_deref(), &self.user_dir);
         let _ = self.change_trust(|trust| trust.adopt(&loaded));
         let mut config = self.config.write().await;
         // A reload started in the previous folder must not overwrite the new one.
-        if version == self.workspace_version.load(Ordering::Acquire) {
+        if self.folder.still(moment) {
             *config = loaded;
         }
     }
@@ -647,15 +646,8 @@ async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResul
 
 #[command]
 async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
-    let version = state.workspace_version.load(Ordering::Acquire);
-    if !version.is_multiple_of(2)
-        || state
-            .workspace_version
-            .compare_exchange(version, version + 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-    {
-        return Err("the folder is already changing".into());
-    }
+    // Settled again when it is dropped, whatever happens below, a panic included (SDB-377).
+    let switch = state.folder.begin_switch().map_err(|e| e.to_string())?;
     let old_sessions = std::mem::take(&mut *state.sessions.lock().await);
     for session in old_sessions.into_values() {
         if let Ok(open) = Arc::try_unwrap(session.open) {
@@ -665,8 +657,8 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
     {
         let mut workspace = state.workspace.write().await;
         *workspace = Some(PathBuf::from(&path));
-        // Stay odd while switching, but invalidate reloads that saw the old path.
-        state.workspace_version.fetch_add(2, Ordering::AcqRel);
+        // Still changing, but reloads that saw the old path are stale.
+        switch.path_changed();
     }
     let _ = std::fs::create_dir_all(&state.user_dir);
     // App state in the personal folder: replaced whole (a crash never leaves half a path) and
@@ -680,7 +672,7 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
     // for the folder not to open.
     let _ = state.history.add_recent_folder(path.clone()).await;
     state.reload().await;
-    state.workspace_version.fetch_add(1, Ordering::Release);
+    drop(switch);
     state.info().await
 }
 
@@ -1934,10 +1926,9 @@ async fn connect(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectOutcome> {
-    let workspace_version = state.workspace_version.load(Ordering::Acquire);
-    if !workspace_version.is_multiple_of(2) {
+    let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
-    }
+    };
     let id = parse_id(&connection);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let (resolved, history_workspace, definition) = {
@@ -2029,7 +2020,7 @@ async fn connect(
             .await;
     }
     let mut sessions = state.sessions.lock().await;
-    if workspace_version != state.workspace_version.load(Ordering::Acquire) {
+    if !state.folder.still(folder) {
         drop(sessions);
         open.close().await;
         return Err("the folder changed while connecting; select a connection again".into());
@@ -2074,10 +2065,9 @@ async fn connect_from_session(
     if source == session {
         return Err("the source and target sessions must differ".into());
     }
-    let workspace_version = state.workspace_version.load(Ordering::Acquire);
-    if !workspace_version.is_multiple_of(2) {
+    let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
-    }
+    };
     let (source_open, typed, history_workspace, opened) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -2152,7 +2142,7 @@ async fn connect_from_session(
             .await;
     }
     let mut sessions = state.sessions.lock().await;
-    if workspace_version != state.workspace_version.load(Ordering::Acquire)
+    if !state.folder.still(folder)
         || !sessions
             .get(&source)
             .is_some_and(|s| Arc::ptr_eq(&s.open, &source_open))
@@ -2391,30 +2381,23 @@ async fn sessions_to_confirm(
 /// committed, applied or saved; the servers roll back open transactions.
 #[command]
 async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
-    state.quitting.store(true, Ordering::SeqCst);
+    state.quit.quit();
     app.exit(0);
     Ok(())
 }
-
-/// Nobody asked to close the window, or the UI answered the last request by going back.
-const CLOSE_IDLE: u8 = 0;
-/// `QuitRequested` was sent and the UI has not said it got it.
-const CLOSE_SENT: u8 = 1;
-/// The UI got the request and is checking its tabs or asking the user.
-const CLOSE_ASKING: u8 = 2;
 
 /// The UI got `QuitRequested` and is deciding: a later close request asks it again instead of
 /// quitting.
 #[command]
 async fn quit_asking(state: State<'_, AppState>) -> CmdResult<()> {
-    state.close_request.store(CLOSE_ASKING, Ordering::SeqCst);
+    state.quit.asking();
     Ok(())
 }
 
 /// The user went back from the quit question: the next close request asks again.
 #[command]
 async fn quit_cancelled(state: State<'_, AppState>) -> CmdResult<()> {
-    state.close_request.store(CLOSE_IDLE, Ordering::SeqCst);
+    state.quit.cancelled();
     Ok(())
 }
 
@@ -2447,7 +2430,7 @@ fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> 
 /// UI never said it got it (it is frozen), the next close request quits.
 fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     let state = window.state::<AppState>();
-    if state.quitting.load(Ordering::SeqCst) {
+    if state.quit.phase() == app_lifecycle::QuitPhase::Quitting {
         return;
     }
     // A command holding the sessions means there are some: the UI decides.
@@ -2456,9 +2439,9 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
         .try_lock()
         .map(|sessions| sessions.is_empty())
         .unwrap_or(false);
-    if no_sessions || state.close_request.swap(CLOSE_SENT, Ordering::SeqCst) == CLOSE_SENT {
-        state.quitting.store(true, Ordering::SeqCst);
-        return;
+    match state.quit.close_requested(no_sessions) {
+        app_lifecycle::CloseDecision::Close => return,
+        app_lifecycle::CloseDecision::AskTheUi => {}
     }
     api.prevent_close();
     let _ = QuitRequested {}.emit(window.app_handle());
@@ -6402,6 +6385,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             notify_run_finished,
             update::update_check,
             update::update_install,
+            update::update_status,
             update::update_open_releases_page,
             plugins::plugins_overview,
             diagnostics::diagnostic_info,
@@ -6652,7 +6636,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             QuitRequested,
             plugins::PluginInstallChanged,
             plugins::PluginsChanged,
-            launch::LaunchRequested
+            launch::LaunchRequested,
+            update_state::UpdateChanged
         ])
 }
 
@@ -6886,7 +6871,7 @@ pub fn run() {
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
-        workspace_version: AtomicU64::new(0),
+        folder: app_lifecycle::Folder::default(),
         config: RwLock::new(config),
         engines: std::sync::RwLock::new(engines),
         plugins: plugins::PluginOps::default(),
@@ -6901,8 +6886,7 @@ pub fn run() {
         history,
         tabs,
         pending: Pending::default(),
-        quitting: AtomicBool::new(false),
-        close_request: AtomicU8::new(CLOSE_IDLE),
+        quit: app_lifecycle::Quit::default(),
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
         loads: std::sync::Mutex::new(HashMap::new()),

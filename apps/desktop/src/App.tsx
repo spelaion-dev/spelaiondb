@@ -31,7 +31,8 @@ import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./c
 import { activeContext, isCommandId, runCommand } from "./commands";
 import { commands, events } from "./api";
 import { usePreferences } from "./preferences";
-import { manualUpdateKey, useUpdate } from "./update";
+import { isInstalling, manualUpdateKey, useUpdate } from "./update";
+import { UpdateInstallButton, UpdateProblem } from "./components/UpdateInstall";
 import { useApp, useDialogs } from "./store";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
@@ -294,9 +295,7 @@ function UpdateNotice() {
   const { t } = useTranslation("app");
   const status = useUpdate((s) => s.status);
   const dismissed = useUpdate((s) => s.dismissed);
-  const installing = useUpdate((s) => s.installing);
-  const error = useUpdate((s) => s.error);
-  const install = useUpdate((s) => s.install);
+  const installing = isInstalling(status);
   const dismiss = useUpdate((s) => s.dismiss);
   const showNotes = useUpdate((s) => s.showNotes);
   const openReleasesPage = useUpdate((s) => s.openReleasesPage);
@@ -309,15 +308,13 @@ function UpdateNotice() {
         {t("update.available", { version: status.version, current: status.currentVersion })}
         {manual && ` ${t(`update.${manual}`)}`}
       </span>
-      {error && <span className="error">{error}</span>}
+      <UpdateProblem namespace="app" group="update" className="error" />
       <div className="banner-actions">
         <button disabled={installing} onClick={showNotes}>{t("update.notesAction")}</button>
         {manual ? (
           <button className="primary" onClick={() => void openReleasesPage()}>{t("update.openReleases")}</button>
         ) : (
-          <button className="primary" disabled={installing} onClick={() => void install()}>
-            {installing ? t("update.installing") : t("update.install")}
-          </button>
+          <UpdateInstallButton namespace="app" group="update" />
         )}
         <button disabled={installing} onClick={dismiss}>
           {t("update.later")}
