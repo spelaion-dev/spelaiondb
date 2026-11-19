@@ -248,12 +248,10 @@ async fn a_cancel_at_and_during_the_start_of_a_long_read_stops_it() {
 /// reach the driver before the statement is numbered and be lost two ways (SDB-428): written
 /// before the statement (the run sends it again once the statement is sent), or delivered
 /// first by a plugin that serves each request in a task of its own (the plugin SDK now hands
-/// a session's execute and cancel to the driver in the order it read them). Through the
-/// pinned MySQL plugin 0.1.5 it still fails about one run in seven; a MySQL plugin built on
-/// this SDK passes 100 runs of 100 (either fix alone: 84 and 86). Un-ignore once the pinned
-/// MySQL plugin is built on that SDK.
+/// a session's execute and cancel to the driver in the order it read them, since plugin SDK
+/// 0.3.3; the MySQL plugin is built on it from 0.1.6). Both fixes are needed: either alone
+/// passed 84 and 86 runs of 100.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "SDB-428: needs the MySQL plugin rebuilt on the plugin SDK that orders execute and cancel"]
 async fn a_cancel_right_after_run_stops_a_long_read() {
     cancel_after(&[0]).await;
 }
