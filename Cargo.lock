@@ -5680,7 +5680,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-cli"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5697,7 +5697,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-config"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "aes 0.8.4",
  "apple-native-keyring-store",
@@ -5725,7 +5725,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -5762,7 +5762,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-desktop"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5790,7 +5790,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-desktop-macros"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5799,7 +5799,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-dialect"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde_json",
  "spelaion-driver-api",
@@ -5807,7 +5807,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-api"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5820,7 +5820,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-sqlite"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5836,7 +5836,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-https"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "async-trait",
  "rcgen",
@@ -5849,7 +5849,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-mcp"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -5868,7 +5868,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-fetch"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "spelaion-core",
@@ -5877,7 +5877,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-host"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5893,7 +5893,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-protocol"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "serde",
@@ -5904,7 +5904,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-sdk"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5918,7 +5918,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-sqlite-schema"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "spelaion-dialect",
@@ -5928,7 +5928,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-ssh"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -5946,7 +5946,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-store"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
@@ -5954,7 +5954,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-test-plugin"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "async-stream",
