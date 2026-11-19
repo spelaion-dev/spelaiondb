@@ -20,7 +20,8 @@ pub use crate::script::{
 };
 use crate::script::{Pause, Resume};
 use crate::transaction::{
-    self, StatementKind, TransactionError, TransactionOutcome, TransactionState, TransactionStatus,
+    self, StatementKind, TransactionError, TransactionLifecycle, TransactionOutcome,
+    TransactionState, TransactionStatus,
 };
 
 /// What happens while a script runs, in order. `index` is the position of the statement
@@ -205,7 +206,7 @@ pub struct Session {
     /// switch are refused as busy while there is one; the core's own short reads (the editor's
     /// schema, a catalog) only make them wait (SDB-277).
     user_runs: Arc<AtomicUsize>,
-    transaction: Arc<tokio::sync::watch::Sender<TransactionStatus>>,
+    transaction: Arc<tokio::sync::watch::Sender<TransactionLifecycle>>,
     /// The run that waits for an answer after an error ([`OnError::Ask`]), if any.
     pause: Arc<Pause>,
     /// How many times the user asked to cancel: a run that sees it change stops.
@@ -339,7 +340,9 @@ impl Session {
             options: ExecOptions::default(),
             control: Arc::new(tokio::sync::Mutex::new(())),
             user_runs: Arc::new(AtomicUsize::new(0)),
-            transaction: Arc::new(tokio::sync::watch::Sender::new(TransactionStatus::default())),
+            transaction: Arc::new(tokio::sync::watch::Sender::new(
+                TransactionLifecycle::NotFollowed,
+            )),
             pause: Arc::new(Pause::default()),
             cancels: Arc::new(AtomicU64::new(0)),
             cancel_gate: CancelGate::default(),
@@ -580,16 +583,20 @@ impl Session {
         self.pause.resume(Resume::Closed)
     }
 
-    /// What the session shows about its transaction (ADR-031). Changes are sent to every
-    /// receiver.
-    pub fn transaction(&self) -> tokio::sync::watch::Receiver<TransactionStatus> {
+    /// The session's transaction (ADR-031, ADR-060). Changes are sent to every receiver.
+    pub fn transaction(&self) -> tokio::sync::watch::Receiver<TransactionLifecycle> {
         self.transaction.subscribe()
     }
 
-    /// The last [`TransactionStatus`] read; also after the session was lost, to say whether it
-    /// had a transaction open.
-    pub fn transaction_status(&self) -> TransactionStatus {
+    /// The last [`TransactionLifecycle`] read; also after the session was lost, to say whether
+    /// it had a transaction open.
+    pub fn transaction_lifecycle(&self) -> TransactionLifecycle {
         *self.transaction.borrow()
+    }
+
+    /// The last state read, as a [`TransactionStatus`].
+    pub fn transaction_status(&self) -> TransactionStatus {
+        self.transaction_lifecycle().into()
     }
 
     /// Makes this an editor session that follows its transaction, under its connection type's
@@ -599,33 +606,43 @@ impl Session {
     pub async fn follow_transactions(&self, safeguards: &Safeguards) -> TransactionStatus {
         let _running = self.control.lock().await;
         self.cancel_gate.settled().await;
-        let status = match self.connection.transaction_state().await {
-            Ok(state) => transaction::initial_status(safeguards, state),
-            Err(_) => TransactionStatus::default(),
+        let lifecycle = match self.connection.transaction_state().await {
+            Ok(state) => TransactionLifecycle::follow(safeguards, state),
+            Err(_) => TransactionLifecycle::NotFollowed,
         };
-        self.transaction.send_replace(status);
-        status
+        self.transaction.send_replace(lifecycle);
+        lifecycle.into()
     }
 
     /// Whether closing the session (closing its tab, switching its connection, quitting) must
-    /// ask first: a transaction with work in it is open. Asks the driver once more unless a
+    /// ask first, by [`TransactionLifecycle::closing_asks`]. Asks the driver once more unless a
     /// script is running, when the last state read decides.
     pub async fn close_needs_confirmation(&self) -> bool {
-        let status = self.transaction_status();
-        if !status.supported {
+        if !self.transaction_lifecycle().is_followed() {
             return false;
         }
         let Ok(_running) = self.control.try_lock() else {
-            return status.is_open();
+            return self.closing_asks_from_last_state();
         };
         match self.connection.transaction_state().await {
             Ok(state) => {
                 self.transaction.send_modify(|s| s.observe(state));
-                state == TransactionState::Open
+                self.transaction_lifecycle().closing_asks()
             }
             // A session that cannot answer any more has nothing left to commit.
             Err(_) => false,
         }
+    }
+
+    /// [`Session::close_needs_confirmation`] from the last state read, with no round trip (the
+    /// quit question, which a server that does not answer must not hold). A lost session has
+    /// nothing left to commit: its server rolled the transaction back (ADR-028).
+    pub fn closing_asks_from_last_state(&self) -> bool {
+        let alive = match *self.health().borrow() {
+            SessionHealth::Alive => true,
+            SessionHealth::Lost { .. } | SessionHealth::IdleClosed { .. } => false,
+        };
+        alive && self.transaction_lifecycle().closing_asks()
     }
 
     /// Turns auto-commit on or off. Turning it on is refused while a transaction is open: the
@@ -634,7 +651,7 @@ impl Session {
     pub async fn set_auto_commit(&self, on: bool) -> Result<TransactionStatus, TransactionError> {
         let _running = self.transaction_control().await?;
         self.cancel_gate.settled().await;
-        if !self.transaction_status().supported {
+        if !self.transaction_lifecycle().is_followed() {
             return Err(TransactionError::Unsupported);
         }
         let state = self
@@ -648,8 +665,7 @@ impl Session {
         }
         self.transaction.send_modify(|s| {
             s.observe(state);
-            s.auto_commit = on;
-            s.smart_switched = false;
+            s.set_auto_commit(on);
         });
         Ok(self.transaction_status())
     }
@@ -687,7 +703,7 @@ impl Session {
         let _running = self.transaction_control().await?;
         // A late cancel must not stop the COMMIT or ROLLBACK (SDB-266).
         self.cancel_gate.settled().await;
-        if !self.transaction_status().supported {
+        if !self.transaction_lifecycle().is_followed() {
             return Err(TransactionError::Unsupported);
         }
         let failed = |e: DriverError| TransactionError::Failed(e.to_string());
@@ -891,7 +907,7 @@ impl Session {
             // nothing is sent before it has returned (SDB-266).
             cancel_gate.settled().await;
             let cancelled = || cancels.load(Ordering::SeqCst) != cancels_at_start;
-            let follow = transaction.borrow().supported;
+            let follow = transaction.borrow().is_followed();
             let mut on_error = run_options.on_error;
             let mut summary = ScriptSummary { statements: spans.len(), ..Default::default() };
             let total = spans.len();
@@ -918,19 +934,18 @@ impl Session {
                 if follow {
                     let mut status = *transaction.borrow();
                     if managed
-                        && status.auto_commit
-                        && status.smart_commit
+                        && status.auto_commit()
+                        && status.smart_commit()
                         && kind == StatementKind::Other
                         && transaction::is_write(engine, policy_text)
+                        && status.switch_by_smart_commit()
                     {
-                        status.auto_commit = false;
-                        status.smart_switched = true;
                         transaction.send_replace(status);
                     }
                     if managed
-                        && !status.auto_commit
+                        && !status.auto_commit()
                         && kind == StatementKind::Other
-                        && status.state == Some(TransactionState::Idle)
+                        && status.state() == Some(TransactionState::Idle)
                     {
                         if let Err(e) = run_control(&*connection, transaction::begin_statement(engine), &options).await {
                             let mut error = StatementError::from_driver(e, &script, span);
@@ -943,8 +958,7 @@ impl Session {
                             yield CoreEvent::StatementFailed { index, error };
                             break;
                         }
-                        status.state = Some(TransactionState::Open);
-                        status.statements = 0;
+                        status.opened_by_core();
                         transaction.send_replace(status);
                     }
                     before = Some(status);
@@ -1199,7 +1213,7 @@ impl Session {
                     && let Ok(state) = connection.transaction_state().await
                 {
                     after = Some(state);
-                    let had_work = before.state == Some(TransactionState::Open) && before.statements > 0;
+                    let had_work = before.has_work();
                     let ended = state == TransactionState::Idle && kind != StatementKind::End;
                     // MySQL commits the open transaction when a new one begins: the state
                     // stays open, so only the statement tells.
@@ -1212,10 +1226,10 @@ impl Session {
                         status.observe(state);
                         if state == TransactionState::Open {
                             if restarted {
-                                status.statements = 0;
+                                status.restart_count();
                             }
                             if count_statement && !kind.is_control() {
-                                status.statements += 1;
+                                status.count_statement();
                             }
                         }
                     });
@@ -1652,5 +1666,32 @@ mod tests {
                 "{name}: {on:?}"
             );
         }
+    }
+
+    /// The quit question reads the last state, without a round trip: it asks about an open
+    /// transaction while the session is alive, and not once it is lost, when its server has
+    /// already rolled the transaction back (SDB-372). Before, a lost session stayed listed.
+    #[tokio::test]
+    async fn the_quit_question_leaves_out_a_lost_sessions_transaction() {
+        let driver = crate::open::test_driver(spelaion_config::Engine::Sqlite);
+        let session = session(
+            driver.as_ref(),
+            ConnectParams {
+                database: ":memory:".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(!session.closing_asks_from_last_state());
+        drain(session.run_script("begin; create table t (a int)")).await;
+        assert!(session.transaction_lifecycle().is_open());
+        assert!(session.closing_asks_from_last_state());
+        assert!(session.close_needs_confirmation().await);
+        session.mark_lost("the tunnel went down");
+        assert!(
+            session.transaction_lifecycle().is_open(),
+            "the last state read stays, to say a transaction was lost with it"
+        );
+        assert!(!session.closing_asks_from_last_state());
     }
 }
