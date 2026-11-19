@@ -35,7 +35,6 @@ use spelaion_core::plugins::pins::Pins;
 use spelaion_https::HttpsTransport;
 use tauri::{AppHandle, Manager, State};
 use tauri_specta::Event as _;
-use tokio::sync::Notify;
 
 use crate::{AppState, CmdResult};
 
@@ -60,10 +59,9 @@ pub(crate) struct PluginOps {
 
 /// A plugin's install that is not idle.
 enum Install {
-    /// Its archive is downloading. `install` is the id the page gave it, to stop it.
+    /// Its archive is downloading. `install` is its job's id (`jobs.rs`), to stop it.
     Downloading {
         install: u32,
-        stop: Arc<Notify>,
         received: u64,
         total: u64,
     },
@@ -73,19 +71,16 @@ enum Install {
 }
 
 impl PluginOps {
-    /// `name` starts downloading as the install `install`, of `total` bytes.
-    fn begin(&self, name: &str, install: u32, total: u64) -> Arc<Notify> {
-        let stop = Arc::new(Notify::new());
+    /// `name` starts downloading as the install job `install`, of `total` bytes.
+    fn begin(&self, name: &str, install: u32, total: u64) {
         self.installs.lock().expect("lock poisoned").insert(
             name.to_string(),
             Install::Downloading {
                 install,
-                stop: stop.clone(),
                 received: 0,
                 total,
             },
         );
-        stop
     }
 
     /// `received` bytes of the install `install` of `name` have arrived.
@@ -120,24 +115,6 @@ impl PluginOps {
             }
             Err(why) => {
                 installs.insert(name.to_string(), Install::Failed { why: why.clone() });
-            }
-        }
-    }
-
-    /// Stops the install `install`, whichever plugin it is for. It ends as failed ("stopped").
-    fn stop(&self, install: u32) {
-        let installs = self.installs.lock().expect("lock poisoned");
-        for entry in installs.values() {
-            match entry {
-                Install::Downloading {
-                    install: running,
-                    stop,
-                    ..
-                } if *running == install => {
-                    // Kept for the install if it is not waiting yet.
-                    stop.notify_one();
-                }
-                Install::Downloading { .. } | Install::Failed { .. } => {}
             }
         }
     }
@@ -180,7 +157,7 @@ pub enum PluginInstall {
     /// No install of it is running, and the last one did not fail.
     Idle,
     /// Its archive is downloading: bytes received of the total the catalogue gives (0 when it
-    /// gives none). `install` is the id to stop it with `pluginsCancelInstall`.
+    /// gives none). `install` is its job's id: `cancelJob(install, "pluginInstall")` stops it.
     #[serde(rename_all = "camelCase")]
     Downloading {
         install: u32,
@@ -659,14 +636,14 @@ pub(crate) fn refresh_in_background(app: AppHandle) {
 }
 
 /// Installs the newest build the accepted catalogue offers of the plugin `name`: an install or
-/// an update, on the user's click. `install` is an id the page chooses, for
-/// `pluginsCancelInstall` and the `PluginInstallProgress` events. The next connection of its
-/// engines starts the new build; connections already open keep theirs.
+/// an update, on the user's click. Its job's ticket goes to `job` at once (`cancel_job` stops
+/// it), and its progress to every view through `PluginInstallChanged`. The next connection of
+/// its engines starts the new build; connections already open keep theirs.
 #[command]
 pub async fn plugins_install(
     app: AppHandle,
     state: State<'_, AppState>,
-    install: u32,
+    job: tauri::ipc::Channel<crate::jobs::JobTicket>,
     name: String,
 ) -> CmdResult<PluginsOverview> {
     // What the download will fetch, from the catalogue's entry for what it offers.
@@ -679,7 +656,9 @@ pub async fn plugins_install(
             .and_then(|plugin| plugin.offered)
             .map_or(0, |offered| offered.archive_size)
     };
-    let stop = state.plugins.begin(&name, install, total);
+    let running = crate::jobs::start(&state, crate::jobs::JobKind::PluginInstall, &job);
+    let install = running.id();
+    state.plugins.begin(&name, install, total);
     install_changed(&app, &state.plugins, &name);
     let work = async {
         let transport = HttpsTransport::new().map_err(|error| error.0)?;
@@ -702,18 +681,13 @@ pub async fn plugins_install(
     // Stopping drops the download: the core leaves nothing of it behind.
     let result = tokio::select! {
         result = work => result,
-        _ = stop.notified() => Err(format!("installing {name} was stopped")),
+        () = running.cancel().cancelled() => Err(format!("installing {name} was stopped")),
     };
+    drop(running);
     state.plugins.end(&name, install, &result);
     install_changed(&app, &state.plugins, &name);
     result?;
     Ok(overview(&state).await)
-}
-
-/// Stops the install `install`, if it runs. Nothing of it is kept.
-#[command]
-pub fn plugins_cancel_install(state: State<'_, AppState>, install: u32) {
-    state.plugins.stop(install);
 }
 
 /// Installs a file the user picked in the app's file dialog: a plugin's archive (installed only
@@ -960,21 +934,11 @@ mod tests {
         assert_eq!(ops.of(DUCKDB), downloading(2, 0.0, 10.0));
     }
 
-    #[tokio::test]
-    async fn stopping_wakes_only_that_install_and_failures_are_forgotten_once_things_change() {
+    #[test]
+    fn failures_are_forgotten_once_things_change_and_a_download_is_not() {
         let ops = PluginOps::default();
-        let stop = ops.begin(DUCKDB, 7, 10);
-        let other = ops.begin("spelaiondb-plugin-mysql", 8, 10);
-        ops.stop(7);
-        tokio::time::timeout(std::time::Duration::from_secs(5), stop.notified())
-            .await
-            .expect("the stopped install is woken");
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), other.notified())
-                .await
-                .is_err(),
-            "another install was stopped"
-        );
+        ops.begin(DUCKDB, 7, 10);
+        ops.begin("spelaiondb-plugin-mysql", 8, 10);
         ops.end(DUCKDB, 7, &Err("installing it was stopped".into()));
         ops.forget_failures();
         assert_eq!(ops.of(DUCKDB), PluginInstall::Idle);

@@ -249,3 +249,208 @@ impl From<DataSearchSummary> for JobEnd<DataSearchSummary, DataSearchSummary> {
         }
     }
 }
+
+/// The jobs one program runs, each under an id the registry makes (SDB-369, ADR-060). Starting
+/// a job gives a [`JobHandle`]; the job is listed while its handle lives and gone when it is
+/// dropped, however its work ends (a panic too). A cancel names the kind of job it stops: an id
+/// of another kind is refused, so a Cancel never reaches a different job.
+///
+/// `K` is what the program calls its kinds of job (the desktop's export, import, backup…).
+pub struct JobRegistry<K> {
+    jobs: std::sync::Arc<std::sync::Mutex<Registered<K>>>,
+}
+
+struct Registered<K> {
+    /// The id the next job gets. Ids are never handed out twice while a job holds one.
+    next: u32,
+    running: std::collections::HashMap<u32, (K, std::sync::Arc<JobCancel>)>,
+}
+
+impl<K> Default for JobRegistry<K> {
+    fn default() -> Self {
+        Self {
+            jobs: std::sync::Arc::new(std::sync::Mutex::new(Registered {
+                next: 1,
+                running: std::collections::HashMap::new(),
+            })),
+        }
+    }
+}
+
+/// Why a cancel was refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CancelRefused<K: std::fmt::Debug> {
+    /// The id is a job of another kind.
+    #[error("job {id} is a {running:?}, not a {asked:?}: it was not cancelled")]
+    OtherKind { id: u32, asked: K, running: K },
+}
+
+impl<K: Copy + Eq + std::fmt::Debug> JobRegistry<K> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Starts a job of `kind`: a new id, never one a running job holds, and its cancel.
+    pub fn start(&self, kind: K) -> JobHandle<K> {
+        let cancel = std::sync::Arc::new(JobCancel::new());
+        let mut jobs = self.jobs.lock().expect("lock poisoned");
+        let id = loop {
+            let id = jobs.next;
+            jobs.next = jobs.next.wrapping_add(1).max(1);
+            if !jobs.running.contains_key(&id) {
+                break id;
+            }
+        };
+        jobs.running.insert(id, (kind, cancel.clone()));
+        JobHandle {
+            id,
+            kind,
+            cancel,
+            jobs: std::sync::Arc::downgrade(&self.jobs),
+        }
+    }
+
+    /// Cancels the job `id` if it is a `kind` still running. One that has ended is not an
+    /// error: there is nothing left to stop.
+    pub async fn cancel(&self, id: u32, kind: K) -> Result<(), CancelRefused<K>> {
+        let cancel = match self.jobs.lock().expect("lock poisoned").running.get(&id) {
+            None => return Ok(()),
+            Some((running, _)) if *running != kind => {
+                return Err(CancelRefused::OtherKind {
+                    id,
+                    asked: kind,
+                    running: *running,
+                });
+            }
+            Some((_, cancel)) => cancel.clone(),
+        };
+        cancel.cancel().await;
+        Ok(())
+    }
+
+    /// The kind of the job `id`, while it runs.
+    pub fn kind_of(&self, id: u32) -> Option<K> {
+        self.jobs
+            .lock()
+            .expect("lock poisoned")
+            .running
+            .get(&id)
+            .map(|(kind, _)| *kind)
+    }
+
+    /// How many jobs run now.
+    pub fn running(&self) -> usize {
+        self.jobs.lock().expect("lock poisoned").running.len()
+    }
+}
+
+/// A running job of a [`JobRegistry`]: its id, its kind and its cancel. Dropping it removes the
+/// job from the registry.
+pub struct JobHandle<K> {
+    id: u32,
+    kind: K,
+    cancel: std::sync::Arc<JobCancel>,
+    jobs: std::sync::Weak<std::sync::Mutex<Registered<K>>>,
+}
+
+impl<K: Copy> JobHandle<K> {
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub fn kind(&self) -> K {
+        self.kind
+    }
+
+    /// What stops the job: the core's jobs take it as they are.
+    pub fn cancel(&self) -> &std::sync::Arc<JobCancel> {
+        &self.cancel
+    }
+}
+
+impl<K> Drop for JobHandle<K> {
+    fn drop(&mut self) {
+        if let Some(jobs) = self.jobs.upgrade() {
+            // Never panics while it unwinds: a poisoned registry is still cleaned.
+            let mut jobs = jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            jobs.running.remove(&self.id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Kind {
+        Export,
+        Import,
+    }
+
+    #[test]
+    fn two_running_jobs_never_share_an_id() {
+        let registry = JobRegistry::new();
+        let handles: Vec<_> = (0..100).map(|_| registry.start(Kind::Export)).collect();
+        let mut ids: Vec<u32> = handles.iter().map(JobHandle::id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 100);
+        assert_eq!(registry.running(), 100);
+        drop(handles);
+        assert_eq!(registry.running(), 0);
+    }
+
+    #[test]
+    fn an_id_still_held_is_skipped_when_the_numbers_wrap() {
+        let registry = JobRegistry::new();
+        let held = registry.start(Kind::Export);
+        // As if every other number had been handed out since.
+        registry.jobs.lock().unwrap().next = held.id();
+        let next = registry.start(Kind::Import);
+        assert_ne!(next.id(), held.id());
+        registry.jobs.lock().unwrap().next = u32::MAX;
+        let last = registry.start(Kind::Import);
+        let wrapped = registry.start(Kind::Import);
+        assert_eq!(last.id(), u32::MAX);
+        assert_ne!(wrapped.id(), 0, "0 is never an id");
+        assert_ne!(wrapped.id(), held.id());
+    }
+
+    #[tokio::test]
+    async fn a_cancel_with_another_kinds_id_is_refused_and_stops_nothing() {
+        let registry = JobRegistry::new();
+        let export = registry.start(Kind::Export);
+        let refused = registry.cancel(export.id(), Kind::Import).await;
+        assert_eq!(
+            refused,
+            Err(CancelRefused::OtherKind {
+                id: export.id(),
+                asked: Kind::Import,
+                running: Kind::Export,
+            })
+        );
+        assert!(!export.cancel().is_cancelled());
+        registry.cancel(export.id(), Kind::Export).await.unwrap();
+        assert!(export.cancel().is_cancelled());
+        // A job that has ended: nothing to stop, and not an error.
+        let id = export.id();
+        drop(export);
+        assert_eq!(registry.cancel(id, Kind::Export).await, Ok(()));
+        assert_eq!(registry.kind_of(id), None);
+    }
+
+    #[tokio::test]
+    async fn a_job_that_panics_leaves_no_entry() {
+        let registry = std::sync::Arc::new(JobRegistry::new());
+        let job = registry.start(Kind::Import);
+        let id = job.id();
+        let task = tokio::spawn(async move {
+            let _job = job;
+            panic!("the command failed halfway");
+        });
+        assert!(task.await.is_err());
+        assert_eq!(registry.kind_of(id), None);
+        assert_eq!(registry.running(), 0);
+    }
+}

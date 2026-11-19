@@ -8,6 +8,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { call, commands, type CopySpecialItem, type UpdateSourceItem, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
+import { startJob, type Job } from "../jobs";
 import { readClipboardText } from "../clipboardText";
 import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, onPixelRatioChange, usePreferences } from "../preferences";
@@ -3521,11 +3522,10 @@ function FilterSubmenu(props: {
 }
 
 /** Ids of the "most frequent values" requests, apart from the column statistics' own. */
-let nextTopValuesId = 1_500_000_000;
 
 /** A column's most frequent values, as far as the dialog has asked for them. */
 type TopValuesState =
-  | { column: number; kind: "loading"; id: number }
+  | { column: number; kind: "loading"; job: Job }
   | { column: number; kind: "done"; values: { value: string | null; count: number | null }[]; sampled: boolean; sampleRows: number | null }
   | { column: number; kind: "masked" }
   | { column: number; kind: "failed"; message: string };
@@ -3548,9 +3548,9 @@ function CustomFilterDialog(props: {
   const apply = () => props.onApply(needsValue ? filter : { ...filter, value: "" });
   // Only the answer for the column on screen counts; leaving the dialog or the column stops
   // the count.
-  const running = useRef<number | null>(null);
+  const running = useRef<Job | null>(null);
   const stop = () => {
-    if (running.current !== null) void call(commands.cancelColumnStats(running.current)).catch(() => undefined);
+    running.current?.cancel();
     running.current = null;
   };
   useEffect(() => stop, []);
@@ -3561,19 +3561,19 @@ function CustomFilterDialog(props: {
     if (!source) return;
     stop();
     const column = filter.column;
-    const id = ++nextTopValuesId;
-    running.current = id;
-    setTop({ column, kind: "loading", id });
-    call(commands.columnTopValues(source.session, id, source.table, source.resultId, column))
+    const job = startJob();
+    running.current = job;
+    setTop({ column, kind: "loading", job });
+    call(commands.columnTopValues(source.session, job.channel, source.table, source.resultId, column))
       .then((outcome) => {
-        if (running.current !== id) return;
+        if (running.current !== job) return;
         running.current = null;
         if (outcome.kind === "done") setTop({ column, kind: "done", values: outcome.values, sampled: outcome.sampled, sampleRows: outcome.sampleRows });
         else if (outcome.kind === "masked") setTop({ column, kind: "masked" });
         else setTop(null);
       })
       .catch((e: unknown) => {
-        if (running.current !== id) return;
+        if (running.current !== job) return;
         running.current = null;
         setTop({ column, kind: "failed", message: e instanceof Error ? e.message : String(e) });
       });

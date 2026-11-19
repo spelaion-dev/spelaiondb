@@ -1,6 +1,6 @@
 // The Plugins page's commands (src-tauri/src/plugins.rs, ADR-055) take no address, key or
-// catalogue text: only a plugin's name, a version, an id, a confirmation, or the path of a file
-// the user picked. Read from the generated bindings, run by `npm run build` with `node --test`.
+// catalogue text: only a plugin's name, a version, a confirmation, the path of a file the user
+// picked, or the channel on which an install's job ticket comes back (SDB-369). Read from the generated bindings, run by `npm run build` with `node --test`.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -20,7 +20,7 @@ function commands() {
   return found;
 }
 
-const ALLOWED = new Set(["install", "name", "version", "confirmed", "path"]);
+const ALLOWED = new Set(["job", "name", "version", "confirmed", "path"]);
 
 test("the Plugins page's commands are all there", () => {
   const all = commands();
@@ -28,7 +28,8 @@ test("the Plugins page's commands are all there", () => {
     "pluginsOverview",
     "pluginsRefreshCatalogue",
     "pluginsInstall",
-    "pluginsCancelInstall",
+    // An install is stopped as any job is (SDB-369).
+    "cancelJob",
     "pluginsInstallFile",
     "pluginsRemove",
   ]) {

@@ -814,7 +814,7 @@ function ConnectionForm(props: {
     setTestError(null);
     try {
       const attempt = () =>
-        test.run((id, onStep) => call(commands.testConnection(request, typedPassword || null, editing ?? null, networkOnly, id, onStep)));
+        test.run((job, onStep) => call(commands.testConnection(request, typedPassword || null, editing ?? null, networkOnly, job, onStep)));
       let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {

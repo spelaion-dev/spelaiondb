@@ -411,3 +411,6 @@
   written once there, per job; the app answers with `JobOutcome::from_end`. A read run again in
   a session of its own enters and ends the engine's read-only transaction through
   `export_stream::read_only_transaction`. A new job adds its conversion, not new flags.
+  `JobRegistry` (SDB-369) lists a program's running jobs under ids it makes: `start(kind)` gives
+  a `JobHandle` whose drop removes the entry (a panic too), and `cancel(id, kind)` refuses an id
+  of another kind. The desktop names its kinds in `src-tauri/src/jobs.rs`.

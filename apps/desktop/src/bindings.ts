@@ -40,7 +40,7 @@ export const commands = {
 	planStatistics: (plan: number, kind: PlanStatKind, offset: number, limit: number) => typedError<PlanStatsPage_Serialize, string>(__TAURI_INVOKE("plan_statistics", { plan, kind, offset, limit })),
 	planRawWindow: (plan: number, offset: number) => typedError<RawWindow_Serialize, string>(__TAURI_INVOKE("plan_raw_window", { plan, offset })),
 	releasePlan: (plan: number) => __TAURI_INVOKE<void>("release_plan", { plan }),
-	exportPlan: (exportId: number, plan: number, view: PlanView, path: string, csv: boolean) => typedError<number, string>(__TAURI_INVOKE("export_plan", { exportId, plan, view, path, csv })),
+	exportPlan: (job: Channel<JobTicket>, plan: number, view: PlanView, path: string, csv: boolean) => typedError<number, string>(__TAURI_INVOKE("export_plan", { job, plan, view, path, csv })),
 	workspaceInfo: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("workspace_info")),
 	/**  Every AI client: its file, whether our server is there, and its manual configuration. */
 	mcpClients: () => typedError<McpClientsItem_Serialize, string>(__TAURI_INVOKE("mcp_clients")),
@@ -83,9 +83,12 @@ export const commands = {
 	 *  read-only connection and an unconfirmed plan that needs a confirmation, and loads the rows
 	 *  in transactions, reporting progress on `on_progress`.
 	 */
-	runImport: (source: string, importId: number, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<JobOutcome<ImportDoneItem, number | null>, string>(__TAURI_INVOKE("run_import", { source, importId, request, confirmed, onProgress })),
-	/**  Stops a running import: the batch it is in is rolled back; committed batches stay. */
-	cancelImport: (importId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_import", { importId })),
+	runImport: (source: string, job: Channel<JobTicket>, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<JobOutcome<ImportDoneItem, number | null>, string>(__TAURI_INVOKE("run_import", { source, job, request, confirmed, onProgress })),
+	/**
+	 *  Stops the running job `id`, which must be a `kind`: the ticket its command sent. A job that
+	 *  has ended is not an error; an id of another kind is refused and stops nothing.
+	 */
+	cancelJob: (id: number, kind: JobKind) => typedError<null, string>(__TAURI_INVOKE("cancel_job", { id, kind })),
 	backupPreferences: () => typedError<BackupPreferencesItem, string>(__TAURI_INVOKE("backup_preferences")),
 	setBackupPreferences: (preferences: BackupPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_backup_preferences", { preferences })),
 	/**  The client tools of the connection's engine, from `folder` (empty: found automatically). */
@@ -96,32 +99,30 @@ export const commands = {
 	 *  Backs up the connection's database with its vendor's tool, through its tunnel; the tool's
 	 *  output goes to `on_event` line by line.
 	 */
-	runBackup: (session: string, runId: number, request: BackupRequestItem_Deserialize, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<BackupDoneItem, null>, string>(__TAURI_INVOKE("run_backup", { session, runId, request, onEvent })),
+	runBackup: (session: string, job: Channel<JobTicket>, request: BackupRequestItem_Deserialize, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<BackupDoneItem, null>, string>(__TAURI_INVOKE("run_backup", { session, job, request, onEvent })),
 	/**  The tool a restore will run and what its confirmation must say. */
 	previewRestore: (session: string, request: RestoreRequestItem) => typedError<RestorePreviewItem, string>(__TAURI_INVOKE("preview_restore", { session, request })),
 	/**
 	 *  Restores a file into the connection's database with its vendor's tool, through its tunnel.
 	 *  The core refuses a read-only connection and an unconfirmed restore.
 	 */
-	runRestore: (session: string, runId: number, request: RestoreRequestItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<RestoreDoneItem, null>, string>(__TAURI_INVOKE("run_restore", { session, runId, request, confirmed, onEvent })),
-	/**  Stops a running backup or restore: the tool is killed and a partial backup removed. */
-	cancelBackup: (runId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_backup", { runId })),
+	runRestore: (session: string, job: Channel<JobTicket>, request: RestoreRequestItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<RestoreDoneItem, null>, string>(__TAURI_INVOKE("run_restore", { session, job, request, confirmed, onEvent })),
 	/**  The file (SQLite) or folder (DuckDB) a copy will be. */
 	previewEmbeddedBackup: (session: string, request: EmbeddedBackupItem) => typedError<string, string>(__TAURI_INVOKE("preview_embedded_backup", { session, request })),
 	/**  Copies a SQLite database with `VACUUM INTO`, or exports a DuckDB one, in a session of its own. */
-	runEmbeddedBackup: (session: string, runId: number, request: EmbeddedBackupItem, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<BackupDoneItem, null>, string>(__TAURI_INVOKE("run_embedded_backup", { session, runId, request, onEvent })),
+	runEmbeddedBackup: (session: string, job: Channel<JobTicket>, request: EmbeddedBackupItem, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<BackupDoneItem, null>, string>(__TAURI_INVOKE("run_embedded_backup", { session, job, request, onEvent })),
 	/**
 	 *  Loads a DuckDB export folder into the connection's database. The core refuses a read-only
 	 *  connection and an unconfirmed import.
 	 */
-	runDuckdbImport: (session: string, runId: number, folder: string, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<RestoreDoneItem, null>, string>(__TAURI_INVOKE("run_duckdb_import", { session, runId, folder, confirmed, onEvent })),
+	runDuckdbImport: (session: string, job: Channel<JobTicket>, folder: string, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<RestoreDoneItem, null>, string>(__TAURI_INVOKE("run_duckdb_import", { session, job, folder, confirmed, onEvent })),
 	/**  Reads an `.sql` file and counts its statements and what the guard would ask about. */
 	planSqlFile: (session: string, path: string) => typedError<FilePlanItem, string>(__TAURI_INVOKE("plan_sql_file", { session, path })),
 	/**
 	 *  Runs an `.sql` file in a session of its own, statement by statement. The core refuses a
 	 *  read-only connection and an unconfirmed run.
 	 */
-	runSqlFile: (session: string, runId: number, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<FileRunDoneItem, null>, string>(__TAURI_INVOKE("run_sql_file", { session, runId, path, onError, confirmed, onEvent })),
+	runSqlFile: (session: string, job: Channel<JobTicket>, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<FileRunDoneItem, null>, string>(__TAURI_INVOKE("run_sql_file", { session, job, path, onError, confirmed, onEvent })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -264,13 +265,11 @@ export const commands = {
 	pluginsRefreshCatalogue: () => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_refresh_catalogue")),
 	/**
 	 *  Installs the newest build the accepted catalogue offers of the plugin `name`: an install or
-	 *  an update, on the user's click. `install` is an id the page chooses, for
-	 *  `pluginsCancelInstall` and the `PluginInstallProgress` events. The next connection of its
-	 *  engines starts the new build; connections already open keep theirs.
+	 *  an update, on the user's click. Its job's ticket goes to `job` at once (`cancel_job` stops
+	 *  it), and its progress to every view through `PluginInstallChanged`. The next connection of
+	 *  its engines starts the new build; connections already open keep theirs.
 	 */
-	pluginsInstall: (install: number, name: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_install", { install, name })),
-	/**  Stops the install `install`, if it runs. Nothing of it is kept. */
-	pluginsCancelInstall: (install: number) => __TAURI_INVOKE<void>("plugins_cancel_install", { install }),
+	pluginsInstall: (job: Channel<JobTicket>, name: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_install", { job, name })),
 	/**
 	 *  Installs a file the user picked in the app's file dialog: a plugin's archive (installed only
 	 *  as the accepted catalogue's entry with its SHA-256) or, for a file whose name ends in
@@ -305,17 +304,12 @@ export const commands = {
 	listTunnels: () => typedError<TunnelItem_Serialize[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**
 	 *  Tests a connection that may not be saved yet, step by step (ADR-032): every change to its
-	 *  steps goes through `on_step`, and `stop_connection_test(test)` stops it. Nothing is
+	 *  steps goes through `on_step`, its ticket to `job`, and `cancel_job` stops it. Nothing is
 	 *  written: neither the file nor the keychain. `editing` is the connection being edited, if
 	 *  any: its stored password is used when none is typed. `network_only` stops before logging
 	 *  in. The steps, their errors and the diagnostics come from the core, redacted.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null, networkOnly: boolean, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, test, onStep })),
-	/**
-	 *  Stops a running connection or network profile test: the running step is dropped and
-	 *  whatever it opened is closed. Nothing is retried.
-	 */
-	stopConnectionTest: (test: number) => __TAURI_INVOKE<void>("stop_connection_test", { test }),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null, networkOnly: boolean, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, job, onStep })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
 	 *  configuration. Returns the new connection's identifier.
@@ -369,10 +363,10 @@ export const commands = {
 	/**
 	 *  Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
 	 *  again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
-	 *  are used when none is typed. Steps go through `on_step`; `stop_connection_test(test)`
+	 *  are used when none is typed. Steps go through `on_step`, its ticket to `job`; `cancel_job`
 	 *  stops it.
 	 */
-	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<TunnelTestOutcome_Serialize, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword, test, onStep })),
+	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<TunnelTestOutcome_Serialize, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword, job, onStep })),
 	/**  Saves a new tunnel (and its `keychain` passwords) and reloads the configuration. */
 	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelItem_Serialize, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords, proxyPassword })),
 	/**  Saves an edited tunnel (same file and name) and reloads the configuration. */
@@ -479,17 +473,17 @@ export const commands = {
 	 *  A table data tab column's statistics (the column header's "Column statistics"): counted by
 	 *  the server in a new session of the tab's connection, every statement a read inside the
 	 *  engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
-	 *  type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
-	 *  `stats_id` stops it.
+	 *  type come from the tab's page (`result`, `column`). Its ticket goes to `job`; `cancel_job`
+	 *  stops it.
 	 */
-	columnStats: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<JobOutcome<ColumnStatsItem_Serialize, null>, string>(__TAURI_INVOKE("column_stats", { source, statsId, table, result, column })),
+	columnStats: (source: string, job: Channel<JobTicket>, table: ColumnStatsTarget, result: number, column: number) => typedError<JobOutcome<ColumnStatsItem_Serialize, null>, string>(__TAURI_INVOKE("column_stats", { source, job, table, result, column })),
 	/**
 	 *  A table data tab column's most frequent values, to pick a filter's value from: counted by
 	 *  the server like `column_stats` (a new session of the tab's connection, every statement a
 	 *  read), with the tab's filter. The core refuses a masked column before anything is read
-	 *  (ADR-051). `cancel_column_stats` with the same `stats_id` stops it.
+	 *  (ADR-051). Its ticket goes to `job`; `cancel_job` stops it.
 	 */
-	columnTopValues: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<TopValuesOutcome_Serialize, string>(__TAURI_INVOKE("column_top_values", { source, statsId, table, result, column })),
+	columnTopValues: (source: string, job: Channel<JobTicket>, table: ColumnStatsTarget, result: number, column: number) => typedError<TopValuesOutcome_Serialize, string>(__TAURI_INVOKE("column_top_values", { source, job, table, result, column })),
 	/**
 	 *  What a table data tab remembers of its table's filters (SDB-381): the history, newest
 	 *  first, and the default the tab opens with. Local data; the core checks each filter again
@@ -503,8 +497,6 @@ export const commands = {
 	forgetTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, schema, name, filter })),
 	/**  Saves the filter a table's tab opens with (checked by the core), or drops it (`None`). */
 	setTableDefaultFilter: (connection: string, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, schema, name, filter })),
-	/**  Stops a column's statistics while they are counted: the running statement and the rest. */
-	cancelColumnStats: (statsId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_column_stats", { statsId })),
 	/**
 	 *  Every column of a schema's relations, read with one catalog query on the explorer's
 	 *  session: metadata search keeps them with the schema (ADR-043).
@@ -516,11 +508,9 @@ export const commands = {
 	 *  Searches a value in the chosen tables of `source`'s connection (ADR-043): the core writes
 	 *  one read per table with the value bound as a parameter, in a new session opened for reads
 	 *  only, each table inside the engine's read-only transaction. Each table's start and end go to
-	 *  `on_event`; `cancel_data_search` with the same `search_id` stops it.
+	 *  `on_event`, its ticket to `job`; `cancel_job` stops it.
 	 */
-	dataSearch: (source: string, searchId: number, request: DataSearchRequestItem, onEvent: Channel<DataSearchEventItem_Deserialize>) => typedError<JobOutcome<DataSearchSummaryItem, DataSearchSummaryItem>, string>(__TAURI_INVOKE("data_search", { source, searchId, request, onEvent })),
-	/**  Stops a data search: the running statement and every table after it. */
-	cancelDataSearch: (searchId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_data_search", { searchId })),
+	dataSearch: (source: string, job: Channel<JobTicket>, request: DataSearchRequestItem, onEvent: Channel<DataSearchEventItem_Deserialize>) => typedError<JobOutcome<DataSearchSummaryItem, DataSearchSummaryItem>, string>(__TAURI_INVOKE("data_search", { source, job, request, onEvent })),
 	/**
 	 *  A table data tab's filter with a condition the core wrote (one of the column statistics'
 	 *  most frequent values) added with AND. The page's SELECT is checked when it loads.
@@ -582,19 +572,17 @@ export const commands = {
 	 *  Runs a query again in a new session and streams every row to `path` (ADR-034). Only a single
 	 *  read is run; a connection type that confirms execution needs `confirmed`.
 	 */
-	exportQuery: (source: string, exportId: number, sql: string, path: string, options: ExportFileOptions_Deserialize, confirmed: boolean, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportSummaryItem, null>, string>(__TAURI_INVOKE("export_query", { source, exportId, sql, path, options, confirmed, onProgress })),
+	exportQuery: (source: string, job: Channel<JobTicket>, sql: string, path: string, options: ExportFileOptions_Deserialize, confirmed: boolean, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportSummaryItem, null>, string>(__TAURI_INVOKE("export_query", { source, job, sql, path, options, confirmed, onProgress })),
 	/**
 	 *  Streams every row of a table data tab's view (its filter and order, not just the loaded
 	 *  page) to `path`, through the core's own SELECT.
 	 */
-	exportTableData: (source: string, exportId: number, view: TableExportItem, path: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportSummaryItem, null>, string>(__TAURI_INVOKE("export_table_data", { source, exportId, view, path, options, onProgress })),
+	exportTableData: (source: string, job: Channel<JobTicket>, view: TableExportItem, path: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportSummaryItem, null>, string>(__TAURI_INVOKE("export_table_data", { source, job, view, path, options, onProgress })),
 	/**
 	 *  Streams explorer tables and views, one file each, into `folder`, never over an existing
 	 *  file. Stops at a cancel or an error; the files written before stay.
 	 */
-	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, names: FileNamePatternItem, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportedFileItem[], TablesStoppedItem>, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, names, options, onProgress })),
-	/**  Stops a running streaming export: its statement and its writer; no file is left. */
-	cancelExport: (exportId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_export", { exportId })),
+	exportTables: (source: string, job: Channel<JobTicket>, tables: RelationRefItem[], folder: string, names: FileNamePatternItem, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportedFileItem[], TablesStoppedItem>, string>(__TAURI_INVOKE("export_tables", { source, job, tables, folder, names, options, onProgress })),
 	/**
 	 *  The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
 	 *  what fits, and the row may not be in its cache.
@@ -978,7 +966,7 @@ export const commands = {
 	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
 	historyDatabases: () => typedError<string[], string>(__TAURI_INVOKE("history_databases")),
 	pinHistory: (id: number, pinned: boolean) => typedError<boolean, string>(__TAURI_INVOKE("pin_history", { id, pinned })),
-	exportHistory: (exportId: number, filter: HistoryFilterItem_Deserialize, path: string) => typedError<number, string>(__TAURI_INVOKE("export_history", { exportId, filter, path })),
+	exportHistory: (job: Channel<JobTicket>, filter: HistoryFilterItem_Deserialize, path: string) => typedError<number, string>(__TAURI_INVOKE("export_history", { job, filter, path })),
 	snippetPage: (search: string, folder: number | null, unfiled: boolean, limit: number, offset: number) => typedError<SnippetItem_Serialize[], string>(__TAURI_INVOKE("snippet_page", { search, folder, unfiled, limit, offset })),
 	snippetFolders: () => typedError<SnippetFolderItem[], string>(__TAURI_INVOKE("snippet_folders")),
 	createSnippetFolder: (name: string) => typedError<number, string>(__TAURI_INVOKE("create_snippet_folder", { name })),
@@ -1058,12 +1046,10 @@ export const commands = {
 	/**
 	 *  Loads keyset pages of a paged query (ADR-054) into `result`, which holds `offset` rows,
 	 *  until it holds `until` rows (every row without it) or the query has no more. The rows held
-	 *  go to `on_progress` after each page; `cancel_load_rows` with the same `load_id` stops it,
-	 *  keeping the pages loaded before.
+	 *  go to `on_progress` after each page; its ticket goes to `job` at once, and `cancel_job` with
+	 *  it stops the load, keeping the pages loaded before.
 	 */
-	loadQueryRows: (session: string, loadId: number, result: number, sql: string, offset: number, sort: SortKeyItem[], until: number | null, onProgress: Channel<number>) => typedError<LoadedRowsItem, string>(__TAURI_INVOKE("load_query_rows", { session, loadId, result, sql, offset, sort, until, onProgress })),
-	/**  Stops a load of query rows: the page being read and every page after it. */
-	cancelLoadRows: (session: string, loadId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_load_rows", { session, loadId })),
+	loadQueryRows: (session: string, job: Channel<JobTicket>, result: number, sql: string, offset: number, sort: SortKeyItem[], until: number | null, onProgress: Channel<number>) => typedError<LoadedRowsItem, string>(__TAURI_INVOKE("load_query_rows", { session, job, result, sql, offset, sort, until, onProgress })),
 	/**
 	 *  Every row of a table data tab's table that its filter keeps, in its pages' order: "Load
 	 *  every row" (SDB-386). Written and checked by the core like a page.
@@ -3671,6 +3657,21 @@ export type InteractionRequest = {
 	request: InteractionKind,
 };
 
+/**  A kind of work the desktop runs and can stop. */
+export type JobKind = 
+/**  A streaming export: of a query, of tables, of the history, of a plan, of a library. */
+"export" | "dataSearch" | 
+/**  A column's statistics or its top values. */
+"columnStats" | "import" | 
+/**  A backup, with its vendor's tool or the engine's own. */
+"backup" | 
+/**  A restore, or an import of a DuckDB export. */
+"restore" | 
+/**  "Run SQL file…". */
+"fileRun" | "connectionTest" | 
+/**  "Load every row", a page or a row jump of a query's result. */
+"rowLoad" | "pluginInstall";
+
 /**
  *  How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
  *  export, an import, a backup, a restore, a file run, a data search, a column's statistics),
@@ -3691,6 +3692,12 @@ export type JobOutcome<T, K> = { kind: "done"; result: T } |
 { kind: "passwordRequired" } | 
 /**  Only a single read may run there (an export runs the query again). */
 { kind: "notARead"; message: string };
+
+/**  What the page holds of a running job: its id and kind, to give back to `cancel_job`. */
+export type JobTicket = {
+	id: number,
+	kind: JobKind,
+};
 
 /**  How JSON and NDJSON write values (SDB-391). */
 export type JsonOptionsItem = {
@@ -5064,7 +5071,7 @@ export type PluginInstall =
 { kind: "idle" } | 
 /**
  *  Its archive is downloading: bytes received of the total the catalogue gives (0 when it
- *  gives none). `install` is the id to stop it with `pluginsCancelInstall`.
+ *  gives none). `install` is its job's id: `cancelJob(install, "pluginInstall")` stops it.
  */
 { kind: "downloading"; install: number; received: number | null; total: number | null } | 
 /**  The last install failed or was stopped, in the core's words. */

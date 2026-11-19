@@ -11,6 +11,7 @@ import { call, commands, type EngineItem, type PluginItem } from "../api";
 import type { PluginProcessItem } from "../bindings";
 import { chooseOpenFile } from "../dialogs";
 import { engineCatalog } from "../engines";
+import { startJob } from "../jobs";
 import { byteSize, installable, installText, needsInstalling, usePlugins } from "../plugins";
 import { useApp } from "../store";
 
@@ -24,7 +25,6 @@ type CatalogueState =
   | { kind: "read" }
   | { kind: "failed"; detail: string };
 
-let nextInstall = 1;
 
 /** How often the running processes' numbers are read again while the page is open. */
 const PROCESS_REFRESH_MS = 2000;
@@ -98,7 +98,7 @@ export function PluginsSettings() {
   async function install(plugin: PluginItem) {
     rowError(plugin.name, null);
     try {
-      setOverview(await call(commands.pluginsInstall(nextInstall++, plugin.name)));
+      setOverview(await call(commands.pluginsInstall(startJob().channel, plugin.name)));
     } catch {
       // The failure is the plugin's install state now: read it, in case its event was missed.
       await usePlugins.getState().load();
@@ -204,7 +204,7 @@ export function PluginsSettings() {
               engineName={engineName}
               error={rowErrors[plugin.name] ?? null}
               onInstall={() => void install(plugin)}
-              onCancel={(id) => void commands.pluginsCancelInstall(id)}
+              onCancel={(install) => void call(commands.cancelJob(install, "pluginInstall")).catch(() => undefined)}
               onRemove={(version) => void remove(plugin, version, false)}
               process={processes[plugin.name] ?? null}
               restarted={restarted[plugin.name] ?? false}

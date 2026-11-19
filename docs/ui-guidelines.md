@@ -323,7 +323,7 @@ A confirmation reads:
   Escape does nothing. If it fails, the dialog stays open with the error inside it
   (`role="alert"`) and what was typed is kept. A dialog that shows the core's script and then
   applies it uses `usePreviewThenApply`, and one that runs a job uses `useJobPhase`
-  (`useDialogState.ts`); a value it loads is a `Loaded<T>` (`dialogState.ts`), never flags
+  (`useDialogState.ts`), started with the job's `startJob()`; a value it loads is a `Loaded<T>` (`dialogState.ts`), never flags
   beside each other (ADR-060).
 - Dialogs opened over a form (trust, password, fingerprint) take Escape first; only the topmost
   closes, and focus returns to what opened it (`modalFocus.ts`). Never decide a safeguard in
@@ -369,7 +369,8 @@ lookups follow the same rules:
 - **Cancel:** what reaches a server or writes a file can be cancelled from where it started:
   Run becomes Cancel in the same place, an export dialog has Cancel export. The button is
   secondary, named "Cancel" plus the object where it stands alone, and asks the core
-  (`cancel`, `cancelExport`); the UI shows what the core reports ("Query cancelled", "Export
+  (`cancel` for a query; `cancelJob` with the job's ticket for anything else, through
+  `startJob` in `src/jobs.ts`); the UI shows what the core reports ("Query cancelled", "Export
   cancelled: no file was written."), not what it assumes.
 - **Meanwhile:** the rest of the app stays usable: other tabs, the explorer, and the editor's
   text. On the busy tab, only what would conflict is disabled (Run script, Run options, the

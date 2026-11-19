@@ -84,6 +84,14 @@
   guard settles it when dropped, so a failed or panicking switch never leaves the app unable to
   change folder). After a plugin change only new connections use the new engines; a session
   already open keeps its plugin process until it is closed (ADR-055), on purpose.
+  Running work (exports, data searches, column statistics, imports, backups, restores, file
+  runs, connection tests, row loads, plugin installs) is one registry, `AppState.jobs`
+  (`src-tauri/src/jobs.rs` over the core's `JobRegistry`, SDB-369): a job command takes a
+  `job: Channel<JobTicket>` and sends the ticket (an id the registry made, and the kind) when
+  the job starts; the page never makes an id (`src/jobs.ts`' `startJob` holds a Cancel pressed
+  before the ticket arrives; `useJobPhase` and `searchRun.ts` keep the `Job`) and stops any job
+  with `cancelJob(id, kind)`. A new job is one `jobs::start` call, held until it ends; no map
+  to add or remove from.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

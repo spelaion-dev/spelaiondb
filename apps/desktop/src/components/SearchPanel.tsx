@@ -20,6 +20,7 @@ import {
 import { useCatalog, type CatalogSchema } from "../catalog";
 import { openTableData } from "../connect";
 import { type NameHit, schemasWithoutColumns, searchableTables, searchNames } from "../dbSearch";
+import { startJob, type Job } from "../jobs";
 import { ended, failed, markCancelling, searching, startedRun, withEvent, type SearchedTable, type SearchRun } from "../searchRun";
 import { useApp } from "../store";
 import { openFound } from "./OpenObjectDialog";
@@ -29,7 +30,6 @@ export const FOCUS_SEARCH_EVENT = "spelaion-focus-search";
 
 /** Ids of data searches: far from the export dialog's and column statistics', which share the
  *  core's cancel map. */
-let nextSearchId = 1_500_000_000;
 
 /** Name matches shown at most; the count says how many there are. */
 const NAME_LIMIT = 200;
@@ -227,8 +227,8 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   const [numbers, setNumbers] = useState(false);
   const [large, setLarge] = useState(false);
   const [rows, setRows] = useState(FALLBACK_LIMITS.defaultRowsPerTable);
-  const [run, setRun] = useState<SearchRun | null>(null);
-  const current = useRef<number | null>(null);
+  const [run, setRun] = useState<SearchRun<Job> | null>(null);
+  const current = useRef<Job | null>(null);
 
   useEffect(() => {
     void commands.dataSearchLimits().then((l) => {
@@ -270,7 +270,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
 
   async function search() {
     if (running || blocked) return;
-    const id = ++nextSearchId;
+    const id = startJob();
     current.current = id;
     const source = connectionId;
     setRun(startedRun(id, source, chosenTables.length));
@@ -280,7 +280,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
       setRun((r) => withEvent(r, id, event));
     };
     try {
-      const summary = await call(commands.dataSearch(`meta:${source}`, id, {
+      const summary = await call(commands.dataSearch(`meta:${source}`, id.channel, {
         value,
         tables: chosenTables,
         caseSensitive,
@@ -300,7 +300,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
     const id = run.id;
     // Applied to the run as it is by then: a search that ended since this render stays ended.
     setRun((r) => markCancelling(r, id));
-    void call(commands.cancelDataSearch(id)).catch(() => undefined);
+    id.cancel();
   }
 
   function toggle(schema: string, table: string) {

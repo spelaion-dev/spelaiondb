@@ -25,8 +25,9 @@ export type SearchPhase =
   | { kind: "ended"; outcome: DataSearchOutcome }
   | { kind: "failed"; message: string };
 
-export interface SearchRun {
-  id: number;
+/** `I` is whatever tells two runs apart: the panel uses the search's job (SDB-369). */
+export interface SearchRun<I = number> {
+  id: I;
   connectionId: string;
   /** The tables it reads. */
   total: number;
@@ -35,12 +36,12 @@ export interface SearchRun {
 }
 
 /** A search that starts: nothing read yet. */
-export function startedRun(id: number, connectionId: string, total: number): SearchRun {
+export function startedRun<I>(id: I, connectionId: string, total: number): SearchRun<I> {
   return { id, connectionId, total, tables: [], phase: { kind: "running", current: null } };
 }
 
 /** Whether the search is still going (running, or cancelling until the core says it stopped). */
-export function searching(run: SearchRun | null): boolean {
+export function searching<I>(run: SearchRun<I> | null): boolean {
   if (!run) return false;
   switch (run.phase.kind) {
     case "running":
@@ -57,7 +58,7 @@ export function searching(run: SearchRun | null): boolean {
 }
 
 /** What the core told of search `id` while it runs. */
-export function withEvent(run: SearchRun | null, id: number, event: DataSearchEventItem): SearchRun | null {
+export function withEvent<I>(run: SearchRun<I> | null, id: I, event: DataSearchEventItem): SearchRun<I> | null {
   if (!run || run.id !== id) return run;
   switch (event.kind) {
     case "started":
@@ -76,17 +77,17 @@ export function withEvent(run: SearchRun | null, id: number, event: DataSearchEv
 }
 
 /** Search `id` ended, as the core says (a cancel asked earlier ends here too). */
-export function ended(run: SearchRun | null, id: number, outcome: DataSearchOutcome): SearchRun | null {
+export function ended<I>(run: SearchRun<I> | null, id: I, outcome: DataSearchOutcome): SearchRun<I> | null {
   return run && run.id === id ? { ...run, phase: { kind: "ended", outcome } } : run;
 }
 
 /** Search `id` could not run. */
-export function failed(run: SearchRun | null, id: number, message: string): SearchRun | null {
+export function failed<I>(run: SearchRun<I> | null, id: I, message: string): SearchRun<I> | null {
   return run && run.id === id ? { ...run, phase: { kind: "failed", message } } : run;
 }
 
 /** `run` with its cancel asked, if it is search `id` and still running; otherwise unchanged. */
-export function markCancelling(run: SearchRun | null, id: number): SearchRun | null {
+export function markCancelling<I>(run: SearchRun<I> | null, id: I): SearchRun<I> | null {
   if (!run || run.id !== id || run.phase.kind !== "running") return run;
   return { ...run, phase: { kind: "cancelling" } };
 }
