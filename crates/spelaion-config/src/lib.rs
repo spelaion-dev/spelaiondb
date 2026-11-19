@@ -90,7 +90,7 @@ pub use name_pattern::{
     NameValues,
 };
 pub use pgadmin::{PgadminError, pgadmin_dir, read_pgadmin};
-pub use relocate::{Moved, move_connection};
+pub use relocate::{Moved, connection_move_target, move_connection};
 pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
     ResolvedSession, ResolvedSsm, ResolvedTunnel, Resolver, TunnelSettings,

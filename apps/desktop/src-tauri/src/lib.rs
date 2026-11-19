@@ -1380,7 +1380,21 @@ async fn move_connection(
     // Tabs waiting to be written carry the old identifier: written first, then moved with it.
     state.tabs.flush().await.map_err(|e| e.to_string())?;
     let (moved, workspace) = {
-        let config = state.config.read().await;
+        // Serialize the restriction switch with staging and moving the connection.
+        let config = state.config.write().await;
+        let destination = spelaion_config::connection_move_target(&config, &id, &folder)
+            .map_err(|e| e.to_string())?;
+        if destination != id {
+            let scope = spelaion_core::agent_workspace(&config, id.source)
+                .ok_or("the workspace for the connection's MCP restriction cannot be read")?;
+            state
+                .history
+                .stage_mcp_connection_move(scope, id.to_string(), destination.to_string())
+                .await
+                .map_err(|e| {
+                    format!("could not carry the MCP restriction to the destination: {e}")
+                })?;
+        }
         let moved = state.change_trust(|trust| {
             spelaion_config::move_connection(&config, trust, &id, &folder, &SystemBackend)
         })?;
@@ -6235,6 +6249,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             mcp::mcp_apply_install,
             mcp::mcp_settings,
             mcp::set_mcp_read_only,
+            mcp::set_mcp_connection_read_only,
             mcp::set_mcp_output_format,
             mcp::mcp_access,
             mcp::audit_events,

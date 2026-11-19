@@ -32,6 +32,9 @@ pub fn connection_entry(c: &ConnectionEntry, access: AgentAccess) -> String {
         AgentAccess::ReadOnly(ReadOnlyBecause::AllAgents) => {
             "Read-only (the user made every agent read-only)."
         }
+        AgentAccess::ReadOnly(ReadOnlyBecause::ConnectionOverride) => {
+            "Read-only under its local MCP restriction."
+        }
         AgentAccess::ReadOnly(ReadOnlyBecause::EngineWithoutWrites) => {
             "Read-only (writes from agents are not available for this engine yet)."
         }

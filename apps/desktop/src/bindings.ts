@@ -51,6 +51,8 @@ export const commands = {
 	mcpSettings: () => typedError<McpSettingsItem, string>(__TAURI_INVOKE("mcp_settings")),
 	/**  Read-only mode for every agent (ADR-033): `spelaiondb mcp` reads it on every call. */
 	setMcpReadOnly: (readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_read_only", { readOnly })),
+	/**  Changes only the local write restriction, in the workspace that the user was shown. */
+	setMcpConnectionReadOnly: (connection: string, workspace: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_connection_read_only", { connection, workspace, readOnly })),
 	setMcpOutputFormat: (format: ToolOutputItem) => typedError<null, string>(__TAURI_INVOKE("set_mcp_output_format", { format })),
 	/**  What agents can do on each connection, as the core decides it. */
 	mcpAccess: () => typedError<McpAccessItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
@@ -4004,6 +4006,9 @@ export type McpAccessItem_Deserialize = {
 	/**  For a visible connection. */
 	access?: McpAccessKindItem | null,
 	reason?: McpReadOnlyReasonItem | null,
+	/**  Scope of the local write restriction and whether it was read successfully. */
+	restrictionWorkspace?: string | null,
+	readOnlyOverride?: boolean | null,
 	kind?: ConnectionTypeItem_Deserialize | null,
 };
 
@@ -4017,6 +4022,9 @@ export type McpAccessItem_Serialize = {
 	/**  For a visible connection. */
 	access: McpAccessKindItem | null,
 	reason: McpReadOnlyReasonItem | null,
+	/**  Scope of the local write restriction and whether it was read successfully. */
+	restrictionWorkspace: string | null,
+	readOnlyOverride: boolean | null,
 	kind: ConnectionTypeItem_Serialize | null,
 };
 
@@ -4113,7 +4121,7 @@ export type McpInstallPlanItem = {
 
 export type McpInstallStateItem = "noFile" | "notInstalled" | "installed" | "different" | "unreadable";
 
-export type McpReadOnlyReasonItem = "allAgents" | "connection" | "writesDenied" | "confirmUnsupported" | 
+export type McpReadOnlyReasonItem = "allAgents" | "connectionOverride" | "connection" | "writesDenied" | "confirmUnsupported" | 
 /**  The engine cannot run agents' writes yet (`runs_agent_writes`). */
 "engineWithoutWrites";
 

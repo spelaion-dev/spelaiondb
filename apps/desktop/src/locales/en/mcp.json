@@ -126,7 +126,10 @@
       "notExposed": "Nothing: not exposed to agents",
       "untrusted": "Nothing: the project is not trusted",
       "noAgents": "Nothing: agents are not offered on this engine yet",
+      "restriction": "Local restriction",
+      "restrict": "Make agents read-only on {{name}}",
       "because": {
+        "connectionOverride": "Local MCP restriction.",
         "allAgents": "Read-only mode is on.",
         "connection": "The connection is read-only.",
         "writesDenied": "The connection does not let agents write.",
