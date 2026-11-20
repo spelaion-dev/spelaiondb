@@ -3,6 +3,9 @@
 - **Status:** Conditional on phase 0 (experiments 1 and 3)
 - **Date:** 2026-11-02
 
+The choices of Tailwind, Radix (shadcn/ui) and `dockview` are superseded by
+[ADR-062](0062-desktop-styling-and-layout.md).
+
 ## Decision
 - **React + TypeScript + Vite**, Tailwind + Radix (shadcn/ui), themes with CSS variables,
   panels with `dockview`. Chosen for the agent's reliability; the heavy parts (grid,
