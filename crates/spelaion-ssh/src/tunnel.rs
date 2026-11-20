@@ -796,9 +796,14 @@ impl Tunnel {
         self.lifecycle.usable()?;
         let session = match &self.shape {
             Shape::Hops { last, .. } => last,
-            Shape::Proxy(..) | Shape::Ssm(..) => {
+            Shape::Proxy(..) => {
                 return Err(SshError::Other(
                     "a tunnel with only a proxy cannot run commands: add an SSH hop".into(),
+                ));
+            }
+            Shape::Ssm(..) => {
+                return Err(SshError::Other(
+                    "a tunnel with only AWS SSM cannot run commands. Add an SSH hop.".into(),
                 ));
             }
         };
