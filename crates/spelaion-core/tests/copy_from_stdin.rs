@@ -243,11 +243,11 @@ async fn a_million_rows_stream_and_a_cancel_half_way_leaves_nothing() {
     let Some(server) = server() else { return };
     let database = format!("sdb162_big_{}", std::process::id());
     fresh_database(&server, &database).await;
-    let session = Arc::new(session(&server, &database).await);
-    run_ok(&session, "create table big (id integer, v text)").await;
+    let writer = Arc::new(session(&server, &database).await);
+    run_ok(&writer, "create table big (id integer, v text)").await;
     let script = big_copy("big", 1_000_000);
 
-    let events = run_ok(&session, &script).await;
+    let events = run_ok(&writer, &script).await;
     assert!(
         events.iter().any(|event| matches!(
             event,
@@ -258,21 +258,45 @@ async fn a_million_rows_stream_and_a_cancel_half_way_leaves_nothing() {
         )),
         "the row count is reported"
     );
-    assert_eq!(value(&session, "select count(*) from big").await, "1000000");
+    assert_eq!(value(&writer, "select count(*) from big").await, "1000000");
 
-    // Cancelled half-way: its own transaction is rolled back, nothing stays loaded.
-    run_ok(&session, "truncate big").await;
+    // Hold the COPY at the halfway point so cancel always reaches an in-flight load.
+    let watcher = session(&server, &database).await;
+    run_ok(&watcher, "select pg_advisory_lock(431)").await;
+    run_ok(
+        &writer,
+        r#"
+truncate big;
+create function wait_at_halfway() returns trigger language plpgsql as $$
+begin
+    perform pg_advisory_xact_lock(431);
+    return new;
+end;
+$$;
+create trigger wait_at_halfway before insert on big
+for each row when (new.id = 500001) execute function wait_at_halfway();
+"#,
+    )
+    .await;
     let run = tokio::spawn({
-        let session = session.clone();
-        let script = script.clone();
-        async move { session.run_script(&script).collect::<Vec<_>>().await }
+        let writer = writer.clone();
+        async move { writer.run_script(&script).collect::<Vec<_>>().await }
     });
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    session.cancel().await.unwrap();
-    let events = tokio::time::timeout(Duration::from_secs(30), run)
-        .await
-        .expect("the cancel was obeyed in time")
-        .unwrap();
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let waiting = "select count(*) from pg_stat_activity where datname = current_database() \
+                       and wait_event_type = 'Lock' and wait_event = 'advisory'";
+        while value(&watcher, waiting).await == "0" {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the COPY reached the halfway lock");
+    let events = tokio::time::timeout(Duration::from_secs(30), async {
+        writer.cancel().await.unwrap();
+        run.await.unwrap()
+    })
+    .await
+    .expect("the cancel was obeyed in time");
     assert!(
         events.iter().any(|event| matches!(
             event,
@@ -284,8 +308,9 @@ async fn a_million_rows_stream_and_a_cancel_half_way_leaves_nothing() {
             .filter(|e| !matches!(e, CoreEvent::Rows { .. }))
             .collect::<Vec<_>>()
     );
-    assert_eq!(value(&session, "select count(*) from big").await, "0");
-    drop(session);
+    // The cancelled COPY rolls back the transaction, including chunks already inserted.
+    assert_eq!(value(&writer, "select count(*) from big").await, "0");
+    drop((writer, watcher));
     drop_database(&server, &database).await;
 }
 
