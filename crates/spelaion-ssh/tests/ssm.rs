@@ -142,6 +142,27 @@ fn ssm_only(fake: &FakeAws, target: &str) -> TunnelSpec {
     }
 }
 
+#[tokio::test]
+async fn ssm_only_rejects_exec_with_an_aws_ssm_message() {
+    let fake = FakeAws::new("exec");
+    let tunnel = Tunnel::connect(
+        &ssm_only(&fake, "i-0123456789abcdef0"),
+        &known(),
+        std::sync::Arc::new(NonInteractive),
+    )
+    .await
+    .expect("the tools are found");
+
+    let Err(error) = tunnel.exec("true").await else {
+        panic!("an SSM-only tunnel cannot run commands");
+    };
+    assert_eq!(
+        error.to_string(),
+        "tunnel: a tunnel with only AWS SSM cannot run commands. Add an SSH hop."
+    );
+    assert!(fake.args().is_empty(), "exec started an AWS session");
+}
+
 /// SSM alone reaches a port on the managed node: the CLI gets exactly the arguments ADR-050
 /// says, each option as `--name=value`, and the tunnel's forward carries the data.
 #[tokio::test]
