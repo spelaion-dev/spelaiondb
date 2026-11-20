@@ -69,3 +69,9 @@
   check (ADR-047, ADR-008). The search panel's data search is one phase in `src/searchRun.ts`.
   The app's own lifecycles (the registry of running work, a tab's connection, the dialogs, the
   update, the folder switch, quitting) are SDB-369, SDB-371, SDB-375 and SDB-377.
+- The frontend build checks token use in `styles.css` and the canvas code with
+  `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
+  each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.
+  `node scripts/check-ui-tokens.mjs --print-baseline` prints the current counts for comparison.
+  Pull request CI compares the counts with the base commit so an entry can only decrease.
+  `scripts/contrast.test.mjs` checks text, icon and focus token pairs in both themes.
