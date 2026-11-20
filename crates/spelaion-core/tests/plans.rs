@@ -480,9 +480,10 @@ async fn plans_are_serialized_cancellable_and_record_explicit_runs_in_history() 
         "CREATE TEMP TABLE plan_queue(value int); INSERT INTO plan_queue VALUES (1)",
     )
     .await;
-    let path =
-        std::env::temp_dir().join(format!("spelaion-plan-history-{}.db", std::process::id()));
-    let history = QueryHistory::open(path.clone()).unwrap();
+    let history_dir =
+        std::env::temp_dir().join(format!("spelaion-plan-history-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&history_dir).unwrap();
+    let history = QueryHistory::open(history_dir.join("history.db")).unwrap();
     let scope = HistoryScope {
         workspace: "plan-test".into(),
         connection: "plans".into(),
@@ -558,5 +559,16 @@ async fn plans_are_serialized_cancellable_and_record_explicit_runs_in_history() 
     assert!(entries[0].statement.starts_with("EXPLAIN (FORMAT JSON"));
     assert!(entries[0].cancelled || entries[0].error.is_some());
     drop(history);
-    let _ = std::fs::remove_file(path);
+    // The history actor closes SQLite on its own thread. Windows can refuse to remove
+    // the directory until the actor releases the database and its sidecar files.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::remove_dir_all(&history_dir) {
+            Ok(()) => break,
+            Err(error) if tokio::time::Instant::now() >= deadline => {
+                panic!("could not clean up {}: {error}", history_dir.display());
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
 }
