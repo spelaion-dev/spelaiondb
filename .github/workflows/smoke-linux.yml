@@ -58,18 +58,11 @@ jobs:
       # WebKitGTK and friends to build the app; WebKitWebDriver for tauri-driver (the package
       # is webkitgtk-webdriver from Ubuntu 26.04 on, webkit2gtk-driver before); Xvfb, Openbox,
       # wmctrl and xclip for the X11 session the test runs in.
+      # In the background, with apt's retries (system-packages.sh, as in ci.yml).
       - name: Install the system packages in the background
         run: |
-          (
-            status=failed
-            if sudo apt-get update \
-              && sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-                webkitgtk-webdriver xvfb openbox wmctrl xclip
-            then
-              status=ready
-            fi
-            echo "$status" > "$RUNNER_TEMP/apt.status"
-          ) > "$RUNNER_TEMP/apt.log" 2>&1 &
+          bash .github/workflows/system-packages.sh install libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            webkitgtk-webdriver xvfb openbox wmctrl xclip
       # The database servers and the bastions, as in ci.yml's Linux job (no Kubernetes here).
       - name: Start the test services in the background
         run: |
@@ -106,13 +99,10 @@ jobs:
       - run: cargo install tauri-driver --locked --version 2.1.0
       - run: npm ci
         working-directory: apps/desktop
+      # Twenty minutes, as in ci.yml: a slow mirror is not a failure; apt failing is, and the
+      # step says which of the two happened (SDB-427).
       - name: Wait for the system packages
-        run: |
-          timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/apt.status" ]; do sleep 1; done' || true
-          echo "::group::apt-get output"
-          cat "$RUNNER_TEMP/apt.log"
-          echo "::endgroup::"
-          test "$(cat "$RUNNER_TEMP/apt.status" 2> /dev/null)" = ready
+        run: bash .github/workflows/system-packages.sh wait 1200
       # The app, the CLI and the tool that fetches the plugins in one command, so nothing is
       # built twice (CONTRIBUTING.md).
       - name: Build the release app and CLI

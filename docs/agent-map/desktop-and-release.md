@@ -42,7 +42,10 @@
   to `dev` that touches more than documentation: a release build on
   ubuntu with `testing/docker` up, under Xvfb with Openbox, so it takes the X11 paths (`xclip`
   for the clipboard, `wmctrl` for the close request). A failure names the step and uploads the
-  screenshots and the log (artifact `smoke-linux`). macOS has neither (no
+  screenshots and the log (artifact `smoke-linux`). It and `ci.yml`'s Linux job install their
+  Ubuntu packages in the background through `.github/workflows/system-packages.sh` (apt's
+  retries and timeouts, then a 20-minute wait that fails saying whether apt failed or the mirror
+  was still slow; tested by `system-packages.test.sh`, SDB-427). macOS has neither (no
   WebDriver for WKWebView). `e2e/processes.mjs` closes windows and lists processes for both.
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;

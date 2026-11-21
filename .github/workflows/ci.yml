@@ -115,6 +115,9 @@ jobs:
           fetch-depth: 2
       - name: Test the release updater manifest check
         run: node --test scripts/check-updater-manifest.test.mjs
+      # How the Linux jobs install and wait for their Ubuntu packages (SDB-427).
+      - name: Test the system packages script
+        run: bash .github/workflows/system-packages.test.sh
       # On a pull request that changes nothing the Rust checks read, every step below is
       # skipped and the job passes (see the top of this file). Anything but an explicit
       # `false` runs them, and a failure here fails the job: never skipped by accident.
@@ -141,19 +144,10 @@ jobs:
       # libdbus: Linux keychain (Secret Service). WebKitGTK and friends: the Tauri app. Installing
       # them takes half a minute that setting up Rust and its cache needs anyway, so it runs in
       # the background: "Wait for the system libraries" below, before the first step that
-      # builds, shows its output and fails the job if it failed.
+      # builds, shows its output and fails the job if it failed (system-packages.sh).
       - name: Install the system libraries in the background
         if: steps.scope.outputs.rust != 'false'
-        run: |
-          (
-            status=failed
-            if sudo apt-get update \
-              && sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-            then
-              status=ready
-            fi
-            echo "$status" > "$RUNNER_TEMP/apt.status"
-          ) > "$RUNNER_TEMP/apt.log" 2>&1 &
+        run: bash .github/workflows/system-packages.sh install libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       # Only installs kind and kubectl: the cluster is created below, in the background. Its
       # name is given so the action deletes it when the job ends.
       - if: steps.scope.outputs.rust != 'false'
@@ -207,14 +201,11 @@ jobs:
           SSH_AUTH_SOCK=/tmp/ssh-agent.sock ssh-add testing/docker/keys/id_ed25519
       - if: steps.scope.outputs.rust != 'false'
         run: cargo fmt --all --check
+      # Twenty minutes: a slow Ubuntu mirror once took more than ten (SDB-427). It fails at
+      # once if apt fails, and says which of the two happened.
       - name: Wait for the system libraries
         if: steps.scope.outputs.rust != 'false'
-        run: |
-          timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/apt.status" ]; do sleep 1; done' || true
-          echo "::group::apt-get output"
-          cat "$RUNNER_TEMP/apt.log"
-          echo "::endgroup::"
-          test "$(cat "$RUNNER_TEMP/apt.status" 2> /dev/null)" = ready
+        run: bash .github/workflows/system-packages.sh wait 1200
       - if: steps.scope.outputs.rust != 'false'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Build the tests first: the services are only needed to run them.
