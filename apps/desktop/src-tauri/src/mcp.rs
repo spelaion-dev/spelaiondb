@@ -207,11 +207,16 @@ pub async fn set_mcp_output_format(
 #[command]
 pub async fn mcp_access(state: State<'_, AppState>) -> CmdResult<Vec<McpAccessItem>> {
     state.reload().await;
-    let (all_read_only, _) = state
-        .history
-        .mcp_settings()
-        .await
-        .map_err(|e| e.to_string())?;
+    // Asked as the server asks it: a setting that cannot be read makes every agent read-only,
+    // so the page shows what a running server decides instead of an error.
+    let all_read_only = spelaion_core::all_agents_read_only(
+        false,
+        state
+            .history
+            .mcp_settings()
+            .await
+            .map(|(read_only, _)| read_only),
+    );
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
     let trusted = config

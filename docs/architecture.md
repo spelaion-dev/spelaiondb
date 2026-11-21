@@ -72,6 +72,9 @@ See [execution plans](execution-plans.md) for metric semantics, capabilities and
    limits, and is recorded in the audit log.
 4. On connections with `mcp.writes = "allow"`, `execute_write` runs one checked write in its
    own transaction, in a session separate from the reads, also audited (ADR-019).
+5. A refused or failed call answers its sentence and, as structured content, the core's code
+   for it and whether running it again makes sense (`spelaion-core::agent_state`, SDB-374);
+   the audit log records the same code.
 
 **The window's Content Security Policy (SDB-127)**
 The window shows a lot of text it does not control (cell values, names, comments, server

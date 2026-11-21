@@ -27,6 +27,10 @@ use crate::{ResultStore, Session};
 /// Available engines, by the name the configuration uses (`engine = "postgres"`).
 pub struct Engines {
     drivers: HashMap<String, Arc<dyn Driver>>,
+    /// Engines whose driver only says why their plugin is not started (missing or refused,
+    /// `with_plugin_states`), so that agents are told "plugin missing" rather than a connection
+    /// failure (SDB-374).
+    unavailable: std::collections::HashSet<String>,
 }
 
 impl Engines {
@@ -62,7 +66,13 @@ impl Engines {
                 .into_iter()
                 .map(|d| (d.engine().to_string(), d))
                 .collect(),
+            unavailable: Default::default(),
         }
+    }
+
+    /// Whether `engine`'s plugin is missing or refused here: its driver only says why.
+    pub fn plugin_unavailable(&self, engine: &str) -> bool {
+        self.unavailable.contains(engine)
     }
 
     /// These engines with our plugins that are on this machine: next to this program and, with
@@ -103,6 +113,7 @@ impl Engines {
     /// driver that is not compiled in (a plugin, ADR-041) is used. It brings the wire only:
     /// the dialect is the core's ([`dialect_of`]).
     pub fn with_driver(mut self, driver: Arc<dyn Driver>) -> Self {
+        self.unavailable.remove(driver.engine());
         self.drivers.insert(driver.engine().to_string(), driver);
         self
     }
@@ -154,7 +165,11 @@ impl Engines {
                 };
                 if let Some(refused) = state.refused.first() {
                     for engine in &refused.engines {
+                        let alone = self.driver(engine).is_none();
                         self = self.with_plugin(says_why(engine));
+                        if alone {
+                            self.unavailable.insert(engine.clone());
+                        }
                     }
                 } else if let Some(missing) = &state.missing {
                     // Not installed is not refused: an engine whose driver is compiled in is
@@ -163,6 +178,7 @@ impl Engines {
                     for engine in &missing.engines {
                         if self.driver(engine).is_none() {
                             self = self.with_driver(says_why(engine));
+                            self.unavailable.insert(engine.clone());
                         }
                     }
                 }
@@ -497,6 +513,44 @@ pub struct OpenConnection {
     tunnel: Option<ActiveTunnel>,
 }
 
+/// Whether an open connection can still be used, readable without locking it while a call uses
+/// it (SDB-374): its session's health, then its tunnel, then its driver connection. The one
+/// place that asks; the first reason found wins, as in `SessionHealth`.
+#[derive(Clone)]
+pub struct Liveness {
+    health: watch::Receiver<crate::SessionHealth>,
+    tunnel: Option<watch::Receiver<TunnelState>>,
+    connection: Arc<dyn Connection>,
+}
+
+impl Liveness {
+    /// Why the connection can no longer be used (ADR-028: it is never used again, and nothing
+    /// that ran on it is run again), or `None` while it can.
+    pub fn lost(&self) -> Option<String> {
+        match &*self.health.borrow() {
+            crate::SessionHealth::Alive => {}
+            crate::SessionHealth::Lost { reason } => return Some(reason.clone()),
+            crate::SessionHealth::IdleClosed { after } => {
+                return Some(format!("closed after {} s without use", after.as_secs()));
+            }
+        }
+        if let Some(tunnel) = &self.tunnel {
+            match &*tunnel.borrow() {
+                TunnelState::Up => {}
+                TunnelState::Opening => return Some("its tunnel is not open".into()),
+                TunnelState::Down { reason } => {
+                    return Some(format!("its tunnel went down: {reason}"));
+                }
+                TunnelState::Closed => return Some("its tunnel was closed".into()),
+            }
+        }
+        if self.connection.is_closed() {
+            return Some("the connection was closed".into());
+        }
+        None
+    }
+}
+
 impl OpenConnection {
     /// Tunnel state, if the connection goes through one.
     pub fn tunnel_state(&self) -> Option<watch::Receiver<TunnelState>> {
@@ -504,6 +558,15 @@ impl OpenConnection {
             ActiveTunnel::Ssh(t) => t.state(),
             ActiveTunnel::Kube(t) => t.state(),
         })
+    }
+
+    /// What says whether this connection can still be used, to read while a call holds it.
+    pub fn liveness(&self) -> Liveness {
+        Liveness {
+            health: self.session.health(),
+            tunnel: self.tunnel_state(),
+            connection: self.session.connection().clone(),
+        }
     }
 
     /// Closes the session and, if it was the last one using the tunnel, the tunnel too.

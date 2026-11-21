@@ -253,6 +253,16 @@ const MIGRATIONS: &[&str] = &["create table audit (
         when new.active = 1 and exists
             (select 1 from open_tabs where workspace = new.workspace and active = 1)
         begin select raise(abort, 'a workspace has one active tab'); end;",
+    // Why an agent's call was refused or failed, as a stable code (SDB-374). Rows written
+    // before have none; a code this build does not know is refused when written and read as
+    // unknown.
+    "alter table audit add column code text;
+    create trigger audit_code_insert before insert on audit
+        when new.code is not null and new.code not in ('session_lost', 'connection_unavailable',
+            'not_exposed', 'not_trusted', 'read_only', 'refused_by_guard',
+            'engine_without_barrier', 'plugin_missing', 'cancelled', 'timed_out',
+            'statement_failed', 'invalid_arguments', 'internal')
+        begin select raise(abort, 'unknown audit code'); end;",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -389,6 +399,94 @@ pub struct AuditEntry {
     pub session: Option<String>,
     /// The MCP tool called (`run_query`, `execute_write`…); `None` before 0.7.
     pub tool: Option<String>,
+    /// Why a refused or failed call ended so (SDB-374); `None` when it was executed, and for
+    /// entries written before 0.13.
+    pub code: Option<FailureCode>,
+}
+
+/// Why an agent's call was refused or failed, as a stable code agents and the Activity tab can
+/// read without parsing English (ADR-060, SDB-374). The store keeps it beside the decision; the
+/// core decides which one applies and whether running the call again makes sense
+/// (`spelaion_core::agent_state`). A code carries no data: no secret, no SQL, no path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FailureCode {
+    /// The session was lost during the call (the server ended it, the network or its tunnel
+    /// went down). The next call opens a new one.
+    SessionLost,
+    /// The connection could not be opened.
+    ConnectionUnavailable,
+    /// The connection does not exist or is not exposed to agents, or nothing is exposed.
+    NotExposed,
+    /// A host key the user has not accepted, or one that changed.
+    NotTrusted,
+    /// Agents may only read this connection.
+    ReadOnly,
+    /// A barrier of SpelaionDB refused the statement before it was sent.
+    RefusedByGuard,
+    /// The engine or server has no barrier agents can rely on.
+    EngineWithoutBarrier,
+    /// The engine's plugin is not installed.
+    PluginMissing,
+    /// The statement was cancelled.
+    Cancelled,
+    /// The statement exceeded the time limit.
+    TimedOut,
+    /// The database refused or failed the statement.
+    StatementFailed,
+    /// The call's arguments do not go together (a plan page without a plan, for instance).
+    InvalidArguments,
+    /// Something went wrong inside SpelaionDB.
+    Internal,
+    /// A code this build does not know (written by a newer one): read as unknown, never as one
+    /// of the others (SDB-376). Never written.
+    Unknown,
+}
+
+impl FailureCode {
+    /// Every code that is written, as its text: the same words agents get.
+    pub const WRITTEN: [FailureCode; 13] = [
+        FailureCode::SessionLost,
+        FailureCode::ConnectionUnavailable,
+        FailureCode::NotExposed,
+        FailureCode::NotTrusted,
+        FailureCode::ReadOnly,
+        FailureCode::RefusedByGuard,
+        FailureCode::EngineWithoutBarrier,
+        FailureCode::PluginMissing,
+        FailureCode::Cancelled,
+        FailureCode::TimedOut,
+        FailureCode::StatementFailed,
+        FailureCode::InvalidArguments,
+        FailureCode::Internal,
+    ];
+
+    /// Its stable text; `None` for [`FailureCode::Unknown`], which is never written.
+    pub fn as_str(self) -> Option<&'static str> {
+        Some(match self {
+            FailureCode::SessionLost => "session_lost",
+            FailureCode::ConnectionUnavailable => "connection_unavailable",
+            FailureCode::NotExposed => "not_exposed",
+            FailureCode::NotTrusted => "not_trusted",
+            FailureCode::ReadOnly => "read_only",
+            FailureCode::RefusedByGuard => "refused_by_guard",
+            FailureCode::EngineWithoutBarrier => "engine_without_barrier",
+            FailureCode::PluginMissing => "plugin_missing",
+            FailureCode::Cancelled => "cancelled",
+            FailureCode::TimedOut => "timed_out",
+            FailureCode::StatementFailed => "statement_failed",
+            FailureCode::InvalidArguments => "invalid_arguments",
+            FailureCode::Internal => "internal",
+            FailureCode::Unknown => return None,
+        })
+    }
+
+    /// The code `s` names, or [`FailureCode::Unknown`].
+    pub fn parse(s: &str) -> Self {
+        Self::WRITTEN
+            .into_iter()
+            .find(|code| code.as_str() == Some(s))
+            .unwrap_or(FailureCode::Unknown)
+    }
 }
 
 impl AuditEntry {
@@ -404,6 +502,7 @@ impl AuditEntry {
             detail: None,
             session: None,
             tool: None,
+            code: None,
         }
     }
 }
@@ -485,6 +584,7 @@ fn audit_where(filter: &AuditFilter) -> (String, Vec<String>) {
 
 fn audit_row(r: &rusqlite::Row) -> rusqlite::Result<AuditRecord> {
     let decision: String = r.get(5)?;
+    let code: Option<String> = r.get(11)?;
     Ok(AuditRecord {
         id: r.get(0)?,
         entry: AuditEntry {
@@ -498,6 +598,7 @@ fn audit_row(r: &rusqlite::Row) -> rusqlite::Result<AuditRecord> {
             detail: r.get(8)?,
             session: r.get(9)?,
             tool: r.get(10)?,
+            code: code.as_deref().map(FailureCode::parse),
         },
     })
 }
@@ -1062,9 +1163,15 @@ impl Store {
                 "an audit record needs a known decision".into(),
             ));
         };
+        let code = match entry.code {
+            None => None,
+            Some(code) => Some(code.as_str().ok_or_else(|| {
+                StoreError::new("an audit record's code must be a known one".into())
+            })?),
+        };
         self.conn.execute(
-            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 entry.at_ms,
                 entry.client,
@@ -1075,7 +1182,8 @@ impl Store {
                 entry.duration_ms,
                 entry.detail,
                 entry.session,
-                entry.tool
+                entry.tool,
+                code
             ],
         )?;
         Ok(())
@@ -1101,7 +1209,7 @@ impl Store {
         params.push(limit.min(i64::MAX as usize).to_string());
         params.push(offset.min(i64::MAX as usize).to_string());
         let sql = format!(
-            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool
+            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code
              from audit {clause} order by id desc limit cast(?{} as integer) offset cast(?{} as integer)",
             params.len() - 1,
             params.len()
@@ -2262,6 +2370,55 @@ mod tests {
         // Reopening neither repeats migrations nor loses data.
         drop(store);
         assert_eq!(Store::open(&path).unwrap().recent(10).unwrap().len(), 2);
+    }
+
+    /// Every code an agent can get is kept and read back as itself (SDB-374); one the build
+    /// does not know is refused when written and read as unknown when a newer build wrote it.
+    #[test]
+    fn audit_codes_are_kept_and_unknown_ones_read_as_unknown() {
+        let path = temp("audit-codes");
+        let store = Store::open(&path).unwrap();
+        for code in FailureCode::WRITTEN {
+            let mut entry = AuditEntry::now("agent", "~/c", "select 1", Decision::Failed);
+            entry.code = Some(code);
+            store.record(&entry).unwrap();
+            assert_eq!(store.recent(1).unwrap()[0].code, Some(code));
+            assert_eq!(FailureCode::parse(code.as_str().unwrap()), code);
+        }
+        assert_eq!(FailureCode::parse("something_new"), FailureCode::Unknown);
+        let mut unknown = AuditEntry::now("agent", "~/c", "select 1", Decision::Failed);
+        unknown.code = Some(FailureCode::Unknown);
+        assert!(store.record(&unknown).is_err());
+        assert!(
+            store
+                .conn
+                .execute(
+                    "insert into audit (at_ms, client, connection, statement, decision, code)
+                     values (1, 'agent', '~/c', 'select 1', 'failed', 'Session Lost')",
+                    [],
+                )
+                .is_err()
+        );
+        // A row a newer build wrote, with a code this build does not know.
+        store
+            .conn
+            .execute_batch(
+                "drop trigger audit_code_insert;
+                 insert into audit (at_ms, client, connection, statement, decision, code)
+                 values (1, 'agent', '~/c', 'select 1', 'failed', 'something_new');",
+            )
+            .unwrap();
+        assert_eq!(store.recent(1).unwrap()[0].code, Some(FailureCode::Unknown));
+        // An executed call has no code.
+        store
+            .record(&AuditEntry::now(
+                "agent",
+                "~/c",
+                "select 1",
+                Decision::Executed,
+            ))
+            .unwrap();
+        assert_eq!(store.recent(1).unwrap()[0].code, None);
     }
 
     #[test]

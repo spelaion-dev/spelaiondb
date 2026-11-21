@@ -3,6 +3,7 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+pub mod agent_state;
 mod app_log;
 pub mod audit;
 pub mod backup;
@@ -92,6 +93,7 @@ mod value_view;
 mod variables;
 mod write;
 
+pub use agent_state::{AgentFailure, FailureCode, access_code, all_agents_read_only};
 pub use app_log::{AppLog, MAX_LOG_BYTES};
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use chart::{
@@ -209,7 +211,7 @@ pub use objects::{
     duplicate_plan, maintenance_kinds, maintenance_plan, maintenance_statement,
 };
 pub use open::{
-    Engines, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
+    Engines, Liveness, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
     create_file_database, dialect_of, open_connection, open_route, test_tunnel,
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
