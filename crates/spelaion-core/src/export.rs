@@ -1831,6 +1831,12 @@ pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
             let hex: String = text.bytes().map(|b| format!("{b:02X}")).collect();
             return format!("_utf8mb4 X'{hex}'");
         }
+        // Where a backslash escapes in a string, `\` and `'` are escaped with one, or a value
+        // ending in `\` would end its literal early (SDB-435). Not `''`: Spanner and HiveQL
+        // read it as two strings.
+        if spelaion_dialect::backslash_escapes(dialect) {
+            return format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"));
+        }
         let text = text.replace('\'', "''");
         // SQL Server: `N'…'` keeps every character (plain `'…'` goes through a code page).
         if dialect == "sqlserver" {
