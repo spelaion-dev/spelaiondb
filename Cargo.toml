@@ -33,6 +33,10 @@ futures-util = "0.3"
 insta = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# Property tests of what reads text and files no one wrote by hand (SDB-156): the splitters, the
+# placeholders, the barriers and the readers of untrusted files. Tests only. No `fork` or
+# `timeout`, which would bring a process runner along.
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

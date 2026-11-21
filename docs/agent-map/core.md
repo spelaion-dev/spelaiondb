@@ -50,7 +50,12 @@
   typed password goes with it only to the same login on the same route (`carried_password`);
   otherwise the tab connects as a new one does. Nothing is run again (`tests/session_source.rs`).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
-  there needs tests that try to get around them. `guard.rs` lists the statements the app
+  there needs tests that try to get around them. `tests/properties.rs` (SDB-156) generates
+  them: a write or a refused function hidden in every place it can go is never a read, and a
+  destructive statement never passes the guard unasked; it also checks the `:name` scanner
+  (`params.rs`: only placeholders in code are found and bound, a value stays in its literal),
+  that pasted text, any import file and any `.sql` file read without a panic, and that SQLite
+  itself agrees with its splitter on where each statement ends. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
   connection's type asks for: data changes on Production, every run where it confirms
   execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
