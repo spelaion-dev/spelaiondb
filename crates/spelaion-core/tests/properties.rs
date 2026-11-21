@@ -256,34 +256,22 @@ proptest! {
     }
 }
 
-/// The dialects whose strings `bind_params` writes so that no value can end them early: a
-/// doubled quote is their only escape, or (MySQL) a value with a backslash goes as hex.
-const BINDS_ANY_VALUE: &[&str] = &[
-    "postgres",
-    "mysql",
-    "mysql[NO_BACKSLASH_ESCAPES]",
-    "mysql[ANSI_QUOTES]",
-    "sqlite",
-    "sqlserver",
-    "duckdb",
-    "trino",
-    "oracle",
-    "cassandra",
-    "flightsql",
-];
-
 proptest! {
     #![proptest_config(config(256))]
 
-    /// Whatever the user types as a value stays one literal: the script splits into as many
-    /// statements as before and has no placeholder left.
+    /// Whatever the user types as a value stays one literal, on every dialect: the script
+    /// splits into as many statements as before and has no placeholder left (SDB-435).
     #[test]
     fn a_value_stays_inside_its_literal(
-        label in prop::sample::select(BINDS_ANY_VALUE),
+        label in prop::sample::select(sql_dialects().into_iter().map(|(l, _)| l).collect::<Vec<_>>()),
         parts in parts("standard"),
-        value in prop_oneof![any::<String>(), text_of("'\"\\;:-/*` xé", 12)],
+        value in prop_oneof![
+            any::<String>(),
+            text_of("'\"\\;:-/*` xé", 12),
+            text_of("'\"\\;:-/*` xé", 12).prop_map(|v| v + "\\"),
+        ],
     ) {
-        let dialect = dialect_of(label);
+        let dialect = dialect_of(&label);
         let (script, names, _) = assemble(&parts);
         let script = format!("{script};\nselect 2");
         let values: HashMap<String, String> = names.iter().map(|n| (n.clone(), value.clone())).collect();
@@ -297,21 +285,31 @@ proptest! {
     }
 }
 
-/// Found by `a_value_stays_inside_its_literal` when every dialect was tried. Where a backslash
-/// escapes a quote in a string (ClickHouse, Databend, Spanner, HiveQL, TDengine),
-/// `bind_params` writes a value as `'…'` with doubled quotes only: a value ending in `\` ends
-/// its literal early and the rest of the script is read inside a string.
+/// Found by `a_value_stays_inside_its_literal` when every dialect was tried (SDB-435). Where a
+/// backslash escapes a quote in a string (ClickHouse, Databend, Spanner, HiveQL, TDengine),
+/// `bind_params` wrote a value as `'…'` with doubled quotes only: a value ending in `\` ended
+/// its literal early and the rest of the script was read inside a string.
 #[test]
-#[ignore = "found by SDB-156's property tests: bind_params does not escape backslashes where they escape quotes; its fix gets its own Plane item"]
 fn a_value_with_a_backslash_stays_inside_its_literal_everywhere() {
     let mut broken = Vec::new();
-    for engine in ["clickhouse", "databend", "spanner", "hive", "tdengine"] {
+    for engine in [
+        "clickhouse",
+        "databend",
+        "spanner",
+        "hive",
+        "spark",
+        "kyuubi",
+        "impala",
+        "tdengine",
+    ] {
         let dialect = dialect(engine);
         let script = "select :a;\nselect 2";
-        let values = HashMap::from([("a".to_string(), "C:\\".to_string())]);
-        let bound = bind_params(dialect.as_ref(), script, &values).unwrap();
-        if dialect.split_statements(&bound).len() != 2 {
-            broken.push(format!("{engine}: {bound:?}"));
+        for value in ["C:\\", "x\\'", "\\\\'; select 3; --\\", "it's"] {
+            let values = HashMap::from([("a".to_string(), value.to_string())]);
+            let bound = bind_params(dialect.as_ref(), script, &values).unwrap();
+            if dialect.split_statements(&bound).len() != 2 {
+                broken.push(format!("{engine}: {bound:?}"));
+            }
         }
     }
     assert!(

@@ -190,7 +190,11 @@
   `tests/value_display.rs` formats every engine's types and writes a filter from a formatted
   cell.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
-  runs those conditions, lists and names on every engine.
+  runs those conditions, lists and names on every engine. Its `sql_literal` writes every
+  literal the core writes (bound `:name` values, edits, copies, filters): where a backslash
+  escapes in a string (`spelaion_dialect::backslash_escapes`, checked against each splitter),
+  `\` and `'` go escaped with one, so no value ends its literal early (SDB-435); MySQL's go
+  as hex when they hold a backslash. No caller escapes values itself.
   "Copy special…" (SDB-388) is `export.rs`'s `copy_special` (delimiter, quote, row delimiter,
   NULL text, header, row numbers; the choices are the copy defaults, `History::copy_defaults`,
   checked before they are saved), and copy as UPDATE is its `copy_updates`, through an

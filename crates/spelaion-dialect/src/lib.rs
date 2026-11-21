@@ -51,6 +51,19 @@ pub use standard::StandardDialect;
 pub use tdengine::TdengineDialect;
 pub use trino::TrinoDialect;
 
+/// Whether a backslash escapes the next character in a `'…'` string of the dialect named
+/// `name` (its [`Dialect::name`]), as that dialect's splitter reads it: ClickHouse, Databend,
+/// Spanner, HiveQL's engines and TDengine. A literal written for them escapes `\` and `'` with
+/// a backslash, or a value ending in `\` would end its literal early (SDB-435). MySQL's
+/// depends on the session's `sql_mode`, so it is not here: its literals with a backslash are
+/// written in hex instead.
+pub fn backslash_escapes(name: &str) -> bool {
+    matches!(
+        name,
+        "clickhouse" | "databend" | "spanner" | "hive" | "spark" | "kyuubi" | "impala" | "tdengine"
+    )
+}
+
 /// The dialect of an engine, by the name the configuration uses (`engine = "postgres"`).
 /// `None` for an engine the core has no dialect for: nothing is split, classified or guarded
 /// for it, so nothing that depends on those may be offered on it (ADR-041).
@@ -159,6 +172,45 @@ mod tests {
         let redis = for_engine("redis").unwrap();
         assert!(redis.reads_requests());
         assert!(matches!(redis.to_request("GET k", "0"), Some(Ok(_))));
+    }
+
+    /// `backslash_escapes` says what each dialect's own splitter reads: `'\''` is one string
+    /// where a backslash escapes, and an open one where it does not (SDB-435).
+    #[test]
+    fn backslash_escapes_as_each_splitter_reads_it() {
+        for engine in [
+            "postgres",
+            "sqlite",
+            "sqlserver",
+            "duckdb",
+            "clickhouse",
+            "trino",
+            "presto",
+            "oracle",
+            "databend",
+            "spanner",
+            "libsql",
+            "cassandra",
+            "tdengine",
+            "flightsql",
+            "dremio",
+            "gizmosql",
+            "hive",
+            "spark",
+            "kyuubi",
+            "impala",
+        ] {
+            let dialect = for_engine(engine).unwrap();
+            let splits_after_the_string =
+                dialect.split_statements("select '\\'';\nselect 2").len() == 2;
+            assert_eq!(
+                backslash_escapes(dialect.name()),
+                splits_after_the_string,
+                "{engine}"
+            );
+        }
+        // MySQL's depends on the session: its literals with a backslash are hex.
+        assert!(!backslash_escapes("mysql"));
     }
 
     #[test]
