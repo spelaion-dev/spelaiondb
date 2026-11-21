@@ -3,8 +3,9 @@
 // not touch the user's configuration or keychain.
 //
 // Requirements: the app and the CLI (for the MCP activity steps) built in one command, so DuckDB
-// is compiled once (CONTRIBUTING.md): npx tauri build --no-bundle -- -p spelaion-desktop
-// -p spelaion-cli; Python, to make examples/demo/data/shop.db again at the start of every run
+// is compiled once, with the `e2e` feature that lets the app open WebView2's debugging port
+// (CONTRIBUTING.md): npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli
+// -p spelaion-plugin-fetch --features spelaion-desktop/e2e; Python, to make examples/demo/data/shop.db again at the start of every run
 // (examples/demo/make-shop-db.py), and, for the PostgreSQL steps, testing/docker up.
 //   node e2e/smoke.mjs [screenshots-dir]
 // On Linux (WebKitGTK has no CDP port) run the Linux pass instead: node e2e/smoke-linux.mjs.
@@ -24,6 +25,13 @@ import { commandLines, requestClose } from "./processes.mjs";
 
 if (process.platform === "linux") {
   console.error("smoke.mjs drives WebView2 over CDP; on Linux run node e2e/smoke-linux.mjs (AGENTS.md)");
+  process.exit(2);
+}
+
+// SPELAION_E2E_UNTIL must name a step of this file: a renamed step would otherwise let the run
+// go on past where it was meant to stop (CI stops before the steps that need testing/docker).
+if (process.env.SPELAION_E2E_UNTIL && !readFileSync(import.meta.filename, "utf8").includes(`step(${JSON.stringify(process.env.SPELAION_E2E_UNTIL).slice(0, -1)}`)) {
+  console.error(`SPELAION_E2E_UNTIL="${process.env.SPELAION_E2E_UNTIL}" is not the start of any step's text in smoke.mjs`);
   process.exit(2);
 }
 
@@ -113,7 +121,9 @@ function startApp(extraEnv = {}, extraArgs = []) {
       // drawing a window it sees as hidden: these flags keep it drawing and its timers running.
       // SPELAION_E2E_SHOW_WINDOW=1 opens it on screen, to watch a run.
       ...(process.env.SPELAION_E2E_SHOW_WINDOW === "1" ? {} : { SPELAION_E2E_OFFSCREEN: "1" }),
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: [
+      // WebView2's switches, passed by the app itself (webview_args.rs): GitHub's Windows runners
+      // ignore WebView2's own WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (SDB-155).
+      SPELAION_E2E_WEBVIEW2_ARGUMENTS: [
         `--remote-debugging-port=${port}`,
         "--disable-features=CalculateNativeWinOcclusion",
         "--disable-backgrounding-occluded-windows",
@@ -291,20 +301,60 @@ function checkContentSecurityPolicy() {
 
 async function connect() {
   for (let i = 0; i < 60; i++) {
+    if (app.exitCode !== null || app.signalCode !== null) {
+      throw new Error(`the app ended (${app.exitCode ?? app.signalCode}) before it opened the debugging port`);
+    }
     try {
       return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     } catch {
       await new Promise((r) => setTimeout(r, 500));
     }
   }
-  throw new Error("the app did not open the debugging port");
+  throw new Error(
+    `the app is running but did not open the debugging port ${port} in 30 s (was it built with --features spelaion-desktop/e2e? CONTRIBUTING.md)\n${startDiagnostics()}`,
+  );
+}
+
+/** What a start that never opened the debugging port left, to tell a webview that never started
+ *  from one started without the port (CI has no screen to look at): WebView2's processes and
+ *  whether they carry the port, and on Windows a picture of the desktop next to the screenshots. */
+function startDiagnostics() {
+  const lines = [];
+  try {
+    const webviews = commandLines(process.platform === "win32" ? "msedgewebview2" : "WebKitWebProcess");
+    lines.push(`webview processes: ${webviews.length}, with --remote-debugging-port=${port}: ${webviews.filter((l) => l.includes(`--remote-debugging-port=${port}`)).length}`);
+    // The browser process carries every switch WebView2 was given; the others are its children.
+    const browserProcess = webviews.find((l) => l.includes("--embedded-browser-webview")) ?? webviews[0];
+    if (browserProcess) lines.push(`  browser process: ${browserProcess}`);
+  } catch (e) {
+    lines.push(`could not list the webview processes: ${e.message}`);
+  }
+  if (process.platform === "win32") {
+    const picture = join(shots, "desktop-at-start.png");
+    try {
+      execFileSync("powershell", ["-NoProfile", "-Command", [
+        "Add-Type -AssemblyName System.Windows.Forms, System.Drawing",
+        "$b = [System.Windows.Forms.SystemInformation]::VirtualScreen",
+        "$i = New-Object System.Drawing.Bitmap $b.Width, $b.Height",
+        "[System.Drawing.Graphics]::FromImage($i).CopyFromScreen($b.Left, $b.Top, 0, 0, $i.Size)",
+        `$i.Save('${picture.replaceAll("'", "''")}')`,
+      ].join("; ")], { stdio: "ignore" });
+      lines.push(`the desktop: ${picture}`);
+    } catch (e) {
+      lines.push(`could not take a picture of the desktop: ${e.message}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 let failed = false;
+// The step that is running, named when the run fails (CI's error reads it).
+let currentStep = "starting the app";
 // The demo's shop.toml is changed during the run (ADR-022) and always put back.
 const shopOriginal = readFileSync(shopFile, "utf8");
-let browser = await connect();
+let browser;
 try {
+  browser = await connect();
   let page = await appPage();
   page.setDefaultTimeout(30_000);
   const shot = (name) => page.screenshot({ path: join(shots, `${name}.png`) });
@@ -314,6 +364,7 @@ try {
   const step = (text) => {
     checkContentSecurityPolicy();
     if (untilReached) throw untilComplete;
+    currentStep = text;
     if (process.env.SPELAION_E2E_UNTIL && text.startsWith(process.env.SPELAION_E2E_UNTIL)) untilReached = true;
     console.log(`· ${text}`);
   };
@@ -1235,7 +1286,15 @@ try {
   await page.mouse.move(resizeBox.x - 80, resizeBox.y + resizeBox.height / 2, { steps: 5 });
   await page.mouse.up();
   const wider = await viewerWidthWhen((width) => width > beforeWidth + 50);
-  assert.ok(wider > beforeWidth + 50, `drag should widen the viewer: ${beforeWidth} → ${wider}`);
+  if (!(wider > beforeWidth + 50)) {
+    // Its maximum follows the window: a screen smaller than the window's 1400×900 shrinks the
+    // window, and with it the room to widen (CI gives its runner a larger screen, SDB-155).
+    const room = await page.evaluate(() => {
+      const separator = document.querySelector('.tab-panel:not([hidden]) [role="separator"][aria-label="Resize cell value panel"]');
+      return `its maximum is ${separator?.getAttribute("aria-valuemax")}, in a window of ${innerWidth}×${innerHeight}`;
+    });
+    assert.fail(`drag should widen the viewer: ${beforeWidth} → ${wider} (${room})`);
+  }
   await viewerResize.focus();
   await page.keyboard.press("ArrowRight");
   const narrower = await viewerWidthWhen((width) => width < wider);
@@ -10569,7 +10628,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   else if (e === untilComplete) console.log(`\nOK. Smoke test passed up to "${process.env.SPELAION_E2E_UNTIL}".`);
   else {
     failed = true;
-    console.error("\nFAILED:", e);
+    console.error(`\nFAILED at step "${currentStep}":\n`, e);
     try {
       await browser.contexts()[0].pages()[0].screenshot({ path: join(shots, "failure.png") });
     } catch {}
@@ -10577,7 +10636,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 } finally {
   writeFileSync(shopFile, shopOriginal);
   restoreDemoConnections();
-  await browser.close().catch(() => {});
+  await browser?.close().catch(() => {});
   await stopApp();
   // WebView2 lets go of its profile (inside userDir) a moment after the app exits.
   try {

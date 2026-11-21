@@ -22,6 +22,7 @@ mod plugins;
 mod startup;
 mod update;
 mod update_state;
+mod webview_args;
 
 use spelaion_desktop_macros::command;
 use std::collections::HashMap;
@@ -6578,6 +6579,14 @@ fn open_main_window(
     let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
     #[cfg(target_os = "linux")]
     let window = window.enable_clipboard_access();
+    // The smoke test's WebView2 switches (its debugging port), only in a build with the `e2e`
+    // feature and only from an allowlist; without the variable wry keeps its own
+    // (`webview_args.rs`).
+    #[cfg(feature = "e2e")]
+    let window = match webview_args::from_env()? {
+        Some(arguments) => window.additional_browser_args(&arguments),
+        None => window,
+    };
     let offscreen = std::env::var_os(OFFSCREEN_SWITCH).is_some();
     // Without the switch the builder keeps the configuration's visibility and focus.
     let window = if offscreen {

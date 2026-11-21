@@ -1,0 +1,135 @@
+# The Windows smoke test (apps/desktop/e2e/smoke.mjs) against a release build of the real app
+# on WebView2, driven over its debugging port, as on a developer's machine (CONTRIBUTING.md).
+#
+# What it covers: every step from the start up to and including "SQL files" (about half the
+# steps: start and trust, the sidebar and Settings, SQLite queries and their results, the grid,
+# copy and export, query pages, sort, find, filters, history, the editor and its shortcuts, script
+# runs and their guards, tabs, the explorer and the connection menu, the command palette, search,
+# table data, charts, the map, the ER diagram, saved queries and SQL files). It stops there with
+# SPELAION_E2E_UNTIL, which smoke.mjs refuses when it names no step. The next step, "direct
+# PostgreSQL", is the first that needs testing/docker, and GitHub's Windows runners do not run
+# Linux containers. Every step from there to the end (the server engines, SSH tunnels, imports,
+# DuckDB, a million rows, restarts, the MCP page, quitting) is still run by hand on Windows with
+# testing/docker up (AGENTS.md). No step is skipped or changed for CI: a step before the cut that
+# starts needing a server fails here, and is moved or the cut is.
+#
+# When a step fails, the job's error names it, and the screenshots (failure.png among them) and
+# the log are uploaded as the artifact `smoke-windows`.
+#
+# When it runs: like the Linux smoke test, on every pull request and every push to `dev` that
+# touches more than documentation, and by hand on any branch (Actions, "Run workflow"). A push to
+# `dev` names the commit that broke a step. It is not a required check (SDB-155): it becomes one
+# only once it has been stable for a while, and then it needs ci.yml's in-job skip, since a
+# skipped run never reports.
+#
+# Versions: the same pins as ci.yml (actions to a commit, Rust to a version): bump them together.
+name: Windows smoke test
+
+on:
+  push:
+    branches: [dev]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+# rust-cache makes every variable that starts with CARGO, RUST or CC part of its key.
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    name: Windows · smoke test of the app (WebView2, up to the server steps)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: 1.99.1
+      # Its own cache (a release build on Windows shares nothing with the other jobs), saved only
+      # by pushes to `dev`, like ci.yml's.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+      - run: npm ci
+        working-directory: apps/desktop
+      # The app, the CLI and the tool that fetches the plugins in one command, so nothing is
+      # built twice; three jobs, as CONTRIBUTING.md says for 16 GB (the runner has 16 GB). With
+      # the `e2e` feature, which only the smoke's builds have: the app passes WebView2 the
+      # test's switches, its debugging port among them (src-tauri/src/webview_args.rs). This
+      # build is never published.
+      - name: Build the release app and CLI for the smoke test
+        working-directory: apps/desktop
+        env:
+          CARGO_BUILD_JOBS: 3
+        run: npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli -p spelaion-plugin-fetch --features spelaion-desktop/e2e
+      # The engines that are plugins go next to the app, as the installer puts them (ADR-042).
+      - name: Put the pinned plugins next to the app
+        shell: bash
+        run: target/release/spelaion-fetch-plugins.exe --into target/release > /dev/null
+      # The runner's screen is 1024×768, which shrinks the app's 1400×900 window and with it the
+      # room steps measure (the cell viewer could widen by 9 px). A developer's screen is larger.
+      - name: Give the runner a 1920×1080 screen
+        shell: pwsh
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          Add-Type -AssemblyName System.Windows.Forms
+          $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          "screen: $screen"
+          if ($screen.Width -lt 1920 -or $screen.Height -lt 1080) { throw "the screen is still $($screen.Width)×$($screen.Height)" }
+      - name: Run the smoke test up to the steps that need testing/docker
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          SPELAION_E2E_UNTIL: "SQL files: Ctrl+O opens one"
+        run: |
+          set -o pipefail
+          if ! node e2e/smoke.mjs 2>&1 | tee "$RUNNER_TEMP/smoke-windows.log"; then
+            step=$(sed -n 's/^FAILED at step "\(.*\)":.*/\1/p' "$RUNNER_TEMP/smoke-windows.log" | head -1)
+            echo "::error title=Windows smoke test failed::${step:-see the log}"
+            echo "Windows smoke test failed at: ${step:-see the log}. Screenshots and log: artifact smoke-windows." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Windows smoke test passed up to \"$SPELAION_E2E_UNTIL\" (the steps that need testing/docker are run by hand)." >> "$GITHUB_STEP_SUMMARY"
+      # What the runner gave the app: WebView2's version, and whether this job has a desktop.
+      - name: Describe WebView2 and the desktop after a failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          "WebView2 runtime: $((Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).pv)"
+          "interactive: $([Environment]::UserInteractive), session: $((Get-Process -Id $PID).SessionId)"
+          Add-Type -AssemblyName System.Windows.Forms
+          "screen: $([System.Windows.Forms.SystemInformation]::VirtualScreen)"
+          Get-Process spelaion-desktop, msedgewebview2 -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, SessionId, StartTime
+      - name: Upload the screenshots and the log
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-windows
+          path: |
+            apps/desktop/e2e/screenshots/
+            ${{ runner.temp }}/smoke-windows.log
+          if-no-files-found: ignore
+          retention-days: 14
