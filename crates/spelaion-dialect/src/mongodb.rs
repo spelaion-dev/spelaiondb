@@ -177,7 +177,8 @@ fn trimmed(script: &str, start: usize, end: usize) -> Option<StatementSpan> {
     let mut first = start;
     while first < end {
         match bytes[first] {
-            b' ' | b'\t' | b'\r' | b'\n' => first += 1,
+            // White space by the one rule of every splitter (SDB-434).
+            _ if crate::is_white_space_at(script, first) => first += 1,
             b'/' if matches!(bytes.get(first + 1), Some(b'/') | Some(b'*')) => {
                 first = skip_non_code(script, first).unwrap_or(end).min(end);
             }

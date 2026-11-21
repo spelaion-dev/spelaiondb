@@ -1,5 +1,7 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::{is_white_space_at, trimmed};
+
 /// ClickHouse dialect, as ClickHouse's own lexer reads text: `'…'`, `"…"` and `` `…` `` with
 /// backslash escapes and doubled quotes, `--` comments and `#` ones (followed by a space or
 /// `!`), nested block comments, and `$tag$ … $tag$` heredocs. The server runs one statement
@@ -49,14 +51,14 @@ fn split(script: &str) -> Vec<StatementSpan> {
         match b[i] {
             b';' => {
                 if has_code {
-                    spans.push(trimmed(script, start, i));
+                    spans.extend(trimmed(script, start, i));
                 }
                 i += 1;
                 start = i;
                 has_code = false;
             }
-            c => {
-                if !c.is_ascii_whitespace() {
+            _ => {
+                if !is_white_space_at(script, i) {
                     has_code = true;
                 }
                 i += 1;
@@ -64,7 +66,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
         }
     }
     if has_code {
-        spans.push(trimmed(script, start, b.len()));
+        spans.extend(trimmed(script, start, b.len()));
     }
     spans
 }
@@ -148,16 +150,6 @@ fn heredoc_tag(b: &[u8], i: usize) -> Option<usize> {
         j += 1;
     }
     (b.get(j) == Some(&b'$')).then_some(j)
-}
-
-fn trimmed(script: &str, start: usize, end: usize) -> StatementSpan {
-    let text = &script[start..end];
-    let lead = text.len() - text.trim_start().len();
-    let trail = text.len() - text.trim_end().len();
-    StatementSpan {
-        start: start + lead,
-        end: end - trail,
-    }
 }
 
 #[cfg(test)]

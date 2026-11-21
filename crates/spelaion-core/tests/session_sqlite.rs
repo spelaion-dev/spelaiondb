@@ -65,6 +65,28 @@ async fn trigger_bodies_run_as_one_statement() {
     );
 }
 
+/// SDB-434: a script pasted with a no-break space (or other white space outside ASCII) after
+/// its last `;` runs its statements, and that white space is no statement of its own.
+#[tokio::test]
+async fn white_space_outside_ascii_after_the_last_statement_is_no_statement() {
+    let session = session().await;
+    for space in ["\u{a0}", "\u{3000}\n", "\u{2028}", "\u{b}"] {
+        let script = format!("create table if not exists t (x int);\nselect 1 as one;{space}");
+        let events: Vec<CoreEvent> = session.run_script(&script).collect().await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(CoreEvent::ScriptFinished {
+                    executed: 2,
+                    failed: false,
+                    ..
+                })
+            ),
+            "{space:?}: {events:#?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn syntax_errors_point_into_the_script() {
     let session = session().await;

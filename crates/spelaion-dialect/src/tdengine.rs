@@ -143,7 +143,8 @@ fn split(script: &str) -> Vec<StatementSpan> {
         }
         let mut start = from;
         loop {
-            while start < to && b[start].is_ascii_whitespace() {
+            // White space by the one rule of every splitter (SDB-434).
+            while start < to && crate::is_white_space_at(script, start) {
                 start += 1;
             }
             let comment = matches!(&b[start..to], [b'-', b'-', ..] | [b'/', b'*', ..]);

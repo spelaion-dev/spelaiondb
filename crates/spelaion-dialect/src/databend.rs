@@ -1,5 +1,7 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::{is_white_space_at, trimmed};
+
 /// Databend's dialect, as Databend's own lexer reads text (checked with 1.2.881):
 ///
 /// - `'…'` strings and `"…"` names, where a backslash escapes the next character and a doubled
@@ -52,14 +54,14 @@ fn split(script: &str) -> Vec<StatementSpan> {
         match b[i] {
             b';' => {
                 if has_code {
-                    spans.push(trimmed(script, start, i));
+                    spans.extend(trimmed(script, start, i));
                 }
                 i += 1;
                 start = i;
                 has_code = false;
             }
-            c => {
-                if !c.is_ascii_whitespace() {
+            _ => {
+                if !is_white_space_at(script, i) {
                     has_code = true;
                 }
                 i += 1;
@@ -67,7 +69,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
         }
     }
     if has_code {
-        spans.push(trimmed(script, start, b.len()));
+        spans.extend(trimmed(script, start, b.len()));
     }
     spans
 }
@@ -122,16 +124,6 @@ fn skip_quoted(b: &[u8], i: usize, quote: u8) -> usize {
         }
     }
     b.len()
-}
-
-fn trimmed(script: &str, start: usize, end: usize) -> StatementSpan {
-    let text = &script[start..end];
-    let lead = text.len() - text.trim_start().len();
-    let trail = text.len() - text.trim_end().len();
-    StatementSpan {
-        start: start + lead,
-        end: end - trail,
-    }
 }
 
 #[cfg(test)]

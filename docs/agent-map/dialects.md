@@ -15,6 +15,11 @@
   where its variables live (the guard still checks each statement in it). SQLite's
   `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
   dot-command away from the server's shell: any change to them needs its tests there too.
+- White space is one rule for every splitter (SDB-434): Unicode's, as `str::trim` reads it
+  (a no-break space, a vertical tab, U+2028, U+3000 too). `lib.rs`'s `is_white_space_at` says
+  whether a byte is white space, `white_space_before` whether a word may start after it, and
+  `trimmed` makes every span, `None` for a statement of white space alone. A new dialect
+  uses them, never `is_ascii_whitespace` or a trim of its own.
 - `tests/split_properties.rs` (SDB-156) generates scripts from each dialect's tricky pieces
   and checks that they split back into their statements, and that any text splits without a
   panic into spans that lose nothing but comments, white space and separators (read with the

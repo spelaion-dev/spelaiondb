@@ -383,6 +383,32 @@ fn read_only_mode_and_toon_over_the_protocol() {
     agent.stop();
 }
 
+/// SDB-434: a statement pasted with a no-break space after its `;` is one statement, for a read
+/// and for a write, and the server does not stop.
+#[test]
+fn a_no_break_space_after_the_semicolon_is_no_statement() {
+    let fx = Fixture::new("mcp-nbsp");
+    create_db(&fx.repo().join("shop.db"));
+    std::fs::write(
+        fx.repo().join(".spelaion/connections/shop.toml"),
+        "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
+    )
+    .unwrap();
+    fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
+    let mut agent = Agent::start(&fx);
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "update products set price = 10 where name = 'lamp';\u{a0}" }),
+    );
+    assert!(!is_error && text.contains("1 row(s) affected"), "{text}");
+    let (text, is_error) = agent.call(
+        "run_query",
+        json!({ "connection": "shop", "sql": "select price from products where name = 'lamp';\u{a0}\u{3000}" }),
+    );
+    assert!(!is_error && text.contains("10"), "{text}");
+    agent.stop();
+}
+
 #[test]
 fn an_agent_writes_only_where_the_user_allowed_it() {
     let fx = Fixture::new("mcp-write");
