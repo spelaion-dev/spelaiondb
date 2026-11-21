@@ -7,7 +7,8 @@ import { runningOutsideTransactions } from "./closeQuestion";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
 import { confirmUnsavedFiles } from "./sqlFiles";
-import { type Tab, useApp, useDialogs } from "./store";
+import { type RunState, type Tab, useApp, useDialogs } from "./store";
+import { CONNECTING, DISCONNECTED, connectFailed, connectedWith, hasPendingEdits, hasUnsavedEdits, isConnecting, isRunning, savingEdits, type OpenedSession } from "./tabState";
 
 /**
  * Fired on `window` with a connection id when the explorer refreshes all its schemas: editor
@@ -63,15 +64,22 @@ function isEditorSession(session: string): boolean {
   return Boolean(tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram);
 }
 
-/** Shows the transaction the core keeps for a freshly connected editor tab. */
-async function showTransaction(session: string) {
-  if (!isEditorSession(session)) return;
+/** What a freshly opened session has: its version and, for an editor tab, the transaction the
+ *  core keeps for it (ADR-031). */
+async function opened(session: string, version: string): Promise<OpenedSession> {
+  if (!isEditorSession(session)) return { version };
   try {
-    const transaction = await call(commands.transactionStatus(session));
-    useApp.getState().updateTab(session, { transaction, lostTransaction: undefined });
+    return { version, transaction: await call(commands.transactionStatus(session)) };
   } catch {
     // The tab was closed meanwhile.
+    return { version };
   }
+}
+
+/** What a tab shows when its session could not open and no run was asked for: the error, with
+ *  the results it had (a run that failed before it started replaces nothing). */
+export function connectionFailedRun(detail: string, results: RunState["results"]): RunState {
+  return { running: false, results, activeResult: null, messages: [], error: { message: detail, offset: null, translation: { key: "messages.connectionFailed", values: { detail } } }, startedAt: 0, elapsedMs: null };
 }
 
 /** A tab's name as its tab shows it: the user's name for it, or its default one. */
@@ -126,9 +134,9 @@ export async function confirmOpenTransactions(sessions: string[], action: "close
  */
 export async function confirmLeaving(action: "quit" | "folder", open: string[]): Promise<boolean> {
   const tabs = useApp.getState().tabs;
-  const unsaved = tabs.filter((t) => t.pendingEdits || t.savingEdits).map((t) => t.id);
+  const unsaved = tabs.filter(hasUnsavedEdits).map((t) => t.id);
   // A tab with an open transaction is asked about once, under it (SDB-253).
-  const running = runningOutsideTransactions(tabs.filter((t) => t.run?.running).map((t) => t.id), open);
+  const running = runningOutsideTransactions(tabs.filter(isRunning).map((t) => t.id), open);
   if (open.length === 0 && running.length === 0 && unsaved.length === 0) return true;
   return useDialogs.getState().askOpenTransactions(open.map(tabName), action, running.map(tabName), unsaved.map(tabName));
 }
@@ -156,11 +164,11 @@ export async function answerQuitRequest() {
   }
 }
 
-/** Returns the server version, or null if the user cancelled. Throws if it fails. */
-export async function openSession(session: string, connectionId: string): Promise<string | null> {
+/** Returns the server version (and an editor tab's transaction), or null if the user
+ *  cancelled. Throws if it fails. */
+export async function openSession(session: string, connectionId: string): Promise<OpenedSession | null> {
   const version = await openSessionInner(session, connectionId);
-  if (version !== null) await showTransaction(session);
-  return version;
+  return version === null ? null : opened(session, version);
 }
 
 async function openSessionInner(session: string, connectionId: string): Promise<string | null> {
@@ -208,37 +216,30 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
   const initial = useApp.getState().tabs.find((tab) => tab.id === tabId);
   if (!initial?.connectionId) return;
   const connectionId = initial.connectionId;
-  useApp.getState().updateTab(tabId, { status: "connecting", serverVersion: null });
+  useApp.getState().setConnection(tabId, CONNECTING);
   void (async () => {
     try {
       const outcome = await call(commands.connectFromSession(source, tabId, database ?? null, isEditorSession(tabId)));
       // The connection was edited since the source opened and needs the user (SDB-426): the
       // tab connects as a new one does, from the saved file, then to the database it wanted.
-      const serverVersion = outcome.kind === "connected"
-        ? outcome.serverVersion
+      const session = outcome.kind === "connected"
+        ? await opened(tabId, outcome.serverVersion)
         : await openSession(tabId, connectionId);
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
-      if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") {
-        if (serverVersion !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
+      if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) {
+        if (session !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
         return;
       }
-      if (serverVersion === null) {
-        useApp.getState().updateTab(tabId, { status: "disconnected" });
+      if (session === null) {
+        useApp.getState().setConnection(tabId, DISCONNECTED);
         return;
       }
       if (outcome.kind === "connectAgain" && database) {
         await call(commands.selectDatabase(tabId, database)).catch(() => undefined);
       }
-      useApp.getState().updateTab(tabId, { status: "connected", serverVersion });
-      if (outcome.kind === "connected") await showTransaction(tabId);
+      useApp.getState().setConnection(tabId, connectedWith(session));
     } catch (e) {
-      const tab = useApp.getState().tabs.find((item) => item.id === tabId);
-      if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") return;
-      const detail = e instanceof Error ? e.message : String(e);
-      useApp.getState().updateTab(tabId, {
-        status: "disconnected",
-        run: { running: false, results: tab.run?.results ?? [], activeResult: null, messages: [], error: { message: detail, offset: null, translation: { key: "messages.connectionFailed", values: { detail } } }, startedAt: 0, elapsedMs: null },
-      });
+      failConnecting(tabId, connectionId, e);
     }
   })();
 }
@@ -251,29 +252,30 @@ export function newQueryOnConnection(connectionId: string): string {
     connectTabFromExplorer(tabId, `meta:${connectionId}`);
     return tabId;
   }
-  useApp.getState().updateTab(tabId, { status: "connecting", serverVersion: null });
+  useApp.getState().setConnection(tabId, CONNECTING);
   void (async () => {
     try {
-      const version = await openSession(tabId, connectionId);
+      const session = await openSession(tabId, connectionId);
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
-      if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") {
-        if (version !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
+      if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) {
+        if (session !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
         return;
       }
-      useApp.getState().updateTab(tabId, version === null
-        ? { status: "disconnected" }
-        : { status: "connected", serverVersion: version, lost: undefined, idleClosed: undefined });
+      useApp.getState().setConnection(tabId, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
-      const tab = useApp.getState().tabs.find((item) => item.id === tabId);
-      if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") return;
-      const detail = e instanceof Error ? e.message : String(e);
-      useApp.getState().updateTab(tabId, {
-        status: "disconnected",
-        run: { running: false, results: tab.run?.results ?? [], activeResult: null, messages: [], error: { message: detail, offset: null, translation: { key: "messages.connectionFailed", values: { detail } } }, startedAt: 0, elapsedMs: null },
-      });
+      failConnecting(tabId, connectionId, e);
     }
   })();
   return tabId;
+}
+
+/** The session a tab was opening on `connectionId` failed with `error`: the tab says why, if
+ *  it is still waiting for that session. */
+function failConnecting(tabId: string, connectionId: string, error: unknown) {
+  const tab = useApp.getState().tabs.find((item) => item.id === tabId);
+  if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) return;
+  const detail = error instanceof Error ? error.message : String(error);
+  useApp.getState().updateTab(tabId, { connectionState: connectFailed(detail), run: connectionFailedRun(detail, tab.run?.results ?? []) });
 }
 
 /** Opens a table data tab on `schema.table` filtered by `filter` (a followed foreign key's,
@@ -298,9 +300,9 @@ export function explorerDatabase(connectionId: string, schema: string): string |
  */
 export async function closeTabs(ids: string[]) {
   const find = (id: string) => useApp.getState().tabs.find((t) => t.id === id);
-  const targets = ids.map(find).filter((t): t is Tab => t !== undefined && !t.savingEdits);
+  const targets = ids.map(find).filter((t): t is Tab => t !== undefined && !savingEdits(t));
   if (targets.length === 0) return;
-  const unsaved = targets.filter((t) => t.pendingEdits);
+  const unsaved = targets.filter(hasPendingEdits);
   if (unsaved.length > 0) {
     const text = unsaved.length === 1 && targets.length === 1
       ? i18n.t("editor:edit.closeUnsaved")
@@ -314,17 +316,17 @@ export async function closeTabs(ids: string[]) {
   // Saving started while the question was open: that tab stays.
   const closing = sessions.filter((id) => {
     const tab = find(id);
-    return tab !== undefined && !tab.savingEdits;
+    return tab !== undefined && !savingEdits(tab);
   });
   if (closing.length === 0) return;
-  const runs = new Map(closing.map((id) => [id, find(id)?.run ?? null]));
+  const running = new Map(closing.map((id) => [id, isRunning(find(id))]));
   stopScriptQuestion(closing);
   useApp.getState().closeTabs(closing);
   for (const id of closing) {
-    const run = runs.get(id);
+    const wasRunning = running.get(id);
     void (async () => {
       // The core stops the run that sent the statement, then the session closes.
-      if (run?.running) await call(commands.cancel(id)).catch(() => undefined);
+      if (wasRunning) await call(commands.cancel(id)).catch(() => undefined);
       await call(commands.disconnect(id)).catch(() => undefined);
     })();
     // The core frees every result of the tab, and any its run still starts (SDB-378).
@@ -350,7 +352,7 @@ async function confirmClose(sessions: string[]): Promise<boolean> {
     // The sessions are gone: nothing is left to roll back.
   }
   const running = runningOutsideTransactions(
-    sessions.filter((id) => useApp.getState().tabs.find((t) => t.id === id)?.run?.running),
+    sessions.filter((id) => isRunning(useApp.getState().tabs.find((t) => t.id === id))),
     open,
   );
   if (open.length === 0 && running.length === 0) return true;

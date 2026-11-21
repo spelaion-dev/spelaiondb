@@ -22,6 +22,7 @@ import { connectTabFromExplorer, explorerDatabase, openSession, openTableData } 
 import { chooseSavePath } from "../dialogs";
 import { openDiagram } from "../diagramTabs";
 import { useApp, type Tab } from "../store";
+import { CONNECTING, DISCONNECTED, connectedWith, lostSession, statusName } from "../tabState";
 import { Icon } from "./Icons";
 import { ObjectMenu } from "./ObjectMenu";
 
@@ -240,6 +241,8 @@ async function svgToPng(text: string, width: number, height: number): Promise<st
 
 /** A tab's diagram: the catalog read on its own session, then laid out by the core. */
 export function ErDiagramView({ tab }: { tab: Tab }) {
+  const status = statusName(tab);
+  const lost = lostSession(tab);
   const { t, i18n } = useTranslation("shell");
   const scope = tab.diagram!;
   const diagram = useRef(0);
@@ -263,7 +266,7 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
   // The catalog, read once per tab (and on Refresh); nothing is read again after a reconnect
   // until the user asks.
   useEffect(() => {
-    if (tab.status !== "connected" || needsRefresh) return;
+    if (status !== "connected" || needsRefresh) return;
     let current = true;
     const id = nextDiagram++;
     const previous = diagram.current;
@@ -289,7 +292,7 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
     return () => {
       current = false;
     };
-  }, [tab.id, tab.status, scope, revision, needsRefresh]);
+  }, [tab.id, status, scope, revision, needsRefresh]);
 
   useEffect(() => () => {
     if (diagram.current) void call(commands.closeDiagram(diagram.current)).catch(() => undefined);
@@ -388,12 +391,12 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
   async function reconnect() {
     if (!tab.connectionId) return;
     setNeedsRefresh(true);
-    useApp.getState().updateTab(tab.id, { status: "connecting" });
+    useApp.getState().setConnection(tab.id, CONNECTING);
     try {
-      const version = await openSession(tab.id, tab.connectionId);
-      useApp.getState().updateTab(tab.id, { status: version === null ? "disconnected" : "connected", serverVersion: version, ...(version === null ? {} : { lost: undefined }) });
+      const session = await openSession(tab.id, tab.connectionId);
+      useApp.getState().setConnection(tab.id, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
-      useApp.getState().updateTab(tab.id, { status: "disconnected" });
+      useApp.getState().setConnection(tab.id, DISCONNECTED);
       setLoad({ kind: "error", message: reason(e) });
     }
   }
@@ -459,7 +462,7 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
   const countText = (s: DiagramSummary) =>
     `${t("diagram.tableCount", { count: s.tables, formattedCount: number(s.tables) })}, ${t("diagram.relationCount", { count: s.relations, formattedCount: number(s.relations) })}`;
   const menuNode = menu ? layout?.nodes[menu.node] : undefined;
-  const busy = tab.status !== "connected" || load.kind === "reading";
+  const busy = status !== "connected" || load.kind === "reading";
 
   return (
     <div className="er-view">
@@ -516,7 +519,7 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
         </div>
       </div>
       <div className="er-status" role="status">
-        {tab.status === "connecting" && <span className="muted">{t("diagram.connecting")}</span>}
+        {status === "connecting" && <span className="muted">{t("diagram.connecting")}</span>}
         {load.kind === "reading" && (
           <span className="muted">
             {load.progress && load.progress.total > 0
@@ -536,17 +539,17 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
       {summary && summary.unreadable > 0 && (
         <p className="banner" role="alert">{t("diagram.unreadable", { count: summary.unreadable, formattedCount: number(summary.unreadable), detail: summary.firstError ?? "" })}</p>
       )}
-      {(load.kind === "error" || layoutError || (tab.status === "disconnected" && tab.lost)) && (
+      {(load.kind === "error" || layoutError || lost) && (
         <p className="banner error" role="alert">
-          {load.kind === "error" ? t("diagram.readFailed", { detail: load.message }) : layoutError ? t("diagram.layoutFailed", { detail: layoutError }) : tab.lost}
+          {load.kind === "error" ? t("diagram.readFailed", { detail: load.message }) : layoutError ? t("diagram.layoutFailed", { detail: layoutError }) : lost?.reason}
         </p>
       )}
-      {tab.status === "disconnected" && (
+      {status === "disconnected" && (
         <div className="er-actions">
           <button type="button" onClick={() => void reconnect()} disabled={!tab.connectionId}>{t("tableDetails.reconnect")}</button>
         </div>
       )}
-      {tab.status === "connected" && needsRefresh && (
+      {status === "connected" && needsRefresh && (
         <div className="er-actions">
           <span className="muted">{t("diagram.refreshAfterReconnect")}</span>
           <button type="button" onClick={refresh}>{t("diagram.refresh")}</button>

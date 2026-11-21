@@ -4,9 +4,10 @@
 // disconnected: the optional "reconnect at startup" only connects them, it never runs anything.
 
 import { call, commands, type OpenTabItem, type RestoredTabsItem } from "./api";
-import { openSession } from "./connect";
+import { connectionFailedRun, openSession } from "./connect";
 import { isModified } from "./sqlFiles";
 import { useApp, type Tab } from "./store";
+import { CONNECTING, DISCONNECTED, connectFailed, connectedWith, hasSession } from "./tabState";
 
 /** Longest wait before the tabs as they are now go to the core. */
 const SEND_DELAY_MS = 250;
@@ -101,25 +102,22 @@ async function reconnectRestored() {
   const ids = useApp.getState().tabs.filter((t) => kept(t) && t.connectionId).map((t) => t.id);
   for (const id of ids) {
     const tab = useApp.getState().tabs.find((t) => t.id === id);
-    if (!tab?.connectionId || tab.status !== "disconnected") continue;
+    if (!tab?.connectionId || hasSession(tab)) continue;
     const connectionId = tab.connectionId;
-    useApp.getState().updateTab(id, { status: "connecting" });
+    useApp.getState().setConnection(id, CONNECTING);
     try {
-      const version = await openSession(id, connectionId);
+      const session = await openSession(id, connectionId);
       const now = useApp.getState().tabs.find((t) => t.id === id);
       if (!now || now.connectionId !== connectionId) {
         await call(commands.disconnect(id)).catch(() => undefined);
         continue;
       }
-      useApp.getState().updateTab(id, version === null ? { status: "disconnected" } : { status: "connected", serverVersion: version });
+      useApp.getState().setConnection(id, session === null ? DISCONNECTED : connectedWith(session));
       // Cancelled (a password not given): the others are not asked either.
-      if (version === null) break;
+      if (session === null) break;
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      useApp.getState().updateTab(id, {
-        status: "disconnected",
-        run: { running: false, results: [], activeResult: null, messages: [], error: { message: detail, offset: null, translation: { key: "messages.connectionFailed", values: { detail } } }, startedAt: 0, elapsedMs: null },
-      });
+      useApp.getState().updateTab(id, { connectionState: connectFailed(detail), run: connectionFailedRun(detail, []) });
     }
   }
 }

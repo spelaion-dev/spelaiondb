@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import { useApp, type Tab } from "../store";
+import { transactionOf } from "../tabState";
 import type { TransactionPhaseItem } from "../bindings";
 
 function message(e: unknown): string {
@@ -19,7 +20,7 @@ export function TransactionControls({ tab, running, onNotice }: {
 }) {
   const { t } = useTranslation("editor");
   const [busy, setBusy] = useState(false);
-  const status = tab.transaction;
+  const status = transactionOf(tab);
   if (!status) return null;
   // The core's state and its answers (ADR-031, ADR-060): nothing here is worked out from flags.
   switch (status.kind) {
@@ -39,7 +40,7 @@ export function TransactionControls({ tab, running, onNotice }: {
     setBusy(true);
     try {
       const transaction = await call(commands.setAutoCommit(tab.id, on));
-      useApp.getState().updateTab(tab.id, { transaction });
+      useApp.getState().setTransaction(tab.id, transaction);
     } catch (e) {
       onNotice({ text: message(e), error: true });
     } finally {
@@ -51,7 +52,7 @@ export function TransactionControls({ tab, running, onNotice }: {
     setBusy(true);
     try {
       const outcome = await call(commit ? commands.commitTransaction(tab.id) : commands.rollbackTransaction(tab.id));
-      useApp.getState().updateTab(tab.id, { transaction: outcome.status });
+      useApp.getState().setTransaction(tab.id, outcome.status);
       const said = outcome.notices.map((n) => n.message);
       onNotice({
         text: [t(commit ? "transaction.committed" : "transaction.rolledBack"), ...said].join(" "),
