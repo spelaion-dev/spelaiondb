@@ -128,7 +128,10 @@ every run, since the run changes that database) and the Docker services up
   on screen and watch a run. Like the Linux pass, it replaces your clipboard while it runs. Its
   first start meets a local store the app cannot open, and answers the startup error dialog with
   `SPELAION_E2E_STARTUP_CHOICE=start-over` instead of a click, so that dialog never appears on
-  your screen either (SDB-283).
+  your screen either (SDB-283). A failing step prints its name (`FAILED at step "…"`) and leaves
+  `e2e/screenshots/failure.png`. `SPELAION_E2E_UNTIL=<the start of a step's text>` ends the run
+  as a pass after that step. CI's Windows job uses it to stop before the steps that need
+  `testing/docker` (`.github/workflows/smoke-windows.yml`), so run the rest yourself.
 - **Linux**: `node e2e/smoke-linux.mjs` (from `apps/desktop`). WebKitGTK has no debugging port,
   so this pass speaks WebDriver to `tauri-driver` (which it starts itself), in front of
   WebKitWebDriver. It is shorter: start, repository trust, a query on SQLite, DuckDB, PostgreSQL,

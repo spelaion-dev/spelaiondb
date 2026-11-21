@@ -45,7 +45,16 @@
   screenshots and the log (artifact `smoke-linux`). It and `ci.yml`'s Linux job install their
   Ubuntu packages in the background through `.github/workflows/system-packages.sh` (apt's
   retries and timeouts, then a 20-minute wait that fails saying whether apt failed or the mirror
-  was still slow; tested by `system-packages.test.sh`, SDB-427). macOS has neither (no
+  was still slow; tested by `system-packages.test.sh`, SDB-427).
+  `.github/workflows/smoke-windows.yml` runs on the same events as the Linux pass, on
+  `windows-latest`, and runs `smoke.mjs` with
+  `SPELAION_E2E_UNTIL="SQL files: Ctrl+O opens one"`, because the next step, "direct
+  PostgreSQL", is the first that needs `testing/docker`, and the runner has no Linux containers.
+  `smoke.mjs` refuses an UNTIL that is not a step's text. A failure prints
+  `FAILED at step "…"`, which the job's error names, and uploads `failure.png` and the log (artifact
+  `smoke-windows`, SDB-155). A step before the cut that starts needing a server makes this job
+  fail. In that case, move the step after the cut, or move the cut. Never skip the step. The
+  steps after the cut are still run by hand (AGENTS.md). macOS has neither (no
   WebDriver for WKWebView). `e2e/processes.mjs` closes windows and lists processes for both.
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;

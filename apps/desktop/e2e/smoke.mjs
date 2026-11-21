@@ -27,6 +27,13 @@ if (process.platform === "linux") {
   process.exit(2);
 }
 
+// SPELAION_E2E_UNTIL must name a step of this file: a renamed step would otherwise let the run
+// go on past where it was meant to stop (CI stops before the steps that need testing/docker).
+if (process.env.SPELAION_E2E_UNTIL && !readFileSync(import.meta.filename, "utf8").includes(`step(${JSON.stringify(process.env.SPELAION_E2E_UNTIL).slice(0, -1)}`)) {
+  console.error(`SPELAION_E2E_UNTIL="${process.env.SPELAION_E2E_UNTIL}" is not the start of any step's text in smoke.mjs`);
+  process.exit(2);
+}
+
 const root = resolve(import.meta.dirname, "../../..");
 const exe = process.env.SPELAION_E2E_EXE ?? join(root, "target/release/spelaion-desktop" + (process.platform === "win32" ? ".exe" : ""));
 const demo = join(root, "examples/demo");
@@ -291,20 +298,56 @@ function checkContentSecurityPolicy() {
 
 async function connect() {
   for (let i = 0; i < 60; i++) {
+    if (app.exitCode !== null || app.signalCode !== null) {
+      throw new Error(`the app ended (${app.exitCode ?? app.signalCode}) before it opened the debugging port`);
+    }
     try {
       return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     } catch {
       await new Promise((r) => setTimeout(r, 500));
     }
   }
-  throw new Error("the app did not open the debugging port");
+  throw new Error(`the app is running but did not open the debugging port ${port} in 30 s\n${startDiagnostics()}`);
+}
+
+/** What a start that never opened the debugging port left, to tell a webview that never started
+ *  from one started without the port (CI has no screen to look at): WebView2's processes and
+ *  whether they carry the port, and on Windows a picture of the desktop next to the screenshots. */
+function startDiagnostics() {
+  const lines = [];
+  try {
+    const webviews = commandLines(process.platform === "win32" ? "msedgewebview2" : "WebKitWebProcess");
+    lines.push(`webview processes: ${webviews.length}, with --remote-debugging-port=${port}: ${webviews.filter((l) => l.includes(`--remote-debugging-port=${port}`)).length}`);
+    for (const line of webviews.slice(0, 3)) lines.push(`  ${line.slice(0, 300)}`);
+  } catch (e) {
+    lines.push(`could not list the webview processes: ${e.message}`);
+  }
+  if (process.platform === "win32") {
+    const picture = join(shots, "desktop-at-start.png");
+    try {
+      execFileSync("powershell", ["-NoProfile", "-Command", [
+        "Add-Type -AssemblyName System.Windows.Forms, System.Drawing",
+        "$b = [System.Windows.Forms.SystemInformation]::VirtualScreen",
+        "$i = New-Object System.Drawing.Bitmap $b.Width, $b.Height",
+        "[System.Drawing.Graphics]::FromImage($i).CopyFromScreen($b.Left, $b.Top, 0, 0, $i.Size)",
+        `$i.Save('${picture.replaceAll("'", "''")}')`,
+      ].join("; ")], { stdio: "ignore" });
+      lines.push(`the desktop: ${picture}`);
+    } catch (e) {
+      lines.push(`could not take a picture of the desktop: ${e.message}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 let failed = false;
+// The step that is running, named when the run fails (CI's error reads it).
+let currentStep = "starting the app";
 // The demo's shop.toml is changed during the run (ADR-022) and always put back.
 const shopOriginal = readFileSync(shopFile, "utf8");
-let browser = await connect();
+let browser;
 try {
+  browser = await connect();
   let page = await appPage();
   page.setDefaultTimeout(30_000);
   const shot = (name) => page.screenshot({ path: join(shots, `${name}.png`) });
@@ -314,6 +357,7 @@ try {
   const step = (text) => {
     checkContentSecurityPolicy();
     if (untilReached) throw untilComplete;
+    currentStep = text;
     if (process.env.SPELAION_E2E_UNTIL && text.startsWith(process.env.SPELAION_E2E_UNTIL)) untilReached = true;
     console.log(`· ${text}`);
   };
@@ -10569,7 +10613,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   else if (e === untilComplete) console.log(`\nOK. Smoke test passed up to "${process.env.SPELAION_E2E_UNTIL}".`);
   else {
     failed = true;
-    console.error("\nFAILED:", e);
+    console.error(`\nFAILED at step "${currentStep}":\n`, e);
     try {
       await browser.contexts()[0].pages()[0].screenshot({ path: join(shots, "failure.png") });
     } catch {}
@@ -10577,7 +10621,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 } finally {
   writeFileSync(shopFile, shopOriginal);
   restoreDemoConnections();
-  await browser.close().catch(() => {});
+  await browser?.close().catch(() => {});
   await stopApp();
   // WebView2 lets go of its profile (inside userDir) a moment after the app exits.
   try {
