@@ -5,6 +5,7 @@ import { call, commands, type ConnectionItem } from "../api";
 import type { LockSnapshotItem_Serialize as LockSnapshotItem, ProcessItem_Serialize as ProcessItem, ProcessSnapshotItem_Serialize as ProcessSnapshotItem, ServerSettingItem_Serialize as ServerSettingItem } from "../bindings";
 import { openSession } from "../connect";
 import { useApp } from "../store";
+import { CONNECTING, DISCONNECTED, connectedWith, isConnected, isConnecting } from "../tabState";
 import { EngineIcon } from "./EngineIcon";
 import { LockView, SettingsView, type ProcessActions } from "./ServerObservation";
 
@@ -101,7 +102,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     async function connect() {
       try {
         // Reuse credentials from an open explorer or query without returning them to the UI.
-        const sources = [`meta:${connection.id}`, ...useApp.getState().tabs.filter((tab) => tab.connectionId === connection.id && tab.status === "connected").map((tab) => tab.id)];
+        const sources = [`meta:${connection.id}`, ...useApp.getState().tabs.filter((tab) => tab.connectionId === connection.id && isConnected(tab)).map((tab) => tab.id)];
         let version: string | null = null;
         for (const source of sources) {
           try {
@@ -110,7 +111,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
             if (outcome.kind === "connected") { version = outcome.serverVersion; break; }
           } catch { /* Try another open session. */ }
         }
-        if (version === null && !disposed) version = await openSession(id, connection.id);
+        if (version === null && !disposed) version = (await openSession(id, connection.id))?.version ?? null;
         if (version === null) {
           if (!disposed) { setBusy(false); setError(translate.current("processMonitor.cancelled")); }
           return;
@@ -200,22 +201,22 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     const id = session.current;
     const tab = useApp.getState().addTab(connection.id, row.sql);
     if (id) {
-      useApp.getState().updateTab(tab, { status: "connecting" });
+      useApp.getState().setConnection(tab, CONNECTING);
       try {
         // PostgreSQL sessions cannot switch databases after connecting. SQL Server and
         // MySQL can select the process's database when opening the query.
         const database = connection.engine === "postgres" ? null : row.database;
         const outcome = await call(commands.connectFromSession(id, tab, database, false));
         // Edited since the monitor's session opened (SDB-426): connect as a new tab does.
-        const version = outcome.kind === "connected" ? outcome.serverVersion : await openSession(tab, connection.id);
+        const session = outcome.kind === "connected" ? { version: outcome.serverVersion } : await openSession(tab, connection.id);
         const current = useApp.getState().tabs.find((item) => item.id === tab);
-        if (!current || current.connectionId !== connection.id || current.status !== "connecting") { if (version !== null) await call(commands.disconnect(tab)); return; }
-        if (version === null) { useApp.getState().updateTab(tab, { status: "disconnected" }); return; }
+        if (!current || current.connectionId !== connection.id || !isConnecting(current)) { if (session !== null) await call(commands.disconnect(tab)); return; }
+        if (session === null) { useApp.getState().setConnection(tab, DISCONNECTED); return; }
         if (outcome.kind === "connectAgain" && database) await call(commands.selectDatabase(tab, database)).catch(() => undefined);
-        useApp.getState().updateTab(tab, { status: "connected", serverVersion: version });
+        useApp.getState().setConnection(tab, connectedWith(session));
       } catch {
         const current = useApp.getState().tabs.find((item) => item.id === tab);
-        if (current?.connectionId === connection.id && current.status === "connecting") useApp.getState().updateTab(tab, { status: "disconnected" });
+        if (current?.connectionId === connection.id && isConnecting(current)) useApp.getState().setConnection(tab, DISCONNECTED);
       }
     }
     if (session.current === id) onOpenEditor();

@@ -69,6 +69,18 @@
   check (ADR-047, ADR-008). The search panel's data search is one phase in `src/searchRun.ts`.
   The app's own lifecycles (the registry of running work, a tab's connection, the dialogs, the
   update, the folder switch, quitting) are SDB-369, SDB-371, SDB-375 and SDB-377.
+  SDB-371: a tab's connection is one union, `Tab.connectionState` (`src/tabState.ts`'s
+  `TabConnection`: disconnected with why the last attempt failed, connecting, connected with its
+  version, transaction and "read-only for this session", lost, idle-closed), so a transaction or
+  a read-only mark cannot outlive its session. It changes only through the store's
+  `setConnection`, `setTransaction` and `setSessionReadOnly` with `tabState.ts`'s transitions
+  (`connectedWith`, `connectFailed`, `sessionLost`…), and `openSession` returns the version and
+  the transaction together. Components read a tab's connection, its run (`isRunning`,
+  `cancelling`, `runStateOf`) and its edits only through `tabState.ts`'s selectors ("busy",
+  "can start a run" — what the Run button and the palette both use —, "lost", "connection in
+  use", "open for the explorer", "a question is open"); `scripts/tab-state.test.mjs` fails the
+  build when a file other than `tabState.ts` or `store.ts` reads the raw fields or writes a
+  connection state by hand.
   An editor tab's run state reaches the page as the `runChanged` event (`RunStateItem`,
   forwarded by `forward_run` only while the session is the tab's, SDB-370) and is kept as the
   tab's `runState`: the status line says "Paused at statement 3" and "Cancelling…" from it

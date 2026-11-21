@@ -32,6 +32,7 @@ import { FOCUS_SEARCH_EVENT } from "./components/SearchPanel";
 import { openFound } from "./components/OpenObjectDialog";
 import { useImport } from "./components/ImportDialog";
 import { ended } from "./resultEnd";
+import { canStartRun, explorerSessionOpen, isConnected, isRunning, sessionReadOnly } from "./tabState";
 
 export interface CommandContext {
   /** The tab the command acts on: the menu's tab, or the active one (none behind Settings). */
@@ -65,6 +66,19 @@ function activeResult(context: CommandContext): ResultMeta | undefined {
   return run?.results.find((result) => result.id === run.activeResult);
 }
 
+/** A SQL editor tab where a run can start now, as its Run button says: a disconnected tab can
+ *  (Run connects it first), one running or connecting cannot (SDB-371). */
+function runnableTab(context: CommandContext): boolean {
+  const tab = editorTab(context);
+  return tab !== undefined && canStartRun(tab);
+}
+
+/** A SQL editor tab whose run is not going. */
+function idleEditorTab(context: CommandContext): boolean {
+  const tab = editorTab(context);
+  return tab !== undefined && !isRunning(tab);
+}
+
 function editorCommand(command: EditorCommand): CommandBinding["run"] {
   return (context) => {
     const tab = editorTab(context);
@@ -72,10 +86,16 @@ function editorCommand(command: EditorCommand): CommandBinding["run"] {
   };
 }
 
+/** A SQL editor tab with its session open. */
+function connectedEditorTab(context: CommandContext): boolean {
+  const tab = editorTab(context);
+  return tab !== undefined && isConnected(tab);
+}
+
 /** A tab whose result may hold pending table edits (a table's data, or a query's). */
 function editableTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && !tab.tableDetails && !tab.plan && !tab.diagram && tab.status === "connected" ? tab : undefined;
+  return tab && !tab.tableDetails && !tab.plan && !tab.diagram && isConnected(tab) ? tab : undefined;
 }
 
 function editsCommand(command: "undo" | "redo"): CommandBinding["run"] {
@@ -94,8 +114,8 @@ function toggleSection(section: "connections" | "processes" | "search") {
 function importSession(context: CommandContext): { session: string; connectionId: string } | null {
   const tab = tabOf(context);
   if (!tab?.connectionId) return null;
-  if (tab.status === "connected") return { session: tab.id, connectionId: tab.connectionId };
-  if (useApp.getState().explorerConnected.includes(tab.connectionId)) {
+  if (isConnected(tab)) return { session: tab.id, connectionId: tab.connectionId };
+  if (explorerSessionOpen(useApp.getState().explorerConnected, tab.connectionId)) {
     return { session: `meta:${tab.connectionId}`, connectionId: tab.connectionId };
   }
   return null;
@@ -118,7 +138,7 @@ async function importFromClipboard(context: CommandContext) {
 /** The connected tab an "ER diagram" command starts from: any but a diagram or a plan. */
 function diagramSource(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && tab.connectionId && !tab.diagram && !tab.plan && tab.status === "connected" ? tab : undefined;
+  return tab && tab.connectionId && !tab.diagram && !tab.plan && isConnected(tab) ? tab : undefined;
 }
 
 /** A diagram around the active tab's table, or of its editor's current schema. */
@@ -204,7 +224,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   "file.open": { run: () => openFileDialog() },
   "file.openPlan": { run: () => openSavedPlan() },
-  "editor.explain": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("explain") },
+  "editor.explain": { enabled: runnableTab, run: editorCommand("explain") },
   "file.save": {
     enabled: (c) => editorTab(c) !== undefined,
     // A file tab saves its file; a console saves its query by name (ADR-036).
@@ -231,14 +251,14 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     enabled: (c) => Boolean(editorTab(c)?.file),
     run: (c) => c.tab && reloadTab(c.tab),
   },
-  "editor.run": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runCurrent") },
-  "editor.runScript": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runScript") },
-  "editor.runFromCursor": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runFromCursor") },
-  "editor.runNewTab": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runNewTab") },
+  "editor.run": { enabled: runnableTab, run: editorCommand("runCurrent") },
+  "editor.runScript": { enabled: runnableTab, run: editorCommand("runScript") },
+  "editor.runFromCursor": { enabled: runnableTab, run: editorCommand("runFromCursor") },
+  "editor.runNewTab": { enabled: runnableTab, run: editorCommand("runNewTab") },
   // The active result's tab (SDB-378). What a run replaces, the pin and the name are the
   // core's; a re-run is a new run, through the guard like any other.
   "results.rerun": {
-    enabled: (c) => Boolean(ended(activeResult(c)) && (activeResult(c)?.paging?.sql ?? activeResult(c)?.sql)) && !editorTab(c)?.run?.running,
+    enabled: (c) => Boolean(ended(activeResult(c)) && (activeResult(c)?.paging?.sql ?? activeResult(c)?.sql)) && idleEditorTab(c),
     run: editorCommand("resultRerun"),
   },
   "results.pin": {
@@ -263,12 +283,18 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   "editor.variables": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("variables") },
   "editor.reconnect": {
-    enabled: (c) => Boolean(editorTab(c)?.connectionId) && !editorTab(c)?.run?.running,
+    enabled: (c) => Boolean(editorTab(c)?.connectionId) && idleEditorTab(c),
     run: editorCommand("reconnect"),
   },
   "editor.sessionReadOnly": {
-    enabled: (c) => editorTab(c)?.status === "connected" && !editorTab(c)?.run?.running,
-    label: (c) => (editorTab(c)?.sessionReadOnly ? "editor:session.readWrite" : "editor:session.readOnly"),
+    enabled: (c) => {
+      const tab = editorTab(c);
+      return tab !== undefined && isConnected(tab) && !isRunning(tab);
+    },
+    label: (c) => {
+      const tab = editorTab(c);
+      return tab && sessionReadOnly(tab) ? "editor:session.readWrite" : "editor:session.readOnly";
+    },
     run: editorCommand("sessionReadOnly"),
   },
   "connections.disconnectAll": {
@@ -280,7 +306,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     enabled: (c) => Boolean(tabOf(c)?.connectionId) && hasSessions(tabOf(c)?.connectionId ?? null),
     run: (c) => void disconnectAll(tabOf(c)?.connectionId ?? null),
   },
-  "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },
+  "editor.cancel": { enabled: (c) => isRunning(editorTab(c)), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
   "editor.lineComment": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("lineComment") },
   "editor.blockComment": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("blockComment") },
@@ -295,8 +321,8 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "editor.copyStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("copyStatement") },
   "editor.selectOccurrences": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("selectOccurrences") },
   // The table under the cursor is looked up in the tab's connection: without one there is none.
-  "editor.openObject": { enabled: (c) => editorTab(c)?.status === "connected", run: editorCommand("openObject") },
-  "editor.revealInExplorer": { enabled: (c) => editorTab(c)?.status === "connected", run: editorCommand("revealInExplorer") },
+  "editor.openObject": { enabled: (c) => connectedEditorTab(c), run: editorCommand("openObject") },
+  "editor.revealInExplorer": { enabled: (c) => connectedEditorTab(c), run: editorCommand("revealInExplorer") },
   "editor.nextStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("nextStatement") },
   "editor.previousStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("previousStatement") },
   "editor.outline": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("outline") },

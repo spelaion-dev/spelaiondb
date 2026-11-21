@@ -34,6 +34,7 @@ import { usePreferences } from "./preferences";
 import { isInstalling, manualUpdateKey, useUpdate } from "./update";
 import { UpdateInstallButton, UpdateProblem } from "./components/UpdateInstall";
 import { useApp, useDialogs } from "./store";
+import { sessionLost } from "./tabState";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
 import { ScreenBoundary } from "./components/ScreenBoundary";
@@ -123,14 +124,14 @@ export default function App() {
     // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses.
     const unlistenLost = events.sessionLost.listen((e) => {
       const { session, reason, idleSeconds, openTransaction } = e.payload;
-      useApp.getState().updateTab(session, { status: "disconnected", lost: reason, idleClosed: idleSeconds ?? undefined, lostTransaction: openTransaction || undefined, transaction: undefined });
+      useApp.getState().setConnection(session, sessionLost(reason, idleSeconds, openTransaction));
       if (session.startsWith("meta:")) {
         window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: session.slice("meta:".length), idleSeconds } }));
       }
     });
     // The core keeps each editor tab's transaction (ADR-031); the tab only shows it.
     const unlistenTransaction = events.transactionChanged.listen((e) => {
-      useApp.getState().updateTab(e.payload.session, { transaction: e.payload.status });
+      useApp.getState().setTransaction(e.payload.session, e.payload.status);
     });
     // The core keeps each editor tab's run state (SDB-370); the tab only shows it.
     const unlistenRun = events.runChanged.listen((e) => {

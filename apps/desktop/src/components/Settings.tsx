@@ -9,6 +9,7 @@ import type { LanguagePreference } from "../i18n";
 import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
+import { questionOpen } from "../tabState";
 import { isInstalling, manualUpdateKey, useUpdate } from "../update";
 import { UpdateInstallButton, UpdateProblem } from "./UpdateInstall";
 import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
@@ -33,8 +34,7 @@ export function SettingsDialog({ onClose }: { onClose(): void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Dialogs opened on top (trust, passwords…) handle their own Escape.
-      const dialogs = useDialogs.getState();
-      if (e.key === "Escape" && !dialogs.trust && !dialogs.password && dialogs.interactions.length === 0) onClose();
+      if (e.key === "Escape" && !questionOpen(useDialogs.getState())) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

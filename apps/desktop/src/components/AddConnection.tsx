@@ -21,6 +21,7 @@ import { tlsWarningText } from "../tlsWarning";
 import type { TlsWarningItem } from "../bindings";
 import { Icon } from "./Icons";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
+import { DISCONNECTED, questionOpen } from "../tabState";
 import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./ConnectionTypePicker";
 import { EngineIcon } from "./EngineIcon";
 import { TagInput } from "./TagInput";
@@ -103,8 +104,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
     });
     const onKey = (e: KeyboardEvent) => {
       // Dialogs opened on top (trust, SSH fingerprint…) handle their own Escape.
-      const dialogs = useDialogs.getState();
-      if (e.key === "Escape" && !dialogs.trust && !dialogs.password && dialogs.interactions.length === 0) close();
+      if (e.key === "Escape" && !questionOpen(useDialogs.getState())) close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -875,7 +875,7 @@ function ConnectionForm(props: {
         await Promise.all(
           [...tabs.map((tab) => tab.id), `meta:${editing}`].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
         );
-        for (const tab of tabs) app.updateTab(tab.id, { status: "disconnected", serverVersion: null });
+        for (const tab of tabs) app.setConnection(tab.id, DISCONNECTED);
       }
       await refreshConnections();
       props.onSaved();

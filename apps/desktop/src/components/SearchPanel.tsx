@@ -23,6 +23,7 @@ import { type NameHit, schemasWithoutColumns, searchableTables, searchNames } fr
 import { startJob, type Job } from "../jobs";
 import { ended, failed, markCancelling, searching, startedRun, withEvent, type SearchedTable, type SearchRun } from "../searchRun";
 import { useApp } from "../store";
+import { explorerSessionOpen } from "../tabState";
 import { openFound } from "./OpenObjectDialog";
 
 /** Fired on `window` by the "Search" command: the panel focuses its box. */
@@ -240,7 +241,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   const list = useMemo(() => Object.values(schemas), [schemas]);
   const choices = useMemo(
     // The data search writes a SELECT per table: only engines queried with SQL (ADR-056).
-    () => connections.filter((c) => c.sql && connected.includes(c.id) && list.some((s) => s.connectionId === c.id)),
+    () => connections.filter((c) => c.sql && explorerSessionOpen(connected, c.id) && list.some((s) => s.connectionId === c.id)),
     [connections, connected, list],
   );
   // The active tab's connection first, then the first one with tables loaded.

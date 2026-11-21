@@ -24,7 +24,8 @@ import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { TransposedView } from "./TransposedView";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { showsSummary, summaryMessages, summaryShort } from "../scriptRun";
-import { isCancelling, runStatus } from "../runState";
+import { runStatus } from "../runState";
+import { CONNECTING, DISCONNECTED, cancelling, connectFailed, connectFailure, connectedWith, isRunning, lostSession, runStateOf, serverVersion, sessionReadOnly, statusName } from "../tabState";
 import { saveTab, saveTabAs } from "../sqlFiles";
 import { notifyFinished } from "../notify";
 import { EditorActionsButton } from "./EditorMenu";
@@ -111,10 +112,14 @@ function translatedError(error: NonNullable<RunState["error"]>, t: TFunction<"ed
 }
 
 export function EditorTab({ tab }: { tab: Tab }) {
+  // Its connection, as the status line, the buttons and the effects below read it (SDB-371).
+  const tabStatus = statusName(tab);
+  const running = isRunning(tab);
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const connections = useApp((s) => s.connections);
   const updateTab = useApp((s) => s.updateTab);
+  const setConnection = useApp((s) => s.setConnection);
   const updateRun = useApp((s) => s.updateRun);
   const historySaving = useApp((s) => tab.connectionId !== null && s.historySaving.includes(tab.connectionId));
   const workspaceChanging = useApp((s) => s.workspaceChanging);
@@ -139,7 +144,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const databaseBusyRef = useRef(false);
   const workspace = useApp((s) => s.workspace?.workspace ?? null);
   // SQL completion only where the language is SQL (ADR-056).
-  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tab.status === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
+  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tabStatus === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   /** This tab's runs, counted: each result remembers which one produced it (SDB-378). */
@@ -160,13 +165,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  (its run state, SDB-370), and until the run has ended. */
   async function cancelRun() {
     const current = tabNow();
-    if (!current?.run?.running || isCancelling(current.runState)) return;
+    if (!current?.run || !isRunning(current) || cancelling(current)) return;
     const startedAt = current.run.startedAt;
     try {
       await call(commands.cancel(tab.id));
     } catch (error) {
       const latest = tabNow();
-      if (latest?.run?.running && latest.run.startedAt === startedAt) {
+      if (isRunning(latest) && latest?.run?.startedAt === startedAt) {
         setNotice({ text: t("results.cancelFailed", { detail: message(error) }), error: true });
       }
     }
@@ -272,9 +277,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [columnComments, setColumnComments] = useState<Record<string, string>>({});
   const [queryTable, setQueryTable] = useState<(EditableTableItem & { result: number }) | null>(null);
   const [queryChecked, setQueryChecked] = useState<number | null>(null);
-  const [savingEdits, setSavingEdits] = useState(false);
-  const [pageLoading, setPageLoading] = useState(false);
-  const savingEditsRef = useRef(false);
+  /** Its edits are being applied: kept once, for the store, this render and a second click. */
+  const saving = useFlag();
+  const savingEdits = saving.on;
+  /** A page load is between its start and the start of its run. */
+  const pageLoad = useFlag();
+  const pageLoading = pageLoad.on;
   const queryPageBusy = useRef(false);
   const [queryPageSize, setQueryPageSize] = useState(DEFAULT_PAGE_SIZE);
   useEffect(() => {
@@ -283,7 +291,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   // A query is editable only when the core can resolve its entire result to one table.
   useEffect(() => {
-    if (tab.table || tab.status !== "connected" || tab.run?.running) return;
+    if (tab.table || tabStatus !== "connected" || running) return;
     const result = tab.run?.results.find((item) => item.id === tab.run?.activeResult);
     // Only a result that is the whole answer of its run: the core resolves that run's text.
     const request = result?.run === undefined ? undefined : runTexts.current.get(result.run);
@@ -293,13 +301,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
       .then((table) => { if (active) { setQueryTable(table ? { ...table, result: result.id } : null); setQueryChecked(result.id); } })
       .catch(() => { if (active) setQueryChecked(result.id); });
     return () => { active = false; };
-  }, [tab.id, tab.table, tab.status, tab.run?.running, tab.run?.results, tab.run?.activeResult]);
+  }, [tab.id, tab.table, tabStatus, running, tab.run?.results, tab.run?.activeResult]);
   // Rows read through a session that is gone (lost, disconnected, another connection) are not
   // editable: the check above asks again once connected, and the core refuses them anyway
   // (SDB-137).
   useEffect(() => {
-    if (tab.status !== "connected") setQueryTable(null);
-  }, [tab.status]);
+    if (tabStatus !== "connected") setQueryTable(null);
+  }, [tabStatus]);
 
   const activeResult = tab.run?.results.find((result) => result.id === tab.run?.activeResult);
   const editTarget = tab.table
@@ -366,7 +374,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   });
 
   const editing: GridEditing | undefined =
-    editTarget && ended(activeResult) && tab.status === "connected"
+    editTarget && ended(activeResult) && tabStatus === "connected"
       ? {
           cells: pending.cells,
           defaults: pending.defaults,
@@ -377,7 +385,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           canRedo: pending.canRedo,
           primaryKey: editTarget.primaryKey,
           table: { schema: editTarget.schema, name: editTarget.name },
-          busy: (tab.run?.running ?? false) || savingEdits || pageLoading || (activeResult?.paging?.loading ?? false),
+          busy: running || savingEdits || pageLoading || (activeResult?.paging?.loading ?? false),
           onInsert: (values) => void sendEdit({ kind: "insert", values }),
           onUpdateInsert: (index, values) => void sendEdit({ kind: "updateInsert", index, values }),
           onRemoveInsert: (index) => void sendEdit({ kind: "removeInsert", index }),
@@ -419,9 +427,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function applyEdits() {
     const view = editTarget;
     const result = activeResult;
-    if (!view || !result || savingEditsRef.current) return;
-    savingEditsRef.current = true;
-    setSavingEdits(true);
+    if (!view || !result || saving.now()) return;
+    saving.set(true);
     try {
       // Every edit sent before Apply reaches the core first.
       await editQueue.current;
@@ -443,8 +450,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     } catch (e) {
       setNotice({ text: message(e), error: true });
     } finally {
-      savingEditsRef.current = false;
-      setSavingEdits(false);
+      saving.set(false);
     }
   }
   /** Loads a file into one cell at once: the core reads it and writes one UPDATE by primary
@@ -452,9 +458,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function loadValueFile(row: number, column: number, path: string) {
     const view = editTarget;
     const result = activeResult;
-    if (!view || !result || savingEditsRef.current) return;
-    savingEditsRef.current = true;
-    setSavingEdits(true);
+    if (!view || !result || saving.now()) return;
+    saving.set(true);
     try {
       let confirmed = false;
       if (connection?.kind?.safeguards.confirmDataChanges) {
@@ -471,31 +476,26 @@ export function EditorTab({ tab }: { tab: Tab }) {
     } catch (e) {
       setNotice({ text: t("edit.fileLoadFailed", { detail: message(e) }), error: true });
     } finally {
-      savingEditsRef.current = false;
-      setSavingEdits(false);
+      saving.set(false);
     }
   }
 
   /** The page asked for while another one was loading: it loads when that one ends. */
   const queuedPage = useRef<TableView | null>(null);
-  /** A page load is between its start and the start of its run. */
-  const loadingPage = useRef(false);
 
   /** Loads a page of a table data tab: the core writes and checks the SELECT. */
   async function loadPage(view: TableView) {
-    const busy = () => loadingPage.current || useApp.getState().tabs.find((t) => t.id === tab.id)?.run?.running;
+    const busy = () => pageLoad.now() || isRunning(useApp.getState().tabs.find((t) => t.id === tab.id));
     if (busy()) {
       queuedPage.current = view;
       return;
     }
     // Set before any await: a second click must queue, not start a race with this load.
-    loadingPage.current = true;
-    setPageLoading(true);
+    pageLoad.set(true);
     try {
       await loadPageNow(view);
     } finally {
-      loadingPage.current = false;
-      setPageLoading(false);
+      pageLoad.set(false);
       const queued = queuedPage.current;
       // A load that never started a run (an error, no connection) does not end one either.
       if (queued && !busy()) {
@@ -543,7 +543,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   function changeView(patch: Partial<TableView>) {
     const current = useApp.getState().tabs.find((item) => item.id === tab.id)?.table;
     if (!current) return;
-    if (pendingCount > 0 || savingEditsRef.current) {
+    if (pendingCount > 0 || saving.now()) {
       setNotice({ text: t("edit.applyFirst"), error: true });
       return;
     }
@@ -582,7 +582,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const result = current?.run?.results.find((item) => item.id === resultId);
     const paging = result?.paging;
     if (!paging) return false;
-    if (current?.run?.running || queryPageBusy.current || startingRun.current) throw new Error(t("results.sortBusy"));
+    if (isRunning(current) || queryPageBusy.current || startingRun.current) throw new Error(t("results.sortBusy"));
     if (sort.length > 0 && !(await call(commands.queryPageSupported(tab.id, paging.sql, sort)).catch(() => false))) return false;
     // The result's own query, into its own tab (SDB-378): the other result tabs stay.
     await run({ text: paging.sql, from: 0 }, false, paging.pageSize, sort, { kind: "into", result: resultId }, result?.refreshSql);
@@ -698,9 +698,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
   const firstResult = tab.run?.results[0];
   useEffect(() => {
-    if (tab.table && !tab.run?.running && ended(firstResult)) showPendingRow();
+    if (tab.table && !running && ended(firstResult)) showPendingRow();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstResult?.id, ended(firstResult), tab.run?.running]);
+  }, [firstResult?.id, ended(firstResult), running]);
 
   /** A load of many keyset pages of a paged query ("Load every row", or a page or a row past
    *  the ones loaded; SDB-386), and its job for Cancel (SDB-369). */
@@ -712,8 +712,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const current = useApp.getState().tabs.find((item) => item.id === tab.id);
     const result = current?.run?.results.find((item) => item.id === resultId);
     const paging = result?.paging;
-    if (!result || !ended(result) || !paging || paging.loading || current?.run?.running || queryPageBusy.current ||
-        savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return null;
+    if (!result || !ended(result) || !paging || paging.loading || isRunning(current) || queryPageBusy.current ||
+        saving.now() || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return null;
     if (!paging.hasMore || (until !== null && result.rows >= until)) return result.rows;
     if (until === null && !(await confirmLoadAll(resultId, { kind: "query", sql: paging.sql }))) return null;
     if (queryPageBusy.current) return null;
@@ -762,8 +762,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const current = useApp.getState().tabs.find((item) => item.id === tab.id);
     const result = current?.run?.results.find((item) => item.id === resultId);
     const paging = result?.paging;
-    if (!result || !ended(result) || !paging || !paging.hasMore || paging.loading || current?.run?.running ||
-        queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length ||
+    if (!result || !ended(result) || !paging || !paging.hasMore || paging.loading || isRunning(current) ||
+        queryPageBusy.current || saving.now() || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length ||
         (paging.total !== undefined && result.rows >= paging.total)) return 0;
     queryPageBusy.current = true;
     updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
@@ -785,7 +785,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   async function countQueryResult(resultId: number) {
     const result = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.id === resultId);
-    if (!result || !ended(result) || !result.paging || tab.run?.running || queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return;
+    if (!result || !ended(result) || !result.paging || running || queryPageBusy.current || saving.now() || pendingCount > 0 || result.sort?.length || result.filter || result.columnFilters?.length) return;
     queryPageBusy.current = true;
     updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
       ? { ...item, paging: { ...item.paging, loading: true } } : item) }));
@@ -804,7 +804,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   function changeQueryPageSize(size: number) {
-    if (queryPageBusy.current || pendingCount > 0 || savingEditsRef.current || !activeResult) return;
+    if (queryPageBusy.current || pendingCount > 0 || saving.now() || !activeResult) return;
     setQueryPageSize(size);
     // The grid's sort of the pages stays: the new pages are read in the same order.
     rerun(activeResult.id, false, size);
@@ -812,12 +812,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   useEffect(() => {
     const queued = queuedPage.current;
-    if (tab.run?.running || !queued) return;
+    if (running || !queued) return;
     queuedPage.current = null;
     void loadPage(queued);
     // Runs when a load ends.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.run?.running]);
+  }, [running]);
 
   /** The first page of a table data tab: with the table's default filter (SDB-381) when the
    *  tab opens without one of its own. The core checked that default again as it read it; one
@@ -837,12 +837,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   // A table data tab shows its first page as soon as it opens.
   const opened = useRef(false);
   useEffect(() => {
-    if (opened.current || !tab.table || tab.run || tab.status === "connecting") return;
+    if (opened.current || !tab.table || tab.run || tabStatus === "connecting") return;
     opened.current = true;
     void openTablePage(tab.table);
     // Wait for an explorer-created tab's independent session before loading its first page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.status, tab.table, tab.run]);
+  }, [tabStatus, tab.table, tab.run]);
 
   /** Saves the SQL as a named query in the local store (Ctrl+S). */
   async function saveQuery() {
@@ -878,8 +878,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const actionState = useRef({ running: false, runBlocked: false });
   const resultCommand = useRef<(command: ResultTabCommand) => void>(() => undefined);
   /** The tab's session commands, as the latest render wrote them. */
-  const sessionCommand = useRef({ reconnect: reconnectNow, readOnly: () => setSessionReadOnly(!tab.sessionReadOnly), cancel: cancelRun });
-  sessionCommand.current = { reconnect: reconnectNow, readOnly: () => setSessionReadOnly(!tab.sessionReadOnly), cancel: cancelRun };
+  const sessionCommand = useRef({ reconnect: reconnectNow, readOnly: () => setSessionReadOnly(!sessionReadOnly(tab)), cancel: cancelRun });
+  sessionCommand.current = { reconnect: reconnectNow, readOnly: () => setSessionReadOnly(!sessionReadOnly(tab)), cancel: cancelRun };
   useEffect(() => {
     const onCommand = (e: Event) => {
       const { tab: target, command } = (e as CustomEvent<{ tab: string; command: EditorCommand }>).detail;
@@ -957,7 +957,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   // Read the server state after connecting and after each script, including failed scripts:
   // a USE earlier in a script can succeed even when a later statement fails.
   useEffect(() => {
-    if (!supportsDatabase || tab.status !== "connected") {
+    if (!supportsDatabase || tabStatus !== "connected") {
       setDatabase(null);
       setDatabases([]);
       setDatabaseError(false);
@@ -965,7 +965,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       setDatabaseBusy(false);
       return;
     }
-    if (tab.run?.running) return;
+    if (running) return;
     let cancelled = false;
     databaseBusyRef.current = true;
     setDatabaseBusy(true);
@@ -991,17 +991,17 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }
       });
     return () => { cancelled = true; };
-  }, [supportsDatabase, tab.id, tab.status, tab.connectionId, tab.run?.running, databaseRefresh]);
+  }, [supportsDatabase, tab.id, tabStatus, tab.connectionId, running, databaseRefresh]);
 
   // The session's schema, read after connecting and after each script (a SET search_path in
   // it changes it), as the database is.
   useEffect(() => {
-    if (!supportsSchema || tab.status !== "connected") {
+    if (!supportsSchema || tabStatus !== "connected") {
       setSchema(null);
       setSchemas([]);
       return;
     }
-    if (tab.run?.running) return;
+    if (running) return;
     let cancelled = false;
     Promise.all([call(commands.listSchemas(tab.id, null, false)), call(commands.activeSchema(tab.id))])
       .then(([list, current]) => {
@@ -1016,7 +1016,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }
       });
     return () => { cancelled = true; };
-  }, [supportsSchema, tab.id, tab.status, tab.connectionId, tab.run?.running, schemaRefresh]);
+  }, [supportsSchema, tab.id, tabStatus, tab.connectionId, running, schemaRefresh]);
 
   async function changeSchema(next: string) {
     if (!next || schemaBusy) return;
@@ -1033,7 +1033,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   async function changeDatabase(next: string) {
-    if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (pendingCount > 0 || saving.now() || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!next || databaseBusyRef.current) return;
     databaseBusyRef.current = true;
     setDatabaseBusy(true);
@@ -1087,33 +1087,34 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // table page connects, then runs its SELECT through `run`).
     const current = useApp.getState().tabs.find((t) => t.id === tab.id);
     // A lost session is reconnected only from its banner, and nothing is run then (ADR-028).
-    if (current?.lost) {
+    const lost = current ? lostSession(current) : null;
+    if (lost) {
       updateTab(tab.id, {
-        run: current.idleClosed
-          ? failedRun(current.lost, { key: "messages.idleClosed", values: { minutes: idleMinutes(current.idleClosed) } })
-          : failedRun(current.lost, { key: "messages.connectionLost", values: { detail: current.lost } }),
+        run: lost.idleSeconds !== null
+          ? failedRun(lost.reason, { key: "messages.idleClosed", values: { minutes: idleMinutes(lost.idleSeconds) } })
+          : failedRun(lost.reason, { key: "messages.connectionLost", values: { detail: lost.reason } }),
       });
       return false;
     }
-    const status = current?.status;
+    const status = current ? statusName(current) : "disconnected";
     if (status === "connected") return true;
     if (status === "connecting") return false;
     if (!tab.connectionId) {
       updateTab(tab.id, { run: failedRun("", { key: "pickConnection" }) });
       return false;
     }
-    updateTab(tab.id, { status: "connecting" });
+    setConnection(tab.id, CONNECTING);
     try {
-      const version = await openSession(tab.id, tab.connectionId);
-      if (version === null) {
-        updateTab(tab.id, { status: "disconnected" });
+      const session = await openSession(tab.id, tab.connectionId);
+      if (session === null) {
+        setConnection(tab.id, DISCONNECTED);
         return false;
       }
-      updateTab(tab.id, { status: "connected", serverVersion: version, lost: undefined, idleClosed: undefined });
+      setConnection(tab.id, connectedWith(session));
       return true;
     } catch (e) {
       const detail = message(e);
-      updateTab(tab.id, { status: "disconnected", run: failedRun(detail, { key: "messages.connectionFailed", values: { detail } }) });
+      updateTab(tab.id, { connectionState: connectFailed(detail), run: failedRun(detail, { key: "messages.connectionFailed", values: { detail } }) });
       return false;
     }
   }
@@ -1123,10 +1124,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  says. Nothing is run again (ADR-028), and "Read-only for this session" ends with it. */
   async function reconnectNow() {
     if (!tab.connectionId) return;
-    if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (pendingCount > 0 || saving.now() || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
-    updateTab(tab.id, { status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined, sessionReadOnly: undefined });
+    setConnection(tab.id, DISCONNECTED);
     if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
   }
 
@@ -1137,26 +1138,23 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (on && !(await ensureConnected())) return;
     try {
       await call(commands.setSessionReadOnly(tab.id, on));
-      updateTab(tab.id, { sessionReadOnly: on || undefined });
+      useApp.getState().setSessionReadOnly(tab.id, on);
       setNotice({ text: t(on ? "session.readOnlyOn" : "session.readOnlyOff"), error: false });
     } catch (e) {
       setNotice({ text: t("session.readOnlyFailed", { detail: message(e) }), error: true });
     }
   }
-  // A new session starts as its connection says: the mark goes with the old one.
-  useEffect(() => {
-    if (tab.sessionReadOnly && (tab.status !== "connected" || tab.lost)) updateTab(tab.id, { sessionReadOnly: undefined });
-  }, [tab.id, tab.status, tab.lost, tab.sessionReadOnly]);
 
   /** Opens a new session for a tab whose session was lost. Nothing is run: the user runs
    *  the statement again. */
   async function reconnect() {
-    updateTab(tab.id, { lost: undefined, idleClosed: undefined, lostTransaction: undefined });
+    const current = tabNow();
+    if (current && lostSession(current)) setConnection(tab.id, DISCONNECTED);
     if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
   }
 
   async function changeConnection(id: string) {
-    if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (pendingCount > 0 || saving.now() || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
     setPlan(null); setPlanOpen(false); setCapabilities(null); setAnalyzePlan(false);
@@ -1164,13 +1162,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // The rows on screen came from the other connection: read-only until run again (SDB-137).
     setQueryTable(null);
     setQueryChecked(activeResult?.id ?? null);
-    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
+    updateTab(tab.id, { connectionId: id || null, connectionState: DISCONNECTED });
   }
 
   // "Run…" on a routine (ADR-047): the whole script once, as soon as the tab is connected and
   // idle (its database list read), like Run script: the parameters are asked, the guard
   // confirms. The request is cleared first, so nothing runs again after a reconnect.
-  const runOnOpenReady = !!tab.runOnOpen && tab.status === "connected" && !(tab.run?.running ?? false)
+  const runOnOpenReady = !!tab.runOnOpen && tabStatus === "connected" && !running
     && !databaseBusy && !historySaving && !workspaceChanging;
   useEffect(() => {
     // The database list may have started loading in this same commit: wait for it.
@@ -1251,9 +1249,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  query's own order, as every run from the editor. `placement`: where the core puts the
    *  run's results (SDB-378). */
   async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize, sort: SortState[] = [], placement: ResultPlacementItem = { kind: "replace" }, refreshSource = request.text) {
-    if (!refreshingEdits && (pendingCount > 0 || savingEditsRef.current)) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (!refreshingEdits && (pendingCount > 0 || saving.now())) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (queryPageBusy.current || startingRun.current || restoringView.current) return;
-    if (!request.text.trim() || tab.run?.running || databaseBusyRef.current || useApp.getState().workspaceChanging ||
+    if (!request.text.trim() || running || databaseBusyRef.current || useApp.getState().workspaceChanging ||
         (tab.connectionId && useApp.getState().historySaving.includes(tab.connectionId))) return;
     startingRun.current = true;
     try {
@@ -1347,7 +1345,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   async function explainCurrent() {
     if (startingRun.current || queryPageBusy.current || actionState.current.running || actionState.current.runBlocked) return;
-    if (pendingCount > 0 || savingEditsRef.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (pendingCount > 0 || saving.now()) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     startingRun.current = true;
     let runStarted = false;
     try {
@@ -1509,10 +1507,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
     e.preventDefault();
   }
 
-  const running = tab.run?.running ?? false;
   // What the core says the tab's session runs (SDB-370): paused at a statement, cancelling.
-  const cancelRequested = running && isCancelling(tab.runState);
-  const runStatusText = runStatus(tab.runState);
+  const cancelRequested = cancelling(tab);
+  const runStatusText = runStatus(runStateOf(tab));
+  const lost = lostSession(tab);
+  const version = serverVersion(tab);
   const runStatusLine = running ? t(runStatusText.key, runStatusText.values) : "";
   // What Run will send, in the core's words; plain "Run" until its first answer.
   const runPicks = runLabel?.kind === "selection" && runLabel.statements > 1;
@@ -1522,7 +1521,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     : runPicks ? t("runSelectionPick") : t("runSelection");
   // The names the table tab's filter box completes from: the columns of the page on screen.
   const tableColumns = tab.table ? (tab.run?.results[0]?.columns ?? []).map((column) => column.name) : [];
-  actionState.current = { running, runBlocked: historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging || refreshRestoring };
+  actionState.current = { running, runBlocked: historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging || refreshRestoring };
   // A result tab's menu (SDB-378), on the active result. The pin and the name are the core's:
   // it answers what the tab is now, and that is what is drawn.
   resultCommand.current = (command) => {
@@ -1534,7 +1533,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const failed = (e: unknown) => setNotice({ text: message(e), error: true });
     switch (command) {
       case "resultRerun":
-        if (!current?.running && ended(result)) rerun(result.id);
+        if (!isRunning(tabNow()) && ended(result)) rerun(result.id);
         break;
       case "resultPin":
         void call(commands.pinResult(tab.id, result.id, !result.pinned)).then(drawn).catch(failed);
@@ -1552,7 +1551,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       case "resultClose":
         // Closing frees the result in the core, pinned or not; never with unsaved edits.
         if (!result || !ended(result)) break;
-        if (pendingCount > 0 || savingEditsRef.current) { setNotice({ text: t("edit.applyFirst"), error: true }); break; }
+        if (pendingCount > 0 || saving.now()) { setNotice({ text: t("edit.applyFirst"), error: true }); break; }
         void call(commands.releaseResult(result.id))
           .then(() => updateRun(tab.id, (r) => withoutResults(r, [result.id])))
           .catch(failed);
@@ -1578,7 +1577,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
             const chosen = connections.find((c) => c.id === tab.connectionId);
             return chosen ? connectionTooltip(chosen) : t("connection");
           })()}
-          disabled={running || databaseBusy || tab.status === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
+          disabled={running || databaseBusy || tabStatus === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
           <option value="">{t("noConnection")}</option>
           {connections.map((c) => (
             <option key={c.id} value={c.id} title={connectionTooltip(c)}>
@@ -1587,16 +1586,16 @@ export function EditorTab({ tab }: { tab: Tab }) {
             </option>
           ))}
         </select>
-        {supportsDatabase && (tab.status === "connected" ? (
+        {supportsDatabase && (tabStatus === "connected" ? (
           <><select aria-label={t("database")} title={t("database")} value={database ?? ""} onChange={(e) => void changeDatabase(e.target.value)} disabled={running || databaseBusy || databaseError || historySaving || workspaceChanging || activeResult?.paging?.loading}>
             <option value="" disabled>{databaseBusy ? t("loadingDatabases") : databaseError ? t("databaseLoadFailed") : t("noDatabase")}</option>
             {database && !databases.includes(database) && <option value={database}>{database}</option>}
             {databases.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>{databaseError && <button className="ghost" disabled={running || databaseBusy} onClick={() => setDatabaseRefresh((n) => n + 1)}>{t("retryDatabases")}</button>}</>
         ) : (
-          <button className="ghost" disabled={tab.status === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
+          <button className="ghost" disabled={tabStatus === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
         ))}
-        {supportsSchema && tab.status === "connected" && (
+        {supportsSchema && tabStatus === "connected" && (
           <select
             aria-label={t("schema")}
             title={schemaPooled ? t("schemaPooled") : t("schemaHint")}
@@ -1610,23 +1609,23 @@ export function EditorTab({ tab }: { tab: Tab }) {
             {schemas.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         )}
-        {tab.lost ? (
-          <span className="status status-lost" role="alert" title={tab.lostTransaction ? `${tab.lost}
-${t("transaction.lostWithTransaction")}` : tab.lost}>
-            {tab.idleClosed ? t("status.idleClosed", { minutes: idleMinutes(tab.idleClosed) }) : t("status.lost")}
-            {tab.lostTransaction && <span className="small">{t("transaction.lostWithTransaction")}</span>}
+        {lost ? (
+          <span className="status status-lost" role="alert" title={lost.transactionOpen ? `${lost.reason}
+${t("transaction.lostWithTransaction")}` : lost.reason}>
+            {lost.idleSeconds !== null ? t("status.idleClosed", { minutes: idleMinutes(lost.idleSeconds) }) : t("status.lost")}
+            {lost.transactionOpen && <span className="small">{t("transaction.lostWithTransaction")}</span>}
             <button className="ghost small" disabled={workspaceChanging} onClick={() => void reconnect()}>
               {t("reconnect")}
             </button>
           </span>
         ) : (
-          <span className={`status status-${tab.status}`}>
-            {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
+          <span className={`status status-${tabStatus}`}>
+            {t(`status.${tabStatus}`)}{version ? ` · ${version}` : ""}
           </span>
         )}
         {kind && <TypeBadge type={kind} />}
-        {!tab.table && tab.status === "connected" && <TransactionControls tab={tab} running={running} onNotice={setNotice} />}
-        {tab.sessionReadOnly && tab.status === "connected" && (
+        {!tab.table && tabStatus === "connected" && <TransactionControls tab={tab} running={running} onNotice={setNotice} />}
+        {sessionReadOnly(tab) && (
           <button
             type="button"
             className="session-read-only"
@@ -1693,7 +1692,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             connectionId={tab.connectionId}
             session={tab.id}
             columns={tableColumns}
-            loaded={!!tab.run && !tab.run.running && !tab.run.error && tab.run.results.length > 0}
+            loaded={!!tab.run && !running && !tab.run.error && tab.run.results.length > 0}
           />
         )}
         {!tab.table && (
@@ -1707,15 +1706,15 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
                 <EditorActionIcon name="cancel" />
               </button>
             ) : (
-              <button className="editor-action editor-action-run" data-run-target={runLabel?.kind ?? ""} aria-label={runName} title={`${runPicks ? t("runSelectionPickHint", { count: runLabel?.statements }) : runName} (${commandSpec("editor.run").shortcut})`} disabled={historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
+              <button className="editor-action editor-action-run" data-run-target={runLabel?.kind ?? ""} aria-label={runName} title={`${runPicks ? t("runSelectionPickHint", { count: runLabel?.statements }) : runName} (${commandSpec("editor.run").shortcut})`} disabled={historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
                 <EditorActionIcon name="run" />
               </button>
             )}
-            <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint")} disabled={running || historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
+            <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
               <EditorActionIcon name="script" />
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
-            <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
+            <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
             <EditorActionsButton />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
@@ -1792,6 +1791,8 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           {planOpen && plan ? <PlanViewer key={plan.id} summary={plan} controls={planControls} onBack={() => { setPlan(null); setPlanOpen(false); }} /> : <>{planOpen && planControls}<Results
             maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
             run={tab.run}
+            running={running}
+            connectFailed={connectFailure(tab) !== null}
             runStatus={runStatusLine}
             cancelRequested={cancelRequested}
             onCancelRun={() => void cancelRun()}
@@ -1805,10 +1806,10 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             columnComments={tab.table ? columnComments : undefined}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
             pendingEdits={pendingCount > 0}
-            refreshDisabled={running || historySaving || databaseBusy || tab.status !== "connected" || !!tab.lost || workspaceChanging || savingEdits || pageLoading || refreshRestoring}
+            refreshDisabled={running || historySaving || databaseBusy || tabStatus !== "connected" || workspaceChanging || savingEdits || pageLoading || refreshRestoring}
             restoringView={refreshRestoring}
             onRefresh={(result, row) => {
-              if (pendingCount > 0 || savingEditsRef.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+              if (pendingCount > 0 || saving.now()) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
               if (tab.table) void loadPage(tab.table);
               else void refreshQuery(result, row);
             }}
@@ -1846,6 +1847,21 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
   );
 }
 
+/** A flag kept in one place (SDB-371): `on` for rendering and `now()` for code already running
+ *  (a second click), which must not wait for a render to see it. */
+function useFlag(): { on: boolean; now(): boolean; set(on: boolean): void } {
+  const [on, setOn] = useState(false);
+  const current = useRef(false);
+  return {
+    on,
+    now: () => current.current,
+    set: (value) => {
+      current.current = value;
+      setOn(value);
+    },
+  };
+}
+
 /** A run that failed before it started: nothing was replaced, so the results stay. */
 function errorRun(text: string, translation?: Translation, results: RunState["results"] = []): RunState {
   return {
@@ -1861,6 +1877,8 @@ function errorRun(text: string, translation?: Translation, results: RunState["re
 
 function Results({
   run,
+  running,
+  connectFailed,
   runStatus,
   cancelRequested,
   onCancelRun,
@@ -1894,6 +1912,10 @@ function Results({
   /** The button that hides the SQL editor (SQL tabs only). */
   maximize?: { maximized: boolean; onToggle(): void };
   run: RunState | null;
+  /** Its run is going (`tabState.ts`'s `isRunning`). */
+  running: boolean;
+  /** The last attempt to connect failed: a missing plugin may be why. */
+  connectFailed: boolean;
   runStatus: string;
   cancelRequested: boolean;
   onCancelRun(): void;
@@ -2034,7 +2056,7 @@ function Results({
         </div>}
         {maximizeButton}
       </div>
-      {run.running && <ResultRunProgress key={run.startedAt} startedAt={run.startedAt} status={runStatus} cancelRequested={cancelRequested} onCancel={onCancelRun} />}
+      {running && <ResultRunProgress key={run.startedAt} startedAt={run.startedAt} status={runStatus} cancelRequested={cancelRequested} onCancel={onCancelRun} />}
       {active && filterError?.result === active.id && <div id={`result-filter-error-${active.id}`} className="result-filter-error" role="alert">{filterError.message}</div>}
       <div className="result-body">
         {active && chartShown[active.id] && (
@@ -2077,7 +2099,7 @@ function Results({
             onViewerOpen={setViewerOpen}
             viewerWidth={viewerWidth}
             onViewerWidth={setViewerWidth}
-            pagingLocked={restoringView || pendingEdits || run.running || filteringResult === active.id || !!active.paging?.loading || !!editing?.busy}
+            pagingLocked={restoringView || pendingEdits || running || filteringResult === active.id || !!active.paging?.loading || !!editing?.busy}
             refresh={canRefresh && refreshSlot ? {
               target: refreshSlot,
               disabled: refreshDisabled || filteringResult === active.id || !!active.paging?.loading || !ended(active),
@@ -2093,13 +2115,13 @@ function Results({
             onCancelLoad={onCancelLoad}
             onSelectedRows={(rows) => { selectedRows.current[active.id] = rows; }}
             onTranspose={(rows) => setTransposed((current) => ({ ...current, [active.id]: rows }))}
-            onRunAgain={!run.running && (active.paging?.sql ?? active.sql) ? () => onRunAgain(active.id) : undefined}
+            onRunAgain={!running && (active.paging?.sql ?? active.sql) ? () => onRunAgain(active.id) : undefined}
           />
           </div>
         ) : (
           <div className="messages">
             {error && <pre className="error-box">{error}</pre>}
-            {run.error?.translation?.key === "messages.connectionFailed" && connectionEngine && <MissingPlugin engine={connectionEngine} />}
+            {connectFailed && connectionEngine && <MissingPlugin engine={connectionEngine} />}
             {run.messages.map((m, i) => (
               <div key={i} className={`message message-${m.kind}`}>
                 {m.translation ? translated(m.translation, t, numbers) : m.text}
@@ -2109,7 +2131,7 @@ function Results({
         )}
       </div>
       <div className="statusline">
-        {!run.running && (
+        {!running && (
           <span>
             {(() => {
               if (!active) return "";

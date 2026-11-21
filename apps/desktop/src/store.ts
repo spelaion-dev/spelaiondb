@@ -6,6 +6,7 @@ import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFormatItem, OnErrorItem, RestoreNoteItem, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
 import type { DiagramScopeItem_Deserialize, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
+import { DISCONNECTED, withReadOnly, withTransaction, type TabConnection } from "./tabState";
 
 export interface ResultMeta {
   id: number;
@@ -99,7 +100,6 @@ export interface RunState {
   summary?: ScriptSummaryItem;
 }
 
-export type TabStatus = "disconnected" | "connecting" | "connected";
 export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "references" | "indexes" | "triggers" | "properties" | "partitions" | "dependencies";
 
 /**
@@ -120,19 +120,10 @@ export interface Tab {
   /** The results panel fills the tab, hiding the SQL editor (UI only, never kept). */
   resultsMaximized?: boolean;
   connectionId: string | null;
-  status: TabStatus;
-  /** Why its session was lost (ADR-028): nothing runs until the user reconnects. */
-  lost?: string;
-  /** Its session was closed by its connection type after this many seconds idle (ADR-029). */
-  idleClosed?: number;
-  /** Its session was lost with a transaction open: the server rolled it back (ADR-031). */
-  lostTransaction?: boolean;
-  /** Its transaction as the core last told it (ADR-031); the core decides, this only shows. */
-  transaction?: TransactionStatusItem;
-  /** "Read-only for this session" (SDB-395): the core made its session refuse writes, until it
-   *  reconnects or the user turns it off. Only shown: the core holds the barrier. */
-  sessionReadOnly?: boolean;
-  serverVersion: string | null;
+  /** Its connection, one state (SDB-371): disconnected (and why it failed), connecting,
+   *  connected (version, transaction, read-only for this session), lost, idle-closed. Read only
+   *  through the selectors of `tabState.ts`; changed with `setConnection` and its transitions. */
+  connectionState: TabConnection;
   sql: string;
   run: RunState | null;
   /** What its session runs, as the core last said it (SDB-370): running, paused at a
@@ -243,6 +234,16 @@ export function snapshotOf(tab: Tab): TabSnapshot | null {
     ...(tab.runOptions ? { runOptions: tab.runOptions } : {}),
     ...(tab.file ? { file: tab.file } : {}),
   };
+}
+
+/** The tabs with `id`'s connection changed by `change`; the same state when nothing changed, so
+ *  an event for a tab that no longer has a session renders nothing (SDB-110). */
+function changeConnection(s: AppStore, id: string, change: (connection: TabConnection) => TabConnection): Partial<AppStore> {
+  const tab = s.tabs.find((t) => t.id === id);
+  if (!tab) return s;
+  const next = change(tab.connectionState);
+  if (next === tab.connectionState) return s;
+  return { tabs: s.tabs.map((t) => (t === tab ? { ...t, connectionState: next } : t)) };
 }
 
 /** Pinned tabs first, each group keeping its order. */
@@ -386,6 +387,12 @@ interface AppStore {
    *  disconnected, with their text and nothing to run. Closed tabs are forgotten. */
   restoreTabs(restored: RestoredTabItem[], active: number | null): void;
   updateTab(id: string, patch: Partial<Tab>): void;
+  /** Moves the tab's connection to `next` (built with `tabState.ts`'s transitions). */
+  setConnection(id: string, next: TabConnection): void;
+  /** The core's new word on the tab's transaction (ADR-031); kept only while connected. */
+  setTransaction(id: string, transaction: TransactionStatusItem): void;
+  /** "Read-only for this session" on or off (SDB-395); kept only while connected. */
+  setSessionReadOnly(id: string, readOnly: boolean): void;
   updateRun(id: string, update: (run: RunState) => RunState): void;
   setHistoryOpen(open: boolean): void;
   /** The saved queries panel takes the place of the history panel, and vice versa. */
@@ -459,8 +466,7 @@ export const useApp = create<AppStore>((set) => ({
       id,
       number: tabCounter,
       connectionId,
-      status: "disconnected",
-      serverVersion: null,
+      connectionState: DISCONNECTED,
       sql: sql ?? newScriptTemplate,
       run: null,
       ...(fromTemplate ? { fromTemplate: true } : {}),
@@ -582,8 +588,7 @@ export const useApp = create<AppStore>((set) => ({
         title: kept.title ?? undefined,
         pinned: kept.pinned || undefined,
         connectionId: kept.connection ?? null,
-        status: "disconnected",
-        serverVersion: null,
+        connectionState: DISCONNECTED,
         sql: kept.text,
         run: null,
         snippetName: kept.snippetName ?? undefined,
@@ -605,6 +610,9 @@ export const useApp = create<AppStore>((set) => ({
     set({ tabs: ordered, activeTab, recentTabs: activeTab ? [activeTab] : [], closedTabs: [], renamingTab: null });
   },
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
+  setConnection: (id, next) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, connectionState: next } : t)) })),
+  setTransaction: (id, transaction) => set((s) => changeConnection(s, id, (c) => withTransaction(c, transaction))),
+  setSessionReadOnly: (id, readOnly) => set((s) => changeConnection(s, id, (c) => withReadOnly(c, readOnly))),
   updateRun: (id, update) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id && t.run ? { ...t, run: update(t.run) } : t)) })),
   setHistoryOpen: (historyOpen) => set(historyOpen ? { historyOpen, snippetsOpen: false } : { historyOpen }),
@@ -650,7 +658,7 @@ export const useApp = create<AppStore>((set) => ({
   setConnectionOpen: (connection, open) => set((s) => ({
     openConnections: open ? [...new Set([...s.openConnections, connection])] : s.openConnections.filter((id) => id !== connection),
   })),
-  clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, status: "disconnected", serverVersion: null, run: null })) })),
+  clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, connectionState: DISCONNECTED, run: null })) })),
   setResultsMaximized: (id, resultsMaximized) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, resultsMaximized: resultsMaximized || undefined } : t)) })),
 }));
