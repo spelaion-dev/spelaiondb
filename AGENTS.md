@@ -35,9 +35,15 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   outside `src-tauri` and `bindings.ts`), CI's two Rust jobs pass without running; the push to
   `dev` after the merge runs them. `.github/workflows/needs-rust.sh` has the list: if Rust
   starts reading a new place outside its crates, name it there in the same pull request.
-- **Pull requests target `dev`** (see `CONTRIBUTING.md`). Merge one when CI is green and it
-  follows these rules, with "Rebase and merge" (one commit per change, as written), and delete
-  its branch. GitHub's auto-merge can merge it as soon as CI passes.
+- **Pull requests target `dev`** (see `CONTRIBUTING.md`) and **merge through `dev`'s merge
+  queue**, never straight: CI on a pull request only proves it against the `dev` it was opened
+  on. Once it is green and follows these rules, put it in the queue: `gh pr merge --auto <N>`
+  (it waits for the required checks, then queues; no merge method is given, the queue's is
+  "Rebase and merge", one commit per change, as written). The queue runs CI again on top of the
+  current `dev` and of the pull requests queued before it (`merge_group`) and merges only if
+  that run is green too; one that fails there leaves the queue unmerged: rebase on `origin/dev`,
+  fix it and queue it again. Delete its branch once it has landed. `gh pr merge --admin`
+  bypasses the queue: only a maintainer, and only for what cannot wait for it.
 - **Security files need a person:** a pull request that touches a file listed in
   `.github/CODEOWNERS` (execution and import barriers, secrets and redaction, trust and
   connection safeguards, SSH and remote SQLite boundaries, MCP client configuration, patched

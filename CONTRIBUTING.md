@@ -166,6 +166,9 @@ every run, since the run changes that database) and the Docker services up
 - CI runs on every pull request and is the code reviewer: a pull request is merged when it is
   green and agrees with the rules above. One that changes a security file (listed in
   [`.github/CODEOWNERS`](.github/CODEOWNERS)) also needs a maintainer's approval.
+- Merging goes through `dev`'s merge queue: CI runs again on your change on top of the current
+  `dev` and of the pull requests queued before it, and the change is merged only if that is
+  green too. If it fails there, rebase on `dev`, fix it and it can be queued again.
 
 ## Reporting problems
 - **Bugs and ideas:** [open an issue](https://github.com/spelaion-dev/spelaiondb/issues/new/choose).
