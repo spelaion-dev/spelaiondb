@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use spelaion_driver_api::Dialect;
+use spelaion_driver_api::{Dialect, StatementSpan};
 
 pub mod clickhouse;
 pub mod cql;
@@ -62,6 +62,43 @@ pub fn backslash_escapes(name: &str) -> bool {
         name,
         "clickhouse" | "databend" | "spanner" | "hive" | "spark" | "kyuubi" | "impala" | "tdengine"
     )
+}
+
+/// Whether the character at byte `i` of `script` is white space. The one rule every splitter
+/// uses, and the one `str::trim` uses (Unicode's White_Space: a no-break space, a vertical tab,
+/// U+2028 and U+3000 too), so a statement is never counted as code by one and then trimmed
+/// away by the other (SDB-434). A byte inside a character is white space: the character was
+/// decided at its first byte.
+pub(crate) fn is_white_space_at(script: &str, i: usize) -> bool {
+    if !script.is_char_boundary(i) {
+        return true;
+    }
+    script[i..].chars().next().is_some_and(char::is_whitespace)
+}
+
+/// Whether the character just before byte `i` is white space, by the same rule: a word may
+/// start after it, even where a byte outside ASCII would otherwise continue a name.
+pub(crate) fn white_space_before(script: &str, i: usize) -> bool {
+    script.is_char_boundary(i)
+        && script[..i]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace)
+}
+
+/// The span of `script[start..end]` without the white space around it, or `None` when there is
+/// nothing else: a statement that is only white space, of any kind, is no statement (SDB-434).
+pub(crate) fn trimmed(script: &str, start: usize, end: usize) -> Option<StatementSpan> {
+    let text = &script[start..end];
+    let body = text.trim();
+    if body.is_empty() {
+        return None;
+    }
+    let lead = text.len() - text.trim_start().len();
+    Some(StatementSpan {
+        start: start + lead,
+        end: start + lead + body.len(),
+    })
 }
 
 /// The dialect of an engine, by the name the configuration uses (`engine = "postgres"`).

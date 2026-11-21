@@ -163,14 +163,8 @@ fn split(script: &str, quoting: Quoting) -> Vec<StatementSpan> {
     let mut i = 0;
     let mut has_code = false;
     let push = |spans: &mut Vec<StatementSpan>, from: usize, to: usize, has_code: bool| {
-        let text = &script[from..to];
-        let trimmed_start = from + (text.len() - text.trim_start().len());
-        let trimmed_end = from + text.trim_end().len();
-        if has_code && trimmed_end > trimmed_start {
-            spans.push(StatementSpan {
-                start: trimmed_start,
-                end: trimmed_end,
-            });
+        if has_code {
+            spans.extend(crate::trimmed(script, from, to));
         }
     };
     while i < bytes.len() {
@@ -204,7 +198,7 @@ fn split(script: &str, quoting: Quoting) -> Vec<StatementSpan> {
                 i = skip_quoted(bytes, i, quote, quoting);
                 continue;
             }
-            b if b.is_ascii_whitespace() => {}
+            _ if crate::is_white_space_at(script, i) => {}
             _ => {
                 if bytes[i..].starts_with(delimiter.as_bytes()) {
                     push(&mut spans, start, i, has_code);

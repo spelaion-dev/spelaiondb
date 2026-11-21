@@ -14,6 +14,8 @@ use spelaion_driver_api::{
     Dialect, ObjectInfo, ObjectKind, RequestClass, RequestError, StatementSpan,
 };
 
+use crate::{is_white_space_at, trimmed};
+
 pub struct Neo4jDialect;
 
 impl Dialect for Neo4jDialect {
@@ -212,32 +214,22 @@ fn split(script: &str) -> Vec<StatementSpan> {
         }
         if b[i] == b';' {
             if has_code {
-                spans.push(trimmed(script, start, i));
+                spans.extend(trimmed(script, start, i));
             }
             i += 1;
             start = i;
             has_code = false;
             continue;
         }
-        if !b[i].is_ascii_whitespace() {
+        if !is_white_space_at(script, i) {
             has_code = true;
         }
         i += 1;
     }
     if has_code {
-        spans.push(trimmed(script, start, b.len()));
+        spans.extend(trimmed(script, start, b.len()));
     }
     spans
-}
-
-fn trimmed(script: &str, start: usize, end: usize) -> StatementSpan {
-    let text = &script[start..end];
-    let leading = text.len() - text.trim_start().len();
-    let trailing = text.len() - text.trim_end().len();
-    StatementSpan {
-        start: start + leading,
-        end: end - trailing,
-    }
 }
 
 #[cfg(test)]

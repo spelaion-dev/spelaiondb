@@ -1,5 +1,7 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::{is_white_space_at, trimmed, white_space_before};
+
 /// SQL Server (T-SQL) dialect.
 ///
 /// T-SQL does not need `;` between statements and wraps bodies in `BEGIN … END` without any
@@ -313,13 +315,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
     let mut i = 0;
 
     let push = |spans: &mut Vec<StatementSpan>, from: usize, to: usize| {
-        let text = &script[from..to];
-        let lead = text.len() - text.trim_start().len();
-        let trail = text.len() - text.trim_end().len();
-        spans.push(StatementSpan {
-            start: from + lead,
-            end: to - trail,
-        });
+        spans.extend(trimmed(script, from, to));
     };
 
     while i < b.len() {
@@ -382,11 +378,18 @@ fn split(script: &str) -> Vec<StatementSpan> {
                 has_code = false;
                 words.clear();
             }
-            c if is_word_byte(c) && (i == 0 || !is_word_byte(b[i - 1])) => {
-                let end = b[i..]
-                    .iter()
-                    .position(|&c| !is_word_byte(c))
-                    .map_or(b.len(), |p| i + p);
+            // White space outside ASCII is no part of a word, and a word may follow it
+            // (SDB-434).
+            c if is_word_byte(c)
+                && (i == 0 || !is_word_byte(b[i - 1]) || white_space_before(script, i))
+                && !is_white_space_at(script, i) =>
+            {
+                let end = (i..b.len())
+                    .find(|&j| {
+                        !is_word_byte(b[j])
+                            || (script.is_char_boundary(j) && is_white_space_at(script, j))
+                    })
+                    .unwrap_or(b.len());
                 let word = script[i..end].to_ascii_lowercase();
                 has_code = true;
                 if words.len() < 4 {
@@ -415,8 +418,8 @@ fn split(script: &str) -> Vec<StatementSpan> {
                 }
                 i = end;
             }
-            c => {
-                if !c.is_ascii_whitespace() {
+            _ => {
+                if !is_white_space_at(script, i) {
                     has_code = true;
                 }
                 i += 1;

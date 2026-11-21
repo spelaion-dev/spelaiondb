@@ -741,6 +741,11 @@ fn soup() -> S {
         "🦀",
         "\u{0}",
         "\u{feff}",
+        "\u{a0}",
+        "\u{b}",
+        "\u{85}",
+        "\u{2028}",
+        "\u{3000}",
     ];
     let piece = prop_oneof![
         6 => prop::sample::select(PIECES).prop_map(str::to_string),
@@ -751,55 +756,54 @@ fn soup() -> S {
         8 => prop::collection::vec(piece, 0..48).prop_map(|p| p.concat()),
         1 => any::<String>(),
     ]
-    // White space that is not ASCII's (U+000B, U+00A0, U+2028, U+3000…) is left out until the
-    // splitters stop
-    // giving an inverted span for it: see `unicode_white_space_alone_gives_no_inverted_span`.
-    .prop_map(|s| {
-        s.chars()
-            .map(|c| {
-                if c.is_whitespace() && !c.is_ascii_whitespace() {
-                    '·'
-                } else {
-                    c
-                }
-            })
-            .collect()
-    })
     .boxed()
 }
 
 // --------------------------------------------------------------------------- the properties
 
-/// Found by `any_text_splits_into_spans_that_lose_nothing`. A statement that holds only white
-/// space `is_ascii_whitespace` does not know (a no-break space pasted after the last `;`, a
-/// vertical tab, U+2028, U+3000) counts as code, and is then trimmed with `str::trim`, which
-/// removes it: the span ends before it starts, and `StatementSpan::text` panics on it. Most
-/// dialects do it (PostgreSQL, DuckDB, SQLite, SQL Server, Oracle, ClickHouse, Trino,
-/// Databend, Spanner, Hive, standard SQL, Neo4j…).
+/// White space that `is_ascii_whitespace` does not know: a no-break space, a vertical tab, a
+/// form feed's Unicode cousins, U+2028, U+3000.
+const UNICODE_WHITE_SPACE: &[&str] = &["\u{a0}", "\u{b}", "\u{85}", "\u{2028}", "\u{3000}"];
+
+/// Found by `any_text_splits_into_spans_that_lose_nothing` (SDB-434). A statement that held
+/// only white space `is_ascii_whitespace` does not know (a no-break space pasted after the
+/// last `;`) counted as code and was then trimmed with `str::trim`, which removed it: the span
+/// ended before it started, and `StatementSpan::text` panicked on it. Every splitter now reads
+/// white space by one rule, and a statement of white space alone is no statement.
 #[test]
-#[ignore = "found by SDB-156's property tests: inverted spans for white space outside ASCII's; its fix gets its own Plane item"]
-fn unicode_white_space_alone_gives_no_inverted_span() {
-    let mut inverted = Vec::new();
+fn unicode_white_space_alone_is_no_statement() {
+    let mut wrong = Vec::new();
     for (label, dialect) in every_dialect() {
-        for script in [
-            "\u{a0}",
-            "select 1;\u{a0}",
-            "select 1;\u{3000}\n",
-            "\u{2028}",
-            "select 1;\u{b}",
-        ] {
-            for span in dialect.split_statements(script) {
-                if span.start > span.end {
-                    inverted.push(format!("{label}: {script:?} -> {span:?}"));
+        for space in UNICODE_WHITE_SPACE {
+            for script in [space.to_string(), format!("{space}\n{space}")] {
+                let spans = dialect.split_statements(&script);
+                if !spans.is_empty() {
+                    wrong.push(format!("{label}: {script:?} -> {spans:?}"));
+                }
+            }
+            // `;` separates statements only in SQL and the languages shaped like it.
+            if dialect.reads_requests() {
+                continue;
+            }
+            for script in [format!(";{space};"), format!("{space};\n;{space}")] {
+                let spans = dialect.split_statements(&script);
+                if !spans.is_empty() {
+                    wrong.push(format!("{label}: {script:?} -> {spans:?}"));
+                }
+            }
+            for script in [
+                format!("select 1;{space}"),
+                format!("select 1;{space}\n"),
+                format!("{space}select 1{space};{space}"),
+            ] {
+                let spans = dialect.split_statements(&script);
+                if spans.iter().any(|s| s.start > s.end) || texts(&spans, &script) != ["select 1"] {
+                    wrong.push(format!("{label}: {script:?} -> {spans:?}"));
                 }
             }
         }
     }
-    assert!(
-        inverted.is_empty(),
-        "inverted spans:\n{}",
-        inverted.join("\n")
-    );
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// Found by `any_text_splits_into_spans_that_lose_nothing`. A psql `\copy … from stdin;` line
