@@ -226,6 +226,25 @@ async fn a_file_changed_after_it_ran_is_refused_at_the_next_start() {
     );
 }
 
+/// A pinned program missing from the app's folder leaves its engines with a driver that only
+/// says why, and the engines say their plugin is unavailable, so agents are told
+/// `plugin_missing` rather than a connection failure (SDB-374). One that is there is available.
+#[tokio::test]
+async fn a_missing_pinned_program_makes_its_engines_unavailable() {
+    let app = AppFolder::new("missing");
+    let file = app.install(NAME);
+    let pins = pins_for(here(), &sha256_of(&file).unwrap());
+    let engines = engines_of(&pins, &app.0);
+    assert!(!engines.plugin_unavailable("test"));
+    std::fs::remove_file(&file).unwrap();
+    let engines = engines_of(&pins, &app.0);
+    assert!(engines.plugin_unavailable("test"));
+    assert!(engines.plugin_unavailable("test2"));
+    assert!(!engines.plugin_unavailable("sqlite"));
+    let error = pid_through(&engines).await.unwrap_err();
+    assert!(error.to_string().contains("is not installed"), "{error}");
+}
+
 /// A pin for another platform is not a pin here: that hash never lets this platform's file in.
 #[tokio::test]
 async fn a_hash_pinned_for_another_platform_starts_nothing_here() {

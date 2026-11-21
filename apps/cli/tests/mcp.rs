@@ -220,6 +220,26 @@ fn an_agent_can_read_but_never_write() {
         json!({ "connection": "hidden", "sql": "select 1" }),
     );
     assert!(is_error && text.contains("is not exposed"), "{text}");
+    // On the wire, the refusal also carries its stable code (SDB-374), and the listing each
+    // connection's state.
+    let refused = agent.request(
+        "tools/call",
+        json!({ "name": "run_query", "arguments": { "connection": "hidden", "sql": "select 1" } }),
+    );
+    assert_eq!(
+        refused["structuredContent"],
+        json!({ "code": "not_exposed", "retry": false }),
+        "{refused}"
+    );
+    let listed = agent.request(
+        "tools/call",
+        json!({ "name": "list_connections", "arguments": {} }),
+    );
+    assert_eq!(
+        listed["structuredContent"]["connections"],
+        json!([{ "id": "shop", "engine": "sqlite", "access": "read_only", "read_only_because": "writes_denied" }]),
+        "{listed}"
+    );
 
     // A read with a row limit (max_rows = 2).
     let (text, is_error) = agent.call(
