@@ -28,9 +28,19 @@
   or decided from them. Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
   nothing is built twice: `npx tauri build --no-bundle -- -p spelaion-desktop -p
-  spelaion-cli -p spelaion-plugin-fetch`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`,
-  see `CONTRIBUTING.md`).
-  It drives WebView2 over CDP, so the whole test runs on **Windows** only. Its window is moved
+  spelaion-cli -p spelaion-plugin-fetch --features spelaion-desktop/e2e`; a release build on
+  16 GB needs `CARGO_BUILD_JOBS=3`, see `CONTRIBUTING.md`).
+  It drives WebView2 over CDP, so the whole test runs on **Windows** only. The app opens the
+  debugging port itself, but only in a build with the `e2e` feature, which only the smoke's
+  builds turn on and never a release. `open_main_window` passes WebView2 the switches named in
+  `SPELAION_E2E_WEBVIEW2_ARGUMENTS`, after wry's own (`src-tauri/src/webview_args.rs`). It
+  accepts only the smoke's switches: the port (1024–65535), `--disable-features`, and three
+  backgrounding flags. Anything else stops the start with a message. Gating it keeps a shipped
+  build from getting around an administrator's policy on WebView2's switches.
+  `scripts/e2e-feature.test.mjs` checks that the gate is in the source, that the feature is off
+  by default, and that only `smoke-windows.yml` turns it on.
+  WebView2's own `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` is ignored on GitHub's Windows runners
+  (SDB-155). Its window is moved
   left of every monitor as it opens and never takes the foreground (`SPELAION_E2E_OFFSCREEN`, read only by
   `open_main_window`), so the user's real mouse and keyboard cannot reach it; never make a step
   depend on the window being visible or focused (`SPELAION_E2E_SHOW_WINDOW=1` shows it). On **Linux**,
@@ -45,7 +55,18 @@
   screenshots and the log (artifact `smoke-linux`). It and `ci.yml`'s Linux job install their
   Ubuntu packages in the background through `.github/workflows/system-packages.sh` (apt's
   retries and timeouts, then a 20-minute wait that fails saying whether apt failed or the mirror
-  was still slow; tested by `system-packages.test.sh`, SDB-427). macOS has neither (no
+  was still slow; tested by `system-packages.test.sh`, SDB-427).
+  `.github/workflows/smoke-windows.yml` runs on the same events as the Linux pass, on
+  `windows-latest`, and runs `smoke.mjs` with
+  `SPELAION_E2E_UNTIL="SQL files: Ctrl+O opens one"`, because the next step, "direct
+  PostgreSQL", is the first that needs `testing/docker`, and the runner has no Linux containers.
+  `smoke.mjs` refuses an UNTIL that is not a step's text. A failure prints
+  `FAILED at step "…"`, which the job's error names, and uploads `failure.png` and the log (artifact
+  `smoke-windows`, SDB-155). A step before the cut that starts needing a server makes this job
+  fail. In that case, move the step after the cut, or move the cut. Never skip the step. The
+  job sets the runner's screen to 1920×1080 first: at its own 1024×768, Windows shrinks the
+  app's 1400×900 window, and steps that measure room (the cell viewer's width) fail. The
+  steps after the cut are still run by hand (AGENTS.md). macOS has neither (no
   WebDriver for WKWebView). `e2e/processes.mjs` closes windows and lists processes for both.
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;

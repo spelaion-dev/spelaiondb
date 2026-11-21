@@ -133,8 +133,15 @@ outside the team.
   the first workspace pass alone does not count as testing these engines.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
-  the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),
+  the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP; build
+  it with `--features spelaion-desktop/e2e`, see `CONTRIBUTING.md`),
   `node e2e/smoke-linux.mjs` on Linux (a shorter pass through WebDriver, see `CONTRIBUTING.md`).
+  CI runs both on every pull request and push to `dev`, but neither is a required check.
+  `smoke-windows.yml` runs `smoke.mjs` only up to the "SQL files" step, because GitHub's Windows
+  runners have no `testing/docker`. That covers start, trust, SQLite, the grid, the editor, tabs,
+  the explorer, table data, charts and SQL files. Every step from "direct PostgreSQL" to the end
+  still has to be run by hand on Windows with `testing/docker` up: the server engines, tunnels,
+  imports, DuckDB, the large results, restarts, the MCP page and quitting.
 - If something could not be tested (for example Pageant or WebKitGTK), say so explicitly.
 
 ## Development environment
