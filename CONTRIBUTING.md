@@ -50,6 +50,15 @@ default workspace tests, follow the isolated warehouse phase in
 [the test environment](testing/docker/README.md#ci-memory-budget); the workspace pass alone
 does not test these engines.
 
+- Property tests (SDB-156) generate the inputs of the splitters, the placeholder scanner, the
+  barriers and the readers of untrusted files: `crates/spelaion-dialect/tests/split_properties.rs`,
+  `crates/spelaion-core/tests/properties.rs` and `crates/spelaion-config/tests/reader_properties.rs`.
+  In `cargo test` they run a bounded number of cases with a fixed seed, so CI is the same every
+  time and a failure prints its smallest input. For a long run on your machine, set
+  `SPELAION_FUZZ_CASES` (a random seed each run; `PROPTEST_RNG_SEED` fixes one), for example
+  `SPELAION_FUZZ_CASES=100000 cargo test -p spelaion-dialect --test split_properties`. A long run
+  never goes in a pull request's job. What one finds becomes a regression test, `#[ignore]`d
+  with its reason until its own fix.
 - If dependencies change: `cargo deny check`.
 - If the desktop app changes: `npm run build` in `apps/desktop` with no type errors and, if the
   UI changes, the smoke test (`node e2e/smoke.mjs` on Windows, `node e2e/smoke-linux.mjs` on

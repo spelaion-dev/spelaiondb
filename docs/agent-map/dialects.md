@@ -15,3 +15,9 @@
   where its variables live (the guard still checks each statement in it). SQLite's
   `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
   dot-command away from the server's shell: any change to them needs its tests there too.
+- `tests/split_properties.rs` (SDB-156) generates scripts from each dialect's tricky pieces
+  and checks that they split back into their statements, and that any text splits without a
+  panic into spans that lose nothing but comments, white space and separators (read with the
+  dialect's own `code_ranges`). A new dialect gets its pieces there (`extra_atoms`, and a
+  property of its own for blocks or separators); a change to a splitter keeps them passing.
+  `SPELAION_FUZZ_CASES=<n>` runs a long local fuzz (see `CONTRIBUTING.md`).

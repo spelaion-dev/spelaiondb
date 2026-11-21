@@ -60,6 +60,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"
 # The startup tests write local stores in the states a real one was found in (SDB-283); the
 # version spelaion-store uses.
 rusqlite = { version = "0.41", features = ["bundled"] }
+proptest.workspace = true
 
 [lints]
 workspace = true
