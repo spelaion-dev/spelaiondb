@@ -37,8 +37,24 @@ the implementation uses to decide which results qualify and which rows an edit r
    a file loaded into a cell. A different connection or a reconnect gives the tab a new session
    ID. When a result's database context cannot be established, its source is unknown and the
    result is read-only. Table name resolution still uses the session and catalog at the time
-   of the eligibility check. Preserving the resolved relation in the stored result is tracked
-   in SDB-433.
+   of the eligibility check.
+
+   **The stored result keeps the table it was matched to (SDB-433).** The first time the core
+   finds a result editable, it records the table's qualified name and the engine's identity
+   for it in the stored result (`ResultTable`): the `oid` on PostgreSQL, `object_id` and
+   `create_date` on SQL Server, `table_oid` in the current database on DuckDB, the schema's
+   `schema_version` on SQLite and `CREATE_TIME` on MySQL and MariaDB. A later eligibility check
+   never moves the result to another table. Before previewing or applying edits, or loading a
+   file into a cell, `result_edit_table` refuses a table name other than the recorded one and
+   reads the identity again: a table that was dropped, replaced or cannot be identified
+   refuses the edit until the query runs again. Where the engine gives no identity, the result
+   stays read-only. Two limits are accepted: SQLite's `schema_version` moves on any schema
+   change in that database, so an unrelated `CREATE INDEX` also asks for the query again; and
+   MySQL and MariaDB expose no table id without the `PROCESS` privilege, so a table dropped and
+   created again in the same second as the original, with the read in between, is not told
+   apart. The identity is read when the eligibility check runs, which the desktop asks for as
+   soon as the run finishes. Table data pages are not bound this way: their rows come from the
+   core's own SELECT of the table the page names.
 5. **Positions refer to the view the user edited (SDB-138).** Pending edits belong to the stored
    result. While they are pending, the core refuses changes to its sort, text filter or column
    filters, including removing a filter. Appending a page is allowed when it preserves the
@@ -55,7 +71,8 @@ the implementation uses to decide which results qualify and which rows an edit r
 - [Query eligibility tests](../../crates/spelaion-core/tests/session_sqlite.rs) check a plain
   projection, missing keys, duplicate result columns, views, joins and ambiguous names.
 - [Edit provenance tests](../../crates/spelaion-core/tests/edit_source.rs) cover different
-  sessions and database changes. [Pending edit tests](../../crates/spelaion-core/src/pending.rs)
+  sessions and database changes, and that edits stop once the table is dropped or replaced
+  (SDB-433). [Pending edit tests](../../crates/spelaion-core/src/pending.rs)
   cover filter and sort changes and the append of a page without moving edited rows.
 - The [desktop smoke test](../../apps/desktop/e2e/smoke.mjs) edits a simple query result and
   checks that a join's result stays read-only.

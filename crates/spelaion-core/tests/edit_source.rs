@@ -18,7 +18,7 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_core::{
     CellEdit, CellInput, CoreEvent, EditError, PendingEdit, ResultId, ResultStore, Session,
-    apply_edits, edit_statements, editable_query_table, file_change,
+    apply_edits, edit_statements, editable_query_table, file_change, result_edit_table,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
@@ -51,8 +51,8 @@ fn server(var: &str) -> Option<(String, u16)> {
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("spelaion-edit-source-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
+    std::fs::create_dir_all(path.parent().expect("a folder")).unwrap();
     let _ = std::fs::remove_file(&path);
     path
 }
@@ -82,9 +82,10 @@ fn login(host: &str, port: u16, user: &str, password: &str, database: &str) -> C
     }
 }
 
-async fn pairs() -> Vec<Pair> {
-    let duck_a = scratch("a.duckdb");
-    let duck_b = scratch("b.duckdb");
+/// `tag` keeps the files of tests that run at the same time apart.
+async fn pairs(tag: &str) -> Vec<Pair> {
+    let duck_a = scratch(&format!("{tag}/a.duckdb"));
+    let duck_b = scratch(&format!("{tag}/b.duckdb"));
     for path in [&duck_a, &duck_b] {
         engines::create_database(spelaion_config::Engine::Duckdb, path).await;
     }
@@ -92,8 +93,8 @@ async fn pairs() -> Vec<Pair> {
         Pair {
             label: "sqlite",
             driver: engines::sqlite(),
-            first: file(&empty_file("a.sqlite")),
-            second: file(&empty_file("b.sqlite")),
+            first: file(&empty_file(&format!("{tag}/a.sqlite"))),
+            second: file(&empty_file(&format!("{tag}/b.sqlite"))),
             schema: "main",
             prepare: vec![],
             switch: None,
@@ -254,7 +255,7 @@ async fn refused(
 async fn edits_are_written_only_where_the_rows_were_read() {
     let loaded = scratch("loaded.txt");
     std::fs::write(&loaded, "from a file").unwrap();
-    for pair in pairs().await {
+    for pair in pairs("source").await {
         let label = pair.label;
         let store = Arc::new(ResultStore::new());
         let first = session(&pair, &pair.first, &store).await;
@@ -414,6 +415,135 @@ async fn rows_read_across_a_use_are_not_editable() {
         "a batch that ran USE"
     );
     run("sqlserver", &session, "drop table edit_source_batch").await;
+}
+
+/// An editable query result keeps the table its rows were read from (SDB-433): its edits are
+/// written while that table is intact, and refused once the name holds another table (dropped
+/// and created again) or no table at all, or when the page names a different table. Every
+/// engine of `pairs`, on its first database.
+#[tokio::test]
+async fn edits_follow_the_table_the_rows_were_read_from() {
+    const IDENTITY_QUERY: &str = "select id, name from edit_identity";
+    for pair in pairs("identity").await {
+        let label = pair.label;
+        let store = Arc::new(ResultStore::new());
+        // Only the first database, which exists already: `prepare` creates the second one.
+        let session = session(&pair, &pair.first, &store).await;
+        let create = async |value: &str| {
+            run(label, &session, "drop table if exists edit_identity").await;
+            run(
+                label,
+                &session,
+                "create table edit_identity (id int primary key, name varchar(40))",
+            )
+            .await;
+            run(
+                label,
+                &session,
+                &format!("insert into edit_identity values (1, '{value}')"),
+            )
+            .await;
+        };
+        let read_name = async || {
+            let id = run(
+                label,
+                &session,
+                "select name from edit_identity where id = 1",
+            )
+            .await
+            .expect("a result");
+            let stored = session.results().get(id).expect("kept");
+            let stored = stored.read().unwrap();
+            match stored.value_at(0, 0) {
+                Some(Value::Text(text)) => text,
+                other => panic!("{label}: name is {other:?}"),
+            }
+        };
+        // A query result found editable, with one change typed into the grid.
+        let editable = async || {
+            let result = run(label, &session, IDENTITY_QUERY)
+                .await
+                .expect("a result");
+            let table = editable_query_table(&session, result, IDENTITY_QUERY, false)
+                .await
+                .unwrap_or_else(|e| panic!("{label}: {e}"))
+                .unwrap_or_else(|| panic!("{label}: not editable"));
+            let stored = session.results().get(result).unwrap();
+            let mut stored = stored.write().unwrap();
+            let bound = stored.table().expect("the table is kept with the result");
+            assert_eq!(
+                (bound.schema(), bound.name()),
+                (table.object.schema.as_str(), table.object.name.as_str()),
+                "{label}"
+            );
+            stored
+                .edit_pending(PendingEdit::Type(CellEdit {
+                    row: 0,
+                    column: 1,
+                    value: Some(CellInput::Text("changed".into())),
+                }))
+                .unwrap();
+            (result, table.object.schema, table.object.name)
+        };
+        let statements = async |result: ResultId, schema: &str, name: &str| {
+            let (target, table) = result_edit_table(&session, result, schema, name).await?;
+            let stored = session.results().get(result).unwrap();
+            let stored = stored.read().unwrap();
+            edit_statements(&target, &table, &stored, &stored.pending().changes())
+        };
+
+        // Intact: the edit is written to the table, as many times as it is asked.
+        create("before").await;
+        let (result, schema, name) = editable().await;
+        assert_eq!(
+            editable_query_table(&session, result, IDENTITY_QUERY, false)
+                .await
+                .map(|table| table.is_some()),
+            Ok(true),
+            "{label}: asked again"
+        );
+        assert!(
+            matches!(
+                statements(result, &schema, "another_table").await,
+                Err(EditError::NotThisTable(_))
+            ),
+            "{label}: another table named"
+        );
+        let applied = statements(result, &schema, &name)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: intact: {e}"));
+        assert_eq!(apply_edits(&session, &applied).await, Ok(1), "{label}");
+        assert_eq!(read_name().await, "changed", "{label}");
+
+        // Dropped and created again under the same name, with the same key: refused.
+        create("before").await;
+        let (result, schema, name) = editable().await;
+        if matches!(label, "mysql" | "mariadb") {
+            // Their identity is the creation time, to the second.
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+        create("recreated").await;
+        assert_eq!(
+            statements(result, &schema, &name).await,
+            Err(EditError::TableChanged(name.clone())),
+            "{label}: recreated"
+        );
+        assert_eq!(
+            editable_query_table(&session, result, IDENTITY_QUERY, false).await,
+            Ok(None),
+            "{label}: recreated, asked again"
+        );
+        assert_eq!(read_name().await, "recreated", "{label}: nothing written");
+
+        // Gone: no table to identify, so nothing is written.
+        let (result, schema, name) = editable().await;
+        run(label, &session, "drop table edit_identity").await;
+        assert_eq!(
+            statements(result, &schema, &name).await,
+            Err(EditError::TableChanged(name.clone())),
+            "{label}: dropped"
+        );
+    }
 }
 
 #[tokio::test]

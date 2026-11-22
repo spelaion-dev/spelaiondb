@@ -6026,19 +6026,12 @@ async fn table_edit_statements(
     schema: &str,
     name: &str,
 ) -> CmdResult<Vec<String>> {
-    // The primary key comes from the database, never from the UI.
-    let table = open
-        .session
-        .connection()
-        .describe_table(schema, name)
-        .await
-        .map_err(|e| e.to_string())?;
-    // Written only through this session, for rows it read in its current database (SDB-137).
-    let target = open
-        .session
-        .edit_target()
-        .await
-        .map_err(|e| e.to_string())?;
+    // The core decides the session and table (SDB-137, SDB-433); the primary key comes from
+    // the database, never from the UI.
+    let (target, table) =
+        spelaion_core::result_edit_table(&open.session, ResultId(result.into()), schema, name)
+            .await
+            .map_err(|e| e.to_string())?;
     let stored = state
         .results
         .stored(ResultId(result.into()))
@@ -6114,22 +6107,15 @@ async fn load_file_statements(
     column: u32,
     path: String,
 ) -> CmdResult<Vec<String>> {
-    // The primary key comes from the database, never from the UI.
-    let table = open
-        .session
-        .connection()
-        .describe_table(schema, name)
-        .await
-        .map_err(|e| e.to_string())?;
+    // The core decides the session and table (SDB-137, SDB-433); the primary key comes from
+    // the database, never from the UI.
+    let (target, table) =
+        spelaion_core::result_edit_table(&open.session, ResultId(result.into()), schema, name)
+            .await
+            .map_err(|e| e.to_string())?;
     let stored = state
         .results
         .stored(ResultId(result.into()))
-        .map_err(|e| e.to_string())?;
-    // Written only through this session, for rows it read in its current database (SDB-137).
-    let target = open
-        .session
-        .edit_target()
-        .await
         .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
