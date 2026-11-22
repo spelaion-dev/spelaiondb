@@ -88,6 +88,9 @@
   --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.25);
   /* The accent edge of a selected explorer row. */
   --shadow-selected-row: inset 2px 0 var(--accent);
+  /* The accent edge under the active result tab, and beside the active result side action. */
+  --shadow-active-tab: inset 0 -2px var(--accent);
+  --shadow-active-side: inset -2px 0 var(--accent);
   --shadow-plan-selected-row: inset 3px 0 var(--accent);
   --shadow-plan-selected-node: 0 0 0 1px var(--accent);
   --backdrop: rgba(0, 0, 0, 0.35);
@@ -135,12 +138,18 @@
   --plan-inspector-compact-share: 40%;
   /* The sidebar's separator lies over the edge of the editor, above its sticky parts. */
   --z-resizer: calc(var(--z-sticky) + 1);
+  /* The cell editor and the grid's notices, over the grid and its sticky parts. */
+  --z-grid-overlay: calc(var(--z-sticky) + 3);
   --z-dropdown: 5;
   /* A menu opened from another menu. */
   --z-submenu: calc(var(--z-dropdown) + 1);
+  /* The grid's find and jump boxes stay above its menus. */
+  --z-grid-find: calc(var(--z-dropdown) + 1);
   --z-dialog: 10;
   --z-popover: 20;
   --z-toast: 30;
+  /* What is dragged under the pointer, above everything. */
+  --z-drag: calc(var(--z-toast) + 1);
   --duration-fast: 120ms;
   --duration-overlay: 180ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
@@ -226,6 +235,8 @@
   --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.45);
   --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.55);
   --shadow-selected-row: inset 2px 0 var(--accent);
+  --shadow-active-tab: inset 0 -2px var(--accent);
+  --shadow-active-side: inset -2px 0 var(--accent);
   --shadow-plan-selected-row: inset 3px 0 var(--accent);
   --shadow-plan-selected-node: 0 0 0 1px var(--accent);
   --backdrop: rgba(0, 0, 0, 0.5);
@@ -1678,7 +1689,7 @@ select {
 /* The header being dragged to the grouping panel, under the pointer. */
 .group-ghost {
   position: fixed;
-  z-index: 50;
+  z-index: var(--z-drag);
   padding: var(--space-2xs) var(--space-md);
   font-family: var(--font-code);
   font-size: var(--text-sm);
@@ -1804,8 +1815,8 @@ select {
   align-items: center;
   flex: 0 0 auto;
   min-width: 0;
-  gap: 8px;
-  padding: 4px 8px 0;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-md) 0;
   border-bottom: 1px solid var(--line);
 }
 .result-tab-list {
@@ -1813,29 +1824,32 @@ select {
   align-self: stretch;
   flex: 1 1 auto;
   min-width: 70px;
-  gap: 2px;
+  gap: var(--space-2xs);
   overflow-x: auto;
 }
 .result-tools {
   display: flex;
   flex: 0 1 auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-md);
   min-width: 0;
-  padding-bottom: 4px;
+  padding-bottom: var(--space-xs);
 }
 .result-tabs button {
   flex: 0 0 auto;
   white-space: nowrap;
   border: none;
-  border-radius: 6px 6px 0 0;
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
+  border-bottom-left-radius: initial;
+  border-bottom-right-radius: initial;
   background: transparent;
-  padding: 5px 12px;
+  padding: var(--space-xs) var(--space-lg);
   color: var(--muted);
 }
 .result-tabs button.active {
   color: var(--fg);
-  box-shadow: inset 0 -2px var(--accent);
+  box-shadow: var(--shadow-active-tab);
 }
 .result-tools .result-refresh {
   display: grid;
@@ -1950,13 +1964,13 @@ select {
   display: flex;
 }
 .messages {
-  padding: 10px 14px;
+  padding: var(--space-md) var(--space-lg);
   overflow: auto;
   flex: 1;
-  font-size: 12.5px;
+  font-size: var(--text-md);
 }
 .message {
-  padding: 3px 0;
+  padding: var(--space-2xs) 0;
 }
 .message-error {
   color: var(--danger);
@@ -1968,17 +1982,17 @@ select {
   white-space: pre-wrap;
   color: var(--danger);
   background: var(--accent-soft);
-  border-radius: 6px;
-  padding: 8px 10px;
-  margin: 0 0 10px;
+  border-radius: var(--radius-md);
+  padding: var(--space-md) var(--space-lg);
+  margin: 0 0 var(--space-md);
   font-family: inherit;
 }
 .statusline {
   display: flex;
-  gap: 16px;
-  padding: 4px 12px;
+  gap: var(--space-xl);
+  padding: var(--space-xs) var(--space-lg);
   border-top: 1px solid var(--line);
-  font-size: 11.5px;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 .status-error {
@@ -2041,7 +2055,7 @@ select {
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: initial;
   background: transparent;
   color: var(--muted);
 }
@@ -2395,7 +2409,7 @@ select {
 }
 .bookmark-star {
   color: var(--warn-fg);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .bookmarks {
   margin-bottom: 6px;
@@ -2958,22 +2972,22 @@ select {
 /* ---------------------------------------------------------------- grid menu */
 .grid-menu {
   position: absolute;
-  z-index: 5;
+  z-index: var(--z-dropdown);
   min-width: 220px;
-  padding: 4px;
+  padding: var(--space-xs);
   display: flex;
   flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
 }
 .grid-menu button {
   text-align: left;
   border: none;
   background: none;
-  padding: 6px 10px;
-  border-radius: 4px;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
 }
 .grid-menu button:hover {
   background: var(--accent-soft);
@@ -3001,11 +3015,11 @@ select {
 }
 .column-chooser {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-popover);
   width: 260px;
   max-height: min(420px, calc(100vh - 16px));
-  gap: 6px;
-  padding: 8px;
+  gap: var(--space-sm);
+  padding: var(--space-md);
 }
 .column-chooser input[type="search"] {
   width: 100%;
@@ -3017,8 +3031,8 @@ select {
   min-height: 0;
 }
 .column-chooser-list .check {
-  padding: 3px 4px;
-  border-radius: 4px;
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
   overflow-wrap: anywhere;
 }
 .column-chooser-list .check:hover {
@@ -3030,17 +3044,17 @@ select {
 }
 .grid-find {
   position: absolute;
-  top: 4px;
+  top: var(--space-xs);
   right: 20px;
-  z-index: 6;
+  z-index: var(--z-grid-find);
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
   user-select: none;
 }
 .grid-find input {
@@ -3060,22 +3074,22 @@ select {
   white-space: nowrap;
 }
 .grid-menu-note {
-  margin: 2px 10px 4px;
+  margin: var(--space-2xs) var(--space-md) var(--space-xs);
 }
 .grid-footer {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 24px;
-  padding: 0 8px;
+  gap: var(--space-lg);
+  min-height: var(--control-sm);
+  padding: 0 var(--space-md);
   border-top: 1px solid var(--line);
   background: var(--panel);
-  font-size: 11.5px;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 .grid-footer .grid-hidden {
-  padding: 1px 6px;
-  font-size: 11.5px;
+  padding: 1px var(--space-sm);
+  font-size: var(--text-sm);
   color: var(--accent);
 }
 .grid-selection {
@@ -3086,15 +3100,15 @@ select {
 }
 .grid-notice {
   position: absolute;
-  right: 12px;
-  bottom: 10px;
-  z-index: 4;
-  padding: 6px 10px;
-  border-radius: 6px;
+  right: var(--space-lg);
+  bottom: var(--space-md);
+  z-index: var(--z-grid-overlay);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
   background: var(--panel);
   border: 1px solid var(--line);
-  font-size: 12px;
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow-popover);
 }
 .grid-notice.error {
   color: var(--danger);
@@ -3103,7 +3117,7 @@ select {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-md);
   min-width: 0;
 }
 .export-button > span {
@@ -3114,17 +3128,9 @@ select {
 }
 .result-tabs .export-button > button {
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px 10px;
+  border-radius: var(--radius-md);
+  padding: var(--space-2xs) var(--space-md);
   color: var(--fg);
-}
-.export-menu {
-  position: fixed;
-  z-index: 20;
-}
-.export-menu button {
-  border-radius: 4px !important;
-  color: var(--fg) !important;
 }
 
 /* A tab's run options (ADR-035): a panel beside the editor toolbar. */
@@ -3166,7 +3172,7 @@ select {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-top: 4px;
+  padding-top: var(--space-xs);
   border-left: 1px solid var(--line);
   background: var(--panel);
 }
@@ -3174,11 +3180,11 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
+  width: var(--control-lg);
   height: 34px;
   padding: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: initial;
   background: transparent;
   color: var(--muted);
 }
@@ -3187,7 +3193,7 @@ select {
   color: var(--fg);
   background: var(--accent-soft);
 }
-.result-side-action.active { box-shadow: inset -2px 0 var(--accent); }
+.result-side-action.active { box-shadow: var(--shadow-active-side); }
 .viewer-resizer {
   flex: 0 0 5px;
   cursor: col-resize;
@@ -3208,7 +3214,7 @@ select {
 .grid-menu hr {
   border: none;
   border-top: 1px solid var(--line);
-  margin: 3px 0;
+  margin: var(--space-2xs) 0;
 }
 .cell-viewer {
   display: flex;
@@ -3220,20 +3226,20 @@ select {
 .cell-viewer header {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
   border-bottom: 1px solid var(--line);
 }
 .cell-viewer-heading,
 .cell-viewer-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-sm);
   min-width: 0;
 }
 .cell-viewer-controls { flex-wrap: wrap; }
 .cell-viewer-controls > button { margin-left: auto; }
-.cell-viewer-close { flex: none; padding: 2px 7px; font-size: 16px; line-height: 1; }
+.cell-viewer-close { flex: none; padding: var(--space-2xs) var(--space-sm); font-size: var(--text-lg); line-height: 1; }
 .cell-viewer-title {
   display: flex;
   flex-direction: column;
@@ -3251,7 +3257,7 @@ select {
   padding: 10px 12px;
   overflow: auto;
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: 12.5px;
+  font-size: var(--text-md);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3371,7 +3377,7 @@ select {
 .viewer-value-heading {
   padding: 10px 12px 6px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
@@ -3459,23 +3465,23 @@ span.pick-key {
 .result-filter {
   width: 200px;
   min-width: 100px;
-  font-size: 12.5px;
+  font-size: var(--text-md);
   padding: 3px 8px;
 }
 .result-filter-scope {
   flex: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   white-space: nowrap;
 }
 .result-filter.invalid {
-  border-color: var(--danger, #c0392b);
+  border-color: var(--danger);
 }
 .result-filter-error {
   padding: 6px 12px;
   color: var(--danger);
   border-bottom: 1px solid var(--line);
-  font-size: 12px;
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
 
@@ -3533,11 +3539,11 @@ span.pick-key {
   background: var(--editor-active);
 }
 .row-field.active {
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: var(--shadow-selected-row);
 }
 .row-field dt {
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: var(--text-md);
 }
 .row-field-button {
   padding: 0;
@@ -3551,7 +3557,7 @@ span.pick-key {
 .row-field dd {
   margin: 2px 0 0;
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: 12.5px;
+  font-size: var(--text-md);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -3665,12 +3671,12 @@ span.pick-key {
   top: 8px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 6;
+  z-index: var(--z-grid-find);
   width: min(320px, 90%);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
   padding: 6px;
 }
 .column-jump input {
@@ -3686,10 +3692,10 @@ span.pick-key {
 }
 .column-jump li {
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: 12.5px;
+  font-size: var(--text-md);
 }
 .column-jump li.active {
   background: var(--accent-soft);
@@ -3718,9 +3724,9 @@ span.pick-key {
   gap: 2px;
   padding: 0 2px 0 8px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--accent-soft);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .filter-chip code {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
@@ -3732,11 +3738,11 @@ span.pick-key {
 }
 .grid-submenu > .grid-child-menu {
   display: flex;
-  z-index: 6;
+  z-index: var(--z-submenu);
 }
 .grid-menu code {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .custom-filter-row {
   display: grid;
@@ -3763,7 +3769,7 @@ span.pick-key {
   min-width: 110px;
 }
 .table-clause span {
-  font-size: 11.5px;
+  font-size: var(--text-sm);
   color: var(--muted);
   white-space: nowrap;
 }
@@ -3771,7 +3777,7 @@ span.pick-key {
   flex: 1;
   min-width: 0;
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: 12.5px;
+  font-size: var(--text-md);
 }
 /* The filter box's memory (SDB-381): suggestions under the box, the default's badge and star. */
 .table-filter-box {
@@ -3782,7 +3788,7 @@ span.pick-key {
   top: 100%;
   left: 0;
   right: 0;
-  z-index: 20;
+  z-index: var(--z-popover);
   margin: 2px 0 0;
   padding: 4px;
   list-style: none;
@@ -4000,7 +4006,7 @@ span.pick-key {
   height: 12px;
   border: 2px solid var(--line);
   border-top-color: var(--accent);
-  border-radius: 50%;
+  border-radius: var(--radius-round);
   animation: query-count-spin 0.8s linear infinite;
 }
 @keyframes query-count-spin { to { transform: rotate(360deg); } }
@@ -4018,10 +4024,12 @@ span.pick-key {
   min-height: 26px;
   padding: 0 6px;
   gap: 8px;
-  background: rgba(56, 189, 110, 0.12);
-  font: 12px ui-monospace, "Cascadia Mono", Consolas, monospace;
+  background: var(--success-soft);
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+  line-height: normal;
 }
-.pending-row-mark { color: #50b879; font-weight: bold; }
+.pending-row-mark { color: var(--success); font-weight: 600; }
 .pending-row-values { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font: inherit; }
 .viewer-edit-actions {
   display: flex;
@@ -4041,7 +4049,7 @@ span.pick-key {
   min-height: 0;
   margin: 0 10px 10px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--fg);
 }
@@ -4162,11 +4170,11 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 }
 .cell-editor {
   position: absolute;
-  z-index: 4;
+  z-index: var(--z-grid-overlay);
   box-sizing: border-box;
   padding: 0 7px;
   border: 2px solid var(--accent);
-  border-radius: 0;
+  border-radius: initial;
   font: 400 12px "Segoe UI", system-ui, sans-serif;
   background: var(--grid-bg);
   color: var(--fg);
@@ -4315,12 +4323,12 @@ button.value-picker-row.selected { background: var(--accent-soft); }
   max-height: 260px;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 .change-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .change-table th,
 .change-table td {

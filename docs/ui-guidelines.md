@@ -113,16 +113,20 @@ Each role is defined for both themes:
   a list or bar has no radius (`border-radius: initial`).
 - The workspace is flat. Only layers above it cast a shadow: `--shadow-popover` for menus,
   popovers, tooltips and autocompletion, and `--shadow-dialog` for dialogs, with `--backdrop`
-  behind modal ones. Panels, cards and buttons have no shadow. A selected sidebar row's 2px
-  accent edge is drawn as an inset shadow, `--shadow-selected-row`.
+  behind modal ones. Panels, cards and buttons have no shadow. A 2px accent edge is drawn as
+  an inset shadow: `--shadow-selected-row` for a selected sidebar row or row field,
+  `--shadow-active-tab` under the active result tab and `--shadow-active-side` beside the
+  active result side action.
 - Heights: `--control-sm` 24px (icon buttons in toolbars, inline controls), `--control-md`
   28px (buttons, inputs and selects) and `--control-lg` 32px (welcome and empty-state
   actions). Rows in lists, trees and menus are `--row-h` (26px); result grid rows are 24px to
   display more data with 12px text. Bars (the tab strip and the editor's and the
   results' toolbars) are `--bar-h` (36px).
 - Stacking order, lowest first: `--z-sticky`, `--z-resizer` (the sidebar's separator over the
-  editor's edge), `--z-dropdown`, `--z-submenu` (a menu opened from another menu), `--z-dialog`,
-  `--z-popover` (a menu opened from a dialog shows above it) and `--z-toast`.
+  editor's edge), `--z-grid-overlay` (the cell editor and the grid's notices), `--z-dropdown`,
+  `--z-submenu` (a menu opened from another menu) and `--z-grid-find` (the grid's find and jump
+  boxes), `--z-dialog`, `--z-popover` (a menu opened from a dialog shows above it), `--z-toast`
+  and `--z-drag` (what is dragged under the pointer).
 
 ### Icons
 
