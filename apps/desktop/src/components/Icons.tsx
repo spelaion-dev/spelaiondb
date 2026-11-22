@@ -4,7 +4,11 @@
 // Each icon is imported on its own, so only the ones listed here reach the bundle.
 
 import {
+  Activity,
+  ArrowDown,
+  ArrowUp,
   ArrowUpRight,
+  Bookmark,
   ChartColumn,
   Check,
   ChevronLeft,
@@ -12,8 +16,12 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Circle,
+  Cpu,
   Database,
+  FileText,
   FolderOpen,
+  History,
+  Info,
   Layers,
   Link,
   LoaderCircle,
@@ -26,11 +34,16 @@ import {
   Plus,
   RefreshCw,
   Scan,
+  Search,
+  Settings,
   ShieldAlert,
   Sigma,
   Square,
   Star,
+  Table,
   TableProperties,
+  Terminal,
+  Workflow,
   X,
 } from "lucide-react";
 
@@ -68,6 +81,21 @@ const ICONS = {
   running: LoaderCircle,
   check: Check,
   stopped: Square,
+  arrowUp: ArrowUp,
+  arrowDown: ArrowDown,
+  // The activity bar's views (the explorer is `database`).
+  processes: Activity,
+  search: Search,
+  history: History,
+  saved: Bookmark,
+  mcp: Cpu,
+  settings: Settings,
+  // A tab's kind: a query, a SQL file, table data, a table's details, an ER diagram.
+  query: Terminal,
+  file: FileText,
+  table: Table,
+  details: Info,
+  diagram: Workflow,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;
@@ -79,8 +107,9 @@ export const PATHS = {
 };
 
 /** One icon. `filled` fills its outline, for a toggle that is on (a default's star). The size is
- *  16, or 20 in the activity bar; the few other sizes left go as their areas move to Lucide. */
-export function Icon({ name, size = 16, filled = false }: { name: IconName; size?: number; filled?: boolean }) {
+ *  16, or 20 in the activity bar; the few other sizes left go as their areas move to Lucide.
+ *  `className` adds a place's own class (a tab's kind takes the tab's colour) to `icon`. */
+export function Icon({ name, size = 16, filled = false, className }: { name: IconName; size?: number; filled?: boolean; className?: string }) {
   const Shape = ICONS[name];
-  return <Shape className="icon" size={size} fill={filled ? "currentColor" : "none"} aria-hidden="true" focusable="false" />;
+  return <Shape className={className ? `icon ${className}` : "icon"} size={size} fill={filled ? "currentColor" : "none"} aria-hidden="true" focusable="false" />;
 }

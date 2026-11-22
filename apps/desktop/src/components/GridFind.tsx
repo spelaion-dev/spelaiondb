@@ -4,6 +4,7 @@
 import type { RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { keyText } from "../shortcuts";
+import { Icon } from "./Icons";
 
 export function FindBar(props: {
   inputRef: RefObject<HTMLInputElement | null>;
@@ -62,13 +63,13 @@ export function FindBar(props: {
         {props.status}
       </span>
       <button type="button" className="ghost small" aria-label={previous} title={previous} disabled={!props.canStep} onClick={props.onPrevious}>
-        ↑
+        <Icon name="arrowUp" />
       </button>
       <button type="button" className="ghost small" aria-label={next} title={next} disabled={!props.canStep} onClick={props.onNext}>
-        ↓
+        <Icon name="arrowDown" />
       </button>
       <button type="button" className="ghost small" aria-label={close} title={close} onClick={props.onClose}>
-        ×
+        <Icon name="x" />
       </button>
     </div>
   );
