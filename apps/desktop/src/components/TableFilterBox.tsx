@@ -7,6 +7,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "re
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { TableFiltersItem } from "../bindings";
+import { Icon } from "./Icons";
 
 /** Suggestions of each kind listed at once. */
 const SHOWN = 8;
@@ -239,7 +240,7 @@ export function TableFilterBox(props: {
                     title={t("table.forgetFilter", { filter: suggestion.text })}
                     onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); void forget(suggestion.text); }}
                   >
-                    ×
+                    <Icon name="x" />
                   </button>
                 )}
               </li>
@@ -256,7 +257,7 @@ export function TableFilterBox(props: {
         disabled={props.disabled || !connectionId || (!canSave && !hasDefault)}
         onClick={() => void setDefault(isDefault || !canSave ? null : applied.trim())}
       >
-        {isDefault ? "★" : "☆"}
+        <Icon name="star" filled={isDefault} />
       </button>
       {memory?.refusedDefault && (
         <span className="table-filter-note small" role="alert">

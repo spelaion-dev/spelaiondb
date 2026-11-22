@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type ObjectActionsItem, type TableDetails } from "../api";
 import type { NewTableElementItem } from "../bindings";
 import { useApp, type TableDetailKind } from "../store";
+import { Icon } from "./Icons";
 
 /** Common native types; custom types and other sizes can still be entered explicitly. */
 const COLUMN_TYPES: Record<string, string[]> = {
@@ -77,7 +78,7 @@ export function NewTableElementDialog({ session, connectionId, schema, table, ki
           <h2>{t("newTableElement.title", { section: t(`folders.${kind}`), table })}</h2>
           <p className="muted small">{t("newTableElement.editorHint")}</p>
         </div>
-        <button type="button" className="ghost new-table-element-close" aria-label={t("newTableElement.cancel")} disabled={busy} onClick={onClose}>×</button>
+        <button type="button" className="ghost new-table-element-close" aria-label={t("newTableElement.cancel")} title={`${t("newTableElement.cancel")} (Esc)`} disabled={busy} onClick={onClose}><Icon name="x" /></button>
       </header>
       <div className="new-table-element-fields">
         <label className={`field${kind === "columns" ? "" : " new-table-element-wide"}`}><span>{t("newTableElement.name")}</span><input type="text" className="mono" autoFocus required value={name} onChange={(e) => setName(e.target.value)} /></label>

@@ -134,6 +134,10 @@ Each role is defined for both themes:
 - Engine logos keep their brand colors; nothing else in the interface is multicolored.
 - An icon without visible text has an accessible name and a tooltip with its name and
   shortcut.
+- Every icon goes through `Icon` (`components/Icons.tsx`), by a name that says what it means
+  there (`refresh`, `plan`), never an import from `lucide-react` in a component: the set, its
+  size and its stroke stay in one place, and only the icons listed there reach the bundle. A
+  toggle that is on may fill its icon (`filled`, a default's star); nothing else is filled.
 
 ### Motion
 
