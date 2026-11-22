@@ -22,7 +22,7 @@ import { SettingsDialog } from "./components/Settings";
 import { watchPlugins } from "./plugins";
 import { ReleaseNotesDialog } from "./components/ReleaseNotesDialog";
 import { SnippetsPanel } from "./components/SnippetsPanel";
-import { Sidebar, refreshConnections } from "./components/Sidebar";
+import { ExplorerDialogHost, Sidebar, refreshConnections } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
@@ -269,6 +269,7 @@ export default function App() {
         <OpenObjectDialog initialConnection={openObject.connectionId} onClose={() => useApp.getState().setOpenObject(null)} />
       )}
       {paletteOpen && <CommandPalette onClose={() => useApp.getState().setPaletteOpen(false)} />}
+      <ExplorerDialogHost />
       <ExportDialog />
       <ImportDialog />
       <BackupDialog />

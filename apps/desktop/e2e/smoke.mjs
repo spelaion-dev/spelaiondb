@@ -4336,7 +4336,11 @@ try {
   await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
   // Enter lists the object's actions; Escape goes back to the search as it was.
   await page.keyboard.press("Enter");
-  assert.deepEqual(await paletteLabels(), ["Open data", "Open structure", "New console", "ER diagram of related tables", "Copy name", "Copy qualified name", "Show in explorer"]);
+  // The table's explorer menu, through the same functions (SDB-92), and the palette's own.
+  const tableActions = await paletteLabels();
+  assert.deepEqual(tableActions.slice(0, 9), ["Open data", "Open structure", "New console", "Open as SQL", "Export…", "Import data…", "ER diagram of related tables", "Copy name", "Copy qualified name"]);
+  for (const label of ["Duplicate table…", "Rename…", "Drop…", "Generate DDL", "Generate SELECT"]) assert.ok(tableActions.includes(label), `${label} in ${tableActions.join(", ")}`);
+  assert.equal(tableActions.at(-1), "Show in explorer");
   await shot("sdb-18-palette-actions");
   await page.keyboard.press("Escape");
   assert.equal(await paletteBox.inputValue(), "ord");
@@ -4347,6 +4351,21 @@ try {
   await page.keyboard.press("Enter");
   await palette.waitFor({ state: "detached" });
   assert.equal(await copied(copiedBeforePalette + 1), "orders");
+  {
+    // Generate DDL from the palette opens the same SQL preview as the explorer's menu.
+    await page.keyboard.press("Control+Shift+P");
+    await paletteBox.fill("ord");
+    await paletteResults.locator(".palette-item", { hasText: "big_orders" }).waitFor();
+    await page.keyboard.press("Enter");
+    await paletteBox.fill("generate ddl");
+    assert.equal((await paletteLabels())[0], "Generate DDL");
+    await page.keyboard.press("Enter");
+    const ddl = page.getByRole("dialog", { name: "Generated SQL" });
+    await page.waitForFunction(() => /CREATE TABLE/i.test(document.querySelector('[role="dialog"][aria-label="Generated SQL"] textarea')?.value ?? ""));
+    await palette.waitFor({ state: "detached" });
+    await ddl.getByRole("button", { name: "Close" }).click();
+    await ddl.waitFor({ state: "detached" });
+  }
   {
     // Copy diagnostic info (SDB-398): the version and the engines in use are there; no
     // connection's name, host, user or file, and no path of this computer.

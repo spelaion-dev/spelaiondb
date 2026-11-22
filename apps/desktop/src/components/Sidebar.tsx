@@ -26,7 +26,6 @@ import {
   type SchemaObjectKindItem,
   type ServerObjectItem,
   type ServerObjectKindItem,
-  type SqlTemplateItem,
   type TableDetails,
   type PartitioningItem,
   type TableKeyItem,
@@ -49,7 +48,6 @@ import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
 import { connectedConnections, explorerSessionOpen, isConnected, isRunning, statusName } from "../tabState";
-import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
 import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
 import { useRunFile } from "./RunFileDialog";
@@ -80,6 +78,33 @@ import { FolderMenuButton } from "./FolderMenu";
 import { folderSwitchBlocked, switchFolder } from "../folders";
 import { ariaKeyShortcuts, commandShortcut, keyText, shortcutText } from "../shortcuts";
 import { matchesShortcut } from "../commandRegistry";
+import {
+  canRenameRelation,
+  changedSchema,
+  dropRelation,
+  duplicateTable,
+  editViewSource,
+  exportRelations,
+  forgetExplorerSession,
+  importIntoTable,
+  isPlainTable,
+  knownObjectActions,
+  loadObjectActions,
+  openGeneratedSql,
+  openRelationDdl,
+  openRelationDiagram,
+  openRelationRows,
+  openRelationSql,
+  openSqlTab,
+  relationBookmark,
+  relationTemplates,
+  reloadBookmarks,
+  renameRelation,
+  sameBookmark,
+  templatesOf,
+  toggleBookmark,
+  useExplorerDialog,
+} from "../explorerActions";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -129,9 +154,9 @@ const EXPLORER_SHORTCUTS = {
  * A menu item with its shortcut right-aligned, as in the tab menu. Its accessible name stays its
  * label, and assistive technology gets the keys as `aria-keyshortcuts`.
  */
-function ShortcutMenuItem({ label, shortcut, className, onClick }: { label: string; shortcut: string; className?: string; onClick(): void }) {
+function ShortcutMenuItem({ label, shortcut, className, action, onClick }: { label: string; shortcut: string; className?: string; action?: string; onClick(): void }) {
   return (
-    <button role="menuitem" className={className} aria-label={label} aria-keyshortcuts={ariaKeyShortcuts(shortcut)} onClick={onClick}>
+    <button role="menuitem" className={className} data-action={action} aria-label={label} aria-keyshortcuts={ariaKeyShortcuts(shortcut)} onClick={onClick}>
       <span>{label}</span>
       <span className="menu-shortcut">{shortcutText(shortcut)}</span>
     </button>
@@ -233,7 +258,7 @@ function matchesFilter(name: string, filter: string): boolean {
 }
 
 /** A separate submenu, positioned outside the scrollable explorer menu. */
-function GenerateMenu({ children, label }: { children: ReactNode; label?: string }) {
+function GenerateMenu({ children, label, action }: { children: ReactNode; label?: string; action?: string }) {
   const { t } = useTranslation("shell");
   const title = label ?? t("generateSql");
   const [open, setOpen] = useState(false);
@@ -262,7 +287,7 @@ function GenerateMenu({ children, label }: { children: ReactNode; label?: string
     }} onBlur={(e) => {
       if (!e.currentTarget.contains(e.relatedTarget) && !submenu.current?.contains(e.relatedTarget)) setOpen(false);
     }}>
-      <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}>
+      <button ref={trigger} role="menuitem" data-action={action} aria-haspopup="menu" aria-expanded={open} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}>
         {title} ▸
       </button>
       {open && createPortal(
@@ -289,7 +314,7 @@ function MaintenanceMenu({ session, target, onPick }: { session: string; target:
   }, [session, key]);
   if (kinds.length === 0) return null;
   return (
-    <GenerateMenu label={t("maintenance.menu")}>
+    <GenerateMenu label={t("maintenance.menu")} action="maintenance">
       {kinds.map((kind) => (
         <button key={kind} role="menuitem" onClick={() => onPick(kind)}>
           {t("maintenance.menuItem", { action: t(`maintenance.kinds.${kind}`) })}
@@ -371,57 +396,18 @@ function useSortByName() {
     sortByName(items, name, { sortAlphabetically, sortIgnoreCase }, i18n.language);
 }
 
-/** What a table's menu can generate, per session: the engine does not change while it is open. */
-const tableTemplates = new Map<string, Promise<SqlTemplateItem[]>>();
-/** The lists already answered, so a menu opens with the engine's own and does not change. */
-const knownTemplates = new Map<string, SqlTemplateItem[]>();
-function templatesOf(session: string): Promise<SqlTemplateItem[]> {
-  let templates = tableTemplates.get(session);
-  if (!templates) {
-    templates = call(commands.tableTemplates(session)).then(
-      (list) => {
-        knownTemplates.set(session, list);
-        return list;
-      },
-      (e: unknown) => {
-        tableTemplates.delete(session);
-        throw e;
-      },
-    );
-    tableTemplates.set(session, templates);
-  }
-  return templates;
-}
-function forgetTemplates(session: string) {
-  tableTemplates.delete(session);
-  knownTemplates.delete(session);
-  objectActions.delete(session);
-  pendingObjectActions.delete(session);
-}
-
 /** What the core lets the explorer do on a session's engine (ADR-026), asked once per session
- *  (`enabled` once it is open). */
-const objectActions = new Map<string, ObjectActionsItem>();
-const pendingObjectActions = new Map<string, Promise<ObjectActionsItem>>();
+ *  (`enabled` once it is open); the answer is kept in `explorerActions.ts`. */
 function useObjectActions(session: string, enabled = true): ObjectActionsItem | undefined {
-  const [actions, setActions] = useState(() => objectActions.get(session));
+  const [actions, setActions] = useState(() => knownObjectActions(session));
   useEffect(() => {
     if (actions || !enabled) return;
     let current = true;
-    let pending = pendingObjectActions.get(session);
-    if (!pending) {
-      pending = call(commands.objectActions(session));
-      pendingObjectActions.set(session, pending);
-    }
-    void pending
+    loadObjectActions(session)
       .then((answer) => {
-        if (pendingObjectActions.get(session) === pending) {
-          objectActions.set(session, answer);
-          pendingObjectActions.delete(session);
-        }
         if (current) setActions(answer);
       })
-      .catch(() => { if (pendingObjectActions.get(session) === pending) pendingObjectActions.delete(session); });
+      .catch(() => undefined);
     return () => {
       current = false;
     };
@@ -429,20 +415,11 @@ function useObjectActions(session: string, enabled = true): ObjectActionsItem | 
   return actions;
 }
 
-/** SQL written by the core, in a new tab of the connection (on the schema's database where the
- *  engine has one per schema): nothing runs. */
 /** Opens the backup or restore dialog of a connection the explorer has open (ADR-049). */
 function openBackup(connection: ConnectionItem, session: string, mode: "backup" | "restore") {
   const family = backupFamily(connection.engine);
   if (!family) return;
   useBackup.getState().open({ session, connectionId: connection.id, connectionName: connection.name, family, mode });
-}
-
-function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string, run = false) {
-  const tab = useApp.getState().addTab(connectionId, sql);
-  // "Run…": the tab runs its script once connected, asking the call's parameters first.
-  if (run) useApp.getState().updateTab(tab, { runOnOpen: true });
-  connectTabFromExplorer(tab, session, schema === undefined ? undefined : explorerDatabase(connectionId, schema));
 }
 
 /** "New table", "New view"…: the core's statement, to finish in a new tab (ADR-026). */
@@ -471,7 +448,7 @@ function isDropKey(e: React.KeyboardEvent): boolean {
 function DropMenuItem({ onClick }: { onClick(): void }) {
   const { t } = useTranslation("shell");
   return (
-    <ShortcutMenuItem className="danger-text" label={t("objectChange.dropMenu")} shortcut={EXPLORER_SHORTCUTS.drop} onClick={onClick} />
+    <ShortcutMenuItem className="danger-text" action="drop" label={t("objectChange.dropMenu")} shortcut={EXPLORER_SHORTCUTS.drop} onClick={onClick} />
   );
 }
 
@@ -507,6 +484,68 @@ function DropDialog({
       onDone={onDone}
     />
   );
+}
+
+/**
+ * The dialogs a table's or a view's actions open, from its menu in the explorer or from the
+ * command palette (`explorerActions.ts`, SDB-92): the same dialog either way, with the core's
+ * SQL shown before anything runs (ADR-026).
+ */
+export function ExplorerDialogHost() {
+  const { t } = useTranslation("shell");
+  const dialog = useExplorerDialog((s) => s.dialog);
+  const close = useExplorerDialog((s) => s.close);
+  if (!dialog) return null;
+  switch (dialog.kind) {
+    case "sql":
+      return <GeneratedSqlDialog key={dialog.sql} initialSql={dialog.sql} onClose={close} />;
+    case "rename": {
+      const { session, connectionId, object, onDone } = dialog;
+      return (
+        <ObjectChangeDialog
+          session={session}
+          connectionId={connectionId}
+          schema={object.schema}
+          title={t("objectChange.renameTitle", { name: object.name })}
+          confirmLabel={t("objectChange.rename")}
+          rename={{ current: object.name }}
+          change={({ newName }) => ({
+            action: "rename",
+            target: { kind: "relation", schema: object.schema, name: object.name, relation: object.kind },
+            newName,
+          })}
+          onClose={close}
+          onDone={() => {
+            close();
+            changedSchema(connectionId, onDone);
+          }}
+        />
+      );
+    }
+    case "drop": {
+      const { session, connectionId, object, onDone } = dialog;
+      return (
+        <DropDialog
+          session={session}
+          connectionId={connectionId}
+          schema={object.schema}
+          name={object.name}
+          target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
+          onClose={close}
+          onDone={() => {
+            close();
+            changedSchema(connectionId, onDone);
+          }}
+        />
+      );
+    }
+    case "duplicate":
+      return <DuplicateTableDialog session={dialog.session} connectionId={dialog.connectionId} schema={dialog.object.schema} name={dialog.object.name} onClose={close} />;
+    default: {
+      const unknown: never = dialog;
+      return unknown;
+    }
+  }
 }
 
 /**
@@ -702,14 +741,6 @@ function useRevealedRow(matches: (reveal: ExplorerReveal) => boolean) {
   return { row, revealed: revealed ? " revealed" : "" };
 }
 
-/** The bookmarks are read again (after a change, or another workspace). */
-async function reloadBookmarks() {
-  useApp.getState().setBookmarks(await call(commands.listBookmarks()));
-}
-
-const sameBookmark = (a: BookmarkItem, b: BookmarkItem) =>
-  a.connection === b.connection && a.schema === b.schema && a.name === b.name && a.kind === b.kind && a.detail === b.detail;
-
 /** Whether an object is bookmarked (ADR-026). */
 function useBookmarked(bookmark: BookmarkItem): boolean {
   return useApp((s) => s.bookmarks.some((b) => sameBookmark(b, bookmark)));
@@ -722,11 +753,10 @@ function BookmarkMenuItem({ bookmark, close, onError }: { bookmark: BookmarkItem
   return (
     <button
       role="menuitem"
+      data-action="bookmark"
       onClick={() => {
         close();
-        call(bookmarked ? commands.removeBookmark(bookmark) : commands.addBookmark(bookmark))
-          .then(reloadBookmarks)
-          .catch((e: unknown) => onError(errorText(e)));
+        toggleBookmark(bookmark).catch((e: unknown) => onError(errorText(e)));
       }}
     >
       {t(bookmarked ? "removeBookmark" : "addBookmark")}
@@ -921,11 +951,13 @@ function CopyMenuItems({
   return (
     <>
       <ShortcutMenuItem
+        action="copyName"
         label={several ? t("copyNames", { count }) : t("copyName")}
         shortcut={EXPLORER_SHORTCUTS.copyNames}
         onClick={() => copy(false)}
       />
       <ShortcutMenuItem
+        action="copyQualifiedName"
         label={several ? t("copyQualifiedNames", { count }) : t("copyQualifiedName")}
         shortcut={EXPLORER_SHORTCUTS.copyQualifiedNames}
         onClick={() => copy(true)}
@@ -958,6 +990,7 @@ function FilterMenuItems({
       <hr />
       <button
         role="menuitem"
+        data-action="hide"
         onClick={() => {
           close();
           onFilterName(kind, names, "hide");
@@ -967,6 +1000,7 @@ function FilterMenuItems({
       </button>
       <button
         role="menuitem"
+        data-action="showOnly"
         onClick={() => {
           close();
           onFilterName(kind, names, "showOnly");
@@ -1864,7 +1898,7 @@ function ConnectionNode({
   async function load() {
     // The connection may have been edited to point to another engine; asked again now, so
     // tables' menus have the list before they open.
-    forgetTemplates(session);
+    forgetExplorerSession(session);
     const filter = await call(commands.getExplorerFilter(connection.id));
     setFilters(filter);
     // Without its roles or logins the connection still shows its schemas.
@@ -2569,7 +2603,6 @@ function ObjectNode({
   onFilterName: FilterName;
 }) {
   const { t, i18n } = useTranslation("shell");
-  const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
   /** Foreign keys of other tables that point to this one; none when they cannot be read. */
@@ -2582,14 +2615,20 @@ function ObjectNode({
   /** Exact count asked from the menu ("counting" while it runs). */
   const [count, setCount] = useState<number | "counting" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState(false);
-  const [dropping, setDropping] = useState(false);
-  const [generatedSql, setGeneratedSql] = useState<string | null>(null);
   /** The maintenance action whose dialog is open (SDB-392). */
   const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
   const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
-  /** "Duplicate table…" is open (SDB-394). */
-  const [duplicating, setDuplicating] = useState(false);
+  /** Runs one of the shared actions (`explorerActions.ts`) from this row's menu: closes it, and
+   *  says what went wrong under the row. */
+  const act = (action: () => unknown) => {
+    setMenu(null);
+    setError(null);
+    void Promise.resolve()
+      .then(action)
+      .catch((e: unknown) => setError(errorText(e)));
+  };
+  const rename = () => renameRelation(connectionId, session, object, onSchemaChanged);
+  const drop = () => dropRelation(connectionId, session, object, onSchemaChanged);
   const openDetails = (kind: TableDetailKind) => {
     const app = useApp.getState();
     const existing = app.tabs.some((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
@@ -2648,66 +2687,14 @@ function ObjectNode({
   }
   useOnChange(generation, reloadDetails);
 
-  /** Preview the core's SQL; Open as SQL still opens an editor tab. */
-  async function openSql(template: SqlTemplateItem, inEditor = false) {
-    setMenu(null);
-    try {
-      setError(null);
-      const sql = await call(commands.tableSql(session, object.schema, object.name, template));
-      if (inEditor) {
-        const tab = addTab(connectionId, sql);
-        connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
-      } else setGeneratedSql(sql);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
   /** Tables and views chosen with Ctrl+click in this session, this one among them or not. */
   const selection = useApp((s) => s.explorerSelection).filter((o) => o.session === session);
   const chosen = selection.some((o) => o.schema === object.schema && o.name === object.name);
   /** A SELECT joining the chosen tables on their foreign keys. */
-  async function openJoin(inner: boolean) {
-    setMenu(null);
-    try {
-      setError(null);
-      const sql = await call(
-        commands.joinSql(
-          session,
-          selection.map((o) => ({ schema: o.schema, name: o.name })),
-          inner,
-        ),
-      );
-      setGeneratedSql(sql);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  /** "Edit source": the core writes the view as the statement that replaces it (ADR-047). */
-  async function openSource() {
-    setMenu(null);
-    try {
-      setError(null);
-      openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "view", schema: object.schema, name: object.name })));
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  /** "Generate DDL": the driver writes the CREATE statement. */
-  async function openDdl() {
-    setMenu(null);
-    try {
-      setError(null);
-      setGeneratedSql(await call(commands.relationDefinition(session, object.schema, object.name)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
+  const openJoin = (inner: boolean) =>
+    act(async () => openGeneratedSql(await call(commands.joinSql(session, selection.map((o) => ({ schema: o.schema, name: o.name })), inner))));
   /** Pages of the table in a table data tab (double-click or "View rows"). */
-  const preview = () => {
-    setMenu(null);
-    const tab = useApp.getState().addTableTab(connectionId, object.schema, object.name);
-    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
-  };
+  const preview = () => act(() => openRelationRows(connectionId, session, object));
   async function countRows() {
     setMenu(null);
     setError(null);
@@ -2722,24 +2709,24 @@ function ObjectNode({
     }
   }
   const view = object.kind.includes("view");
-  const canRename = !view || actions?.renameViews === true;
-  const [tableMenu, setTableMenu] = useState<SqlTemplateItem[] | undefined>(() => knownTemplates.get(session));
+  const canRename = canRenameRelation(object, actions);
+  // The engine's list of statements, asked once the menu opens; until it answers, what every
+  // engine has (`relationTemplates`).
+  const [, setTemplatesKnown] = useState(false);
   useEffect(() => {
-    if (!menu || view || tableMenu) return;
+    if (!menu || view) return;
     let current = true;
     void templatesOf(session)
-      .then((list) => {
-        if (current) setTableMenu(list);
+      .then(() => {
+        if (current) setTemplatesKnown(true);
       })
       .catch(() => undefined);
     return () => {
       current = false;
     };
-  }, [menu, view, session, tableMenu]);
-  // Until the engine's list arrives, only what every engine has.
-  const templates: SqlTemplateItem[] = view ? ["select"] : (tableMenu ?? ["select", "insert", "update", "delete"]);
-  // A relation's kind comes from the driver as text; the core refuses one it does not know.
-  const bookmark: BookmarkItem = { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind as BookmarkItem["kind"], detail: "" };
+  }, [menu, view, session]);
+  const templates = relationTemplates(session, object);
+  const bookmark = relationBookmark(connectionId, object);
   /** What "Copy" takes: every table chosen with Ctrl+click, or this one. */
   const copyPaths: ObjectPathItem[] = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, names: [o.name] }));
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
@@ -2776,11 +2763,11 @@ function ObjectNode({
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => copyPaths, setError)) return;
           if (isRenameKey(e)) {
-            if (canRename) setRenaming(true);
+            if (canRename) rename();
             return;
           }
           if (isDropKey(e)) {
-            setDropping(true);
+            drop();
             return;
           }
           if (e.key === "Enter" || e.key === " ") {
@@ -2819,46 +2806,40 @@ function ObjectNode({
       </div>
       {menu && (
         <ObjectMenu at={menu} className="explorer-relation-menu">
-          <button role="menuitem" onClick={preview}>
+          {/* Each item's `data-action` is the id of the same action in the command palette
+              (`relationActions` in commands.ts); scripts/commands.test.mjs compares them. */}
+          <button role="menuitem" data-action="openData" onClick={preview}>
             {t("sql.preview")}
           </button>
-          <button role="menuitem" onClick={() => void openSql("preview", true)}>
+          <button role="menuitem" data-action="openAsSql" onClick={() => act(() => openRelationSql(connectionId, session, object, "preview", true))}>
             {t("sql.openAsSql")}
           </button>
-          <button role="menuitem" onClick={() => void countRows()}>
+          <button role="menuitem" data-action="countRows" onClick={() => void countRows()}>
             {t("sql.count")}
           </button>
           <button
             role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              const tables = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, name: o.name }));
-              useExport.getState().open({ kind: "tables", session, connectionId, tables });
-            }}
+            data-action="export"
+            onClick={() => act(() => exportRelations(connectionId, session, (chosen ? selection : [object]).map((o) => ({ schema: o.schema, name: o.name }))))}
           >
             {chosen && selection.length > 1
               ? t("exportTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
               : t("exportTable")}
           </button>
           {!view && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                useImport.getState().open({ session, connectionId, schema: object.schema, table: object.name, text: null });
-              }}
-            >
+            <button role="menuitem" data-action="import" onClick={() => act(() => importIntoTable(connectionId, session, object))}>
               {t("importData")}
             </button>
           )}
           {!view && (
             <button
               role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                const tables = chosen && selection.length > 1 ? selection.map((o) => ({ schema: o.schema, name: o.name })) : null;
-                openDiagram(connectionId, tables ? { kind: "tables", tables } : { kind: "focus", schema: object.schema, table: object.name }, session);
-              }}
+              data-action="erDiagram"
+              onClick={() =>
+                act(() =>
+                  openRelationDiagram(connectionId, session, object, chosen && selection.length > 1 ? selection.map((o) => ({ schema: o.schema, name: o.name })) : null),
+                )
+              }
             >
               {chosen && selection.length > 1
                 ? t("diagram.menuTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
@@ -2866,41 +2847,21 @@ function ObjectNode({
             </button>
           )}
           {object.kind === "view" && (
-            <button role="menuitem" onClick={() => void openSource()}>
+            <button role="menuitem" data-action="editSource" onClick={() => act(() => editViewSource(connectionId, session, object))}>
               {t("editSource")}
             </button>
           )}
-          <ShortcutMenuItem label={t("refresh")} shortcut={EXPLORER_SHORTCUTS.refresh} onClick={refresh} />
+          <ShortcutMenuItem action="refresh" label={t("refresh")} shortcut={EXPLORER_SHORTCUTS.refresh} onClick={refresh} />
           <hr />
           <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
           <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
-          {!view && object.kind !== "collection" && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                setDuplicating(true);
-              }}
-            >
+          {isPlainTable(object) && (
+            <button role="menuitem" data-action="duplicate" onClick={() => act(() => duplicateTable(connectionId, session, object))}>
               {t("duplicate.menu")}
             </button>
           )}
-          {canRename && (
-            <ShortcutMenuItem
-              label={t("objectChange.renameMenu")}
-              shortcut={EXPLORER_SHORTCUTS.rename}
-              onClick={() => {
-                setMenu(null);
-                setRenaming(true);
-              }}
-            />
-          )}
-          <DropMenuItem
-            onClick={() => {
-              setMenu(null);
-              setDropping(true);
-            }}
-          />
+          {canRename && <ShortcutMenuItem action="rename" label={t("objectChange.renameMenu")} shortcut={EXPLORER_SHORTCUTS.rename} onClick={() => act(rename)} />}
+          <DropMenuItem onClick={() => act(drop)} />
           <FilterMenuItems
             kind="objects"
             names={chosen ? selection.map((o) => o.name) : [object.name]}
@@ -2911,22 +2872,23 @@ function ObjectNode({
           <GenerateMenu>
             {chosen && selection.length > 1 && (
               <>
-                <button role="menuitem" onClick={() => void openJoin(false)}>
+                <button role="menuitem" data-action="join" onClick={() => openJoin(false)}>
                   {t("sql.join", { count: selection.length.toLocaleString(i18n.language) })}
                 </button>
-                <button role="menuitem" onClick={() => void openJoin(true)}>
+                <button role="menuitem" data-action="innerJoin" onClick={() => openJoin(true)}>
                   {t("sql.innerJoin", { count: selection.length.toLocaleString(i18n.language) })}
                 </button>
               </>
             )}
-            <button role="menuitem" onClick={() => void openDdl()}>
+            <button role="menuitem" data-action="generateDdl" onClick={() => act(() => openRelationDdl(session, object))}>
               {t("generateDdl")}
             </button>
             {templates.map((template) => (
               <button
                 key={template}
                 role="menuitem"
-                onClick={() => void openSql(template)}
+                data-action={`generate:${template}`}
+                onClick={() => act(() => openRelationSql(connectionId, session, object, template))}
               >
                 {t(`sql.${template}`)}
               </button>
@@ -2948,7 +2910,6 @@ function ObjectNode({
         </p>
       )}
       {open && loadingDetails && <div className="children muted small" role="status">{t("loadingDetails")}</div>}
-      {generatedSql !== null && <GeneratedSqlDialog initialSql={generatedSql} onClose={() => setGeneratedSql(null)} />}
       {maintaining && (
         <MaintenanceDialog
           session={session}
@@ -2959,43 +2920,6 @@ function ObjectNode({
           target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
           kind={maintaining}
           onClose={() => setMaintaining(null)}
-        />
-      )}
-      {duplicating && (
-        <DuplicateTableDialog session={session} connectionId={connectionId} schema={object.schema} name={object.name} onClose={() => setDuplicating(false)} />
-      )}
-      {renaming && (
-        <ObjectChangeDialog
-          session={session}
-          connectionId={connectionId}
-          schema={object.schema}
-          title={t("objectChange.renameTitle", { name: object.name })}
-          confirmLabel={t("objectChange.rename")}
-          rename={{ current: object.name }}
-          change={({ newName }) => ({
-            action: "rename",
-            target: { kind: "relation", schema: object.schema, name: object.name, relation: object.kind },
-            newName,
-          })}
-          onClose={() => setRenaming(false)}
-          onDone={() => {
-            setRenaming(false);
-            onSchemaChanged();
-          }}
-        />
-      )}
-      {dropping && (
-        <DropDialog
-          session={session}
-          connectionId={connectionId}
-          schema={object.schema}
-          name={object.name}
-          target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
-          onClose={() => setDropping(false)}
-          onDone={() => {
-            setDropping(false);
-            onSchemaChanged();
-          }}
         />
       )}
       {open && details && (

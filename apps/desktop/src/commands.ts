@@ -30,6 +30,25 @@ import {
 import { FOCUS_EXPLORER_FILTER_EVENT } from "./components/Sidebar";
 import { FOCUS_SEARCH_EVENT } from "./components/SearchPanel";
 import { openFound } from "./components/OpenObjectDialog";
+import {
+  canRenameRelation,
+  dropRelation,
+  duplicateTable,
+  editViewSource,
+  explorerSession,
+  exportRelations,
+  importIntoTable,
+  isBookmarked,
+  isPlainTable,
+  knownObjectActions,
+  openRelationDdl,
+  openRelationDiagram,
+  openRelationSql,
+  relationBookmark,
+  relationTemplates,
+  renameRelation,
+  toggleBookmark,
+} from "./explorerActions";
 import { useImport } from "./components/ImportDialog";
 import { ended } from "./resultEnd";
 import { canStartRun, explorerSessionOpen, isConnected, isRunning, sessionReadOnly } from "./tabState";
@@ -446,6 +465,61 @@ function openStructure(connectionId: string, object: ObjectItem) {
   if (!existing) connectTabFromExplorer(tab, `meta:${connectionId}`, explorerDatabase(connectionId, object.schema));
 }
 
+/**
+ * What the palette offers for a table or a view: the actions of its menu in the explorer, run by
+ * the same functions (`explorerActions.ts`, SDB-92), and a few of its own (open structure, new
+ * console, show in explorer). `scripts/commands.test.mjs` compares the two lists; the menu's
+ * items that need its row (count, refresh, the filter, joins of the tables chosen with
+ * Ctrl+click, the maintenance submenu) stay there. A collection, or a table of an engine whose
+ * language is not SQL, only opens, copies its name and is shown in the explorer.
+ */
+function relationActions(connectionId: string, object: ObjectItem): PaletteObjectAction[] {
+  const session = explorerSession(connectionId);
+  const opening: PaletteObjectAction[] = [
+    { id: "openData", label: "app:palette.actions.openData", run: () => openFound(connectionId, { kind: "relation", object }) },
+  ];
+  const own = (structure: boolean): PaletteObjectAction[] => [
+    ...(structure ? [{ id: "openStructure", label: "app:palette.actions.openStructure", run: () => openStructure(connectionId, object) }] : []),
+    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, object.schema) },
+  ];
+  const names: PaletteObjectAction[] = [
+    { id: "copyName", label: "shell:copyName", run: () => copyName(object.name) },
+    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, object.schema, object.name) },
+  ];
+  const show: PaletteObjectAction = {
+    id: "showInExplorer",
+    label: "app:palette.actions.showInExplorer",
+    run: () => showInExplorer({ connectionId, schema: object.schema, name: object.name }),
+  };
+  const sql = useApp.getState().connections.find((c) => c.id === connectionId)?.sql ?? true;
+  if (object.kind === "collection" || !sql) return [...opening, ...own(false), ...names, show];
+  const table = isPlainTable(object);
+  const bookmark = relationBookmark(connectionId, object);
+  return [
+    ...opening,
+    ...own(true),
+    { id: "openAsSql", label: "shell:sql.openAsSql", run: () => openRelationSql(connectionId, session, object, "preview", true) },
+    { id: "export", label: "shell:exportTable", run: () => exportRelations(connectionId, session, [{ schema: object.schema, name: object.name }]) },
+    ...(table ? [{ id: "import", label: "shell:importData", run: () => importIntoTable(connectionId, session, object) }] : []),
+    ...(table ? [{ id: "erDiagram", label: "app:palette.actions.erDiagram", run: () => openRelationDiagram(connectionId, session, object) }] : []),
+    ...(object.kind === "view" ? [{ id: "editSource", label: "shell:editSource", run: () => editViewSource(connectionId, session, object) }] : []),
+    ...names,
+    { id: "bookmark", label: isBookmarked(bookmark) ? "shell:removeBookmark" : "shell:addBookmark", run: () => toggleBookmark(bookmark) },
+    ...(table ? [{ id: "duplicate", label: "shell:duplicate.menu", run: () => duplicateTable(connectionId, session, object) }] : []),
+    ...(canRenameRelation(object, knownObjectActions(session))
+      ? [{ id: "rename", label: "shell:objectChange.renameMenu", run: () => renameRelation(connectionId, session, object) }]
+      : []),
+    { id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropRelation(connectionId, session, object) },
+    { id: "generateDdl", label: "shell:generateDdl", run: () => openRelationDdl(session, object) },
+    ...relationTemplates(session, object).map((template) => ({
+      id: `generate:${template}`,
+      label: `shell:sql.${template}`,
+      run: () => openRelationSql(connectionId, session, object, template),
+    })),
+    show,
+  ];
+}
+
 /** What the palette offers for an object; the first one is what Enter does. */
 export function objectActions(item: PaletteObject): PaletteObjectAction[] {
   switch (item.kind) {
@@ -465,24 +539,8 @@ export function objectActions(item: PaletteObject): PaletteObjectAction[] {
         { id: "delete", label: "connections:delete", danger: true, run: () => useApp.getState().setDeletingConnection(connection) },
       ];
     }
-    case "relation": {
-      const { connectionId, object } = item;
-      return [
-        { id: "openData", label: "app:palette.actions.openData", run: () => openFound(connectionId, { kind: "relation", object }) },
-        { id: "openStructure", label: "app:palette.actions.openStructure", run: () => openStructure(connectionId, object) },
-        { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, object.schema) },
-        ...(object.kind === "view" || object.kind === "materialized_view"
-          ? []
-          : [{ id: "erDiagram", label: "app:palette.actions.erDiagram", run: () => openDiagram(connectionId, { kind: "focus", schema: object.schema, table: object.name }) }]),
-        { id: "copyName", label: "shell:copyName", run: () => copyName(object.name) },
-        { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, object.schema, object.name) },
-        {
-          id: "showInExplorer",
-          label: "app:palette.actions.showInExplorer",
-          run: () => showInExplorer({ connectionId, schema: object.schema, name: object.name }),
-        },
-      ];
-    }
+    case "relation":
+      return relationActions(item.connectionId, item.object);
     case "schemaObject": {
       const { connectionId, object } = item;
       return [

@@ -20,6 +20,11 @@
   file menus, the activity bar, the global shortcuts and the command palette
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
   menus against it. The palette's objects are only what the explorer already read (`catalog.ts`).
+  A table's or a view's actions live in `src/explorerActions.ts` (SDB-92): its explorer menu
+  (`ObjectNode` in `Sidebar.tsx`, each item marked with `data-action`) and the palette's
+  `relationActions` call the same functions, Rename…, Drop…, Duplicate table… and generated SQL
+  open the same dialogs (`ExplorerDialogHost`), and the test compares the two lists. A new item
+  in that menu goes in both, or in the test's list of menu-only items with its reason.
   In the SQL editor, completion, Ctrl+click and hover resolve a name with one reader of the
   statement (`src/sqlCompletion.ts`: `completeSql` and `resolveName`, tested by
   `scripts/sql-completion.test.mjs` and `scripts/sql-names.test.mjs`) over the catalog the tab
