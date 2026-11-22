@@ -26,6 +26,10 @@
   driver that only says why (its error is a `DriverError::Connection`), so `plugin_missing` is
   told from `Engines::plugin_unavailable`, not from the error. "Every agent is read-only" is
   `spelaion_core::all_agents_read_only`, asked by the server and by the app's MCP page.
+  `explain_query` names the engines `structured=true` works on from the core
+  (`plan::agent_plan_engines`: the plan reader's engines that agents see), filled in at start
+  in place of `{engines}` in its description and its `structured` argument (SDB-103); a test
+  fails if one is missing. Never write engine names there by hand.
   `spelaion-config::mcp_clients` finds each AI client's file and writes our entry there for the
   app's MCP page (ADR-033): only our entry changes, JSON edited as text at the spans it finds,
   Codex's TOML with `toml_edit`, a backup first, and only the change the user saw (its

@@ -163,6 +163,83 @@ fn personal(read_only_flag: bool) -> Personal {
 
 const INSERT: &str = "insert into notes (body) values ('from an agent')";
 
+/// `explain_query` names, in its description and in its `structured` argument's, exactly the
+/// engines agents can ask for a structured plan on: those whose plans the core reads and whose
+/// connections agents see (SDB-103). An engine missing from either fails here.
+#[test]
+fn explain_query_names_every_engine_with_structured_plans() {
+    let p = personal(false);
+    let tool = p
+        .server
+        .tool_router
+        .get("explain_query")
+        .expect("the tool")
+        .clone();
+    let description = tool.description.as_deref().expect("a description");
+    let structured = tool.input_schema["properties"]["structured"]["description"]
+        .as_str()
+        .expect("the argument's description");
+    for text in [description, structured] {
+        assert!(!text.contains(PLAN_ENGINES), "{text}");
+    }
+    let expected: Vec<&str> = Engine::ALL
+        .into_iter()
+        .filter(|&e| spelaion_core::plan::reads_plans(e) && e.has_read_barrier())
+        .map(Engine::label)
+        .collect();
+    assert!(expected.contains(&"SQLite") && expected.contains(&"DuckDB"));
+    // The names between `structured=true on ` and ` for the same`, split as a sentence lists them.
+    let named = |text: &str, before: &str, after: &str| -> Vec<String> {
+        let start = text.find(before).expect(before) + before.len();
+        let end = start + text[start..].find(after).expect(after);
+        text[start..end]
+            .replace(" or ", ", ")
+            .split(", ")
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(
+        named(description, "structured=true on ", " for the same"),
+        expected
+    );
+    assert_eq!(named(structured, "plan tree on ", "; omitted"), expected);
+}
+
+/// `structured=true` on a SQLite connection: the core's tree of the plan's steps, as on the
+/// desktop (SDB-103).
+#[tokio::test]
+async fn structured_plans_run_on_a_sqlite_connection() {
+    let p = personal(false);
+    let result = p
+        .server
+        .explain(
+            &call("explain_query"),
+            ExplainArgs {
+                connection: "~/notes".into(),
+                sql: Some("select body from notes where id = 1".into()),
+                structured: Some(true),
+                output_format: None,
+                plan_id: None,
+                offset: None,
+                limit: Some(50),
+                release: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!refused(&result), "{}", body(&result));
+    let json: serde_json::Value = serde_json::from_str(&body(&result)).unwrap();
+    assert_eq!(json["summary"]["engine"], "sqlite");
+    assert_eq!(json["summary"]["analyzed"], false);
+    let nodes = json["page"]["nodes"].as_array().expect("nodes");
+    assert!(!nodes.is_empty(), "{json}");
+    assert!(
+        nodes.iter().any(|n| n.to_string().contains("notes")),
+        "{json}"
+    );
+    assert_eq!(rows(&p.db), 1);
+}
+
 #[tokio::test]
 async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning() {
     let Ok(address) = std::env::var("SPELAION_TEST_PG") else {

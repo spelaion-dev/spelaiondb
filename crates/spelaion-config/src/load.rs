@@ -639,7 +639,7 @@ pub(crate) fn validate_connection(
     }
     if let Some(databases) = &file.databases {
         if !file.engine.chooses_databases() {
-            let label = engine_label(file.engine);
+            let label = file.engine.label();
             return Err(ConfigError::new(
                 path,
                 format!("{label} has no database list to choose from: remove `databases`"),
@@ -683,14 +683,14 @@ pub(crate) fn validate_connection(
     // its sessions run no SQL. Opening it anyway would let writes through or fail later.
     // ADR-020: no barrier of ours, no read-only mode (the Flight SQL engines too, ADR-041).
     if !file.engine.has_read_barrier() && file.read_only {
-        let label = engine_label(file.engine);
+        let label = file.engine.label();
         return Err(ConfigError::new(
             path,
             format!("{label} has no read-only mode in SpelaionDB yet: remove `read_only`"),
         ));
     }
     if !file.engine.is_sql() {
-        let label = engine_label(file.engine);
+        let label = file.engine.label();
         if !file.session.is_default() {
             return Err(ConfigError::new(
                 path,
@@ -1005,7 +1005,7 @@ pub(crate) fn check_session(engine: Engine, session: &SessionConfig) -> Result<(
         if !engine.has_session_schema() {
             return Err(format!(
                 "{} has no schema per session: leave session.schema out and qualify names instead",
-                engine_label(engine)
+                engine.label()
             ));
         }
         if schema.trim().is_empty() || schema.trim() != schema {
@@ -1027,51 +1027,17 @@ pub(crate) fn check_session(engine: Engine, session: &SessionConfig) -> Result<(
         return Err(if engine.is_file() {
             format!(
                 "{} has a single isolation level: leave session.isolation out",
-                engine_label(engine)
+                engine.label()
             )
         } else {
             format!(
                 "{} has no {} isolation level",
-                engine_label(engine),
+                engine.label(),
                 level.as_str()
             )
         });
     }
     Ok(())
-}
-
-fn engine_label(engine: Engine) -> &'static str {
-    match engine {
-        Engine::Postgres => "PostgreSQL",
-        Engine::Mysql => "MySQL",
-        Engine::Mariadb => "MariaDB",
-        Engine::Sqlserver => "SQL Server",
-        Engine::Sqlite => "SQLite",
-        Engine::Duckdb => "DuckDB",
-        Engine::Mongodb => "MongoDB",
-        Engine::Clickhouse => "ClickHouse",
-        Engine::Redis => "Redis",
-        Engine::Trino => "Trino",
-        Engine::Presto => "Presto",
-        Engine::Oracle => "Oracle",
-        Engine::Libsql => "libSQL",
-        Engine::Cassandra => "Cassandra",
-        Engine::Tdengine => "TDengine",
-        Engine::Flightsql => "Arrow Flight SQL",
-        Engine::Dremio => "Dremio",
-        Engine::Gizmosql => "GizmoSQL",
-        Engine::Neo4j => "Neo4j",
-        Engine::Hive => "Apache Hive",
-        Engine::Spark => "Spark's Thrift server",
-        Engine::Kyuubi => "Apache Kyuubi",
-        Engine::Impala => "Apache Impala",
-        Engine::Databend => "Databend",
-        Engine::Spanner => "Cloud Spanner",
-        Engine::Elasticsearch => "Elasticsearch",
-        Engine::Opensearch => "OpenSearch",
-        Engine::Solr => "Solr",
-        Engine::Meilisearch => "Meilisearch",
-    }
 }
 
 /// One tag: what the form would have saved (trimmed, single spaces), short, without commas
