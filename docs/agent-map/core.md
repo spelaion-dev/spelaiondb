@@ -285,7 +285,8 @@
   required), in a transaction of its own unless the user's is open, so a cancel half-way leaves
   nothing. `cursor.rs` keeps a `COPY`'s data with it when a selection runs. `tests/copy_from_stdin.rs`
   restores a `pg_dump` of every common type and dumps it again identically, streams a million rows
-  and cancels half-way.
+  and cancels half-way. psql's `\copy` line is a meta-command, not a `COPY`: it has no data
+  (`copy_stdio` is `None` for it), so the session refuses it before anything is sent (SDB-437).
   `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads), and
   `xlsx.rs` a sheet of an XLSX file (SDB-390): every part's declared size, compression and
