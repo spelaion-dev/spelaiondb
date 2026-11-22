@@ -38,8 +38,9 @@ controls for novelty: the editor's compact vertical action column stays.
 Use tokens, never literals. Outside the two token blocks, neither `styles.css` nor the canvas
 code (`ResultGrid.tsx` reads the same variables) contains a color, font size, radius, shadow or
 z-index literal. The exceptions are the engine logos' brand colors and the SQL syntax theme,
-each in its own commented block. A value that is missing becomes a token named by its role,
-defined for both themes in the same change.
+each in its own commented block. Nor does it use `!important`, except in the `[hidden]` rule,
+which keeps a hidden element hidden whatever display its classes give it. A value that is
+missing becomes a token named by its role, defined for both themes in the same change.
 
 The tokens are the sizes at the normal interface size. The interface size (Settings ›
 Appearance, SDB-389: 90% to 150%) draws the whole window at that scale with the webview's own
@@ -113,8 +114,9 @@ Each role is defined for both themes:
   a list or bar has no radius (`border-radius: initial`).
 - The workspace is flat. Only layers above it cast a shadow: `--shadow-popover` for menus,
   popovers, tooltips and autocompletion, and `--shadow-dialog` for dialogs, with `--backdrop`
-  behind modal ones. Panels, cards and buttons have no shadow. A 2px accent edge is drawn as
-  an inset shadow: `--shadow-selected-row` for a selected sidebar row or row field,
+  behind modal ones; the history laid over the editor in a narrow window has
+  `--shadow-panel-overlay`. Panels, cards and buttons have no shadow. A 2px accent edge is
+  drawn as an inset shadow: `--shadow-selected-row` for a selected sidebar row or row field,
   `--shadow-active-tab` under the active result tab and `--shadow-active-side` beside the
   active result side action.
 - Heights: `--control-sm` 24px (icon buttons in toolbars, inline controls), `--control-md`
@@ -123,10 +125,12 @@ Each role is defined for both themes:
   display more data with 12px text. Bars (the tab strip and the editor's and the
   results' toolbars) are `--bar-h` (36px).
 - Stacking order, lowest first: `--z-sticky`, `--z-resizer` (the sidebar's separator over the
-  editor's edge), `--z-grid-overlay` (the cell editor and the grid's notices), `--z-dropdown`,
-  `--z-submenu` (a menu opened from another menu) and `--z-grid-find` (the grid's find and jump
-  boxes), `--z-dialog`, `--z-popover` (a menu opened from a dialog shows above it), `--z-toast`
-  and `--z-drag` (what is dragged under the pointer).
+  editor's edge) and `--z-panel-overlay` (the history over the editor in a narrow window),
+  `--z-grid-overlay` (the cell editor and the grid's notices), `--z-dropdown`, `--z-submenu` (a
+  menu opened from another menu) and `--z-grid-find` (the grid's find and jump boxes),
+  `--z-wizard` (the connection form, under the questions it opens), `--z-dialog`, `--z-popover`
+  (a menu opened from a dialog shows above it), `--z-toast` and `--z-drag` (what is dragged
+  under the pointer).
 
 ### Icons
 
