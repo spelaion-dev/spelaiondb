@@ -7,6 +7,9 @@ import { resolve } from "node:path";
 import test from "node:test";
 import {
   COMMANDS,
+  EDITOR_MENU_GROUPS,
+  editorMenu,
+  editorMenuCommands,
   globalCommandFor,
   KEYS,
   matchesShortcut,
@@ -262,23 +265,49 @@ test("global shortcuts find their command; AltGr characters and editor keys do n
   assert.equal(globalCommandFor(press("Tab", { ctrlKey: true })), null);
 });
 
-test("the editor menu and keymap derive actions from the central palette registry", () => {
-  const editor = menuCommands("editor");
-  assert.equal(editor.length, 29);
+test("the editor menu is the registry's groups and submenus; the keymap binds only the editor's own keys (SDB-438)", () => {
+  const groups = editorMenu();
+  assert.deepEqual(groups.length, EDITOR_MENU_GROUPS.length);
+  // 18 rows: each group's own commands first, then its submenus.
+  assert.equal(groups.flat().length, 18);
+  for (const group of groups) {
+    const firstSubmenu = group.findIndex((entry) => entry.kind === "submenu");
+    if (firstSubmenu >= 0) assert.ok(group.slice(firstSubmenu).every((entry) => entry.kind === "submenu"), "submenus come last in a group");
+  }
+  assert.deepEqual(groups.map((group) => group.map((entry) => entry.kind === "command" ? entry.id : `${entry.submenu} ▸`)), [
+    ["editor.run", "editor.runNewTab", "editor.explain", "run ▸"],
+    ["editor.cut", "editor.copy", "editor.paste", "editor.copyStatement", "editor.selectAll"],
+    ["editor.format", "editor.lineComment", "selection ▸", "insert ▸"],
+    ["editor.openObject", "editor.revealInExplorer", "goTo ▸"],
+    ["view ▸", "session ▸"],
+  ]);
+  const reached = groups.flat().flatMap((entry) => entry.kind === "command" ? [entry.id] : entry.items.map((item) => item.id));
+  assert.deepEqual([...reached].sort(), editorMenuCommands().map((command) => command.id).sort());
+  // Every SQL editor command has a place in it; Cancel is Run's place while a query runs.
+  for (const command of COMMANDS.filter((command) => command.category === "editor" && command.id !== "editor.cancel")) {
+    assert.ok(command.editorMenu, `${command.id} has a group in the editor menu`);
+  }
   // The editor's zoom (SDB-389): Ctrl+= / Ctrl+- / Ctrl+0, the editor's own keys.
+  const editor = editorMenuCommands();
   assert.deepEqual(editor.filter((command) => command.id.startsWith("editor.zoom")).map((command) => command.shortcut), ["Ctrl+=", "Ctrl+-", "Ctrl+0"]);
   for (const key of ["=", "-", "0", "+"]) assert.equal(globalCommandFor(press(key, { ctrlKey: true })), null, `Ctrl+${key} is the editor's`);
   // Variables… opens the tab's variables (SDB-383): a menu item without a key, like Explain.
   assert.ok(editor.some(command => command.id === "editor.variables" && command.shortcut === undefined));
   // Run in a new result tab is the editor's own key, like its other actions (SDB-378).
-  assert.ok(editor.some(command => command.id === "editor.runNewTab" && command.shortcut === "Alt+Enter"));
+  assert.ok(editor.some(command => command.id === "editor.runNewTab" && command.shortcut === "Alt+Enter" && command.editorAction));
   assert.ok(editor.some(command => command.id === "editor.explain" && command.shortcut === undefined));
   for (const command of editor) {
     assert.equal(command.scope, command.shortcut ? "editor" : undefined);
     assert.ok(paletteCommands().includes(command));
   }
+  // The keymap's own chords have a key; Run, Format and the clipboard keep theirs where they are.
+  for (const command of COMMANDS.filter((command) => command.editorAction)) assert.ok(command.shortcut, command.id);
+  for (const id of ["editor.run", "editor.runScript", "editor.format", "editor.cut", "editor.copy", "editor.paste", "editor.selectAll"]) {
+    assert.ok(!COMMANDS.find((command) => command.id === id).editorAction, `${id} is not bound by the editor's keymap`);
+  }
   const menu = functionSource("components/EditorMenu.tsx", "EditorMenu");
-  assert.match(menu, /menuCommands\("editor"\)/);
+  assert.match(menu, /editorMenu\(\)/);
   assert.match(menu, /runCommand\(/);
-  assert.match(read("editorActions.ts"), /menuCommands\("editor"\)/);
+  assert.doesNotMatch(menu, /role="menuitem"[^>]*>\s*\{?t\("/, "no item written by hand");
+  assert.match(read("editorActions.ts"), /command\.editorAction/);
 });

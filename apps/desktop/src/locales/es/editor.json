@@ -1,5 +1,13 @@
 {
   "connection": "Conexión",
+  "editorMenu": {
+    "run": "Ejecutar",
+    "selection": "Selección",
+    "insert": "Insertar",
+    "goTo": "Ir a",
+    "view": "Ver",
+    "session": "Sesión"
+  },
   "database": "Base de datos",
   "noDatabase": "— Sin base de datos —",
   "loadingDatabases": "Cargando bases de datos…",
@@ -1002,6 +1010,10 @@
     "quotedList": "Líneas a lista entre comillas",
     "selectStatement": "Seleccionar sentencia actual",
     "copyStatement": "Copiar sentencia actual",
+    "cut": "Cortar",
+    "copy": "Copiar",
+    "paste": "Pegar",
+    "selectAll": "Seleccionar todo",
     "selectOccurrences": "Seleccionar todas las coincidencias",
     "openObject": "Ir a la tabla",
     "revealInExplorer": "Mostrar en el explorador",

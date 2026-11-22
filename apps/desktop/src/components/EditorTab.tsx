@@ -945,6 +945,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
         case "zoomReset":
           editor.current?.action(command);
           break;
+        case "cut":
+        case "copy":
+        case "paste":
+        case "selectAll":
+          editor.current?.clipboard(command);
+          break;
         case "cancel":
           void sessionCommand.current.cancel();
           break;
@@ -1715,7 +1721,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
             <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
-            <EditorActionsButton />
+            <EditorActionsButton runName={runName} />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint", { shortcut: commandShortcut("editor.format") })} onClick={() => editor.current?.format()}>
               <EditorActionIcon name="format" />
@@ -1751,6 +1757,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             onOutline={() => setOutlineOpen((open) => !open)}
             error={editorError}
             cursorAtEnd={tab.fromTemplate}
+            runName={runName}
           />
           {outlineOpen && (
             <ScriptOutline

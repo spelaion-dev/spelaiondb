@@ -10,7 +10,7 @@ import { Compartment, countColumn, EditorSelection, EditorState, findColumn, Pre
 import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, lineNumbers } from "@codemirror/view";
 import { sql } from "@codemirror/lang-sql";
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, foldCode, unfoldCode, indentUnit } from "@codemirror/language";
-import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess, selectAll } from "@codemirror/commands";
 import { tags } from "@lezer/highlight";
 import { closeLintPanel, lintKeymap, openLintPanel, setDiagnostics } from "@codemirror/lint";
 import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen } from "@codemirror/search";
@@ -28,6 +28,8 @@ import { useDialogs } from "../dialogStore";
 import { EditorMenu } from "./EditorMenu";
 import { call, commands } from "../api";
 import { byteToIndex, indexToByte, wordEnd } from "../text";
+import { readClipboardText } from "../clipboardText";
+import type { ClipboardCommand } from "../store";
 import { commandShortcut, keyText } from "../shortcuts";
 
 export interface RunRequest {
@@ -50,6 +52,8 @@ const RUN_LABEL_DELAY_MS = 120;
 /** What the toolbar can ask the editor to do. */
 export interface SqlEditorHandle {
   action(id: EditorActionId): void;
+  /** Cut, Copy, Paste and Select all from the editor's menu (SDB-438). */
+  clipboard(command: ClipboardCommand): void;
   format(): void;
   runCurrent(): void;
   runScript(): void;
@@ -90,6 +94,8 @@ interface Props {
   error: { index: number; message: string; source: object } | null;
   /** The editor opens with its cursor after the text instead of before it. */
   cursorAtEnd?: boolean;
+  /** Run's name, as the action column says it ("Run statement"), for the editor's menu. */
+  runName: string;
 }
 
 const theme = EditorView.theme({
@@ -325,7 +331,7 @@ function editorPreferences(p: EditorPreferencesItem) {
   ];
 }
 
-export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, onName, onOutline, error, cursorAtEnd }: Props) {
+export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, onName, onOutline, error, cursorAtEnd, runName }: Props) {
   const { t } = useTranslation("editor");
   const preferences = usePreferences((s) => s.editor);
   const settings = useRef(new Compartment());
@@ -457,6 +463,34 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     }).catch((e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e)));
     return true;
   };
+  // The menu's Cut, Copy, Paste and Select all (SDB-438), as the keys do them: Cut and Copy take
+  // the selected text, or the cursor's whole line when nothing is selected; Paste reads the
+  // clipboard as the grid's menu does (`readClipboardText`) and puts its text in place of the
+  // selection. A clipboard that cannot be read or written says so in the editor's notice.
+  const clipboard = (v: EditorView, command: ClipboardCommand) => {
+    const failed = (e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e));
+    if (command === "selectAll") return selectAll(v);
+    if (command === "paste") {
+      readClipboardText()
+        .then((text) => { if (v.dom.isConnected) v.dispatch(v.state.replaceSelection(text), { scrollIntoView: true, userEvent: "input.paste" }); })
+        .catch(failed);
+      return true;
+    }
+    const { state } = v;
+    const whole = state.selection.ranges.every((range) => range.empty);
+    // Several cursors on one line take that line once.
+    const lines = [...new Set(state.selection.ranges.map((range) => state.doc.lineAt(range.head).number))];
+    const ranges = whole
+      ? lines.map((number) => { const line = state.doc.line(number); return { from: line.from, to: Math.min(line.to + 1, state.doc.length) }; })
+      : state.selection.ranges.filter((range) => !range.empty);
+    const text = ranges.map((range) => state.sliceDoc(range.from, range.to)).join(whole ? "" : state.lineBreak);
+    navigator.clipboard.writeText(text).then(() => {
+      if (command === "cut" && v.dom.isConnected && v.state.doc === state.doc) {
+        v.dispatch({ changes: ranges, scrollIntoView: true, userEvent: "delete.cut" });
+      }
+    }).catch(failed);
+    return true;
+  };
   // What the name at `pos` is, in the catalog the editor already has (the one completion
   // uses): nothing is asked of the database for a click or a hover.
   const nameAt = (v: EditorView, pos: number): ResolvedName | null => {
@@ -539,6 +573,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   };
   useImperativeHandle(handle, () => ({
     action: (id) => { if (view.current) { action(view.current, id); view.current.focus(); } },
+    clipboard: (command) => { if (view.current) { clipboard(view.current, command); view.current.focus(); } },
     format: () => {
       if (view.current) {
         format(view.current);
@@ -794,6 +829,6 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
         const rect = host.current!.getBoundingClientRect(); setMenu({ x: rect.left, y: rect.top });
       }
     }} />
-    {menu && <EditorMenu {...menu} onClose={() => { setMenu(null); view.current?.focus(); }} />}
+    {menu && <EditorMenu {...menu} runName={runName} onClose={() => { setMenu(null); view.current?.focus(); }} />}
   </>;
 }

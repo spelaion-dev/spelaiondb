@@ -31,7 +31,8 @@ import { CopySpecialDialog } from "./CopySpecialDialog";
 import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES, PageControls } from "./TableDataBar";
-import { MENU_MARGIN, placeMenu } from "../menuPlacement";
+import { placeMenu } from "../menuPlacement";
+import { Submenu } from "./Submenu";
 import { ended, partialText } from "../resultEnd";
 import { errorText, type Loaded } from "../dialogState";
 
@@ -2438,13 +2439,13 @@ export function ResultGrid({
             <button role="menuitem" onClick={() => openGroup(menu.header ?? 0)}>
               {t("group.byColumn")}
             </button>
-            <GridSubmenu label={t("results.copyNamesMenu")}>
+            <Submenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
                 <button key={n.style} role="menuitem" onClick={() => void copyNames(headerColumns(menu.header ?? 0), n.style)}>
                   {t(`results.${n.key}`)}
                 </button>
               ))}
-            </GridSubmenu>
+            </Submenu>
             <button role="menuitem" onClick={() => void copyColumnInList(menu.header ?? 0)}>
               {t("results.copyColumnInList")}
             </button>
@@ -2494,7 +2495,7 @@ export function ResultGrid({
               >
                 <span>{t("edit.setNull")}</span><span className="menu-shortcut">{shortcutText(SET_NULL_SHORTCUT)}</span>
               </button>
-              <GridSubmenu label={t("edit.changeCells")}>
+              <Submenu label={t("edit.changeCells")}>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "trim" })}>{t("edit.trim")}</button>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "upperCase" })}>{t("edit.upperCase")}</button>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "lowerCase" })}>{t("edit.lowerCase")}</button>
@@ -2502,7 +2503,7 @@ export function ResultGrid({
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "set", value: { kind: "default" } })}>{t("edit.setDefault")}</button>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "newUuid" })}>{t("edit.newUuid")}</button>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "now" })}>{t("edit.now")}</button>
-              </GridSubmenu>
+              </Submenu>
               <hr />
               <button
                 role="menuitem"
@@ -2647,7 +2648,7 @@ export function ResultGrid({
             </button>
           )}
           <hr />
-          <GridSubmenu label={t("results.copyMenu")}>
+          <Submenu label={t("results.copyMenu")}>
             {COPY_ITEMS.map((item) => (
               <button key={item.key} role="menuitem" onClick={() => void copy(item.format, item.header)}>
                 {t(`results.${item.key}`, { shortcut: item.shortcut ? keyText(item.shortcut) : "" })}
@@ -2666,7 +2667,7 @@ export function ResultGrid({
             <button role="menuitem" onClick={() => { setMenu(null); setCopySpecial(selectedRange()); }}>
               {t("results.copySpecial")}
             </button>
-          </GridSubmenu>
+          </Submenu>
           {selection && !selection.rows && ended(result) && (
             <button
               role="menuitem"
@@ -2685,13 +2686,13 @@ export function ResultGrid({
             </button>
           )}
           {selection && (
-            <GridSubmenu label={t("results.copyNamesMenu")}>
+            <Submenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
                 <button key={n.style} role="menuitem" onClick={() => void copyNames(shownIn(bounds(selection)), n.style)}>
                   {t(`results.${n.key}`)}
                 </button>
               ))}
-            </GridSubmenu>
+            </Submenu>
           )}
           {menu.cell && !(editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) && (
             <>
@@ -3397,80 +3398,6 @@ function ColumnChooser(props: {
   );
 }
 
-/** How long the pointer rests on a submenu's item before the submenu opens, and how long an
- *  open submenu stays once the pointer has left it. A pointer going diagonally into an open
- *  submenu crosses other items of the menu on the way: they neither close it nor open theirs. */
-const SUBMENU_OPEN_DELAY = 150;
-const SUBMENU_CLOSE_DELAY = 400;
-
-/** The grid submenu open now: opening another one closes it at once. */
-let openSubmenu: { close(): void } | null = null;
-
-/** A context submenu that stays inside the window, even near its edges. */
-function GridSubmenu({ label, children }: { label: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const submenu = useRef<HTMLDivElement>(null);
-  const timer = useRef<number | null>(null);
-  const clearTimer = () => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = null;
-  };
-  const self = useRef({ close: () => {} });
-  self.current.close = () => {
-    clearTimer();
-    if (openSubmenu === self.current) openSubmenu = null;
-    setOpen(false);
-  };
-  const show = () => {
-    clearTimer();
-    if (openSubmenu !== self.current) openSubmenu?.close();
-    openSubmenu = self.current;
-    setOpen(true);
-  };
-  useEffect(() => () => self.current.close(), []);
-  useLayoutEffect(() => {
-    if (!open || !trigger.current || !submenu.current) return;
-    const position = () => {
-      if (!trigger.current || !submenu.current) return;
-      const anchor = trigger.current.getBoundingClientRect();
-      const width = submenu.current.getBoundingClientRect().width;
-      const right = anchor.right;
-      const x = right + width <= window.innerWidth - MENU_MARGIN ? right : anchor.left - width;
-      placeMenu(submenu.current, x, anchor.top);
-    };
-    position();
-    // It follows its item when the menu or the submenu changes size (items added while open).
-    const resized = new ResizeObserver(position);
-    resized.observe(submenu.current);
-    const parent = trigger.current.closest(".grid-menu");
-    if (parent) resized.observe(parent);
-    window.addEventListener("resize", position);
-    window.addEventListener("scroll", position, true);
-    return () => {
-      resized.disconnect();
-      window.removeEventListener("resize", position);
-      window.removeEventListener("scroll", position, true);
-    };
-  }, [open, children]);
-  return (
-    <div className="grid-submenu" onMouseEnter={() => {
-      clearTimer();
-      if (!open) timer.current = window.setTimeout(show, SUBMENU_OPEN_DELAY);
-    }} onMouseLeave={(e) => {
-      clearTimer();
-      if (open && !e.currentTarget.contains(document.activeElement)) timer.current = window.setTimeout(() => self.current.close(), SUBMENU_CLOSE_DELAY);
-    }} onFocus={show} onBlur={(e) => {
-      if (!e.currentTarget.contains(e.relatedTarget)) self.current.close();
-    }}>
-      <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open}>
-        {label} ▸
-      </button>
-      {open && <div ref={submenu} className="grid-menu grid-child-menu" role="menu" aria-label={label}>{children}</div>}
-    </div>
-  );
-}
-
 /** Filters for the cell on which the context menu was opened. */
 function FilterSubmenu(props: {
   cell: Cell;
@@ -3502,7 +3429,7 @@ function FilterSubmenu(props: {
             { column, op: "isNotNull" as const, value: "" },
           ];
   return (
-    <GridSubmenu label={t("results.filterMenu")}>
+    <Submenu label={t("results.filterMenu")}>
         {props.server && <p className="grid-menu-note muted small">{t("results.filterInServer")}</p>}
         {items.map((filter) => (
           <button key={filter.op} role="menuitem" onClick={() => props.onAdd(filter)}>
@@ -3518,7 +3445,7 @@ function FilterSubmenu(props: {
             {t("results.resetFilters")}
           </button>
         )}
-    </GridSubmenu>
+    </Submenu>
   );
 }
 

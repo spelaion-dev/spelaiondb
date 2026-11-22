@@ -338,6 +338,11 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "editor.quotedList": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("quotedList") },
   "editor.selectStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("selectStatement") },
   "editor.copyStatement": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("copyStatement") },
+  // The clipboard, from the editor's menu (SDB-438): its keys stay the editor's own.
+  "editor.cut": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("cut") },
+  "editor.copy": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("copy") },
+  "editor.paste": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("paste") },
+  "editor.selectAll": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("selectAll") },
   "editor.selectOccurrences": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("selectOccurrences") },
   // The table under the cursor is looked up in the tab's connection: without one there is none.
   "editor.openObject": { enabled: (c) => connectedEditorTab(c), run: editorCommand("openObject") },

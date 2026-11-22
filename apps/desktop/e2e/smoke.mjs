@@ -2521,7 +2521,9 @@ try {
     };
     const variables = page.getByRole("dialog", { name: "Variables", exact: true });
     const openVariables = async () => {
+      // In the editor menu's Run submenu (SDB-438).
       await actions.getByRole("button", { name: "Editor actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Run ▸", exact: true }).click();
       await page.getByRole("menuitem", { name: "Variables…", exact: true }).click();
       await variables.waitFor();
     };
@@ -2702,6 +2704,7 @@ try {
   await sqlEditor.click();
   await page.keyboard.press("Control+End");
   await actions.getByRole("button", { name: "Editor actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Run ▸", exact: true }).click();
   const fromCursor = page.getByRole("menuitem", { name: "Run from the cursor to the end", exact: true });
   assert.equal(await fromCursor.locator(".menu-shortcut").innerText(), "Ctrl+Alt+Enter");
   await fromCursor.click();
@@ -3016,8 +3019,10 @@ try {
   {
     const menu = page.getByRole("menu", { name: "Editor actions" });
     const editorText = async (text) => { await page.waitForFunction((expected) => [...document.querySelectorAll('.tab-panel:not([hidden]) .cm-content .cm-line')].map((line) => line.textContent).join("\n") === expected, text); };
-    const menuAction = async (name) => {
+    // An item of the editor menu, or of one of its submenus (SDB-438), opened with a click.
+    const menuAction = async (name, submenu) => {
       await panel.getByRole("button", { name: "Editor actions", exact: true }).click();
+      if (submenu) await menu.getByRole("menuitem", { name: `${submenu} ▸`, exact: true }).click();
       await menu.getByRole("menuitem", { name, exact: true }).click();
     };
     await replaceQuery(panel, "select 'before' as value;");
@@ -3036,7 +3041,7 @@ try {
     await page.waitForFunction(() => getSelection().toString() === "id");
     await replaceQuery(panel, "select 'α;β' as value;\nselect 2;");
     await page.keyboard.press("Control+Home");
-    await menuAction("Select current statement");
+    await menuAction("Select current statement", "Selection");
     await page.waitForFunction(() => getSelection().toString() === "select 'α;β' as value");
     const before = await page.evaluate(() => window.__copied.length);
     await menuAction("Copy current statement");
@@ -3051,17 +3056,17 @@ try {
     await menuAction("Toggle line comment");
     await editorText("select id from orders");
     await page.keyboard.press("Control+A");
-    await menuAction("Toggle block comment");
+    await menuAction("Toggle block comment", "Selection");
     assert.match(await sqlEditor.innerText(), /^\/\*/);
     await page.keyboard.press("Control+z");
     await page.keyboard.press("Control+A");
-    await menuAction("Convert to upper case");
+    await menuAction("Convert to upper case", "Selection");
     await editorText("SELECT ID FROM ORDERS");
-    await menuAction("Convert to lower case");
+    await menuAction("Convert to lower case", "Selection");
     await editorText("select id from orders");
     await replaceQuery(panel, "O'Reilly\n漢字\n");
     await page.keyboard.press("Control+A");
-    await menuAction("Lines to quoted list");
+    await menuAction("Lines to quoted list", "Selection");
     await editorText("'O''Reilly', '漢字', ''");
     await page.keyboard.press("Control+z");
     await editorText("O'Reilly\n漢字\n");
@@ -3070,13 +3075,13 @@ try {
     await editorText("()");
     await replaceQuery(panel, "SELECT (\n  SELECT 1\n);");
     await page.keyboard.press("Control+Home");
-    await menuAction("Fold selection");
+    await menuAction("Fold selection", "Selection");
     await panel.locator(".cm-foldPlaceholder").waitFor();
-    await menuAction("Unfold selection");
+    await menuAction("Unfold selection", "Selection");
     await panel.locator(".cm-foldPlaceholder").waitFor({ state: "detached" });
     await replaceQuery(panel, "(select 1)");
     await page.keyboard.press("Control+Home");
-    await menuAction("Go to matching bracket");
+    await menuAction("Go to matching bracket", "Go to");
     await page.keyboard.insertText("X");
     await editorText("(select 1)X");
     await replaceQuery(panel, "orders orders orders");
@@ -3107,12 +3112,40 @@ try {
       await page.keyboard.press("ArrowRight");
     }
     await setTheme("light", "light");
-    await sqlEditor.focus();
+    // The whole menu from the keyboard (SDB-438): its last rows are the View and Session
+    // submenus; Right opens one with its first item focused, Left closes it, and Enter on an item
+    // of the Go to submenu runs it.
+    await replaceQuery(panel, "select 1;\nselect 2;");
+    await page.keyboard.press("Control+Home");
     await page.keyboard.press("Shift+F10");
     await menu.waitFor();
+    const focusedItem = () => page.evaluate(() => document.activeElement.getAttribute("data-command") ?? document.activeElement.textContent);
     await page.keyboard.press("End");
-    // The last item is the editor's zoom (SDB-389), after the snippets.
-    assert.equal(await page.evaluate(() => document.activeElement.textContent.includes("Reset the editor's zoom")), true);
+    assert.equal(await focusedItem(), "Session ▸");
+    await page.keyboard.press("ArrowUp");
+    assert.equal(await focusedItem(), "View ▸");
+    await page.keyboard.press("ArrowRight");
+    const viewMenu = page.getByRole("menu", { name: "View", exact: true });
+    await viewMenu.waitFor();
+    assert.equal(await focusedItem(), "editor.wordWrap");
+    await page.keyboard.press("End");
+    // The editor's zoom (SDB-389) ends the View submenu.
+    assert.equal(await focusedItem(), "editor.zoomReset");
+    await shot("sdb-438-editor-menu-submenu");
+    await page.keyboard.press("ArrowLeft");
+    await viewMenu.waitFor({ state: "detached" });
+    assert.equal(await focusedItem(), "View ▸");
+    await page.keyboard.press("ArrowUp");
+    assert.equal(await focusedItem(), "Go to ▸");
+    await page.keyboard.press("Enter");
+    await page.getByRole("menu", { name: "Go to", exact: true }).waitFor();
+    assert.equal(await focusedItem(), "editor.nextStatement");
+    await page.keyboard.press("Enter");
+    await menu.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .cm-activeLine")?.textContent === "select 2;");
+    assert.equal(await sqlEditor.evaluate((el) => el === document.activeElement), true);
+    await page.keyboard.press("Shift+F10");
+    await menu.waitFor();
     await page.keyboard.press("Escape");
     assert.equal(await sqlEditor.evaluate((el) => el === document.activeElement), true);
     await withSettings("editor", async (settings) => {
