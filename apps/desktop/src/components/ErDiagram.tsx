@@ -68,7 +68,8 @@ function reason(e: unknown): string {
 /** The width of one character and the row height of the diagram's monospace font. */
 function measureFont(host: Element): { charWidth: number; lineHeight: number } {
   const style = getComputedStyle(host);
-  const size = style.getPropertyValue("--text-sm").trim() || "12px";
+  // The stylesheet always defines the token: no size of its own here.
+  const size = style.getPropertyValue("--text-sm").trim();
   const family = style.getPropertyValue("--font-code").trim() || "monospace";
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
