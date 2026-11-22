@@ -4740,7 +4740,9 @@ try {
     await range.filter({ hasText: "rows 49,501–50,000 of 50,000" }).waitFor();
     await pages.getByText("of 100", { exact: true }).waitFor();
     assert.equal(await pageNumber.inputValue(), "100");
-    await pages.getByRole("button", { name: "First page" }).click();
+    // The range shows the asked-for page at once, while the page itself is still read: wait
+    // for its grid, or the focus and Ctrl+G below go to the grid it replaces and are lost.
+    await tablePageReloadedBy(() => pages.getByRole("button", { name: "First page" }).click());
     await range.filter({ hasText: "rows 1–500 of 50,000" }).waitFor();
     // Go to row 1,234 (Ctrl+G): the page that holds it is read and the row is selected; the
     // grid numbers the table's rows, not the page's.
@@ -4846,7 +4848,9 @@ try {
     await page.mouse.click(grid.x + 52 + 20, grid.y + 34 + 12, { button: "right" });
     await openSubmenu(panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
     await panel.getByText("Added to the table's WHERE").waitFor();
-    await panel.getByRole("menuitem", { name: "id = 50000", exact: true }).click();
+    // The filtered page replaces the grid: the right-click below waits for the new one, or it
+    // opens a menu on the grid going away and the menu goes with it.
+    await tablePageReloadedBy(() => panel.getByRole("menuitem", { name: "id = 50000", exact: true }).click());
     await range.filter({ hasText: "rows 1–1" }).waitFor();
     assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), "id = 50000");
     let box = null;
