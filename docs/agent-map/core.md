@@ -250,6 +250,10 @@
   leaves none), and edit statements are written only through an `EditTarget` from
   `Session::edit_target`, which refuses rows read through another session (another connection,
   a reconnected tab) or in another database; `tests/edit_source.rs` tries it on every engine.
+  An editable query result also keeps the table it was matched to (`ResultTable`, SDB-433,
+  ADR-061): the desktop's edit commands get their target and table only from
+  `result_edit_table`, which refuses another table's name and an identity (`table_identity`)
+  that changed since the result was found editable.
   `masking.rs` is column masking (ADR-051): the session compiles the connection's rules
   (`spelaion-config::masking` combines its `[masking]`, the user's `user.toml` and its type's
   `mask_columns`; required patterns only add up) and `ResultStore` masks every batch as it

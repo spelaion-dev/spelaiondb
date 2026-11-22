@@ -133,7 +133,7 @@ pub use display::{
 pub use edit::{
     CellInput, EditError, EditTarget, RowChange, UpdateCopyError, UpdateSource, UpdateTable,
     apply_edits, check_edit_policy, edit_statements, editable_query_source, editable_query_table,
-    update_copy_table,
+    result_edit_table, update_copy_table,
 };
 pub use editor_snippets::{
     MAX_SCRIPT_TEMPLATE, MAX_SNIPPET_BODY, MAX_SNIPPET_DESCRIPTION, MAX_SNIPPET_NAME, MAX_SNIPPETS,
@@ -237,8 +237,8 @@ pub use result_tabs::{
     ResultTabs, ResultTabsError, RunResults, statement_title,
 };
 pub use results::{
-    PartialReason, ResultEnd, ResultFreed, ResultId, ResultSource, ResultStore, RevealError,
-    RevealedCell, StoredResult,
+    PartialReason, ResultEnd, ResultFreed, ResultId, ResultSource, ResultStore, ResultTable,
+    RevealError, RevealedCell, StoredResult,
 };
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{

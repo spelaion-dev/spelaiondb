@@ -12,10 +12,10 @@ use sqlparser::ast::{Expr, GroupByExpr, SelectItem, SetExpr, Statement, TableFac
 use sqlparser::parser::Parser;
 
 use crate::export::sql_literal;
-use crate::generate::{qualified, scalar_count, scalar_value};
+use crate::generate::{qualified, scalar_count, scalar_metadata, scalar_value};
 use crate::guard::sql_dialect;
 use crate::params::is_number;
-use crate::results::{ResultId, ResultSource, StoredResult};
+use crate::results::{ResultId, ResultSource, ResultTable, StoredResult};
 use crate::session::{CoreEvent, Session};
 
 /// Identify only direct columns from one real table. Complex projections, joins and
@@ -161,6 +161,159 @@ async fn query_result_table(
         .await
         .map_err(|e| UpdateCopyError::Failed(e.to_string()))?;
     check_result_columns(&table, &columns, true)?;
+    // The result keeps the table it was matched to (SDB-433): the first time it is recorded,
+    // afterwards it must still be the same table.
+    let Some(identity) = table_identity(session, &table.object.schema, &table.object.name)
+        .await
+        .map_err(UpdateCopyError::Failed)?
+    else {
+        return Err(UpdateCopyError::TableNotCertain(name));
+    };
+    let bound = ResultTable {
+        schema: table.object.schema.clone(),
+        name: table.object.name.clone(),
+        identity,
+    };
+    let stored = session
+        .results()
+        .stored(result)
+        .map_err(|e| UpdateCopyError::Failed(e.to_string()))?;
+    let same = stored
+        .write()
+        .map_err(|_| UpdateCopyError::Failed("result lock poisoned".into()))?
+        .bind_table(bound);
+    if !same {
+        return Err(UpdateCopyError::TableChanged(name));
+    }
+    Ok((target, table))
+}
+
+/// What the engine identifies the table `schema.name` by, read now, or `None` when the engine
+/// has no such identity or no single table has that name (SDB-433). It changes when the table
+/// is dropped and created again, or another table takes its name, so a result's rows are
+/// never written into a table that only shares the name of the one they were read from.
+///
+/// - PostgreSQL: the table's `oid`.
+/// - SQL Server: its `object_id` and `create_date`.
+/// - DuckDB: its `table_oid` in the current database.
+/// - SQLite: the schema's `schema_version`, which every change to that schema's tables,
+///   indexes, views or triggers moves on, so any such change asks for the query again.
+/// - MySQL and MariaDB: its `CREATE_TIME`, to the second (they expose no table id without the
+///   `PROCESS` privilege). A table dropped and created again within the same second as the
+///   original, with no time between them for the read, is the one case it cannot tell apart.
+async fn table_identity(
+    session: &Session,
+    schema: &str,
+    name: &str,
+) -> Result<Option<String>, String> {
+    let engine = session.dialect().name();
+    let literal = |text: &str| sql_literal(&Value::Text(text.to_string()), engine);
+    let sql = match engine {
+        "postgres" => format!(
+            "SELECT c.oid::text FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = {} AND c.relname = {} AND c.relkind IN ('r', 'p')",
+            literal(schema),
+            literal(name)
+        ),
+        "sqlserver" => format!(
+            "SELECT CONVERT(varchar(20), o.object_id) + ' ' + CONVERT(varchar(30), o.create_date, 126) \
+             FROM sys.objects o WHERE o.object_id = OBJECT_ID({}) AND o.type = 'U'",
+            literal(&qualified(session.dialect().as_ref(), schema, name))
+        ),
+        "duckdb" => format!(
+            "SELECT CASE WHEN COUNT(*) = 1 THEN CAST(MIN(table_oid) AS VARCHAR) END \
+             FROM duckdb_tables() WHERE database_name = current_database() \
+             AND schema_name = {} AND table_name = {} AND NOT temporary",
+            literal(schema),
+            literal(name)
+        ),
+        "sqlite" => {
+            let quoted = session.dialect().quote_identifier(schema);
+            let exists = format!(
+                "SELECT COUNT(*) FROM {quoted}.sqlite_master WHERE type = 'table' AND name = {}",
+                literal(name)
+            );
+            if scalar_count_metadata(session, &exists).await? != 1 {
+                return Ok(None);
+            }
+            format!("PRAGMA {quoted}.schema_version")
+        }
+        "mysql" | "mariadb" => format!(
+            "SELECT CAST(CREATE_TIME AS CHAR) FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} AND TABLE_TYPE = 'BASE TABLE'",
+            literal(schema),
+            literal(name)
+        ),
+        _ => return Ok(None),
+    };
+    Ok(match scalar_metadata(session, &sql).await? {
+        Some(Value::Text(text)) => Some(text),
+        Some(Value::Int(n)) => Some(n.to_string()),
+        Some(Value::Decimal(text)) => Some(text),
+        _ => None,
+    })
+}
+
+/// A count read as core metadata (outside the user's transaction statement count).
+async fn scalar_count_metadata(session: &Session, sql: &str) -> Result<i64, String> {
+    match scalar_metadata(session, sql).await? {
+        Some(Value::Int(n)) => Ok(n),
+        Some(Value::Decimal(text) | Value::Text(text)) => text
+            .parse()
+            .map_err(|_| format!("unexpected count: {text}")),
+        other => Err(format!("unexpected count: {other:?}")),
+    }
+}
+
+/// The session and table a result's edits are written through (SDB-433), decided by the core:
+///
+/// - rows read through another session, or in another database, are refused (SDB-137);
+/// - a query result the core found editable is written only to the table it was matched to:
+///   `schema.name` must name that table, and the name must still hold the same table
+///   ([`table_identity`]); a table dropped, replaced or no longer certain refuses the edit;
+/// - any other result is a table data page, whose rows its own SELECT of `schema.name` read.
+///
+/// The table's description, with its primary key, is always read again from the catalog.
+pub async fn result_edit_table(
+    session: &Session,
+    result: ResultId,
+    schema: &str,
+    name: &str,
+) -> Result<(EditTarget, TableInfo), EditError> {
+    let target = session.edit_target().await?;
+    let failed = EditError::Unavailable;
+    let bound = {
+        let stored = session
+            .results()
+            .stored(result)
+            .map_err(|e| failed(e.to_string()))?;
+        let stored = stored
+            .read()
+            .map_err(|_| failed("result lock poisoned".into()))?;
+        target.check(&stored)?;
+        stored.table().cloned()
+    };
+    if let Some(bound) = bound {
+        if bound.schema != schema || bound.name != name {
+            return Err(EditError::NotThisTable(bound.name));
+        }
+        match table_identity(session, &bound.schema, &bound.name).await {
+            Ok(Some(identity)) if identity == bound.identity => {}
+            Ok(_) => return Err(EditError::TableChanged(bound.name)),
+            Err(message) => {
+                return Err(EditError::TableUnverified {
+                    table: bound.name,
+                    message,
+                });
+            }
+        }
+    }
+    let table = session
+        .connection()
+        .describe_table(schema, name)
+        .await
+        .map_err(|e| failed(e.to_string()))?;
     Ok((target, table))
 }
 
@@ -256,6 +409,11 @@ pub enum UpdateCopyError {
         "could not tell for certain which table {0} is (a temporary table or the search path may hide another): qualify its name and run the query again"
     )]
     TableNotCertain(String),
+    /// The name no longer holds the table the result's rows were matched to (SDB-433).
+    #[error(
+        "{0} is no longer the table these rows were read from (it was dropped or replaced): run the query again"
+    )]
+    TableChanged(String),
     #[error("{0} is not a table: only a table's rows can be copied as UPDATE statements")]
     NotATable(String),
     #[error("{0} has no primary key: its rows cannot be told apart")]
@@ -304,7 +462,11 @@ impl From<EditError> for UpdateCopyError {
             | EditError::NotAtomic(_)
             | EditError::NotOneRow { .. }
             | EditError::Masked(_)
-            | EditError::Source(_) => Self::Failed(error.to_string()),
+            | EditError::Source(_)
+            | EditError::NotThisTable(_)
+            | EditError::TableChanged(_)
+            | EditError::TableUnverified { .. }
+            | EditError::Unavailable(_) => Self::Failed(error.to_string()),
         }
     }
 }
@@ -507,6 +669,20 @@ pub enum EditError {
     /// The session could not say which database it is in.
     #[error("could not tell which database this tab is in: {0}")]
     Source(String),
+    /// A query result's rows belong to another table than the one named (SDB-433).
+    #[error("these rows were read from {0}, not from the table named: run the query again")]
+    NotThisTable(String),
+    /// The table's name no longer holds the table the rows were read from (SDB-433).
+    #[error(
+        "{0} is no longer the table these rows were read from (it was dropped or replaced): run the query again"
+    )]
+    TableChanged(String),
+    /// Whether the name still holds that table could not be checked (SDB-433).
+    #[error("could not check that {table} is still the table these rows were read from: {message}")]
+    TableUnverified { table: String, message: String },
+    /// The result is no longer kept, or the table could not be described.
+    #[error("{0}")]
+    Unavailable(String),
 }
 
 /// What an edit is written through: a session and the database it is in now (SDB-137), from

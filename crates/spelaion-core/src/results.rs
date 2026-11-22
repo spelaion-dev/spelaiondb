@@ -129,6 +129,32 @@ pub struct StoredResult {
     /// Where the rows were read (SDB-137); `None` when it is not known, and then nothing is
     /// written from these rows.
     source: Option<ResultSource>,
+    /// The table a query's rows were matched to when the core found them editable (SDB-433);
+    /// `None` until then, and for a table data page, whose table its SELECT names.
+    table: Option<ResultTable>,
+}
+
+/// The table an editable query result's rows belong to (SDB-433), recorded the first time the
+/// core finds the result editable: its qualified name and what the engine identifies that
+/// table by ([`crate::edit`]'s `table_identity`). Edits are written only while the same name
+/// still holds the same table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultTable {
+    pub(crate) schema: String,
+    pub(crate) name: String,
+    pub(crate) identity: String,
+}
+
+impl ResultTable {
+    /// The table's schema (the database on MySQL and MariaDB).
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
+
+    /// The table's name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// Where a result's rows were read (SDB-137): the session that ran the statement and that
@@ -197,12 +223,31 @@ impl StoredResult {
             group_latest: Arc::new(AtomicU64::new(0)),
             pending: PendingEdits::default(),
             source: None,
+            table: None,
         }
     }
 
     /// Where the rows were read (SDB-137), if known.
     pub fn source(&self) -> Option<&ResultSource> {
         self.source.as_ref()
+    }
+
+    /// The table this query result's rows were matched to (SDB-433), once the core found the
+    /// result editable.
+    pub fn table(&self) -> Option<&ResultTable> {
+        self.table.as_ref()
+    }
+
+    /// Records the table the rows were matched to, the first time; afterwards only says
+    /// whether `table` is still the one recorded. A result never moves to another table.
+    pub(crate) fn bind_table(&mut self, table: ResultTable) -> bool {
+        match &self.table {
+            Some(bound) => *bound == table,
+            None => {
+                self.table = Some(table);
+                true
+            }
+        }
     }
 
     /// The edits of this page not yet applied (ADR-044).
