@@ -171,6 +171,8 @@ pub enum GeoFormat {
     GeoPackage,
     /// SQL Server's `geometry` or `geography`, in its CLR serialization (MS-SSCLRT).
     SqlServer,
+    /// Well-known text, or PostGIS's extended form with `SRID=…;` before it.
+    Wkt,
 }
 
 /// The coordinates a value had before Z and M were left out.
@@ -277,8 +279,9 @@ pub fn is_geometry_type(native_type: &str) -> bool {
 
 /// The cell as a geometry, if it is one. Bytes are recognised by their format (SpatiaLite's
 /// and GeoPackage's blobs by their markers, WKB and MySQL's by reading cleanly to the end), in
-/// any column, and SQL Server's in a column of a CLR type; text only in a spatial column
-/// (PostGIS's hexadecimal EWKB).
+/// any column, and SQL Server's in a column of a CLR type. Text is a geometry when the whole
+/// value is well-known text (SDB-214), in any column, or in a spatial column PostGIS's
+/// hexadecimal EWKB.
 pub fn read_geometry(value: &Value, native_type: &str) -> Option<GeoValue> {
     read_cell_geometry(value, native_type).ok().flatten()
 }
@@ -295,13 +298,20 @@ pub fn read_cell_geometry(value: &Value, native_type: &str) -> Result<Option<Geo
             clr.filter(|value| spatial || value.geometry.points() > 0)
                 .or_else(|| read_bytes(bytes, spatial))
         }
-        Value::Text(text) | Value::Native(text) if spatial => read_hex_wkb(text.trim()),
+        Value::Text(text) | Value::Native(text) => {
+            let text = text.trim();
+            spatial
+                .then(|| read_hex_wkb(text))
+                .flatten()
+                .or_else(|| read_wkt(text))
+                // Outside a spatial column, empty text geometries are more likely something else.
+                .filter(|value| spatial || value.geometry.points() > 0)
+        }
         Value::Null
         | Value::Bool(_)
         | Value::Int(_)
         | Value::Float(_)
         | Value::Decimal(_)
-        | Value::Text(_)
         | Value::Date(_)
         | Value::Time(_)
         | Value::Timestamp(_)
@@ -309,8 +319,7 @@ pub fn read_cell_geometry(value: &Value, native_type: &str) -> Result<Option<Geo
         | Value::Uuid(_)
         | Value::Json(_)
         | Value::Interval(_)
-        | Value::Array(_)
-        | Value::Native(_) => None,
+        | Value::Array(_) => None,
     })
 }
 
@@ -1092,6 +1101,258 @@ fn sqlserver_geometry(
     .geometry(0, 0)
 }
 
+/// Well-known text (OGC, with ISO's `Z`, `M` and `ZM`), or PostGIS's extended form: `SRID=…;`
+/// before it, `POINTM` for a point with M, and Z read from the number of coordinates. As
+/// `ST_AsText` and `ST_AsEWKT` write it, in any case and spacing. The whole value must be
+/// one geometry; nesting is bounded and every coordinate must be a finite number. Curves,
+/// surfaces, TINs and triangles are not drawn.
+fn read_wkt(text: &str) -> Option<GeoValue> {
+    let (srid, body) = match text.get(..5) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("srid=") => {
+            let (srid, body) = text[5..].split_once(';')?;
+            (Some(srid.trim().parse::<i32>().ok()?), body)
+        }
+        _ => (None, text),
+    };
+    let mut wkt = Wkt {
+        text: body.as_bytes(),
+        at: 0,
+        dimensions: None,
+    };
+    let geometry = wkt.geometry(0)?;
+    wkt.space();
+    (wkt.at == wkt.text.len()).then_some(GeoValue {
+        geometry,
+        srid: srid.and_then(|s| u32::try_from(s).ok()).filter(|&s| s != 0),
+        format: GeoFormat::Wkt,
+        dimensions: wkt.dimensions.unwrap_or(Dimensions::Xy),
+    })
+}
+
+/// A reader over well-known text. The value's dimensions are decided once, by a `Z`, `M` or
+/// `ZM` or by the first coordinate, and every coordinate after must have them.
+struct Wkt<'a> {
+    text: &'a [u8],
+    at: usize,
+    dimensions: Option<Dimensions>,
+}
+
+impl Wkt<'_> {
+    fn space(&mut self) {
+        while self.text.get(self.at).is_some_and(u8::is_ascii_whitespace) {
+            self.at += 1;
+        }
+    }
+
+    /// The next character after white space, without taking it.
+    fn peek(&mut self) -> Option<u8> {
+        self.space();
+        self.text.get(self.at).copied()
+    }
+
+    /// Takes `c` after white space, or fails.
+    fn expect(&mut self, c: u8) -> Option<()> {
+        (self.peek()? == c).then(|| self.at += 1)
+    }
+
+    /// A word of letters, upper-cased (at most a keyword's length).
+    fn word(&mut self) -> Option<String> {
+        self.space();
+        let start = self.at;
+        while self.text.get(self.at).is_some_and(u8::is_ascii_alphabetic) {
+            self.at += 1;
+        }
+        let word = &self.text[start..self.at];
+        (!word.is_empty() && word.len() <= 20)
+            .then(|| word.to_ascii_uppercase())
+            .and_then(|word| String::from_utf8(word).ok())
+    }
+
+    /// Whether `EMPTY` follows; if it does, it is taken.
+    fn empty(&mut self) -> bool {
+        let at = self.at;
+        if self.word().as_deref() == Some("EMPTY") {
+            return true;
+        }
+        self.at = at;
+        false
+    }
+
+    /// Sets the value's dimensions, or checks them against the ones already set.
+    fn dimensions(&mut self, dimensions: Dimensions) -> Option<()> {
+        match self.dimensions {
+            None => {
+                self.dimensions = Some(dimensions);
+                Some(())
+            }
+            Some(set) => (set == dimensions).then_some(()),
+        }
+    }
+
+    /// A finite number.
+    fn number(&mut self) -> Option<f64> {
+        self.space();
+        let start = self.at;
+        while self
+            .text
+            .get(self.at)
+            .is_some_and(|c| c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.' | b'e' | b'E'))
+        {
+            self.at += 1;
+        }
+        let number: f64 = std::str::from_utf8(&self.text[start..self.at])
+            .ok()?
+            .parse()
+            .ok()?;
+        number.is_finite().then_some(number)
+    }
+
+    /// A coordinate: two to four numbers, as many as the value's dimensions say.
+    fn position(&mut self) -> Option<Position> {
+        let mut numbers = Vec::with_capacity(4);
+        while numbers.len() < 4 && !matches!(self.peek()?, b',' | b')') {
+            numbers.push(self.number()?);
+        }
+        let dimensions = match numbers.len() {
+            2 => Dimensions::Xy,
+            // Z unless an M was declared: PostGIS's `POINT(1 2 3)` is a Z point.
+            3 => match self.dimensions {
+                Some(Dimensions::Xym) => Dimensions::Xym,
+                _ => Dimensions::Xyz,
+            },
+            4 => Dimensions::Xyzm,
+            _ => return None,
+        };
+        self.dimensions(dimensions)?;
+        Some([numbers[0], numbers[1]])
+    }
+
+    /// `(x y, x y, …)`, or `EMPTY`.
+    fn positions(&mut self) -> Option<Vec<Position>> {
+        if self.empty() {
+            return Some(Vec::new());
+        }
+        self.list(Self::position)
+    }
+
+    /// `(item, item, …)`: at least one item.
+    fn list<T>(&mut self, mut item: impl FnMut(&mut Self) -> Option<T>) -> Option<Vec<T>> {
+        self.expect(b'(')?;
+        let mut items = vec![item(self)?];
+        while self.peek()? == b',' {
+            self.at += 1;
+            items.push(item(self)?);
+        }
+        self.expect(b')')?;
+        Some(items)
+    }
+
+    /// `(ring, ring, …)`, or `EMPTY`.
+    fn rings(&mut self) -> Option<Vec<Vec<Position>>> {
+        if self.empty() {
+            return Some(Vec::new());
+        }
+        self.list(Self::positions)
+    }
+
+    fn geometry(&mut self, depth: usize) -> Option<Geometry> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let word = self.word()?;
+        // PostGIS writes a point with M as `POINTM`; ISO as `POINT M`.
+        let (name, m_suffix) = match word.strip_suffix('M') {
+            Some(name) if Self::kind(name).is_some() => (name, true),
+            _ => (word.as_str(), false),
+        };
+        let kind = Self::kind(name)?;
+        if m_suffix {
+            self.dimensions(Dimensions::Xym)?;
+        } else {
+            let at = self.at;
+            match self.word().as_deref() {
+                Some("Z") => self.dimensions(Dimensions::Xyz)?,
+                Some("M") => self.dimensions(Dimensions::Xym)?,
+                Some("ZM") => self.dimensions(Dimensions::Xyzm)?,
+                // `EMPTY`, read below.
+                _ => self.at = at,
+            }
+        }
+        Some(match kind {
+            Kind::Point => {
+                if self.empty() {
+                    Geometry::Point {
+                        coordinates: Vec::new(),
+                    }
+                } else {
+                    let [position] = <[Position; 1]>::try_from(self.list(Self::position)?).ok()?;
+                    Geometry::Point {
+                        coordinates: position.to_vec(),
+                    }
+                }
+            }
+            Kind::LineString => Geometry::LineString {
+                coordinates: self.positions()?,
+            },
+            Kind::Polygon => Geometry::Polygon {
+                coordinates: self.rings()?,
+            },
+            Kind::MultiPoint => Geometry::MultiPoint {
+                coordinates: if self.empty() {
+                    Vec::new()
+                } else {
+                    // Each point bare (`1 2`) or in parentheses (`(1 2)`); an empty one is left
+                    // out.
+                    self.list(|wkt| {
+                        if wkt.empty() {
+                            Some(None)
+                        } else if wkt.peek()? == b'(' {
+                            let [position] =
+                                <[Position; 1]>::try_from(wkt.list(Self::position)?).ok()?;
+                            Some(Some(position))
+                        } else {
+                            wkt.position().map(Some)
+                        }
+                    })?
+                    .into_iter()
+                    .flatten()
+                    .collect()
+                },
+            },
+            Kind::MultiLineString => Geometry::MultiLineString {
+                coordinates: self.rings()?,
+            },
+            Kind::MultiPolygon => Geometry::MultiPolygon {
+                coordinates: if self.empty() {
+                    Vec::new()
+                } else {
+                    self.list(Self::rings)?
+                },
+            },
+            Kind::Collection => Geometry::GeometryCollection {
+                geometries: if self.empty() {
+                    Vec::new()
+                } else {
+                    self.list(|wkt| wkt.geometry(depth + 1))?
+                },
+            },
+        })
+    }
+
+    fn kind(name: &str) -> Option<Kind> {
+        Some(match name {
+            "POINT" => Kind::Point,
+            "LINESTRING" => Kind::LineString,
+            "POLYGON" => Kind::Polygon,
+            "MULTIPOINT" => Kind::MultiPoint,
+            "MULTILINESTRING" => Kind::MultiLineString,
+            "MULTIPOLYGON" => Kind::MultiPolygon,
+            "GEOMETRYCOLLECTION" => Kind::Collection,
+            _ => return None,
+        })
+    }
+}
+
 /// One shape of a column's map: the row it is on (a position of the current view) and its
 /// geometry.
 #[derive(Debug, Clone, PartialEq)]
@@ -1337,6 +1598,187 @@ mod tests {
         assert_eq!(
             read_geometry(&Value::Bytes(hex(geometry_point)), "varbinary"),
             None
+        );
+    }
+
+    /// Reads `text` as a text cell of `native` type: its GeoJSON, SRID and dimensions.
+    fn wkt(native: &str, text: &str) -> Option<(String, Option<u32>, Dimensions)> {
+        let value = read_geometry(&Value::Text(text.into()), native)?;
+        assert_eq!(value.format, GeoFormat::Wkt, "{text}");
+        Some((value.geometry.to_geojson(), value.srid, value.dimensions))
+    }
+
+    fn wkt_geojson(text: &str) -> Option<String> {
+        wkt("text", text).map(|v| v.0)
+    }
+
+    #[test]
+    fn well_known_text_of_each_type() {
+        let cases = [
+            ("POINT(1 2)", r#"{"type":"Point","coordinates":[1.0,2.0]}"#),
+            (
+                "point ( -1.5e1  2 )",
+                r#"{"type":"Point","coordinates":[-15.0,2.0]}"#,
+            ),
+            (
+                "LINESTRING(0 0, 1 1, 2 0)",
+                r#"{"type":"LineString","coordinates":[[0.0,0.0],[1.0,1.0],[2.0,0.0]]}"#,
+            ),
+            (
+                "POLYGON((0 0,4 0,4 4,0 0),(1 1,1 2,2 2,1 1))",
+                r#"{"type":"Polygon","coordinates":[[[0.0,0.0],[4.0,0.0],[4.0,4.0],[0.0,0.0]],[[1.0,1.0],[1.0,2.0],[2.0,2.0],[1.0,1.0]]]}"#,
+            ),
+            // Both ways MySQL and PostGIS write a multipoint.
+            (
+                "MULTIPOINT((1 2),(3 4))",
+                r#"{"type":"MultiPoint","coordinates":[[1.0,2.0],[3.0,4.0]]}"#,
+            ),
+            (
+                "MULTIPOINT(1 2, 3 4)",
+                r#"{"type":"MultiPoint","coordinates":[[1.0,2.0],[3.0,4.0]]}"#,
+            ),
+            (
+                "MULTILINESTRING((0 0,1 1),(2 2,3 3))",
+                r#"{"type":"MultiLineString","coordinates":[[[0.0,0.0],[1.0,1.0]],[[2.0,2.0],[3.0,3.0]]]}"#,
+            ),
+            (
+                "MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))",
+                r#"{"type":"MultiPolygon","coordinates":[[[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,0.0]]],[[[2.0,2.0],[3.0,2.0],[3.0,3.0],[2.0,2.0]]]]}"#,
+            ),
+            (
+                "GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))",
+                r#"{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1.0,2.0]},{"type":"LineString","coordinates":[[0.0,0.0],[1.0,1.0]]}]}"#,
+            ),
+        ];
+        for (text, geojson) in cases {
+            assert_eq!(
+                wkt("text", text),
+                Some((geojson.into(), None, Dimensions::Xy)),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn well_known_text_srid_dimensions_and_empty() {
+        let point = r#"{"type":"Point","coordinates":[1.0,2.0]}"#.to_string();
+        // PostGIS's extended form.
+        assert_eq!(
+            wkt("text", "SRID=4326;POINT(1 2)"),
+            Some((point.clone(), Some(4326), Dimensions::Xy))
+        );
+        assert_eq!(wkt("text", "srid=0;POINT(1 2)").unwrap().1, None);
+        // Z and M, the ISO way and PostGIS's.
+        for (text, dimensions) in [
+            ("POINT Z (1 2 3)", Dimensions::Xyz),
+            ("POINT(1 2 3)", Dimensions::Xyz),
+            ("POINT M (1 2 3)", Dimensions::Xym),
+            ("POINTM(1 2 3)", Dimensions::Xym),
+            ("POINT ZM (1 2 3 4)", Dimensions::Xyzm),
+            ("POINT(1 2 3 4)", Dimensions::Xyzm),
+        ] {
+            assert_eq!(
+                wkt("text", text),
+                Some((point.clone(), None, dimensions)),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            wkt("text", "MULTIPOINT Z ((1 2 3), (3 4 5))").unwrap().2,
+            Dimensions::Xyz
+        );
+        // Empty geometries: in a spatial column only.
+        for (text, geojson) in [
+            ("POINT EMPTY", r#"{"type":"Point","coordinates":[]}"#),
+            (
+                "LINESTRING EMPTY",
+                r#"{"type":"LineString","coordinates":[]}"#,
+            ),
+            ("POLYGON Z EMPTY", r#"{"type":"Polygon","coordinates":[]}"#),
+            (
+                "MULTIPOLYGON EMPTY",
+                r#"{"type":"MultiPolygon","coordinates":[]}"#,
+            ),
+            (
+                "GEOMETRYCOLLECTION EMPTY",
+                r#"{"type":"GeometryCollection","geometries":[]}"#,
+            ),
+        ] {
+            assert_eq!(
+                wkt("geometry", text).map(|v| v.0),
+                Some(geojson.into()),
+                "{text}"
+            );
+            assert_eq!(
+                read_geometry(&Value::Text(text.into()), "text"),
+                None,
+                "{text}"
+            );
+        }
+        assert_eq!(
+            wkt_geojson("GEOMETRYCOLLECTION(POINT EMPTY, POINT(1 2))"),
+            Some(r#"{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[]},{"type":"Point","coordinates":[1.0,2.0]}]}"#.into())
+        );
+        assert_eq!(
+            wkt_geojson("MULTIPOINT(EMPTY, (1 2))"),
+            Some(r#"{"type":"MultiPoint","coordinates":[[1.0,2.0]]}"#.into())
+        );
+    }
+
+    #[test]
+    fn text_that_is_not_one_whole_geometry() {
+        for text in [
+            "",
+            "POINT",
+            "POINT()",
+            "POINT(1)",
+            "POINT(1 2 3 4 5)",
+            "POINT(1 2",
+            "POINT(1 2))",
+            "POINT(1 2) and more",
+            "the POINT(1 2)",
+            "POINT(1 2),POINT(3 4)",
+            "POINT(1, 2)",
+            "POINT(1 2, 3 4)",
+            "POINT(NaN 2)",
+            "POINT(inf 2)",
+            "POINT(1e999 2)",
+            "POINT(1-2 3)",
+            "LINESTRING(0 0, 1 1 1)",
+            "POINT Z (1 2)",
+            "POINT ZM (1 2 3)",
+            "GEOMETRYCOLLECTION Z (POINT(1 2))",
+            "CIRCULARSTRING(0 0, 1 1, 2 0)",
+            "CURVEPOLYGON((0 0, 1 1, 0 0))",
+            "TRIANGLE((0 0, 1 0, 0 1, 0 0))",
+            "SRID=4326POINT(1 2)",
+            "SRID=x;POINT(1 2)",
+            "Paris",
+        ] {
+            assert_eq!(
+                read_geometry(&Value::Text(text.into()), "geometry"),
+                None,
+                "{text:?}"
+            );
+        }
+        // Collections nested deeper than the bound, and a long one within it.
+        let deep = MAX_DEPTH + 2;
+        let nested = format!(
+            "{}POINT(1 2){}",
+            "GEOMETRYCOLLECTION(".repeat(deep),
+            ")".repeat(deep)
+        );
+        assert_eq!(wkt_geojson(&nested), None);
+        let shallow = format!(
+            "{}POINT(1 2){}",
+            "GEOMETRYCOLLECTION(".repeat(3),
+            ")".repeat(3)
+        );
+        assert!(wkt_geojson(&shallow).is_some());
+        let many = format!("LINESTRING({})", vec!["1 2"; 10_000].join(","));
+        assert_eq!(
+            read_geometry(&Value::Text(many), "text").map(|v| v.geometry.points()),
+            Some(10_000)
         );
     }
 

@@ -3161,7 +3161,9 @@ export type GeoFormat =
 /**  A GeoPackage geometry: its header, then WKB. */
 "geoPackage" | 
 /**  SQL Server's `geometry` or `geography`, in its CLR serialization (MS-SSCLRT). */
-"sqlServer";
+"sqlServer" | 
+/**  Well-known text, or PostGIS's extended form with `SRID=…;` before it. */
+"wkt";
 
 /**
  *  A cell or a column read as geometry, for the map (ADR-045): GeoJSON from the core, never
