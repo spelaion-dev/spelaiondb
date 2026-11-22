@@ -345,7 +345,7 @@ export function ResultGrid({
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
-  tableData, columnComments,
+  tableData, keyTable, columnComments,
   onHiddenColumns,
   onChart,
   refresh,
@@ -390,6 +390,9 @@ export function ResultGrid({
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
    *  can be followed to new table data tabs of `connectionId`. */
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+  /** The table whose foreign keys the rows follow, both ways (SDB-11): a table data tab's own, or
+   *  the one table the core matched a query's result to (SDB-93). */
+  keyTable?: { schema: string; name: string; connectionId: string | null };
   /** The comments of the columns, by name, where they are known (a table's data): shown in
    *  the header when the user asks for it. */
   columnComments?: Record<string, string>;
@@ -479,23 +482,23 @@ export function ResultGrid({
   const [freed, setFreed] = useState<number | null>(null);
   const dragging = useRef(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
-  /** A table data tab's foreign keys: its own and those of other tables that point to it. */
+  /** The foreign keys of the rows' table (`keyTable`): its own and those of other tables that point to it. */
   const [keys, setKeys] = useState<TableKeyItem[]>([]);
-  const keySchema = tableData?.schema;
-  const keyTable = tableData?.name;
+  const keySchema = keyTable?.schema;
+  const keyTableName = keyTable?.name;
   useEffect(() => {
-    if (keySchema === undefined || keyTable === undefined) {
+    if (keySchema === undefined || keyTableName === undefined) {
       setKeys((current) => (current.length === 0 ? current : []));
       return;
     }
     let active = true;
-    call(commands.tableKeys(session, keySchema, keyTable))
+    call(commands.tableKeys(session, keySchema, keyTableName))
       .then((found) => active && setKeys(found))
       .catch(() => active && setKeys([]));
     return () => {
       active = false;
     };
-  }, [session, keySchema, keyTable]);
+  }, [session, keySchema, keyTableName]);
   /** The result's columns that are part of a key of the table, with those keys. */
   const keyColumns = useMemo(() => {
     const byColumn = new Map<number, TableKeyItem[]>();
@@ -514,7 +517,7 @@ export function ResultGrid({
     }
     return byColumn;
   }, [keys, result.columns]);
-  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references", "calc", "group"] : ["cell", "row", "calc", "group"];
+  const viewerModes: ViewerMode[] = keyTable && keys.length > 0 ? ["cell", "row", "references", "calc", "group"] : ["cell", "row", "calc", "group"];
   const shownMode: ViewerMode = viewerModes.includes(viewerMode) ? viewerMode : "cell";
   const referencesShown = viewer && shownMode === "references";
   const calcShown = viewer && shownMode === "calc";
@@ -1257,15 +1260,15 @@ export function ResultGrid({
    *  reads the row's values and writes the filter of the table data tab it opens. */
   async function followKey(cell: Cell, key: TableKeyItem | undefined = keyColumns.get(cell.col)?.[0]) {
     setMenu(null);
-    if (!tableData?.connectionId || !key) return;
+    if (!keyTable?.connectionId || !key) return;
     try {
-      const target = await call(commands.followKey(session, result.id, cell.row, tableData.schema, tableData.name, {
+      const target = await call(commands.followKey(session, result.id, cell.row, keyTable.schema, keyTable.name, {
         direction: key.direction,
         schema: key.schema,
         table: key.table,
         name: key.name,
       }));
-      openTableData(tableData.connectionId, session, target.schema, target.table, target.filter);
+      openTableData(keyTable.connectionId, session, target.schema, target.table, target.filter);
     } catch (e) {
       setNotice({ text: t("references.followFailed", { detail: e instanceof Error ? e.message : String(e) }), error: true });
     }
@@ -1323,7 +1326,7 @@ export function ResultGrid({
 
   /** Opens a table data tab where a key of the references panel leads (its filter is the core's). */
   function openTarget(target: KeyTargetItem) {
-    if (tableData?.connectionId) openTableData(tableData.connectionId, session, target.schema, target.table, target.filter);
+    if (keyTable?.connectionId) openTableData(keyTable.connectionId, session, target.schema, target.table, target.filter);
   }
 
   /** The next shown column `delta` steps away (stopping at the first and the last). */
@@ -2681,7 +2684,7 @@ export function ResultGrid({
               <span className="menu-shortcut">{shortcutText(FOLLOW_SHORTCUT)}</span>
             </button>
           ))}
-          {tableData && keys.length > 0 && (
+          {keyTable && keys.length > 0 && (
             <button
               role="menuitem"
               onClick={() => {
@@ -3073,13 +3076,13 @@ export function ResultGrid({
           scrollerRef.current?.focus();
         }}
       />
-    ) : referencesShown && tableData && result.rows > 0 ? (
+    ) : referencesShown && keyTable && result.rows > 0 ? (
       <ReferencesPanel
         session={session}
         resultId={result.id}
         row={Math.min(selection?.focus.row ?? 0, result.rows - 1)}
-        schema={tableData.schema}
-        table={tableData.name}
+        schema={keyTable.schema}
+        table={keyTable.name}
         modes={<ViewerModes modes={viewerModes} mode={shownMode} onMode={(mode) => { setViewerMode(mode); scrollerRef.current?.focus(); }} />}
         onOpen={openTarget}
         onClose={() => {
@@ -3155,7 +3158,7 @@ export function ResultGrid({
       >
         <Icon name="sidePanel" />
       </button>
-      {tableData && keys.length > 0 && (
+      {keyTable && keys.length > 0 && (
         <button
           type="button"
           className={`result-side-action ${referencesShown ? "active" : ""}`}

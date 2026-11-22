@@ -150,7 +150,13 @@
   `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
   read from the catalog again each time (the UI only names one), the values come from the
   stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
-  composite, multi-level and self-referencing keys on every engine.
+  composite, multi-level and self-referencing keys on every engine. A query's result follows
+  keys too (SDB-93) once `query_key_table` matched it to one table (editing's rule,
+  `edit::query_table`, without the read-only gate: following only reads); the result keeps
+  that table, and `check_key_table`, called by the app's `follow_key` and `row_references`
+  before anything else, refuses another table's keys or a table replaced since (its identity,
+  SDB-433); a table data page is bound to its table too (SDB-440). A result with no table bound
+  (a view's page) is read as a page of the table named, as before.
   `data_search.rs` (ADR-043) searches a value in the tables the user chose: one `SELECT` per
   table written from the catalog and the columns' types, the value always bound as a parameter
   (`Connection::execute_bound`), each a read in the engine's read-only transaction in a session

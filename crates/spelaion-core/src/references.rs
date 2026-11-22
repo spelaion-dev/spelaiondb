@@ -7,11 +7,17 @@
 //! stored, typed result (not from the text on screen), and the filter of the table data tab a
 //! key opens is written by [`key_filter`] and checked as a page of that table, like any filter
 //! of a table data tab.
+//!
+//! A query's result follows keys too (SDB-93) when the core can match its rows to one table
+//! ([`query_key_table`], the rule editing uses, ADR-014). The result then keeps that table,
+//! and [`check_key_table`] refuses to follow the keys of any other, or of a table that was
+//! replaced since.
 
 use futures_util::StreamExt;
-use spelaion_driver_api::{Connection, Dialect, DriverError, Value};
+use spelaion_driver_api::{Connection, Dialect, DriverError, TableInfo, Value};
 
-use crate::results::StoredResult;
+use crate::edit::TableIdentity;
+use crate::results::{ResultId, StoredResult};
 use crate::session::{CoreEvent, Session};
 use crate::table_data::{ConditionError, PageError, TablePage, key_filter, table_page_sql};
 
@@ -87,6 +93,71 @@ pub enum FollowError {
     /// A column of the key is masked (ADR-051): the result holds the mask, not the value.
     #[error("{0} is masked: the key cannot be followed from this row")]
     Masked(String),
+    /// The core no longer keeps the result.
+    #[error("the result is no longer kept: run the query again")]
+    NoSuchResult,
+    /// A query's rows are another table's than the one named (SDB-93).
+    #[error("these rows are from {0}, not from the table named")]
+    NotThisTable(String),
+    /// The table a query's rows were matched to was dropped or replaced since.
+    #[error("{0} changed since the query ran: run it again")]
+    TableChanged(String),
+    #[error("could not check that {table} is still the table the query read: {message}")]
+    TableUnverified { table: String, message: String },
+}
+
+/// The table whose foreign keys a query's `result` can follow (SDB-93): the one table its rows
+/// are matched to by the rule that makes a query result editable (ADR-014, a plain SELECT of
+/// one table whose result holds its primary key), on a read-only connection too, since
+/// following a key only reads. `None` when the rows cannot be matched to one table. The result
+/// keeps the table it is matched to, which [`check_key_table`] then holds it to.
+pub async fn query_key_table(
+    session: &Session,
+    result: ResultId,
+    sql: &str,
+) -> Result<Option<TableInfo>, String> {
+    crate::edit::query_table(session, result, sql).await
+}
+
+/// Refuses to follow the keys of `schema.table` from `result` unless its rows are that table's.
+/// A result bound to a table (a query's matched by [`query_key_table`], or a table data page,
+/// SDB-440) follows only that table's keys, and only while the name still holds the same table
+/// (the identity editing checks, SDB-433). A result with no table bound (a view's page, or one
+/// whose table's identity could not be read) is a page of `schema.table`, as before.
+pub async fn check_key_table(
+    session: &Session,
+    result: ResultId,
+    schema: &str,
+    table: &str,
+) -> Result<(), FollowError> {
+    let bound = {
+        let stored = session
+            .results()
+            .stored(result)
+            .map_err(|_| FollowError::NoSuchResult)?;
+        let stored = stored.read().map_err(|_| FollowError::NoSuchResult)?;
+        stored.table().cloned()
+    };
+    let Some(bound) = bound else {
+        return Ok(());
+    };
+    if bound.schema() != schema || bound.name() != table {
+        return Err(FollowError::NotThisTable(bound.name().to_string()));
+    }
+    // An engine that keeps no identity for a table has only the name to go by (SDB-440).
+    let Some(expected) = &bound.identity else {
+        return Ok(());
+    };
+    match crate::edit::table_identity(session, bound.schema(), bound.name()).await {
+        Ok(TableIdentity::Of(identity)) if identity == *expected => Ok(()),
+        Ok(TableIdentity::Of(_) | TableIdentity::NoSingleTable | TableIdentity::NotKept) => {
+            Err(FollowError::TableChanged(bound.name().to_string()))
+        }
+        Err(message) => Err(FollowError::TableUnverified {
+            table: bound.name().to_string(),
+            message,
+        }),
+    }
 }
 
 /// Every key that can be followed from `schema.table`: its own keys (outgoing) first, then

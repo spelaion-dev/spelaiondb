@@ -560,15 +560,16 @@ export const commands = {
 	/**  What a relation uses and what uses it; `None` when the engine cannot tell (SDB-393). */
 	objectDependencies: (session: string, schema: string, table: string) => typedError<DependenciesItem_Serialize | null, string>(__TAURI_INVOKE("object_dependencies", { session, schema, table })),
 	/**
-	 *  Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
-	 *  of `schema.table`): the core finds the key in the catalog again, reads the row's typed
-	 *  values and writes the filter of the table data tab it leads to.
+	 *  Follows a foreign key from the row at `row` of `result`: a table data tab's page of
+	 *  `schema.table`, or a query's result the core matched to that table (SDB-93). The core
+	 *  checks the result's table, finds the key in the catalog again, reads the row's typed values
+	 *  and writes the filter of the table data tab it leads to.
 	 */
 	followKey: (session: string, result: number, row: number, schema: string, table: string, key: KeyRefItem) => typedError<KeyTargetItem, string>(__TAURI_INVOKE("follow_key", { session, result, row, schema, table, key })),
 	/**
-	 *  The references panel of a table data tab: every foreign key of the row at `row` (the
-	 *  table's own and those that point to it), each with up to `limit` of the rows it leads to,
-	 *  read in turn on the tab's session.
+	 *  The references panel of a table data tab, or of a query's result matched to one table
+	 *  (SDB-93): every foreign key of the row at `row` (the table's own and those that point to
+	 *  it), each with up to `limit` of the rows it leads to, read in turn on the tab's session.
 	 */
 	rowReferences: (session: string, result: number, row: number, schema: string, table: string, limit: number) => typedError<RowReferenceItem_Serialize[], string>(__TAURI_INVOKE("row_references", { session, result, row, schema, table, limit })),
 	/**
@@ -1142,6 +1143,11 @@ export const commands = {
 	joinSql: (session: string, tables: TableRefItem[], inner: boolean) => typedError<string, string>(__TAURI_INVOKE("join_sql", { session, tables, inner })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
+	/**
+	 *  The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
+	 *  none: the core matches the rows to one table, on a read-only connection too.
+	 */
+	queryKeyTable: (session: string, result: number, sql: string) => typedError<KeyTableItem | null, string>(__TAURI_INVOKE("query_key_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
 	/**  An editor tab's transaction, as the core last read it (ADR-031). */
@@ -3789,6 +3795,12 @@ export type KeyRefItem = {
 	direction: KeyDirectionItem,
 	schema: string,
 	table: string,
+	name: string,
+};
+
+/**  The table whose foreign keys a query's result follows (SDB-93), as the core matched it. */
+export type KeyTableItem = {
+	schema: string,
 	name: string,
 };
 

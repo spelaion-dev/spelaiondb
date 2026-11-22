@@ -15,8 +15,8 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_core::{
     CoreEvent, FollowError, KeyDirection, KeyRef, ReferenceOutcome, ResultId, ResultStore, Session,
-    TableKey, TablePage, find_key, follow, key_rows, read_references, reference_targets,
-    table_keys, table_page_sql,
+    TableKey, TablePage, check_key_table, find_key, follow, key_rows, query_key_table,
+    read_references, reference_targets, table_keys, table_page_sql,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
 
@@ -128,50 +128,91 @@ const CUSTOMER: &str = "fkf_customer";
 const ORDER: &str = "fkf_order";
 const LINE: &str = "fkf_line";
 
+/// One test's names for the four tables and the line's named key. The tests of a file run in
+/// parallel (`serial.rs`), so each keeps its own on the shared servers: `fkf_…` for the table
+/// data pages, `fkq_…` for the query results.
+struct Tables {
+    country: String,
+    customer: String,
+    order: String,
+    line: String,
+    line_key: String,
+}
+
+impl Tables {
+    fn new(prefix: &str) -> Self {
+        Self {
+            country: format!("{prefix}_country"),
+            customer: format!("{prefix}_customer"),
+            order: format!("{prefix}_order"),
+            line: format!("{prefix}_line"),
+            line_key: format!("{prefix}_line_order"),
+        }
+    }
+
+    /// The line table, with its composite key to the order table.
+    fn create_line(&self, session: &Session) -> String {
+        let region = session.dialect().quote_identifier("order region");
+        format!(
+            "CREATE TABLE {} (id INT PRIMARY KEY, {region} VARCHAR(10), number INT, \
+             product VARCHAR(40), \
+             CONSTRAINT {} FOREIGN KEY ({region}, number) \
+             REFERENCES {} ({region}, number))",
+            self.line, self.line_key, self.order
+        )
+    }
+
+    /// Drops the four tables, children first.
+    fn drops(&self) -> Vec<String> {
+        [&self.line, &self.order, &self.customer, &self.country]
+            .iter()
+            .map(|t| format!("DROP TABLE {t}"))
+            .collect()
+    }
+}
+
 /// Creates the four tables and their rows (children dropped first).
-async fn create_schema(label: &str, session: &Session) {
+async fn create_schema(label: &str, session: &Session, tables: &Tables) {
     let q = |name: &str| session.dialect().quote_identifier(name);
     let region = q("order region");
-    let drops: Vec<String> = [LINE, ORDER, CUSTOMER, COUNTRY]
-        .iter()
-        .map(|t| format!("DROP TABLE {t}"))
-        .collect();
-    run(label, session, &drops, true).await;
+    run(label, session, &tables.drops(), true).await;
+    let Tables {
+        country,
+        customer,
+        order,
+        line,
+        ..
+    } = tables;
     let statements = vec![
-        format!("CREATE TABLE {COUNTRY} (code CHAR(2) PRIMARY KEY, name VARCHAR(40))"),
+        format!("CREATE TABLE {country} (code CHAR(2) PRIMARY KEY, name VARCHAR(40))"),
         format!(
-            "CREATE TABLE {CUSTOMER} (id INT PRIMARY KEY, name VARCHAR(40), \
+            "CREATE TABLE {customer} (id INT PRIMARY KEY, name VARCHAR(40), \
              country CHAR(2), referrer INT, \
-             FOREIGN KEY (country) REFERENCES {COUNTRY} (code), \
-             FOREIGN KEY (referrer) REFERENCES {CUSTOMER} (id))"
+             FOREIGN KEY (country) REFERENCES {country} (code), \
+             FOREIGN KEY (referrer) REFERENCES {customer} (id))"
         ),
         format!(
-            "CREATE TABLE {ORDER} ({region} VARCHAR(10) NOT NULL, number INT NOT NULL, \
+            "CREATE TABLE {order} ({region} VARCHAR(10) NOT NULL, number INT NOT NULL, \
              customer INT, PRIMARY KEY ({region}, number), \
-             FOREIGN KEY (customer) REFERENCES {CUSTOMER} (id))"
+             FOREIGN KEY (customer) REFERENCES {customer} (id))"
         ),
-        format!(
-            "CREATE TABLE {LINE} (id INT PRIMARY KEY, {region} VARCHAR(10), number INT, \
-             product VARCHAR(40), \
-             CONSTRAINT fkf_line_order FOREIGN KEY ({region}, number) \
-             REFERENCES {ORDER} ({region}, number))"
-        ),
-        format!("INSERT INTO {COUNTRY} (code, name) VALUES ('ES', 'Spain'), ('FR', 'France')"),
+        tables.create_line(session),
+        format!("INSERT INTO {country} (code, name) VALUES ('ES', 'Spain'), ('FR', 'France')"),
         // Ana first: DuckDB checks a key against the rows before the statement.
         format!(
-            "INSERT INTO {CUSTOMER} (id, name, country, referrer) VALUES (1, 'Ana', 'ES', NULL)"
+            "INSERT INTO {customer} (id, name, country, referrer) VALUES (1, 'Ana', 'ES', NULL)"
         ),
         format!(
-            "INSERT INTO {CUSTOMER} (id, name, country, referrer) VALUES \
+            "INSERT INTO {customer} (id, name, country, referrer) VALUES \
              (2, 'Luc', 'FR', 1), (3, 'Eva', 'ES', 1), (4, 'Nobody', NULL, NULL)"
         ),
         // Two orders share a number in different regions: the key needs both columns.
         format!(
-            "INSERT INTO {ORDER} ({region}, number, customer) VALUES \
+            "INSERT INTO {order} ({region}, number, customer) VALUES \
              ('EU', 7, 1), ('US', 7, 2), ('EU', 8, 3)"
         ),
         format!(
-            "INSERT INTO {LINE} (id, {region}, number, product) VALUES \
+            "INSERT INTO {line} (id, {region}, number, product) VALUES \
              (1, 'EU', 7, 'pen'), (2, 'EU', 7, 'ink'), (3, 'US', 7, 'cap'), (4, NULL, NULL, 'loose')"
         ),
     ];
@@ -276,7 +317,7 @@ async fn follow_to(
 async fn foreign_keys_are_followed_both_ways_on_every_engine() {
     let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
-        create_schema(label, &session).await;
+        create_schema(label, &session, &Tables::new("fkf")).await;
         let conn = session.connection().as_ref();
 
         // The catalog, both ways: the composite key keeps its order on both sides.
@@ -533,5 +574,146 @@ async fn foreign_keys_are_followed_both_ways_on_every_engine() {
             .map(|t| format!("DROP TABLE {t}"))
             .collect();
         run(label, &session, &drops, false).await;
+    }
+}
+
+/// SDB-93: a query typed in an editor whose rows the core matches to one table follows that
+/// table's keys both ways, as a table data page does; the core refuses another table's keys,
+/// a table replaced since the query ran, and a query it cannot match to one table.
+#[tokio::test]
+async fn query_results_of_one_table_follow_its_keys_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for (label, session, schema) in engines().await {
+        let tables = Tables::new("fkq");
+        let (order, customer, line) = (
+            tables.order.as_str(),
+            tables.customer.as_str(),
+            tables.line.as_str(),
+        );
+        create_schema(label, &session, &tables).await;
+        let conn = session.connection().as_ref();
+        let on = &session;
+        let query = |sql: String| async move {
+            let result = run(label, on, std::slice::from_ref(&sql), false)
+                .await
+                .unwrap_or_else(|| panic!("{label}: no result for {sql}"));
+            (result, sql)
+        };
+
+        // The order of customer 2, (US, 7), read by a plain SELECT: matched to the order table.
+        let (orders, sql) = query(format!("SELECT * FROM {order} WHERE customer = 2")).await;
+        let table = query_key_table(&session, orders, &sql)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"))
+            .unwrap_or_else(|| panic!("{label}: not matched to {order}"));
+        assert!(table.object.name.eq_ignore_ascii_case(order), "{label}");
+        assert_eq!(table.object.schema, schema, "{label}");
+        let (schema_name, order_name) = (table.object.schema.clone(), table.object.name.clone());
+        assert_eq!(
+            check_key_table(&session, orders, &schema_name, &order_name).await,
+            Ok(()),
+            "{label}"
+        );
+        // Its keys are that table's only: naming another table is refused.
+        assert!(
+            matches!(
+                check_key_table(&session, orders, &schema_name, customer).await,
+                Err(FollowError::NotThisTable(_))
+            ),
+            "{label}"
+        );
+
+        // Out to its customer, and back to its lines: both ways, as from a table data page.
+        let to_customer = key(
+            label,
+            &session,
+            schema,
+            order,
+            KeyDirection::Outgoing,
+            customer,
+        )
+        .await;
+        let referenced = follow_to(label, &session, orders, 0, &to_customer, "id").await;
+        assert_eq!(
+            column_text(&session, referenced, "name"),
+            ["Luc"],
+            "{label}"
+        );
+        let from_lines = key(label, &session, schema, order, KeyDirection::Incoming, line).await;
+        let referencing = follow_to(label, &session, orders, 0, &from_lines, "id").await;
+        assert_eq!(
+            column_text(&session, referencing, "product"),
+            ["cap"],
+            "{label}"
+        );
+
+        // The references panel of the query's row: both keys, each with its rows.
+        let order_keys = table_keys(conn, schema, order).await.unwrap();
+        let targets = {
+            let stored = session.results().get(orders).unwrap();
+            let stored = stored.read().unwrap();
+            reference_targets(session.dialect().as_ref(), &stored, 0, order_keys)
+        };
+        let panel = read_references(&session, targets, 5).await;
+        assert_eq!(panel.len(), 2, "{label}");
+        for reference in &panel {
+            assert!(
+                matches!(&reference.outcome, ReferenceOutcome::Rows(_, rows) if rows.rows.len() == 1),
+                "{label}: {:?}",
+                reference.outcome
+            );
+        }
+
+        // Not one table's rows, or not all of its key: no table, so no keys to follow.
+        let (joined, sql) = query(format!(
+            "SELECT o.number, c.name FROM {order} o JOIN {customer} c ON c.id = o.customer"
+        ))
+        .await;
+        assert_eq!(
+            query_key_table(&session, joined, &sql)
+                .await
+                .map(|t| t.is_some()),
+            Ok(false),
+            "{label}: a join"
+        );
+        let (keyless, sql) = query(format!("SELECT customer FROM {order}")).await;
+        assert_eq!(
+            query_key_table(&session, keyless, &sql)
+                .await
+                .map(|t| t.is_some()),
+            Ok(false),
+            "{label}: without the primary key"
+        );
+
+        // The table dropped and created again since the query ran: its keys are not followed.
+        let (line_rows, sql) = query(format!("SELECT * FROM {line}")).await;
+        let line_table = query_key_table(&session, line_rows, &sql)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"))
+            .unwrap_or_else(|| panic!("{label}: not matched to {line}"));
+        if matches!(label, "mysql" | "mariadb") {
+            // Their identity is the creation time, to the second.
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+        run(
+            label,
+            &session,
+            &[format!("DROP TABLE {line}"), tables.create_line(&session)],
+            false,
+        )
+        .await;
+        assert_eq!(
+            check_key_table(
+                &session,
+                line_rows,
+                &line_table.object.schema,
+                &line_table.object.name
+            )
+            .await,
+            Err(FollowError::TableChanged(line_table.object.name.clone())),
+            "{label}: recreated"
+        );
+
+        run(label, &session, &tables.drops(), false).await;
     }
 }

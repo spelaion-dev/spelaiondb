@@ -3124,6 +3124,14 @@ pub struct EditableTableItem {
     pub primary_key: Vec<String>,
 }
 
+/// The table whose foreign keys a query's result follows (SDB-93), as the core matched it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyTableItem {
+    pub schema: String,
+    pub name: String,
+}
+
 /// Where rows copied as UPDATE statements come from (SDB-388): a table data tab's table, or
 /// the statement a query's result came from. The core decides the table and its key.
 #[derive(Debug, Clone, Deserialize, Type)]

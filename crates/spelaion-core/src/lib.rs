@@ -232,8 +232,8 @@ pub use query_page::{
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use references::{
     FollowError, KeyDirection, KeyRef, KeyRows, KeyTarget, MAX_PREVIEW_ROWS, PREVIEW_CHARS,
-    ReferenceOutcome, RowReference, TableKey, find_key, follow, key_rows, read_references,
-    reference_targets, table_keys,
+    ReferenceOutcome, RowReference, TableKey, check_key_table, find_key, follow, key_rows,
+    query_key_table, read_references, reference_targets, table_keys,
 };
 pub use result_tabs::{
     DEFAULT_RESULT_TABS, MAX_RESULT_NAME, MAX_RESULT_TABS, Placed, Placement, ResultTab,

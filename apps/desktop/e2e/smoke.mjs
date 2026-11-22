@@ -5304,6 +5304,25 @@ try {
     }
     assert.equal(await page.locator(".tabbar .tab", { hasText: "customer" }).count(), 0);
 
+    // A query of one table follows the same keys (SDB-93): the core matched its rows to orders.
+    panel = await newQuery("Shop (SQLite)", "select * from orders where id = 1;");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await panel.getByRole("button", { name: "References panel" }).waitFor();
+    box = await gridBox();
+    widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
+    await page.keyboard.press("Control+Enter");
+    await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor();
+    assert.match(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), /^id = \d+$/);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    // The customer's tab, then the query's.
+    for (let i = 0; i < 2; i++) {
+      const open = await page.locator(".tabbar .tab").count();
+      await page.keyboard.press("Control+w");
+      await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n - 1, open);
+    }
+
     // The table details' References: the keys of other tables that point to customer.
     await customerNode.locator(".twisty").click();
     const customerChildren = customerNode.locator("xpath=..");
