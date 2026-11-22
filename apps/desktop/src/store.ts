@@ -267,7 +267,8 @@ export function setNewScriptTemplate(template: string) {
 }
 
 export type ConnectionDialog =
-  | { kind: "add"; openImportMenu?: boolean }
+  /** `imports`: open on the list of clients to import connections from (SDB-446). */
+  | { kind: "add"; imports?: boolean }
   /** `notice`: shown above the form, such as "this is the copy just made". */
   | { kind: "edit"; id: string; notice?: string };
 

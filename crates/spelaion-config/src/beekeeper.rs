@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 use spelaion_driver_api::Secret;
 
 use crate::datagrip::shown;
-use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls};
+use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls, SavedSecrets};
 use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
@@ -113,6 +113,15 @@ fn beekeeper_linux_dirs(home: &LinuxHome) -> Vec<PathBuf> {
 /// The saved connections under `path`: Beekeeper's data folder (its `app.db` and `.key`), or
 /// the `app.db` file itself (its `.key` is looked for next to it).
 pub fn read_beekeeper(path: &Path) -> Result<Vec<ImportedConnection>, BeekeeperError> {
+    read_beekeeper_with(path, SavedSecrets::Read)
+}
+
+/// [`read_beekeeper`], with or without the saved passwords: with [`SavedSecrets::Skip`] the
+/// install's `.key` is not read, so nothing is decrypted.
+pub fn read_beekeeper_with(
+    path: &Path,
+    secrets: SavedSecrets,
+) -> Result<Vec<ImportedConnection>, BeekeeperError> {
     let file = if path.is_dir() {
         path.join(DATABASE_FILE)
     } else {
@@ -121,10 +130,13 @@ pub fn read_beekeeper(path: &Path) -> Result<Vec<ImportedConnection>, BeekeeperE
     if !file.is_file() {
         return Err(BeekeeperError::NotFound(path.to_path_buf()));
     }
-    let key = file
-        .parent()
-        .map(|dir| read_key(&dir.join(KEY_FILE)))
-        .unwrap_or(KeyState::Missing);
+    let key = match secrets {
+        SavedSecrets::Read => file
+            .parent()
+            .map(|dir| read_key(&dir.join(KEY_FILE)))
+            .unwrap_or(KeyState::Missing),
+        SavedSecrets::Skip => KeyState::Missing,
+    };
     read_database(&file, &key)
 }
 

@@ -198,6 +198,71 @@ function useContextMenu() {
 /** Fired on `window` to put the keyboard in the explorer's quick filter (Ctrl+Shift+F). */
 export const FOCUS_EXPLORER_FILTER_EVENT = "spelaion-focus-explorer-filter";
 
+/**
+ * The explorer header's Add connection, a split button (docs/ui-guidelines.md): the main part
+ * adds a connection, the arrow beside it opens the other ways in, "Import connections from
+ * another client…" (SDB-446), which opens the list of clients with what each one has here.
+ */
+function AddConnectionButton() {
+  const { t } = useTranslation(["shell", "connections"]);
+  const [menu, setMenu] = useContextMenu();
+  const arrow = useRef<HTMLButtonElement>(null);
+  const item = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (menu) item.current?.focus();
+  }, [menu]);
+  const open = () => {
+    const rect = arrow.current?.getBoundingClientRect();
+    if (rect) setMenu({ x: rect.left, y: rect.bottom });
+  };
+  return (
+    <span className="split-button">
+      <button
+        className="ghost add-connection"
+        onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
+        aria-label={t("connections:add")}
+        title={t("connections:add")}
+      >
+        +
+      </button>
+      <button
+        ref={arrow}
+        className="ghost split-button-arrow"
+        aria-label={t("connections:moreWaysToAdd")}
+        title={t("connections:moreWaysToAdd")}
+        aria-haspopup="menu"
+        aria-expanded={menu !== null}
+        onClick={() => (menu ? setMenu(null) : open())}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !menu) {
+            e.preventDefault();
+            open();
+          }
+        }}
+      >
+        ▾
+      </button>
+      {menu && (
+        <ObjectMenu at={menu} label={t("connections:moreWaysToAdd")}>
+          <button
+            ref={item}
+            role="menuitem"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") arrow.current?.focus();
+            }}
+            onClick={() => {
+              setMenu(null);
+              useApp.getState().setConnectionDialog({ kind: "add", imports: true });
+            }}
+          >
+            {t("connections:importer.open")}
+          </button>
+        </ObjectMenu>
+      )}
+    </span>
+  );
+}
+
 /** Tags shown next to a connection's name; the others are only in its tooltip. */
 const VISIBLE_TAGS = 2;
 
@@ -1618,14 +1683,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           >
             <SearchIcon />
           </button>
-          <button
-            className="ghost add-connection"
-            onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
-            aria-label={t("connections:add")}
-            title={t("connections:add")}
-          >
-            +
-          </button>
+          <AddConnectionButton />
         </div>
       </div>
       {filter !== null && (

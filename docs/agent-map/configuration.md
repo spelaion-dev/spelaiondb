@@ -38,7 +38,14 @@
   On Linux a reader's default search also looks in the client's Flatpak and Snap folders
   (`linux_dirs.rs`; native first, each package path citing the manifest it was checked against);
   HeidiSQL's registry only exists on Windows (`heidisql_has_registry`), elsewhere its import
-  starts by choosing an exported file. `tests/reader_properties.rs` (SDB-156) changes each
+  starts by choosing an exported file. `import_sources.rs` (SDB-446) decides where each client
+  is read from (`ImportPlaces::this_system`: the `SPELAION_<CLIENT>_DIR` overrides the smoke test
+  sets, `SPELAION_HEIDISQL_REGISTRY=off`, else the client's own place), reads it
+  (`read_import`, which the desktop's scan and import call) and gives the import's list its
+  state per client (`import_source`: found with a count, not found, needs a file, encrypted,
+  failed). The list reads no saved password (`SavedSecrets::Skip`: DBeaver's credentials,
+  HeidiSQL's passwords and Beekeeper's key are not opened; `tests/import_sources.rs`); a new
+  reader that reads saved secrets takes `SavedSecrets` too. `tests/reader_properties.rs` (SDB-156) changes each
   client's real files at random (and Beekeeper's database values) and checks that no reader,
   nor `paste_connection`, panics; a new reader gets a property there.
   `dbeaver.rs` reads DBeaver's connections and saved credentials (passwords only as `Secret`,

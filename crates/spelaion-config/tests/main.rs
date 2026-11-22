@@ -22,6 +22,7 @@ mod engine_names;
 mod file_writes;
 mod flightsql;
 mod hive;
+mod import_sources;
 mod imports;
 mod masking;
 mod mcp_clients;

@@ -6430,6 +6430,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             variable_is_valid,
             parse_connection_url,
             connection_import::scan_connections,
+            connection_import::client_import_source,
             kube_contexts,
             kube_namespaces,
             kube_names,
