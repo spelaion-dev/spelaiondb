@@ -418,9 +418,7 @@ pub fn copy_stdio(sql: &str) -> Option<CopyStdio> {
         match b[i] {
             b'\\' if words.is_empty() => return None,
             b'\'' => {
-                let escapes =
-                    i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]));
-                i = skip_quoted(b, i, b'\'', escapes);
+                i = skip_quoted(b, i, b'\'', escape_string(b, i));
                 words.push(String::new());
             }
             b'"' => {
@@ -468,13 +466,13 @@ pub fn copy_stdio(sql: &str) -> Option<CopyStdio> {
                 parens = parens.saturating_sub(1);
                 i += 1;
             }
+            // Words as the splitter reads them (SDB-439): one may follow white space outside
+            // ASCII, and ends at it, so both agree on a statement's first word.
             c if (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
-                && (i == 0 || !is_ident_byte(b[i - 1])) =>
+                && (i == 0 || !is_ident_byte(b[i - 1]) || white_space_before(sql, i))
+                && !is_white_space_at(sql, i) =>
             {
-                let end = b[i..]
-                    .iter()
-                    .position(|&c| !is_ident_byte(c))
-                    .map_or(b.len(), |p| i + p);
+                let end = word_end(sql, i);
                 if words.is_empty() || parens == 0 {
                     words.push(sql[i..end].to_ascii_lowercase());
                 }
@@ -748,6 +746,32 @@ mod tests {
             assert_eq!(d.copy_data(script, &spans[0]), None, "{script:?}");
             assert!(d.refuse_statement(spans[0].text(script)).is_some());
         }
+    }
+
+    #[test]
+    fn copy_stdio_reads_the_first_word_as_the_splitter_does() {
+        // After white space outside ASCII a word starts, and at it one ends (SDB-439): the first
+        // word here is `a` or `go`, not the `copy` after it, so no text is taken as COPY data.
+        let d = PostgresDialect;
+        for script in [
+            "$\u{85}a\u{b}copy t from stdin;\n'",
+            "0\u{a0}GO`copy t from stdin;\n//",
+        ] {
+            let spans = d.split_statements(script);
+            assert_eq!(copy_stdio(spans[0].text(script)), None, "{script:?}");
+            for span in &spans {
+                assert_eq!(d.copy_data(script, span), None, "{script:?}");
+            }
+        }
+        assert_eq!(
+            copy_stdio("\u{a0}copy t from stdin"),
+            Some(CopyStdio::FromStdin)
+        );
+        assert_eq!(copy_stdio("x\u{3000}copy t from stdin"), None);
+        assert_eq!(
+            copy_stdio("copy\u{a0}t\u{a0}from\u{a0}stdin"),
+            Some(CopyStdio::FromStdin)
+        );
     }
 
     #[test]
