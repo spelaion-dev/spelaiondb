@@ -3817,7 +3817,7 @@ try {
       await overview.getByRole("button", { name: "Refresh" }).click();
       const addedRow = overview.getByText("smoke_added", { exact: true }).locator("xpath=..");
       await addedRow.getByRole("button", { name: "Drop…" }).click();
-      const dropAdded = page.getByRole("dialog", { name: "Drop smoke_added" });
+      const dropAdded = page.getByRole("dialog", { name: "Drop smoke_added?" });
       await dropAdded.getByRole("button", { name: "Cancel" }).waitFor();
       assert.ok(await dropAdded.getByRole("button", { name: "Cancel" }).evaluate((button) => document.activeElement === button), "destructive confirmation starts on Cancel");
       await dropAdded.getByLabel("SQL that will run").filter({ hasText: "DROP COLUMN smoke_added" }).waitFor();
@@ -4193,7 +4193,7 @@ try {
   // Drop: the core's SQL first, without "Cascade" on SQLite, which has none.
   await amountColumn.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Drop…" }).click();
-  const dropColumn = page.getByRole("dialog", { name: "Drop renamed_probe.amount" });
+  const dropColumn = page.getByRole("dialog", { name: "Drop renamed_probe.amount?" });
   await dropColumn.getByLabel("SQL that will run").filter({ hasText: "ALTER TABLE renamed_probe DROP COLUMN amount;" }).waitFor();
   assert.equal(await dropColumn.locator('input[name="cascade"]').count(), 0);
   await dropColumn.getByRole("button", { name: "Drop", exact: true }).click();
@@ -4201,7 +4201,7 @@ try {
   await renamedProbe.locator(".twisty").click();
   await renamedProbe.focus();
   await page.keyboard.press("Delete");
-  const dropTable = page.getByRole("dialog", { name: "Drop renamed_probe" });
+  const dropTable = page.getByRole("dialog", { name: "Drop renamed_probe?" });
   await dropTable.getByLabel("SQL that will run").filter({ hasText: "DROP TABLE renamed_probe;" }).waitFor();
   await shot("05h-drop-dialog");
   await dropTable.getByRole("button", { name: "Drop", exact: true }).click();
@@ -4232,7 +4232,7 @@ try {
   assert.equal(await tablesFolder.locator(".muted").innerText(), "4");
   await formTable.focus();
   await page.keyboard.press("Delete");
-  const dropFormTable = page.getByRole("dialog", { name: "Drop smoke_form_table" });
+  const dropFormTable = page.getByRole("dialog", { name: "Drop smoke_form_table?" });
   await dropFormTable.getByRole("button", { name: "Drop", exact: true }).click();
   await formTable.waitFor({ state: "detached" });
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
@@ -6470,7 +6470,7 @@ try {
     await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor();
     await (await connectionMenu("PG session setup")).getByRole("menuitem", { name: "Delete…" }).click();
     const deleteSetup = page.getByRole("dialog", { name: "Delete connection?" });
-    await deleteSetup.getByRole("button", { name: "Delete", exact: true }).click();
+    await deleteSetup.getByRole("button", { name: "Delete connection", exact: true }).click();
     await deleteSetup.waitFor({ state: "detached" });
     await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor({ state: "detached" });
   }
@@ -7699,7 +7699,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     for (const spec of recorded) {
       await (await connectionMenu(spec.name)).getByRole("menuitem", { name: "Delete…" }).click();
       const dialog = page.getByRole("dialog", { name: "Delete connection?" });
-      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+      await dialog.getByRole("button", { name: "Delete connection", exact: true }).click();
       await dialog.waitFor({ state: "detached" });
     }
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
@@ -8668,7 +8668,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Delete the repository copy (the clipboard keeps its text), then paste it back.
   await (await connectionMenu("MariaDB (copy)")).getByRole("menuitem", { name: "Delete…" }).click();
   const deleteCopy = page.getByRole("dialog", { name: "Delete connection?" });
-  await deleteCopy.getByRole("button", { name: "Delete", exact: true }).click();
+  await deleteCopy.getByRole("button", { name: "Delete connection", exact: true }).click();
   await deleteCopy.waitFor({ state: "detached" });
   await copyRow.waitFor({ state: "detached" });
   assert.ok(!existsSync(mysqlCopyFile));
@@ -8731,7 +8731,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   for (const name of ["MariaDB (copy) (copy)", "MariaDB (copy)"]) {
     await (await connectionMenu(name)).getByRole("menuitem", { name: "Delete…" }).click();
     const confirmDelete = page.getByRole("dialog", { name: "Delete connection?" });
-    await confirmDelete.getByRole("button", { name: "Delete", exact: true }).click();
+    await confirmDelete.getByRole("button", { name: "Delete connection", exact: true }).click();
     await confirmDelete.waitFor({ state: "detached" });
   }
   await page.locator(".connection-row", { hasText: "MariaDB (copy)" }).waitFor({ state: "detached" });
@@ -8817,7 +8817,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   });
   await (await connectionMenu("Masked shop")).getByRole("menuitem", { name: "Delete…" }).click();
   const confirmMaskedDelete = page.getByRole("dialog", { name: "Delete connection?" });
-  await confirmMaskedDelete.getByRole("button", { name: "Delete", exact: true }).click();
+  await confirmMaskedDelete.getByRole("button", { name: "Delete connection", exact: true }).click();
   await confirmMaskedDelete.waitFor({ state: "detached" });
 
   step("connection types: made in Settings, picked in the form, a tinted badge in the sidebar and the editor, asking before any run");
@@ -9112,6 +9112,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const dialog = page.getByRole("dialog", { name: "Proxy password" });
     await dialog.waitFor();
     assert.match(await dialog.innerText(), /proxyuser@127\.0\.0\.1/);
+    // The answer is named by what it does (SDB-90), never OK.
+    await dialog.getByRole("button", { name: "Sign in to proxy", exact: true }).waitFor();
     await dialog.locator("input").fill("proxy-pass");
     await dialog.locator("input").press("Enter");
     await dialog.waitFor({ state: "detached" });
@@ -9448,7 +9450,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const confirm = page.getByRole("dialog", { name: "Delete connection?" });
   await confirm.getByText("only this computer is affected").waitFor();
   await shot("13b-delete-connection");
-  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+  await confirm.getByRole("button", { name: "Delete connection", exact: true }).click();
   await confirm.waitFor({ state: "detached" });
   await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor({ state: "detached" });
   assert.ok(!existsSync(join(userDir, "connections", "shop-copy.toml")));
