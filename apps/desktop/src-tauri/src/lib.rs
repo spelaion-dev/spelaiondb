@@ -5101,6 +5101,24 @@ async fn editable_query_table(
     }))
 }
 
+/// The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
+/// none: the core matches the rows to one table, on a read-only connection too.
+#[command]
+async fn query_key_table(
+    session: String,
+    result: u32,
+    sql: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<KeyTableItem>> {
+    let open = state.session(&session).await?;
+    let table =
+        spelaion_core::query_key_table(&open.session, ResultId(result.into()), &sql).await?;
+    Ok(table.map(|table| KeyTableItem {
+        schema: table.object.schema,
+        name: table.object.name,
+    }))
+}
+
 /// SQL for a table written by the core with the engine's quoting (preview, SELECT, INSERT,
 /// UPDATE or DELETE with `:named` placeholders), to open in a new tab.
 #[command]
@@ -5318,9 +5336,10 @@ async fn referencing_keys(
         .collect())
 }
 
-/// Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
-/// of `schema.table`): the core finds the key in the catalog again, reads the row's typed
-/// values and writes the filter of the table data tab it leads to.
+/// Follows a foreign key from the row at `row` of `result`: a table data tab's page of
+/// `schema.table`, or a query's result the core matched to that table (SDB-93). The core
+/// checks the result's table, finds the key in the catalog again, reads the row's typed values
+/// and writes the filter of the table data tab it leads to.
 #[command]
 #[allow(clippy::too_many_arguments)]
 async fn follow_key(
@@ -5333,6 +5352,9 @@ async fn follow_key(
     state: State<'_, AppState>,
 ) -> CmdResult<KeyTargetItem> {
     let open = state.session(&session).await?;
+    spelaion_core::check_key_table(&open.session, ResultId(result.into()), &schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
     let key = spelaion_core::find_key(
         open.session.connection().as_ref(),
         &schema,
@@ -5351,9 +5373,9 @@ async fn follow_key(
         .map_err(|e| e.to_string())
 }
 
-/// The references panel of a table data tab: every foreign key of the row at `row` (the
-/// table's own and those that point to it), each with up to `limit` of the rows it leads to,
-/// read in turn on the tab's session.
+/// The references panel of a table data tab, or of a query's result matched to one table
+/// (SDB-93): every foreign key of the row at `row` (the table's own and those that point to
+/// it), each with up to `limit` of the rows it leads to, read in turn on the tab's session.
 #[command]
 #[allow(clippy::too_many_arguments)]
 async fn row_references(
@@ -5366,6 +5388,9 @@ async fn row_references(
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<RowReferenceItem>> {
     let open = state.session(&session).await?;
+    spelaion_core::check_key_table(&open.session, ResultId(result.into()), &schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
     let keys = spelaion_core::table_keys(open.session.connection().as_ref(), &schema, &table)
         .await
         .map_err(|e| e.to_string())?;
@@ -6543,6 +6568,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             table_templates,
             join_sql,
             editable_query_table,
+            query_key_table,
             answer_interaction,
             transaction_status,
             set_auto_commit,

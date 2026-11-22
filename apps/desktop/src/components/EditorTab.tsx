@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import { startJob, type Job } from "../jobs";
-import type { EditableTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
+import type { EditableTableItem, KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
@@ -263,6 +263,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [primaryKey, setPrimaryKey] = useState<string[] | null>(null);
   const [columnComments, setColumnComments] = useState<Record<string, string>>({});
   const [queryTable, setQueryTable] = useState<(EditableTableItem & { result: number }) | null>(null);
+  /** The one table a query's result was matched to, whose foreign keys it follows (SDB-93). */
+  const [queryKeyTable, setQueryKeyTable] = useState<(KeyTableItem & { result: number }) | null>(null);
   const [queryChecked, setQueryChecked] = useState<number | null>(null);
   /** Its edits are being applied: kept once, for the store, this render and a second click. */
   const saving = useFlag();
@@ -276,7 +278,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
     updateTab(tab.id, { pendingEdits: pendingCount > 0, savingEdits });
   }, [tab.id, pendingCount, savingEdits, updateTab]);
 
-  // A query is editable only when the core can resolve its entire result to one table.
+  // A query follows foreign keys, and is editable, only when the core can resolve its entire
+  // result to one table: first the table (read-only connections too), then whether it may be
+  // edited, which only a result with a table can be.
   useEffect(() => {
     if (tab.table || tabStatus !== "connected" || running) return;
     const result = tab.run?.results.find((item) => item.id === tab.run?.activeResult);
@@ -284,22 +288,40 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const request = result?.run === undefined ? undefined : runTexts.current.get(result.run);
     if (!result || !ended(result) || !request || request.results !== 1) return;
     let active = true;
-    call(commands.editableQueryTable(tab.id, result.id, request.text))
-      .then((table) => { if (active) { setQueryTable(table ? { ...table, result: result.id } : null); setQueryChecked(result.id); } })
-      .catch(() => { if (active) setQueryChecked(result.id); });
+    void (async () => {
+      try {
+        const keyTable = await call(commands.queryKeyTable(tab.id, result.id, request.text));
+        if (!active) return;
+        setQueryKeyTable(keyTable ? { ...keyTable, result: result.id } : null);
+        const table = keyTable ? await call(commands.editableQueryTable(tab.id, result.id, request.text)) : null;
+        if (!active) return;
+        setQueryTable(table ? { ...table, result: result.id } : null);
+      } catch {
+        // Neither: the result stays a plain, read-only result.
+      }
+      if (active) setQueryChecked(result.id);
+    })();
     return () => { active = false; };
   }, [tab.id, tab.table, tabStatus, running, tab.run?.results, tab.run?.activeResult]);
   // Rows read through a session that is gone (lost, disconnected, another connection) are not
-  // editable: the check above asks again once connected, and the core refuses them anyway
-  // (SDB-137).
+  // editable and follow no keys: the check above asks again once connected, and the core
+  // refuses them anyway (SDB-137).
   useEffect(() => {
-    if (tabStatus !== "connected") setQueryTable(null);
+    if (tabStatus !== "connected") {
+      setQueryTable(null);
+      setQueryKeyTable(null);
+    }
   }, [tabStatus]);
 
   const activeResult = tab.run?.results.find((result) => result.id === tab.run?.activeResult);
   const editTarget = tab.table
     ? (primaryKey?.length && !connection?.readOnly ? { ...tab.table, primaryKey } : null)
     : (queryTable && queryTable.result === activeResult?.id ? queryTable : null);
+  /** The table whose foreign keys the active result follows: a table data tab's own, or the
+   *  one table the core matched a query's result to (SDB-93). */
+  const keyTable = tab.table
+    ? { schema: tab.table.schema, name: tab.table.name, connectionId: tab.connectionId }
+    : (queryKeyTable && queryKeyTable.result === activeResult?.id ? { schema: queryKeyTable.schema, name: queryKeyTable.name, connectionId: tab.connectionId } : undefined);
 
   // A page shown again (another result tab, a tab restored) shows the edits its core holds.
   const activeResultId = activeResult && ended(activeResult) ? activeResult.id : null;
@@ -1796,6 +1818,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             serverSort={tab.table ? { sort: tab.table.sort ?? NO_TABLE_SORT, onSort: (sort) => void sortTable(sort) } : undefined}
             onQuerySort={tab.table ? undefined : sortQuery}
             tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0, all: undefined, total: undefined }), connectionId: tab.connectionId } : undefined}
+            keyTable={keyTable}
             editing={editing}
             columnComments={tab.table ? columnComments : undefined}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
@@ -1886,6 +1909,7 @@ function Results({
   serverSort,
   onQuerySort,
   tableData,
+  keyTable,
   editing,
   columnComments,
   readOnlyHint,
@@ -1924,6 +1948,8 @@ function Results({
   /** Reads a paged query again from the server in a sort's order (see `ResultGrid`). */
   onQuerySort?(result: number, sort: SortState[]): Promise<boolean>;
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+  /** The table whose foreign keys the result follows (SDB-93). */
+  keyTable?: { schema: string; name: string; connectionId: string | null };
   editing?: GridEditing;
   columnComments?: Record<string, string>;
   readOnlyHint?: boolean;
@@ -2087,6 +2113,7 @@ function Results({
             serverSort={serverSort}
             onQuerySort={onQuerySort ? (sort) => onQuerySort(active.id, sort) : undefined}
             tableData={tableData}
+            keyTable={keyTable}
             columnComments={columnComments}
             editing={filteringResult === active.id || restoringView ? undefined : editing}
             restoringView={restoringView}

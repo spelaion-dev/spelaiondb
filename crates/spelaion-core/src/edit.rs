@@ -101,6 +101,17 @@ pub async fn editable_query_table(
     if read_only {
         return Ok(None);
     }
+    query_table(session, result, sql).await
+}
+
+/// The one table a query's `result` shows, by [`editable_query_table`]'s rule but whatever the
+/// connection's read-only setting, or `None` when its rows cannot be matched to one table.
+/// Reading a result's foreign keys (SDB-93) needs the table, not the right to edit it.
+pub(crate) async fn query_table(
+    session: &Session,
+    result: ResultId,
+    sql: &str,
+) -> Result<Option<TableInfo>, String> {
     match query_result_table(session, result, sql).await {
         Ok((_, table)) => Ok(Some(table)),
         Err(UpdateCopyError::Failed(message)) => Err(message),
@@ -193,7 +204,7 @@ async fn query_result_table(
 
 /// What [`table_identity`] read for a name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum TableIdentity {
+pub(crate) enum TableIdentity {
     /// What the engine identifies the table by now.
     Of(String),
     /// No single table has that name (none, or it is a view).
@@ -215,7 +226,7 @@ enum TableIdentity {
 /// - MySQL and MariaDB: its `CREATE_TIME`, to the second (they expose no table id without the
 ///   `PROCESS` privilege). A table dropped and created again within the same second as the
 ///   original, with no time between them for the read, is the one case it cannot tell apart.
-async fn table_identity(
+pub(crate) async fn table_identity(
     session: &Session,
     schema: &str,
     name: &str,
