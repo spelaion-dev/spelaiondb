@@ -200,7 +200,9 @@ animate data, the grid, layout changes or anything while the user types. Under
 - **Empty states.** Centered in their region: an optional 24px icon in `--muted`, a one-line
   title, one sentence and at most one primary action. No illustrations.
 - **Scrollbars.** Thin and themed in every scrolling region, the grid included: a transparent
-  track and a thumb from a token that widens on hover. Check them on WebKitGTK.
+  track and a thumb from a token that widens on hover. Check them on WebKitGTK. One global rule
+  in `styles.css` draws them from the `--scrollbar-*` tokens; a region never sets its own
+  `scrollbar-width` or `scrollbar-color`, which would turn that rule off in WebView2.
 
 ## Workspace and data
 
