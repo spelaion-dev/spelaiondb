@@ -38,7 +38,6 @@ import {
   openSession,
   newQueryOnConnection,
   SCHEMAS_REFRESHED_EVENT,
-  SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
 import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInfo";
 import { connectionMatch } from "../connectionSearch";
@@ -48,7 +47,6 @@ import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
 import { connectedConnections, explorerSessionOpen, isConnected, isRunning, statusName } from "../tabState";
-import { useImport } from "./ImportDialog";
 import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
 import { useRunFile } from "./RunFileDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
@@ -70,7 +68,6 @@ import type { MaintenanceKindItem, PrincipalActionsItem, PrincipalKindItem, Prin
 import { MaintenanceDialog } from "./MaintenanceDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
-import { openDiagram } from "../diagramTabs";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 import { ObjectMenu } from "./ObjectMenu";
 import { MissingPlugin } from "./MissingPlugin";
@@ -79,28 +76,44 @@ import { folderSwitchBlocked, switchFolder } from "../folders";
 import { ariaKeyShortcuts, commandShortcut, keyText, shortcutText } from "../shortcuts";
 import { matchesShortcut } from "../commandRegistry";
 import {
+  canEditRoutineSource,
+  canGenerateCall,
   canRenameRelation,
+  canRunRoutine,
   changedSchema,
+  createInSchema,
   dropRelation,
+  dropSchema,
+  dropSchemaObject,
   duplicateTable,
+  editRoutineSource,
   editViewSource,
   exportRelations,
   forgetExplorerSession,
+  importIntoNewTable,
   importIntoTable,
   isPlainTable,
   knownObjectActions,
   loadObjectActions,
   openGeneratedSql,
+  openObjectDefinition,
   openRelationDdl,
   openRelationDiagram,
   openRelationRows,
   openRelationSql,
+  openRoutineCall,
+  openSchemaDiagram,
   openSqlTab,
   relationBookmark,
   relationTemplates,
   reloadBookmarks,
   renameRelation,
   sameBookmark,
+  schemaBookmark,
+  schemaCreateKinds,
+  schemaEditorTab,
+  schemaObjectBookmark,
+  setEditorSchema,
   templatesOf,
   toggleBookmark,
   useExplorerDialog,
@@ -560,14 +573,14 @@ export function ExplorerDialogHost() {
       );
     }
     case "drop": {
-      const { session, connectionId, object, onDone } = dialog;
+      const { session, connectionId, schema, name, target, onDone } = dialog;
       return (
         <DropDialog
           session={session}
           connectionId={connectionId}
-          schema={object.schema}
-          name={object.name}
-          target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
+          schema={schema}
+          name={name}
+          target={target}
           onClose={close}
           onDone={() => {
             close();
@@ -578,6 +591,21 @@ export function ExplorerDialogHost() {
     }
     case "duplicate":
       return <DuplicateTableDialog session={dialog.session} connectionId={dialog.connectionId} schema={dialog.object.schema} name={dialog.object.name} onClose={close} />;
+    case "createTable": {
+      const { session, connectionId, schema, onDone } = dialog;
+      return (
+        <CreateTableDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          onClose={close}
+          onDone={() => {
+            close();
+            changedSchema(connectionId, onDone);
+          }}
+        />
+      );
+    }
     default: {
       const unknown: never = dialog;
       return unknown;
@@ -2248,21 +2276,17 @@ function SchemaNode({
   const sql = useApp((s) => s.connections.find((c) => c.id === connectionId)?.sql ?? true);
   /** Redis's "collections" are its keys (ADR-056). */
   const keys = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine === "redis");
-  const [dropping, setDropping] = useState(false);
-  /** The create table form (ADR-047); other kinds open their statement in a tab. */
-  const [creatingTable, setCreatingTable] = useState(false);
-  const create = (kind: CreateKindItem) => {
-    if (kind === "table") setCreatingTable(true);
-    else openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
+  /** The editor tab "Set as the editor's schema" applies to (`explorerActions.ts`). */
+  const editorTab = useApp(() => schemaEditorTab(connectionId));
+  /** A menu item's action, shared with the palette (`explorerActions.ts`): a failure is shown
+   *  under the row. */
+  const act = (action: () => unknown) => {
+    setMenu(null);
+    setError(null);
+    void Promise.resolve()
+      .then(action)
+      .catch((e: unknown) => setError(errorText(e)));
   };
-  /** The editor tab "Set as the editor's schema" applies to: the active query tab, connected to
-   *  this connection and idle. */
-  const editorTab = useApp((s) => {
-    const tab = s.tabs.find((t) => t.id === s.activeTab);
-    return tab && !tab.table && tab.connectionId === connectionId && isConnected(tab) && !isRunning(tab)
-      ? tab.id
-      : null;
-  });
 
   async function load() {
     setError(null);
@@ -2278,7 +2302,7 @@ function SchemaNode({
       setOthers(rest);
       setObjects(relations);
       // The command palette lists what the tree has read (SDB-18).
-      useCatalog.getState().publish({ connectionId, schema, relations, others: rest });
+      useCatalog.getState().publish({ connectionId, schema, relations, others: rest, filter: objectFilter });
     } catch (e) {
       setError(errorText(e));
     }
@@ -2383,7 +2407,7 @@ function SchemaNode({
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => [{ schema: "", names: [schema] }], setError)) return;
           if (isDropKey(e)) {
-            if (actions?.dropSchemas) setDropping(true);
+            if (actions?.dropSchemas) act(() => dropSchema(connectionId, session, schema, onRefreshAll));
             return;
           }
           if (e.key === "Enter" || e.key === " ") {
@@ -2410,76 +2434,41 @@ function SchemaNode({
             close={() => setMenu(null)}
             onError={setError}
           />
-          <BookmarkMenuItem
-            bookmark={{ connection: connectionId, schema, name: "", kind: "schema", detail: "" }}
-            close={() => setMenu(null)}
-            onError={setError}
-          />
+          <BookmarkMenuItem bookmark={schemaBookmark(connectionId, schema)} close={() => setMenu(null)} onError={setError} />
           {actions?.activeSchema && (
             <button
               role="menuitem"
+              data-action="setActiveSchema"
               disabled={editorTab === null}
               title={editorTab === null ? t("activeSchemaHint") : undefined}
-              onClick={() => {
-                setMenu(null);
-                if (editorTab) {
-                  window.dispatchEvent(new CustomEvent(SET_ACTIVE_SCHEMA_EVENT, { detail: { tabId: editorTab, schema } }));
-                }
-              }}
+              onClick={() => act(() => editorTab && setEditorSchema(editorTab, schema))}
             >
               {t("setActiveSchema")}
             </button>
           )}
           <hr />
-          <ShortcutMenuItem label={t("refreshSchema")} shortcut={EXPLORER_SHORTCUTS.refresh} onClick={refresh} />
-          <button
-            role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              onRefreshAll();
-            }}
-          >
+          <ShortcutMenuItem action="refresh" label={t("refreshSchema")} shortcut={EXPLORER_SHORTCUTS.refresh} onClick={refresh} />
+          <button role="menuitem" data-action="refreshAll" onClick={() => act(onRefreshAll)}>
             {t("refreshAllSchemas")}
           </button>
           <FilterMenuItems kind="schemas" names={[schema]} onFilterName={onFilterName} close={() => setMenu(null)} />
           {sql && (
             <>
               <hr />
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  useImport.getState().open({ session, connectionId, schema, table: null, text: null });
-                }}
-              >
+              <button role="menuitem" data-action="importNewTable" onClick={() => act(() => importIntoNewTable(connectionId, session, schema))}>
                 {t("importNewTable")}
               </button>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  openDiagram(connectionId, { kind: "schema", schema, filter: objectFilter }, session);
-                }}
-              >
+              <button role="menuitem" data-action="erDiagram" onClick={() => act(() => openSchemaDiagram(connectionId, session, schema, objectFilter))}>
                 {t("diagram.menuSchema")}
               </button>
             </>
           )}
-          {actions && actions.create.some((kind) => kind !== "schema") && <hr />}
-          {actions?.create
-            .filter((kind) => kind !== "schema")
-            .map((kind) => (
-              <button
-                key={kind}
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  create(kind);
-                }}
-              >
-                {t(`create.${kind}`)}
-              </button>
-            ))}
+          {schemaCreateKinds(actions).length > 0 && <hr />}
+          {schemaCreateKinds(actions).map((kind) => (
+            <button key={kind} role="menuitem" data-action={`create:${kind}`} onClick={() => act(() => createInSchema(connectionId, session, schema, kind, refresh))}>
+              {t(`create.${kind}`)}
+            </button>
+          ))}
           <MaintenanceMenu
             session={session}
             target={{ kind: "schema", name: schema }}
@@ -2491,12 +2480,7 @@ function SchemaNode({
           {actions?.dropSchemas && (
             <>
               <hr />
-              <DropMenuItem
-                onClick={() => {
-                  setMenu(null);
-                  setDropping(true);
-                }}
-              />
+              <DropMenuItem onClick={() => act(() => dropSchema(connectionId, session, schema, onRefreshAll))} />
             </>
           )}
         </ObjectMenu>
@@ -2511,32 +2495,6 @@ function SchemaNode({
           target={{ kind: "schema", name: schema }}
           kind={maintaining}
           onClose={() => setMaintaining(null)}
-        />
-      )}
-      {creatingTable && (
-        <CreateTableDialog
-          session={session}
-          connectionId={connectionId}
-          schema={schema}
-          onClose={() => setCreatingTable(false)}
-          onDone={() => {
-            setCreatingTable(false);
-            refresh();
-          }}
-        />
-      )}
-      {dropping && (
-        <DropDialog
-          session={session}
-          connectionId={connectionId}
-          schema={schema}
-          name={schema}
-          target={{ kind: "schema", name: schema }}
-          onClose={() => setDropping(false)}
-          onDone={() => {
-            setDropping(false);
-            onRefreshAll();
-          }}
         />
       )}
       {open && (
@@ -2568,7 +2526,7 @@ function SchemaNode({
                       return kind && actions?.create.includes(kind)
                         ? {
                             label: t(`create.${kind}`),
-                            run: () => create(kind),
+                            run: () => act(() => createInSchema(connectionId, session, schema, kind, refresh)),
                           }
                         : undefined;
                     })()}
@@ -3171,6 +3129,7 @@ function ColumnRow({
         <ObjectMenu at={menu}>
           <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
           <ShortcutMenuItem
+            action="rename"
             label={t("objectChange.renameMenu")}
             shortcut={EXPLORER_SHORTCUTS.rename}
             onClick={() => {
@@ -3180,6 +3139,7 @@ function ColumnRow({
           />
           <button
             role="menuitem"
+            data-action="editColumn"
             onClick={() => {
               setMenu(null);
               setEditing(indexColumns);
@@ -3198,7 +3158,7 @@ function ColumnRow({
           {actions?.newIndex
             .filter((kind) => kind !== "primaryKey" || !hasPrimaryKey)
             .map((kind) => (
-              <button key={kind} role="menuitem" onClick={() => void openNewIndex(kind)}>
+              <button key={kind} role="menuitem" data-action={`newIndex:${kind}`} onClick={() => void openNewIndex(kind)}>
                 {t(`newIndex.${kind}`, { columns: indexColumns.join(", ") })}
               </button>
             ))}
@@ -3323,7 +3283,7 @@ function IndexNode({
       </div>
       {menu && (
         <ObjectMenu at={menu}>
-          <button role="menuitem" onClick={openDefinition}>
+          <button role="menuitem" data-action="openDefinition" onClick={openDefinition}>
             {t("openDefinition")}
           </button>
           <hr />
@@ -3375,54 +3335,24 @@ function SchemaObjectNode({
   onFilterName: FilterName;
 }) {
   const { t } = useTranslation("shell");
-  const addTab = useApp((s) => s.addTab);
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
-  const [dropping, setDropping] = useState(false);
   const actions = useObjectActions(session);
   const { row, revealed } = useRevealedRow(
     (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
   );
-  const bookmark: BookmarkItem = {
-    connection: connectionId,
-    schema: object.schema,
-    name: object.name,
-    kind: object.kind,
-    detail: object.detail ?? "",
+  const bookmark = schemaObjectBookmark(connectionId, object);
+  /** A menu item's action, shared with the palette (`explorerActions.ts`, SDB-441): a failure is
+   *  shown under the row. */
+  const act = (action: () => unknown) => {
+    setMenu(null);
+    setError(null);
+    void Promise.resolve()
+      .then(action)
+      .catch((e: unknown) => setError(errorText(e)));
   };
-
-  /** The driver writes the DDL; it opens in a new tab and nothing runs. */
-  async function openDefinition() {
-    setMenu(null);
-    setError(null);
-    try {
-      const tab = addTab(connectionId, await call(commands.objectDefinition(session, object)));
-      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  /** "Generate call": the routine's call, written by the driver, in a new tab; "Run…" also runs
-   *  it there, so the editor asks its parameters and its usual barriers apply (ADR-047). */
-  async function openCall(run = false) {
-    setMenu(null);
-    setError(null);
-    try {
-      openSqlTab(connectionId, session, object.schema, await call(commands.procedureCall(session, object)), run);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  /** "Edit source": the core writes the routine as the statement that replaces it (ADR-047). */
-  async function openSource() {
-    setMenu(null);
-    setError(null);
-    try {
-      openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "routine", object })));
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
+  const openDefinition = () => act(() => openObjectDefinition(connectionId, session, object));
+  const drop = () => act(() => dropSchemaObject(connectionId, session, object, onSchemaChanged));
 
   const routine =
     object.kind === "function" || object.kind === "procedure" || object.kind === "aggregate";
@@ -3441,7 +3371,7 @@ function SchemaObjectNode({
       <div
         ref={row}
         className={`row leaf-row${revealed}`}
-        onDoubleClick={() => void openDefinition()}
+        onDoubleClick={openDefinition}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
@@ -3453,12 +3383,12 @@ function SchemaObjectNode({
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => [{ schema: object.schema, names: [object.name] }], setError)) return;
           if (isDropKey(e)) {
-            setDropping(true);
+            drop();
             return;
           }
           if (e.key === "Enter") {
             e.preventDefault();
-            void openDefinition();
+            openDefinition();
           }
         }}
       >
@@ -3474,21 +3404,21 @@ function SchemaObjectNode({
       </div>
       {menu && (
         <ObjectMenu at={menu}>
-          <button role="menuitem" onClick={() => void openDefinition()}>
+          <button role="menuitem" data-action="openDefinition" onClick={openDefinition}>
             {t("openDefinition")}
           </button>
-          {(object.kind === "procedure" || object.kind === "function") && actions?.routineSource && (
-            <button role="menuitem" onClick={() => void openSource()}>
+          {canEditRoutineSource(object, actions) && (
+            <button role="menuitem" data-action="editSource" onClick={() => act(() => editRoutineSource(connectionId, session, object))}>
               {t("editSource")}
             </button>
           )}
-          {(object.kind === "procedure" || object.kind === "function") && actions?.routineCalls && (
-            <button role="menuitem" onClick={() => void openCall(true)}>
+          {canRunRoutine(object, actions) && (
+            <button role="menuitem" data-action="runRoutine" onClick={() => act(() => openRoutineCall(connectionId, session, object, true))}>
               {t("runRoutine")}
             </button>
           )}
-          {(object.kind === "procedure" || (object.kind === "function" && actions?.routineCalls)) && (
-            <button role="menuitem" onClick={() => void openCall()}>
+          {canGenerateCall(object, actions) && (
+            <button role="menuitem" data-action="generateCall" onClick={() => act(() => openRoutineCall(connectionId, session, object))}>
               {t("generateCall")}
             </button>
           )}
@@ -3500,28 +3430,9 @@ function SchemaObjectNode({
             onError={setError}
           />
           <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
-          <DropMenuItem
-            onClick={() => {
-              setMenu(null);
-              setDropping(true);
-            }}
-          />
+          <DropMenuItem onClick={drop} />
           <FilterMenuItems kind="objects" names={[object.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </ObjectMenu>
-      )}
-      {dropping && (
-        <DropDialog
-          session={session}
-          connectionId={connectionId}
-          schema={object.schema}
-          name={object.name}
-          target={{ kind: "schemaObject", object }}
-          onClose={() => setDropping(false)}
-          onDone={() => {
-            setDropping(false);
-            onSchemaChanged();
-          }}
-        />
       )}
       {error && (
         <p className="error small" role="alert">

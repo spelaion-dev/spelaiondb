@@ -97,7 +97,18 @@
     "redoEdit": "Redo the pending edit undone",
     "explorerFilter": "Filter the explorer",
     "importClipboard": "Import data from the clipboard…",
-    "erDiagram": "ER diagram of the current table or schema"
+    "erDiagram": "ER diagram of the current table or schema",
+    "copySelection": "Copy the selected cells",
+    "copySelectionWithHeaders": "Copy the selected cells with headers",
+    "copySelectionCsv": "Copy the selected cells as CSV",
+    "copySelectionJson": "Copy the selected cells as JSON",
+    "copySelectionMarkdown": "Copy the selected cells as Markdown",
+    "copySelectionInList": "Copy the selected cells as an IN list",
+    "copySelectionHtml": "Copy the selected cells as HTML",
+    "copySelectionInsert": "Copy the selected cells as SQL INSERT",
+    "copySelectionSpecial": "Copy the selected cells with options…",
+    "copySelectionUpdates": "Copy the selected rows as UPDATE statements",
+    "exportSelection": "Export the selected cells…"
   },
   "palette": {
     "title": "Command palette",

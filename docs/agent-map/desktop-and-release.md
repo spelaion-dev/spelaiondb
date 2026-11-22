@@ -29,7 +29,13 @@
   (`ObjectNode` in `Sidebar.tsx`, each item marked with `data-action`) and the palette's
   `relationActions` call the same functions, Rename…, Drop…, Duplicate table… and generated SQL
   open the same dialogs (`ExplorerDialogHost`), and the test compares the two lists. A new item
-  in that menu goes in both, or in the test's list of menu-only items with its reason.
+  in that menu goes in both, or in the test's list of menu-only items with its reason. The same
+  holds for a schema's menu (`SchemaNode`, `schemaActions`) and a routine's, sequence's or
+  trigger's (`SchemaObjectNode`, `schemaObjectActions`, SDB-441); a column's and an index's menus
+  (`ColumnRow`, `IndexNode`) are compared too, all menu-only, since the palette does not list
+  them. Every item of those menus carries its action (`data-action`), or the test fails. The
+  palette's commands on the active result's selection send a `GridCommand` (`store.ts`) to its
+  grid, which runs it like its menu (`runGridCommand` in `ResultGrid.tsx`).
   In the SQL editor, completion, Ctrl+click and hover resolve a name with one reader of the
   statement (`src/sqlCompletion.ts`: `completeSql` and `resolveName`, tested by
   `scripts/sql-completion.test.mjs` and `scripts/sql-names.test.mjs`) over the catalog the tab

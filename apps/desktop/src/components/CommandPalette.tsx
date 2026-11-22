@@ -131,6 +131,16 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
       const connectionName = names.get(schema.connectionId);
       // Only what the explorer shows now: a connection still connected there.
       if (connectionName === undefined || !connected.includes(schema.connectionId)) continue;
+      // A connection with one unnamed schema (SQLite's "main" is named) shows no schema row.
+      if (schema.schema !== "") {
+        entries.push({
+          kind: "object",
+          key: `schema:${schema.connectionId}:${schema.schema}`,
+          item: { kind: "schema", connectionId: schema.connectionId, schema: schema.schema, filter: schema.filter ?? null },
+          text: schema.schema,
+          detail: `${t("shell:kinds.schema")} · ${connectionName}`,
+        });
+      }
       for (const object of schema.relations) {
         entries.push({
           kind: "object",

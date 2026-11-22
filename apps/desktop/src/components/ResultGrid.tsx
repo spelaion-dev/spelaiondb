@@ -17,7 +17,7 @@ import { RowCache, type ValueKind } from "../grid/rowCache";
 import { printableGridKey } from "../gridTyping";
 import { formatsValues, useDisplayFormat } from "../displayFormat";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
-import { GRID_COMMAND_EVENT, useDialogs, type FilterMode, type ResultMeta, type SortState } from "../store";
+import { GRID_COMMAND_EVENT, useDialogs, type FilterMode, type GridCommand, type ResultMeta, type SortState } from "../store";
 import { commandKeys, commandSpec, KEYS, matchesShortcut, type KeyId } from "../commandRegistry";
 import { commandShortcut, keyText, shortcutText, withShortcut } from "../shortcuts";
 import { useExport } from "./ExportDialog";
@@ -1197,15 +1197,17 @@ export function ResultGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.goToRow?.seq, result.id]);
 
-  // "Go to row" from the command palette, for this result's grid.
+  // "Go to row" and the selection's copies and export from the command palette, for this
+  // result's grid (SDB-386, SDB-441): done by `runGridCommand`, with the selection of now.
+  const gridCommandHandler = useRef<(command: GridCommand) => void>(() => undefined);
   useEffect(() => {
     const onCommand = (e: Event) => {
-      const detail = (e as CustomEvent<{ result: number; command: "goToRow" }>).detail;
-      if (detail.result === result.id && detail.command === "goToRow" && result.rows > 0) setRowJump(true);
+      const detail = (e as CustomEvent<{ result: number; command: GridCommand }>).detail;
+      if (detail.result === result.id) gridCommandHandler.current(detail.command);
     };
     window.addEventListener(GRID_COMMAND_EVENT, onCommand);
     return () => window.removeEventListener(GRID_COMMAND_EVENT, onCommand);
-  }, [result.id, result.rows]);
+  }, [result.id]);
 
   // The rows the results' Transpose button shows: the selected ones, or the current one.
   useEffect(() => {
@@ -1875,6 +1877,45 @@ export function ResultGrid({
   const updateSource: UpdateSourceItem | null = tableData
     ? { kind: "table", schema: tableData.schema, name: tableData.name }
     : result.sql ? { kind: "query", sql: result.sql } : null;
+
+  /** A command from the palette: what the grid's menu does, on the selection of now. Without a
+   *  selection, or where the menu would not offer it, the grid says why. */
+  function runGridCommand(command: GridCommand) {
+    if (command.kind === "goToRow") {
+      if (result.rows > 0) setRowJump(true);
+      return;
+    }
+    if (!selection) {
+      setNotice({ text: t("results.selectFirst"), error: true });
+      return;
+    }
+    switch (command.kind) {
+      case "copy":
+        void copy(command.format, command.header);
+        return;
+      case "copySpecial":
+        setCopySpecial(selectedRange());
+        return;
+      case "copyUpdates":
+        if (updateSource) void copyUpdates();
+        else setNotice({ text: t("results.copyUpdatesRefused", { reason: t("results.noUpdateSource") }), error: true });
+        return;
+      case "exportSelection": {
+        if (selection.rows || !ended(result)) {
+          setNotice({ text: t("results.exportSelectionBlock"), error: true });
+          return;
+        }
+        const b = bounds(selection);
+        useExport.getState().open({ kind: "selection", session, result, range: { firstRow: b.r0, rows: b.r1 - b.r0 + 1, columns: shownIn(b) } });
+        return;
+      }
+      default: {
+        const unknown: never = command;
+        return unknown;
+      }
+    }
+  }
+  gridCommandHandler.current = runGridCommand;
 
   async function copyUpdates() {
     setMenu(null);

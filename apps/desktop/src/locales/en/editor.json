@@ -248,7 +248,10 @@
     "findCount_other": "{{total}} matches",
     "findWhenComplete": "The result can be searched once every row has arrived",
     "summary": "{{ok}} OK, {{failed}} failed, {{notRun}} not run",
-    "exportSelection": "Export selection…"
+    "exportSelection": "Export selection…",
+    "selectFirst": "Select cells in the results first",
+    "noUpdateSource": "these rows are not one table's",
+    "exportSelectionBlock": "Select one block of cells, and wait for the query to finish, to export it"
   },
   "messages": {
     "connectionLost": "The connection was lost: {{detail}}. Nothing ran. Reconnect, then run it again: nothing is re-run on its own.",

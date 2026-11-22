@@ -97,7 +97,18 @@
     "redoEdit": "Rehacer el cambio pendiente deshecho",
     "explorerFilter": "Filtrar el explorador",
     "importClipboard": "Importar datos del portapapeles…",
-    "erDiagram": "Diagrama ER de la tabla o el esquema actual"
+    "erDiagram": "Diagrama ER de la tabla o el esquema actual",
+    "copySelection": "Copiar las celdas seleccionadas",
+    "copySelectionWithHeaders": "Copiar las celdas seleccionadas con encabezados",
+    "copySelectionCsv": "Copiar las celdas seleccionadas como CSV",
+    "copySelectionJson": "Copiar las celdas seleccionadas como JSON",
+    "copySelectionMarkdown": "Copiar las celdas seleccionadas como Markdown",
+    "copySelectionInList": "Copiar las celdas seleccionadas como lista IN",
+    "copySelectionHtml": "Copiar las celdas seleccionadas como HTML",
+    "copySelectionInsert": "Copiar las celdas seleccionadas como SQL INSERT",
+    "copySelectionSpecial": "Copiar las celdas seleccionadas con opciones…",
+    "copySelectionUpdates": "Copiar las filas seleccionadas como sentencias UPDATE",
+    "exportSelection": "Exportar las celdas seleccionadas…"
   },
   "palette": {
     "title": "Paleta de comandos",

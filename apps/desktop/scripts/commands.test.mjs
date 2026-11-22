@@ -241,6 +241,92 @@ test("a table's or a view's explorer menu and its palette actions offer the same
   }
 });
 
+/** The items of a row's explorer menu (`<ObjectMenu>` in `fn` of Sidebar.tsx), by their action:
+ *  `data-action` / `action`, those of the shared parts it uses, and `prefix:*` for an item per
+ *  kind. Every item written there carries its action, so none can be left out of the comparison. */
+function explorerMenu(fn) {
+  const parts = {
+    CopyMenuItems: ["copyName", "copyQualifiedName"],
+    BookmarkMenuItem: ["bookmark"],
+    DropMenuItem: ["drop"],
+    FilterMenuItems: ["hide", "showOnly"],
+    MaintenanceMenu: ["maintenance"],
+  };
+  const node = functionSource("components/Sidebar.tsx", fn);
+  const menu = node.slice(node.indexOf("<ObjectMenu"), node.indexOf("</ObjectMenu>"));
+  assert.ok(menu.length > 0, `${fn} has a menu`);
+  const ids = new Set();
+  for (const m of menu.matchAll(/\baction=(?:"([^"]+)"|\{`([a-zA-Z]+):\$\{[^}]+\}`\})/g)) ids.add(m[1] ?? `${m[2]}:*`);
+  for (const [part, partIds] of Object.entries(parts)) if (menu.includes(`<${part}`)) for (const id of partIds) ids.add(id);
+  for (const tag of menu.split(/<(?=button\b|ShortcutMenuItem\b)/).slice(1)) {
+    const attributes = tag.slice(0, tag.indexOf(">"));
+    if (/^button\b/.test(tag) && !attributes.includes('role="menuitem"')) continue;
+    assert.match(attributes, /\baction=/, `${fn}: a menu item without its action: <${attributes.slice(0, 80)}`);
+  }
+  return { node, ids };
+}
+
+/** The ids a palette function of commands.ts offers, with `prefix:*` for one per kind. */
+function paletteActions(fn) {
+  const source = functionSource("commands.ts", fn);
+  const ids = new Set([...source.matchAll(/\bid: "([^"]+)"/g)].map((m) => m[1]));
+  for (const m of source.matchAll(/\bid: `([a-zA-Z]+):\$\{[^}]+\}`/g)) ids.add(`${m[1]}:*`);
+  return { source, ids };
+}
+
+/** The menu and the palette offer the same, but for the items listed with their reason. */
+function sameActions(name, menu, palette, menuOnly, paletteOnly) {
+  const without = (set, others) => [...set].filter((id) => !(id in others)).sort();
+  assert.deepEqual(without(menu, menuOnly), without(palette, paletteOnly), `${name}: menu and palette`);
+  for (const id of Object.keys(menuOnly)) assert.ok(menu.has(id), `${name}: ${id} is still in the menu`);
+  for (const id of Object.keys(paletteOnly)) assert.ok(palette.has(id), `${name}: ${id} is still in the palette`);
+}
+
+const PALETTE_ONLY = {
+  newConsole: "a new query on the object's schema, which the tree opens by double-clicking",
+  showInExplorer: "the tree is where the menu already is",
+};
+
+test("a schema's and a schema object's explorer menus and their palette actions offer the same things (SDB-441)", () => {
+  const schema = explorerMenu("SchemaNode");
+  const schemaPalette = paletteActions("schemaActions");
+  sameActions("schema", schema.ids, schemaPalette.ids, {
+    refresh: "reads the row's objects again",
+    refreshAll: "reads every schema row of the connection again",
+    hide: "changes the connection's explorer filter through its node",
+    showOnly: "changes the connection's explorer filter through its node",
+    maintenance: "a submenu of the actions the core lists for that object",
+  }, PALETTE_ONLY);
+  for (const shared of ["setEditorSchema", "importIntoNewTable", "openSchemaDiagram", "createInSchema", "dropSchema", "schemaBookmark"]) {
+    assert.match(schema.node, new RegExp(`\\b${shared}\\(`), `the schema menu calls ${shared}`);
+    assert.match(schemaPalette.source, new RegExp(`\\b${shared}\\(`), `the schema palette calls ${shared}`);
+  }
+
+  const object = explorerMenu("SchemaObjectNode");
+  const objectPalette = paletteActions("schemaObjectActions");
+  sameActions("schema object", object.ids, objectPalette.ids, {
+    hide: "changes the connection's explorer filter through its node",
+    showOnly: "changes the connection's explorer filter through its node",
+  }, PALETTE_ONLY);
+  for (const shared of ["openObjectDefinition", "editRoutineSource", "openRoutineCall", "dropSchemaObject", "schemaObjectBookmark", "canEditRoutineSource", "canRunRoutine", "canGenerateCall"]) {
+    assert.match(object.node, new RegExp(`\\b${shared}\\(`), `the schema object menu calls ${shared}`);
+    assert.match(objectPalette.source, new RegExp(`\\b${shared}\\(`), `the schema object palette calls ${shared}`);
+  }
+});
+
+test("a column's and an index's explorer menus stay menu-only, each item with its reason (SDB-441)", () => {
+  // The palette lists what the explorer catalog holds (schemas, relations and other schema
+  // objects, catalog.ts); a table's columns and indexes are read only when its row opens, so
+  // they are not palette objects: every item of their menus needs that row.
+  const notInPalette = "columns and indexes are not palette objects: they are read when their table's row opens";
+  const column = explorerMenu("ColumnRow");
+  sameActions("column", column.ids, new Set(), Object.fromEntries([
+    "copyName", "copyQualifiedName", "rename", "editColumn", "drop", "hide", "showOnly", "newIndex:*",
+  ].map((id) => [id, notInPalette])), {});
+  const index = explorerMenu("IndexNode");
+  sameActions("index", index.ids, new Set(), Object.fromEntries(["openDefinition", "copyName", "copyQualifiedName", "drop"].map((id) => [id, notInPalette])), {});
+});
+
 test("shortcuts parse with modifiers in the order Ctrl, Shift, Alt", () => {
   assert.deepEqual(parseShortcut("Ctrl+Shift+PageDown"), { ctrl: true, shift: true, alt: false, key: "pagedown" });
   assert.deepEqual(parseShortcut("Shift+Alt+F"), { ctrl: false, shift: true, alt: true, key: "f" });
