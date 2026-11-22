@@ -6,12 +6,13 @@
 // go to the keychain, never to the file.
 
 import { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { chooseOpenFile } from "../dialogs";
 import { useKeychainAvailable } from "../keychain";
 import { call, commands, type HopDraft, type KubernetesDraftItem, type PasswordMode, type ProxyDraft, type SshAuthItem, type SsmDraftItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
 import { questionOpen } from "../tabState";
+import { ConfirmDelete } from "./ConfirmDelete";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
 
@@ -172,6 +173,26 @@ export function TunnelEditor(props: {
   const log = useConnectionTest();
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [profileUsers, setProfileUsers] = useState<ProfileUsers>({ kind: "loading" });
+  // The connections that go through this profile, as the core counts them (`tunnel_users`):
+  // while there are any, it refuses to delete the profile.
+  const deletedName = mode.kind === "edit" ? mode.name : null;
+  useEffect(() => {
+    if (!confirmDelete || deletedName === null) return;
+    let current = true;
+    setProfileUsers({ kind: "loading" });
+    call(commands.networkProfiles())
+      .then((profiles) => {
+        const profile = profiles.find((p) => p.name === deletedName && p.personal === mode.personal);
+        if (current) setProfileUsers(profile ? { kind: "known", names: profile.usedBy } : { kind: "unknown" });
+      })
+      .catch(() => {
+        if (current) setProfileUsers({ kind: "unknown" });
+      });
+    return () => {
+      current = false;
+    };
+  }, [confirmDelete, deletedName, mode.personal]);
   // Without a system keychain a new tunnel asks for its passwords; an edited one keeps what
   // its file says (a repository file is the team's) unless the user unticks it.
   const keychain = useKeychainAvailable();
@@ -326,19 +347,14 @@ export function TunnelEditor(props: {
     }
   }
 
+  /** Called by the confirmation (SDB-89); a failure is shown there. */
   async function remove() {
     if (mode.kind !== "edit") return;
-    // Two clicks: the first one only asks for confirmation.
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      return;
-    }
     setBusy(true);
     try {
       await call(commands.deleteTunnel(mode.name, mode.personal));
+      setConfirmDelete(false);
       props.onDeleted();
-    } catch (e) {
-      setStatus({ kind: "error", message: errorText(e) });
     } finally {
       setBusy(false);
     }
@@ -698,8 +714,8 @@ export function TunnelEditor(props: {
               {status.kind === "error" && <span className="error">{status.message}</span>}
             </div>
             {editing && (
-              <button type="button" className="danger-text" onClick={() => void remove()} disabled={busy}>
-                {confirmDelete ? t("tunnel.confirmDelete") : t("tunnel.delete")}
+              <button type="button" className="danger-text" onClick={() => setConfirmDelete(true)} disabled={busy}>
+                {t("tunnel.delete")}
               </button>
             )}
             <button type="button" onClick={props.onClose} disabled={busy}>
@@ -710,7 +726,53 @@ export function TunnelEditor(props: {
             </button>
           </div>
         </form>
+        {confirmDelete && mode.kind === "edit" && (
+          <ConfirmDelete
+            title={t("tunnel.deleteTitle")}
+            action={t("tunnel.deleteAction")}
+            onConfirm={remove}
+            onCancel={() => setConfirmDelete(false)}
+            blocked={profileUsers.kind === "known" && profileUsers.names.length > 0}
+          >
+            <p>
+              <Trans t={t} i18nKey="tunnel.deleteExplanation" values={{ name: mode.name }} components={{ strong: <strong /> }} />
+            </p>
+            <p className="muted small">{mode.personal ? t("tunnel.deletePersonalHint") : t("tunnel.deleteProjectHint")}</p>
+            <UsedBy users={profileUsers} />
+          </ConfirmDelete>
+        )}
       </div>
     </div>
   );
+}
+
+/** Which connections go through a profile about to be deleted; `unknown` leaves it to the core. */
+type ProfileUsers = { kind: "loading" } | { kind: "known"; names: string[] } | { kind: "unknown" };
+
+/** The connections that keep a profile from being deleted, or that none do. */
+function UsedBy({ users }: { users: ProfileUsers }) {
+  const { t } = useTranslation("connections");
+  switch (users.kind) {
+    case "loading":
+    case "unknown":
+      return null;
+    case "known":
+      if (users.names.length === 0) return <p className="muted small">{t("tunnel.deleteUnused")}</p>;
+      return (
+        <>
+          <p className="error">{t("tunnel.deleteUsed", { count: users.names.length })}</p>
+          <ul className="risk-list">
+            {users.names.map((name) => (
+              <li key={name}>
+                <strong>{name}</strong>
+              </li>
+            ))}
+          </ul>
+        </>
+      );
+    default: {
+      const unknown: never = users;
+      return unknown;
+    }
+  }
 }

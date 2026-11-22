@@ -321,7 +321,11 @@ A confirmation reads:
   never drops or deletes; a form focuses its first field; a non-destructive choice focuses its
   primary answer. Escape is the safe choice (Cancel; Stop for a paused script).
 - **Always a dialog**, never a button that changes to "Click again to delete". Closing or
-  leaving never drops typed text, unsaved SQL or pending edits without one.
+  leaving never drops typed text, unsaved SQL or pending edits without one. Deleting something
+  the app keeps (a saved query, a network profile, a connection type) uses `ConfirmDelete`
+  (SDB-89): "Delete …?", the target by name and what is lost, the connections that use it,
+  Cancel focused and the danger button named by its action. When the core would refuse (a
+  profile a connection still goes through), it says why and offers only Cancel.
 - **While it runs**, its buttons are disabled, the action reads "Running…" or "Deleting…" and
   Escape does nothing. If it fails, the dialog stays open with the error inside it
   (`role="alert"`) and what was typed is kept. A dialog that shows the core's script and then

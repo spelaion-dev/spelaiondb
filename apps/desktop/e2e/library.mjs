@@ -118,7 +118,8 @@ try {
     await page.waitForTimeout(250); await settled(saved);
     assert.equal(await saved.locator(".snippet-entry").count(), 1, "search matches SQL even when the name does not match");
     await daily.getByText("Organize", { exact: true }).click(); await daily.getByRole("button", { name: "Delete", exact: true }).click();
-    const deletion = page.getByRole("dialog", { name: "Delete “Daily revenue”?" });
+    const deletion = page.getByRole("dialog", { name: "Delete saved query?" });
+    await deletion.getByText("Daily revenue will be removed from this computer.", { exact: false }).waitFor();
     assert.ok(await deletion.getByRole("button", { name: "Cancel", exact: true }).evaluate((button) => document.activeElement === button));
     await page.keyboard.press("Escape"); await deletion.waitFor({ state: "detached" });
     assert.equal(await saved.locator(".snippet-entry").count(), 1, "Escape keeps the query");
