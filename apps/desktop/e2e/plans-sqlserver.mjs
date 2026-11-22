@@ -7,6 +7,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
+import { webviewPage } from "./cdpPage.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const executable = process.env.SPELAION_E2E_EXE ?? join(root, "target/debug/spelaion-desktop.exe");
@@ -24,7 +25,7 @@ try {
   app = spawn(executable, ["--plan", fixture], { cwd: profile, env: { ...process.env, SPELAION_USER_DIR: profile, SPELAION_PLAN48_PASSWORD: "Spelaion-test-1", SPELAION_NO_UPDATES: "1", SPELAION_MCP_CLIENTS_HOME: join(profile, "clients"), KUBECONFIG: join(profile, "none"), WEBVIEW2_USER_DATA_FOLDER: join(profile, "webview"), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` }, windowsHide: true, stdio: "inherit" });
   for (let n = 0; n < 90; n++) { try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`); break; } catch { await new Promise(done => setTimeout(done, 500)); } }
   assert.ok(browser, "native app did not expose its private automation port");
-  page = browser.contexts()[0].pages()[0]; page.setDefaultTimeout(30_000);
+  page = await webviewPage(browser); page.setDefaultTimeout(30_000);
   await page.locator(".activity-bar .settings-button").click();
   const settings = page.locator(".settings-dialog");
   await settings.locator(".settings-nav button").nth(1).click();

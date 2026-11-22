@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
+import { webviewPage } from "./cdpPage.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const profile = mkdtempSync(join(tmpdir(), "spelaion-completion-"));
@@ -24,7 +25,7 @@ try {
     catch { await new Promise((done) => setTimeout(done, 500)); }
   }
   assert.ok(browser, "the native app opened its CDP port");
-  const page = browser.contexts()[0].pages()[0]; page.setDefaultTimeout(30_000);
+  const page = await webviewPage(browser); page.setDefaultTimeout(30_000);
   await page.locator(".activity-bar .settings-button").waitFor();
   await page.locator(".activity-bar .settings-button").click();
   await page.locator(".settings-nav button:nth-child(2)").click();

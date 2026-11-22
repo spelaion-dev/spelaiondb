@@ -8,6 +8,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { chromium } from "playwright-core";
+import { webviewPage } from "./cdpPage.mjs";
 
 async function freePort() {
   const server = createServer();
@@ -40,7 +41,7 @@ try {
     if (i === 119) throw new Error("Vite did not start");
     await new Promise((done) => setTimeout(done, 500));
   }
-  const page = browser.contexts()[0].pages()[0];
+  const page = await webviewPage(browser);
   await page.route("http://tauri.localhost/**", async (route) => {
     const url = new URL(route.request().url());
     const response = await fetch(`http://127.0.0.1:${vitePort}${url.pathname}${url.search}`);
