@@ -566,7 +566,8 @@ function ExportForm({ request }: { request: ExportRequest }) {
               {t("export.progress", { count: phase.progress.rows, formattedCount: numbers.format(phase.progress.rows), size: bytes(phase.progress.bytes) })}
             </p>
             <div className="modal-actions">
-              <button className="danger" disabled={exportId === null} onClick={() => exportId?.cancel()}>
+              {/* Stopping work is secondary: danger only confirms what loses data. */}
+              <button disabled={exportId === null} onClick={() => exportId?.cancel()}>
                 {t("export.cancel")}
               </button>
             </div>

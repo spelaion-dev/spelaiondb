@@ -171,8 +171,8 @@
     "title": "Prueba de conexión",
     "okNetwork": "La red llega a la base de datos",
     "failed": "Falló en el paso {{step}}: {{kind}}",
-    "stopped": "Detenida",
-    "stop": "Detener",
+    "cancelled": "Cancelada",
+    "cancel": "Cancelar prueba",
     "copy": "Copiar diagnóstico",
     "copied": "Copiado",
     "close": "Cerrar el registro de la prueba",
@@ -182,7 +182,7 @@
       "ok": "Correcto",
       "failed": "Falló",
       "skipped": "No se ejecutó",
-      "stopped": "Detenido"
+      "stopped": "Cancelado"
     },
     "steps": {
       "resolve": "Leer la configuración y los secretos",

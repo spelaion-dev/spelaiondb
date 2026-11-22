@@ -1,5 +1,5 @@
-// The connection test's log (ADR-032): one line per step as the core reports it, with Stop
-// while it runs and "Copy diagnostics" when it ends. The core decides every step, failure
+// The connection test's log (ADR-032): one line per step as the core reports it, with "Cancel
+// test" while it runs and "Copy diagnostics" when it ends. The core decides every step, failure
 // kind and hint, and builds the diagnostics text (already redacted): this only shows them.
 
 import { useEffect, useRef, useState } from "react";
@@ -116,7 +116,7 @@ export function TestSummary(props: { steps: TestStepItem[] | null; report: TestR
   if (props.running) return <span className="muted">{t("test.testing")}</span>;
   const { report } = props;
   if (!report) return null;
-  if (report.stopped) return <span className="muted">{t("testLog.stopped")}</span>;
+  if (report.stopped) return <span className="muted">{t("testLog.cancelled")}</span>;
   if (report.ok) return <span className="ok">{props.okText(report)}</span>;
   const failedAt = report.steps.findIndex((s) => s.status === "failed");
   const kind = report.steps[failedAt]?.failure?.kind ?? "other";
@@ -156,7 +156,7 @@ export function ConnectionTestLog(props: {
         <span className="grow" />
         {props.running && (
           <button type="button" onClick={props.onStop}>
-            {t("testLog.stop")}
+            {t("testLog.cancel")}
           </button>
         )}
         {report && (
