@@ -359,7 +359,20 @@ try {
   browser = await connect();
   let page = await appPage();
   page.setDefaultTimeout(30_000);
-  const shot = (name) => page.screenshot({ path: join(shots, `${name}.png`) });
+  // A screenshot waits for the page's running transitions and finite animations (at most
+  // 500 ms) first: a step that has just switched the theme would otherwise catch the 120 ms
+  // colour transitions half way, with grey text on a grey surface. Endless ones (spinners) are
+  // not waited for.
+  const settled = () => page.evaluate((cap) => Promise.race([
+    Promise.all(document.getAnimations()
+      .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+      .map((animation) => animation.finished.catch(() => {}))),
+    new Promise((done) => setTimeout(done, cap)),
+  ]), 500);
+  const shot = async (name) => {
+    await settled();
+    await page.screenshot({ path: join(shots, `${name}.png`) });
+  };
   // SPELAION_E2E_UNTIL=<the start of a step's text>: the run stops as a pass when the step
   // after that one begins, to repeat one step without the whole run.
   let untilReached = false;
@@ -1963,6 +1976,7 @@ try {
     // as device pixels): the whole window, as it is on screen, comes from CDP itself.
     const cdp = await page.context().newCDPSession(page);
     const windowShot = async (name) => {
+      await settled();
       const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
       writeFileSync(join(shots, `${name}.png`), Buffer.from(data, "base64"));
     };
