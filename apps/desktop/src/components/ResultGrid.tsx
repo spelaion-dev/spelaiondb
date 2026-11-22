@@ -56,16 +56,80 @@ const MIN_RESIZE = 48;
 const MAX_RESIZE = 2000;
 /** Pixels on each side of a header edge that grab it. */
 const EDGE = 4;
-// Regular UI text is easier to scan across dense rows; the header remains distinct.
-let DATA_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
-let ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
+/** The size of the grid's values in pixels, the user's setting (SDB-385). */
+let GRID_FONT_PX = 12;
 /** Sets the size of the grid's values, in pixels; a row is that plus the usual room. */
 function setGridFont(size: number) {
-  const px = Math.min(20, Math.max(10, Math.round(size) || 12));
-  ROW_H = px + 12;
-  DATA_FONT = `400 ${px}px "Segoe UI", system-ui, sans-serif`;
-  ROW_NUMBER_FONT = `400 ${Math.min(px, 13)}px "Segoe UI", system-ui, sans-serif`;
+  GRID_FONT_PX = Math.min(20, Math.max(10, Math.round(size) || 12));
+  ROW_H = GRID_FONT_PX + 12;
 }
+
+/** What the canvas draws with, from the theme's tokens (SDB-75). */
+interface GridTheme {
+  bg: string;
+  stripe: string;
+  line: string;
+  header: string;
+  text: string;
+  muted: string;
+  select: string;
+  accent: string;
+  vNumber: string;
+  vDate: string;
+  vBool: string;
+  vText: string;
+  vNull: string;
+  /** An edited cell, the cells a search found and the one it is on, and a row to delete. */
+  edited: string;
+  found: string;
+  foundCurrent: string;
+  deleted: string;
+  /** The column's name, and the line under it. */
+  headerFont: string;
+  typeFont: string;
+  /** The values' family; their size is the user's (`GRID_FONT_PX`). */
+  family: string;
+  /** The row numbers never grow past this size, in pixels. */
+  rowNumberMax: number;
+}
+let gridTheme: { key: string; theme: GridTheme } | null = null;
+/** The theme's tokens, read once and again only when the theme or the interface size changes:
+ *  never per frame (a computed style per frame costs a style pass while scrolling). The key is
+ *  read on every draw, but it touches no style. */
+function currentGridTheme(): GridTheme {
+  const key = `${document.documentElement.dataset.theme ?? ""}|${window.devicePixelRatio || 1}`;
+  if (gridTheme?.key === key) return gridTheme.theme;
+  const style = getComputedStyle(document.documentElement);
+  const token = (name: string) => style.getPropertyValue(name).trim();
+  const family = token("--font-ui");
+  const theme: GridTheme = {
+    bg: token("--grid-bg"),
+    stripe: token("--grid-stripe"),
+    line: token("--grid-line"),
+    header: token("--grid-header"),
+    text: token("--grid-text"),
+    muted: token("--muted"),
+    select: token("--accent-soft"),
+    accent: token("--accent"),
+    vNumber: token("--value-number"),
+    vDate: token("--value-date"),
+    vBool: token("--value-bool"),
+    vText: token("--value-text"),
+    vNull: token("--value-null"),
+    edited: token("--grid-edited"),
+    found: token("--grid-found"),
+    foundCurrent: token("--grid-found-current"),
+    deleted: token("--grid-deleted"),
+    headerFont: `600 ${token("--text-sm")} ${family}`,
+    typeFont: `400 ${token("--text-xs")} ${family}`,
+    family,
+    rowNumberMax: parseFloat(token("--text-md")) || GRID_FONT_PX,
+  };
+  gridTheme = { key, theme };
+  return theme;
+}
+const dataFont = (theme: GridTheme) => `400 ${GRID_FONT_PX}px ${theme.family}`;
+const rowNumberFont = (theme: GridTheme) => `400 ${Math.min(GRID_FONT_PX, theme.rowNumberMax)}px ${theme.family}`;
 /** The token that colors each kind of value (SDB-385), when the user asks for it. */
 const KIND_TOKEN: Partial<Record<ValueKind, "vNumber" | "vDate" | "vBool" | "vText">> = {
   number: "vNumber",
@@ -82,8 +146,6 @@ function kindOf(logical: string): ValueKind {
   if (logical === "date" || logical === "time" || logical === "timestamp" || logical === "timestamptz" || logical === "bool" || logical === "text") return logical;
   return "other";
 }
-const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
-const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
 const NUMERIC = new Set(["int", "float", "decimal"]);
 /** Texts of a boolean cell, as each engine's text reads (`t`, `true`, a `bit`'s `1`). */
 const BOOL_TRUE = new Set(["t", "true", "1"]);
@@ -170,10 +232,6 @@ function fit(ctx: CanvasRenderingContext2D, text: string, max: number): string {
   return sample.slice(0, lo) + "…";
 }
 
-function cssVar(style: CSSStyleDeclaration, name: string): string {
-  return style.getPropertyValue(name).trim() || "#888";
-}
-
 /** Pending edits of a table data tab, as the core holds them (ADR-044): drawn over the page
  *  until applied. */
 export interface GridEditing {
@@ -223,10 +281,6 @@ const REVERT_SHORTCUT = "Ctrl+Alt+Z";
 /** "Go to row" (SDB-386): an app command the grid handles, as undo and redo. */
 const GO_TO_ROW_SHORTCUT = commandSpec("results.goToRow").shortcut ?? "";
 
-const EDITED_BG = "rgba(250, 204, 21, 0.30)";
-/** Cells the search found, and the one it is on. */
-const FOUND_BG = "rgba(234, 179, 8, 0.28)";
-const FOUND_CURRENT_BG = "rgba(234, 88, 12, 0.45)";
 /** Ways of copying column names, in menu order (qualified only with a known table). */
 const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
   { style: "plain", key: "copyNamesPlain" },
@@ -234,7 +288,6 @@ const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
   { style: "qualified", key: "copyNamesQualified" },
   { style: "list", key: "copyNamesList" },
 ];
-const DELETED_BG = "rgba(239, 68, 68, 0.20)";
 
 function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "redo" | "revert" | "save" | "cancel" }) {
   return <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -704,10 +757,11 @@ export function ResultGrid({
   const automatic = useMemo(() => {
     const ctx = document.createElement("canvas").getContext("2d");
     if (!ctx) return result.columns.map(() => 140);
+    const theme = currentGridTheme();
     return result.columns.map((c) => {
-      ctx.font = HEADER_FONT;
+      ctx.font = theme.headerFont;
       const name = ctx.measureText(c.name).width;
-      ctx.font = TYPE_FONT;
+      ctx.font = theme.typeFont;
       const type = ctx.measureText(c.nativeType).width;
       const base = NUMERIC.has(c.logical) ? 96 : 132;
       return Math.round(Math.min(MAX_COL, Math.max(MIN_COL, name + PAD * 2 + 8, type + PAD * 2, base)));
@@ -805,22 +859,7 @@ export function ResultGrid({
     }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const style = getComputedStyle(scroller);
-    const c = {
-      bg: cssVar(style, "--grid-bg"),
-      stripe: cssVar(style, "--grid-stripe"),
-      line: cssVar(style, "--grid-line"),
-      header: cssVar(style, "--grid-header"),
-      text: cssVar(style, "--grid-text"),
-      muted: cssVar(style, "--muted"),
-      select: cssVar(style, "--accent-soft"),
-      accent: cssVar(style, "--accent"),
-      vNumber: cssVar(style, "--value-number"),
-      vDate: cssVar(style, "--value-date"),
-      vBool: cssVar(style, "--value-bool"),
-      vText: cssVar(style, "--value-text"),
-      vNull: cssVar(style, "--value-null"),
-    };
+    const c = currentGridTheme();
     const left = scroller.scrollLeft;
     const top = contentTop(scroller);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -844,7 +883,7 @@ export function ResultGrid({
         ctx.fillRect(x, y, w, ROW_H);
       }
       if (findCache?.has(row, col)) {
-        ctx.fillStyle = findCurrent && findCurrent.row === row && findCurrent.col === col ? FOUND_CURRENT_BG : FOUND_BG;
+        ctx.fillStyle = findCurrent && findCurrent.row === row && findCurrent.col === col ? c.foundCurrent : c.found;
         ctx.fillRect(x, y, w, ROW_H);
       }
       if (selection && selection.focus.row === row && selection.focus.col === col) {
@@ -854,7 +893,7 @@ export function ResultGrid({
       const editKey = `${row}:${col}`;
       const edited = editing !== undefined && editKey in editing.cells;
       if (edited) {
-        ctx.fillStyle = EDITED_BG;
+        ctx.fillStyle = c.edited;
         ctx.fillRect(x, y, w, ROW_H);
       }
       const value = edited ? (editing?.cells[editKey] ?? null) : cache.get(row, col);
@@ -923,7 +962,7 @@ export function ResultGrid({
     };
 
     // Cells.
-    ctx.font = DATA_FONT;
+    ctx.font = dataFont(c);
     for (let row = first; row < last; row++) {
       const y = HEADER_H + row * ROW_H - top;
       const striped = gridLook.zebra && row % 2 === 1;
@@ -933,7 +972,7 @@ export function ResultGrid({
       }
       const deleted = deletedRows.has(row);
       if (deleted) {
-        ctx.fillStyle = DELETED_BG;
+        ctx.fillStyle = c.deleted;
         ctx.fillRect(rowNumW, y, size.w, ROW_H);
       }
       for (let col = firstCol; col < widths.length; col++) {
@@ -951,7 +990,7 @@ export function ResultGrid({
           ctx.fillRect(rowNumW, y, frozenW, ROW_H);
         }
         if (deleted) {
-          ctx.fillStyle = DELETED_BG;
+          ctx.fillStyle = c.deleted;
           ctx.fillRect(rowNumW, y, frozenW, ROW_H);
         }
         drawCell(row, frozenCol, rowNumW, y, frozenW);
@@ -979,7 +1018,7 @@ export function ResultGrid({
     // Row number column (fixed on the left).
     ctx.fillStyle = c.header;
     ctx.fillRect(0, HEADER_H, rowNumW, size.h);
-    ctx.font = ROW_NUMBER_FONT;
+    ctx.font = rowNumberFont(c);
     ctx.textAlign = "right";
     for (let row = first; row < last; row++) {
       const y = HEADER_H + row * ROW_H - top;
@@ -1003,7 +1042,7 @@ export function ResultGrid({
         ctx.fillStyle = c.select;
         ctx.fillRect(x, 0, w, HEADER_H);
       }
-      ctx.font = HEADER_FONT;
+      ctx.font = c.headerFont;
       ctx.fillStyle = c.text;
       // The column's place in the sort: its direction and, with several keys, its position.
       const place = sortShown.findIndex((key) => key.column === col);
@@ -1028,7 +1067,7 @@ export function ResultGrid({
         ctx.fillText(mark, x + w - PAD, nameY);
         ctx.textAlign = "left";
       }
-      ctx.font = TYPE_FONT;
+      ctx.font = c.typeFont;
       ctx.fillStyle = c.muted;
       if (typeLine) ctx.fillText(fit(ctx, typeLine, w - PAD * 2), x + PAD, 26);
       ctx.fillStyle = c.line;
@@ -1566,12 +1605,13 @@ export function ResultGrid({
   function fitWidth(col: number): number {
     const ctx = canvasRef.current?.getContext("2d");
     const meta = result.columns[col];
+    const theme = currentGridTheme();
     if (!ctx || !meta) return widths[col] ?? MIN_RESIZE;
-    ctx.font = HEADER_FONT;
+    ctx.font = theme.headerFont;
     let widest = ctx.measureText(meta.name).width + 14;
-    ctx.font = TYPE_FONT;
+    ctx.font = theme.typeFont;
     widest = Math.max(widest, ctx.measureText(meta.nativeType).width);
-    ctx.font = DATA_FONT;
+    ctx.font = dataFont(theme);
     const scroller = scrollerRef.current;
     const first = scroller ? Math.floor(contentTop(scroller) / ROW_H) : 0;
     const last = Math.min(result.rows, first + Math.ceil((size.h || 600) / ROW_H) + 1);
@@ -2741,6 +2781,8 @@ export function ResultGrid({
             top: HEADER_H + cellEditor.row * ROW_H - contentTop(),
             width: widths[cellEditor.col] ?? MIN_COL,
             height: ROW_H,
+            // The values' size, the user's setting: what is typed matches the cell it replaces.
+            fontSize: GRID_FONT_PX,
           }}
           value={cellEditor.value}
           onChange={(e) => setCellEditor({ ...cellEditor, value: e.target.value, dirty: true })}

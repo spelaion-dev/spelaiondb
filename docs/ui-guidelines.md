@@ -42,6 +42,14 @@ each in its own commented block. Nor does it use `!important`, except in the `[h
 which keeps a hidden element hidden whatever display its classes give it. A value that is
 missing becomes a token named by its role, defined for both themes in the same change.
 
+The result grid's canvas builds its fonts from `--font-ui` and the type scale (the header's
+name at `--text-sm`, the line under it at `--text-xs`; the values at the user's size, the row
+numbers never past `--text-md`) and fills its highlights with `--grid-edited`, `--grid-found`,
+`--grid-found-current` and `--grid-deleted`. These are translucent, laid over the rows, and each
+keeps the cell's text, plain or colored by its type, at 4.5:1 over a row and a striped row
+(`contrast.test.mjs`). It reads the tokens once and again only when the theme or the interface
+size changes, never per frame.
+
 The tokens are the sizes at the normal interface size. The interface size (Settings ›
 Appearance, SDB-389: 90% to 150%) draws the whole window at that scale with the webview's own
 zoom, applied by the core when it is saved and before the window first shows: every CSS pixel

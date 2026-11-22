@@ -1,12 +1,1 @@
-{
-  "components/ResultGrid.tsx | DATA_FONT | 400 12px \"Segoe UI\", system-ui, sans-serif | font size": 1,
-  "components/ResultGrid.tsx | DELETED_BG | rgba(239, 68, 68, 0.20) | color": 1,
-  "components/ResultGrid.tsx | EDITED_BG | rgba(250, 204, 21, 0.30) | color": 1,
-  "components/ResultGrid.tsx | FOUND_BG | rgba(234, 179, 8, 0.28) | color": 1,
-  "components/ResultGrid.tsx | FOUND_CURRENT_BG | rgba(234, 88, 12, 0.45) | color": 1,
-  "components/ResultGrid.tsx | HEADER_FONT | 600 12.5px system-ui, \"Segoe UI\", sans-serif | font size": 1,
-  "components/ResultGrid.tsx | ROW_NUMBER_FONT | 400 12px \"Segoe UI\", system-ui, sans-serif | font size": 1,
-  "components/ResultGrid.tsx | TYPE_FONT | 11px system-ui, \"Segoe UI\", sans-serif | font size": 1,
-  "components/ResultGrid.tsx | canvas | #888 | color": 1,
-  "styles.css | .cell-editor | font: 400 12px \"Segoe UI\", system-ui, sans-serif | font size": 1
-}
+{}

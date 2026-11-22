@@ -145,4 +145,9 @@
   `node scripts/check-ui-tokens.mjs --print-baseline` prints the current counts for comparison.
   Its only `!important` exemption is `[hidden] { display: none !important }`.
   Pull request CI compares the counts with the base commit so an entry can only decrease.
-  `scripts/contrast.test.mjs` checks text, icon and focus token pairs in both themes.
+  `scripts/contrast.test.mjs` checks text, icon and focus token pairs in both themes, and the
+  grid's translucent highlights blended over its rows.
+- The grid's canvas reads its colors and fonts through `currentGridTheme()` in
+  `ResultGrid.tsx`: one computed style per theme and device pixel ratio, cached under that key,
+  never one per frame. A new color or font the canvas draws with goes into that object, read
+  from a token defined in both themes.
