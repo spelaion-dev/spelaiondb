@@ -10234,11 +10234,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByText("Calls of the smoke-agent session", { exact: false }).waitFor();
   await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
   // Clear: confirmed, done by the core, and recorded.
-  await mcp.getByRole("button", { name: "Clear", exact: true }).click();
+  await mcp.getByRole("button", { name: "Clear log…", exact: true }).click();
   const clearDialog = page.getByRole("dialog", { name: "Clear the MCP activity?" });
   await clearDialog.getByRole("button", { name: "Cancel" }).click();
   await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
-  await mcp.getByRole("button", { name: "Clear", exact: true }).click();
+  await mcp.getByRole("button", { name: "Clear log…", exact: true }).click();
   await clearDialog.getByRole("button", { name: "Clear the log" }).click();
   await mcp.getByText("4 events cleared.").waitFor();
   await mcp.getByRole("status").filter({ hasText: "1 event" }).waitFor();
