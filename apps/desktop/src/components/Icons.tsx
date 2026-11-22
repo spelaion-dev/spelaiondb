@@ -6,14 +6,17 @@
 import {
   ArrowUpRight,
   ChartColumn,
+  Check,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Circle,
   Database,
   FolderOpen,
   Layers,
   Link,
+  LoaderCircle,
   type LucideIcon,
   Maximize2,
   Minimize2,
@@ -25,6 +28,7 @@ import {
   Scan,
   ShieldAlert,
   Sigma,
+  Square,
   Star,
   TableProperties,
   X,
@@ -59,6 +63,11 @@ const ICONS = {
   database: Database,
   shieldAlert: ShieldAlert,
   star: Star,
+  // A step's state: waiting, running, done, failed, cancelled (`minus` and `x` too).
+  waiting: Circle,
+  running: LoaderCircle,
+  check: Check,
+  stopped: Square,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;
