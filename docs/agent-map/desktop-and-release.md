@@ -143,5 +143,6 @@
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.
   `node scripts/check-ui-tokens.mjs --print-baseline` prints the current counts for comparison.
+  Its only `!important` exemption is `[hidden] { display: none !important }`.
   Pull request CI compares the counts with the base commit so an entry can only decrease.
   `scripts/contrast.test.mjs` checks text, icon and focus token pairs in both themes.
