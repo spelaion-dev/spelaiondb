@@ -1,9 +1,10 @@
 //! Geometry values on a map (ADR-045), from every engine with spatial types to one GeoJSON:
 //! SQLite (SpatiaLite's and GeoPackage's blobs) and DuckDB always; DuckDB's spatial extension
 //! when it can be installed (it downloads once; `SPELAION_TEST_DUCKDB_SPATIAL=1` makes a
-//! failed install fail the test); PostGIS, MySQL and MariaDB with their `SPELAION_TEST_*`
-//! variables (without them they are skipped, which does not count as tested). PostGIS is in the
-//! test PostgreSQL's `spelaion_gis` database (`testing/docker/postgres-init/02-postgis.sql`).
+//! failed install fail the test); PostGIS, MySQL, MariaDB and SQL Server with their
+//! `SPELAION_TEST_*` variables (without them they are skipped, which does not count as tested).
+//! PostGIS is in the test PostgreSQL's `spelaion_gis` database
+//! (`testing/docker/postgres-init/02-postgis.sql`).
 //!
 //! Each value goes the way the app takes it: the engine runs a query, the core stores the
 //! result, and the cell viewer (`view_cell`) and the column's map (`column_map`) read it.
@@ -19,9 +20,10 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    CoreEvent, Dimensions, GeoFormat, MapCrs, ResultId, ResultStore, Session, column_map, view_cell,
+    CoreEvent, Dimensions, GeoFormat, MapCrs, MapNote, ResultId, ResultStore, Session, column_map,
+    view_cell,
 };
-use spelaion_driver_api::{ConnectParams, Driver, Secret};
+use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
 
 async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
     let conn = driver
@@ -581,4 +583,141 @@ async fn mysql_and_mariadb() {
         );
         statement(label, &session, "DROP TABLE geo_places").await;
     }
+}
+
+/// The native type the engine gave the result's only column.
+fn native_type(session: &Session, result: ResultId) -> String {
+    let stored = session.results().get(result).expect("stored result");
+    let stored = stored.read().unwrap();
+    stored.schema().columns[0].native_type.clone()
+}
+
+/// A column of SQL Server values whose type the driver did not name (`udt`), with an SRID: no
+/// row is drawn, each says why, and the column's map counts them.
+fn check_type_unknown(label: &str, session: &Session, result: ResultId, rows: usize) {
+    let stored = session.results().get(result).expect("stored result");
+    let stored = stored.read().unwrap();
+    for row in 0..rows {
+        let cell = view_cell(&stored, row, 0, false).unwrap();
+        assert_eq!(cell.geometry, None, "{label}: row {row}");
+        assert_eq!(
+            cell.map_note,
+            Some(MapNote::SqlServerTypeUnknown),
+            "{label}: row {row}"
+        );
+    }
+    let map = column_map(&stored, 0).unwrap();
+    assert_eq!(
+        (map.shapes.len(), map.type_unknown, map.unreadable),
+        (0, rows, 0),
+        "{label}: map"
+    );
+}
+
+#[tokio::test]
+async fn sql_server() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
+        return;
+    };
+    let label = "sqlserver";
+    let session = session(
+        &*engines::sqlserver(),
+        ConnectParams {
+            user: "sa".into(),
+            password: Some(Secret::new("Spelaion-test-1")),
+            tls: TlsMode::Require,
+            ..login(host, port, "master")
+        },
+    )
+    .await;
+    // A plugin that names a CLR column's type gives `geometry` and `geography`; an older one
+    // gives `udt` for both, and then only a value without an SRID (always geometry) is drawn.
+    let geometry = |srid: u32| -> Vec<String> {
+        SHAPES
+            .iter()
+            .map(|(wkt, _)| format!("geometry::STGeomFromText('{wkt}', {srid})"))
+            .collect()
+    };
+    let result = query(label, &session, &rows_sql(&geometry(0))).await;
+    let native = native_type(&session, result);
+    assert!(native == "geometry" || native == "udt", "{label}: {native}");
+    let expected: Vec<Expected> = SHAPES
+        .iter()
+        .map(|(_, geojson)| expect(geojson, None, GeoFormat::SqlServer))
+        .collect();
+    check(
+        label,
+        &session,
+        result,
+        &native,
+        &expected,
+        MapCrs::AssumedLonLat,
+    );
+
+    // Geometry with an SRID: x first, as written.
+    let result = query(label, &session, &rows_sql(&geometry(4326))).await;
+    if native == "geometry" {
+        let expected: Vec<Expected> = SHAPES
+            .iter()
+            .map(|(_, geojson)| expect(geojson, Some(4326), GeoFormat::SqlServer))
+            .collect();
+        check(label, &session, result, &native, &expected, MapCrs::LonLat);
+    } else {
+        check_type_unknown(label, &session, result, SHAPES.len());
+    }
+
+    // Geography stores latitude first; its well-known text, like the map, is longitude first.
+    let expressions: Vec<String> = SHAPES
+        .iter()
+        .map(|(wkt, _)| format!("geography::STGeomFromText('{wkt}', 4326)"))
+        .collect();
+    let result = query(label, &session, &rows_sql(&expressions)).await;
+    let native_geography = native_type(&session, result);
+    if native_geography == "geography" {
+        let expected: Vec<Expected> = SHAPES
+            .iter()
+            .map(|(_, geojson)| expect(geojson, Some(4326), GeoFormat::SqlServer))
+            .collect();
+        check(
+            label,
+            &session,
+            result,
+            &native_geography,
+            &expected,
+            MapCrs::LonLat,
+        );
+    } else {
+        assert_eq!(native_geography, "udt", "{label}");
+        check_type_unknown(label, &session, result, SHAPES.len());
+    }
+
+    // A point with Z and M, and one whole line segment (stored apart from figures and shapes).
+    let result = query(
+        label,
+        &session,
+        &rows_sql(&[
+            "geometry::STGeomFromText('POINT(1 2 3 4)', 0)".into(),
+            "geometry::STGeomFromText('LINESTRING(0 0, 1 1)', 0)".into(),
+        ]),
+    )
+    .await;
+    check(
+        label,
+        &session,
+        result,
+        &native,
+        &[
+            Expected {
+                dimensions: Dimensions::Xyzm,
+                ..expect(POINT, None, GeoFormat::SqlServer)
+            },
+            expect(
+                r#"{"type":"LineString","coordinates":[[0.0,0.0],[1.0,1.0]]}"#,
+                None,
+                GeoFormat::SqlServer,
+            ),
+        ],
+        MapCrs::AssumedLonLat,
+    );
 }

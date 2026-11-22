@@ -15,7 +15,7 @@ use quick_xml::{Reader, Writer};
 use spelaion_driver_api::{LogicalType, Value};
 
 use crate::edit::{CellInput, RowChange};
-use crate::geometry::{GeoValue, read_geometry};
+use crate::geometry::{GeoValue, MapNote, read_cell_geometry};
 use crate::results::StoredResult;
 use crate::sql_file::replace_atomically;
 
@@ -119,6 +119,8 @@ pub struct CellView {
     pub content: CellContent,
     /// The value read as a geometry, when it is one and it is shown (not withheld).
     pub geometry: Option<GeoValue>,
+    /// Why a value that is a geometry is not drawn (SDB-213).
+    pub map_note: Option<MapNote>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -172,20 +174,24 @@ pub fn view_cell(
             extension: text_extension(meta.logical, xml_type),
             content: CellContent::Null,
             geometry: None,
+            map_note: None,
         },
         Value::Bytes(bytes) => {
             let image = ImageFormat::detect(&bytes);
             let size = bytes.len();
             let mut geometry = None;
+            let mut map_note = None;
             let content = match fits(size) {
                 None => CellContent::TooBig,
                 Some(false) => CellContent::Withheld,
                 Some(true) => {
                     let value = Value::Bytes(bytes);
-                    geometry = image
-                        .is_none()
-                        .then(|| read_geometry(&value, &meta.native_type))
-                        .flatten();
+                    if image.is_none() {
+                        match read_cell_geometry(&value, &meta.native_type) {
+                            Ok(read) => geometry = read,
+                            Err(note) => map_note = Some(note),
+                        }
+                    }
                     let Value::Bytes(bytes) = &value else {
                         unreachable!("built just above")
                     };
@@ -202,17 +208,22 @@ pub fn view_cell(
                 extension: image.map_or("bin", ImageFormat::extension),
                 content,
                 geometry,
+                map_note,
             }
         }
         other => {
             let text = other.to_string();
             let size = text.len();
             let mut geometry = None;
+            let mut map_note = None;
             let content = match fits(size) {
                 None => CellContent::TooBig,
                 Some(false) => CellContent::Withheld,
                 Some(true) => {
-                    geometry = read_geometry(&other, &meta.native_type);
+                    match read_cell_geometry(&other, &meta.native_type) {
+                        Ok(read) => geometry = read,
+                        Err(note) => map_note = Some(note),
+                    }
                     let xml = (xml_type || text.trim_start().starts_with('<'))
                         .then(|| pretty_xml(&text))
                         .flatten();
@@ -226,6 +237,7 @@ pub fn view_cell(
                 extension: text_extension(meta.logical, xml_type),
                 content,
                 geometry,
+                map_note,
             }
         }
     })

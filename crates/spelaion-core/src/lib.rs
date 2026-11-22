@@ -165,7 +165,8 @@ pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use geometry::{
     Bounds, ColumnMap, Dimensions, GeoFormat, GeoValue, Geometry, MAP_MAX_POINTS, MAP_MAX_SHAPES,
-    MapCrs, MapError, MapShape, Position, column_map, is_geometry_type, map_crs, read_geometry,
+    MapCrs, MapError, MapNote, MapShape, Position, column_map, is_geometry_type, map_crs,
+    read_cell_geometry, read_geometry,
 };
 pub use group::{
     GROUP_KEY_CHARS, Group, GroupCounts, GroupError, GroupFiltered, GroupRequest,
