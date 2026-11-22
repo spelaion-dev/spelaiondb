@@ -130,6 +130,12 @@
   --control-lg: 32px;
   --row-h: 26px;
   --bar-h: 36px;
+  /* Scrollbars (SDB-74): a transparent track and a thumb inset in it that widens on hover. */
+  --scrollbar-size: 10px;
+  --scrollbar-thumb-inset: 3px;
+  --scrollbar-thumb-inset-hover: 1px;
+  --scrollbar-thumb: var(--line-strong);
+  --scrollbar-thumb-hover: var(--faint);
   --z-sticky: 1;
   --z-plan-header: calc(var(--z-sticky) + 1);
   --z-plan-corner: calc(var(--z-sticky) + 2);
@@ -253,6 +259,36 @@
 
 * {
   box-sizing: border-box;
+}
+/* Every scrolling region, the result grid included (its scrolling is native), has the same thin
+   themed scrollbar (SDB-74). WebView2 and WebKitGTK both draw it from these pseudo-elements, the
+   only way to widen the thumb on hover; Chromium uses them only while no scrollbar-width or
+   scrollbar-color applies, so those two are kept for an engine without them. */
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+  background: transparent;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  border: var(--scrollbar-thumb-inset) solid transparent;
+  border-radius: var(--scrollbar-size);
+}
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-hover);
+  border-width: var(--scrollbar-thumb-inset-hover);
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
 }
 html,
 body,
@@ -1082,8 +1118,6 @@ select {
   flex: 1;
   min-width: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
   padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-md);
 }
 /* A real item, unlike the padding, counts in the scrolled width: the last tab never touches
