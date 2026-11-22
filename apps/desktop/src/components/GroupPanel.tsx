@@ -138,7 +138,7 @@ export function GroupPanel(props: {
           {grouped.map((column) => (
             <span className="group-chip" key={column}>
               <span>{name(column)}</span>
-              <button type="button" className="ghost" aria-label={t("group.remove", { column: name(column) })} title={t("group.remove", { column: name(column) })} onClick={() => props.onGrouped(grouped.filter((c) => c !== column))}>×</button>
+              <button type="button" className="ghost" aria-label={t("group.remove", { column: name(column) })} title={t("group.remove", { column: name(column) })} onClick={() => props.onGrouped(grouped.filter((c) => c !== column))}><Icon name="x" /></button>
             </span>
           ))}
           {free.length > 0 && (

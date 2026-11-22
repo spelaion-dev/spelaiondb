@@ -18,6 +18,7 @@ import { chooseOpenFile, chooseSavePath } from "../dialogs";
 import { usePicker, ValuePicker, type PickedEdit, type PickerSource } from "./ValuePicker";
 import { formatJson } from "../formatJson";
 import { keyText } from "../shortcuts";
+import { Icon } from "./Icons";
 
 type View =
   | { kind: "null" }
@@ -291,7 +292,7 @@ export function CellViewer(props: {
               <strong>{t("viewer.rowTitle", { number: (row + 1).toLocaleString(i18n.language) })}</strong>
               <span className="muted small">{t("viewer.columns", { count: props.columns.length })}</span>
             </div>
-            <button className="ghost cell-viewer-close" aria-label={t("viewer.close", { shortcut: keyText("close") })} onClick={props.onClose}>×</button>
+            <button className="ghost cell-viewer-close" aria-label={t("viewer.close", { shortcut: keyText("close") })} title={t("viewer.close", { shortcut: keyText("close") })} onClick={props.onClose}><Icon name="x" /></button>
           </div>
           <div className="cell-viewer-controls">{modes}</div>
         </header>
@@ -343,7 +344,7 @@ export function CellViewer(props: {
               {length ? ` · ${length}` : ""}
             </span>
           </div>
-          <button className="ghost cell-viewer-close" aria-label={t("viewer.close", { shortcut: keyText("close") })} onClick={props.onClose}>×</button>
+          <button className="ghost cell-viewer-close" aria-label={t("viewer.close", { shortcut: keyText("close") })} title={t("viewer.close", { shortcut: keyText("close") })} onClick={props.onClose}><Icon name="x" /></button>
         </div>
         <div className="cell-viewer-controls">
           {modes}

@@ -18,6 +18,7 @@ import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { SnippetSettings } from "./SnippetSettings";
 import { ScreenBoundary } from "./ScreenBoundary";
+import { Icon } from "./Icons";
 import { copyDiagnostics, openIssuePage } from "../diagnostics";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 import { commandShortcut, keyText } from "../shortcuts";
@@ -46,8 +47,8 @@ export function SettingsDialog({ onClose }: { onClose(): void }) {
       <div className="modal wizard settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div className="wizard-header">
           <h2 id="settings-title">{t("title")}</h2>
-          <button className="ghost" aria-label={t("close")} onClick={onClose}>
-            ×
+          <button className="ghost" aria-label={t("close")} title={t("close")} onClick={onClose}>
+            <Icon name="x" />
           </button>
         </div>
         <ScreenBoundary screen={`settings ${category}`}>

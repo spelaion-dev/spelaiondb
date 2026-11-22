@@ -15,6 +15,7 @@ import { questionOpen } from "../tabState";
 import { ConfirmDelete } from "./ConfirmDelete";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
+import { Icon } from "./Icons";
 
 /** `kubernetes` starts a new profile as a Kubernetes one (from the Kubernetes tab). */
 export type TunnelEditorMode = { kind: "add"; personal: boolean; kubernetes?: boolean } | { kind: "edit"; name: string; personal: boolean };
@@ -366,8 +367,8 @@ export function TunnelEditor(props: {
       <div className="modal wizard tunnel-editor" role="dialog" aria-modal="true" aria-label={editing ? t("tunnel.editTitle", { name: mode.name }) : t("tunnel.newTitle")}>
         <div className="wizard-header">
           <h2>{editing ? t("tunnel.editTitle", { name: mode.name }) : t("tunnel.newTitle")}</h2>
-          <button className="ghost" aria-label={t("close")} onClick={props.onClose}>
-            ×
+          <button className="ghost" aria-label={t("close")} title={t("close")} onClick={props.onClose}>
+            <Icon name="x" />
           </button>
         </div>
         <form
@@ -474,13 +475,13 @@ export function TunnelEditor(props: {
                   </legend>
                   <div className="hop-actions">
                     <button type="button" className="ghost small" disabled={i === 0} aria-label={t("tunnel.moveUp", { hop: label })} onClick={() => moveHop(i, -1)}>
-                      ↑
+                      <Icon name="arrowUp" />
                     </button>
                     <button type="button" className="ghost small" disabled={i === hops.length - 1} aria-label={t("tunnel.moveDown", { hop: label })} onClick={() => moveHop(i, 1)}>
-                      ↓
+                      <Icon name="arrowDown" />
                     </button>
                     <button type="button" className="ghost small" disabled={hops.length === 1 && !proxy.enabled && !viaSsm} aria-label={t("tunnel.removeHop", { hop: label })} onClick={() => setHops((list) => list.filter((_, j) => j !== i))}>
-                      ✕
+                      <Icon name="x" />
                     </button>
                   </div>
                   <div className="form-pair">
