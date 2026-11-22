@@ -19,7 +19,9 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Circle,
+  CircleX,
   Columns3,
+  CopyPlus,
   Cpu,
   Database,
   FilePlus2,
@@ -42,12 +44,15 @@ import {
   Minimize2,
   Minus,
   Network,
+  PanelRight,
   Pin,
   Play,
   Plug,
   Plus,
   RectangleVertical,
   RefreshCw,
+  Redo2,
+  RotateCcw,
   Rows3,
   Save,
   Scan,
@@ -57,11 +62,14 @@ import {
   Sigma,
   SlidersHorizontal,
   Square,
+  SquarePlus,
   Star,
   Table,
   TableProperties,
   Terminal,
+  Trash2,
   TriangleAlert,
+  Undo2,
   Workflow,
   X,
   Zap,
@@ -139,20 +147,32 @@ const ICONS = {
   trigger: Zap,
   partitions: Rows3,
   dependencies: GitFork,
+  // A table data tab's edits, and the result's side panel (the cell viewer).
+  addRow: SquarePlus,
+  duplicateRow: CopyPlus,
+  delete: Trash2,
+  revert: RotateCcw,
+  undo: Undo2,
+  redo: Redo2,
+  discard: CircleX,
+  sidePanel: PanelRight,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;
 
-/** Lucide's arrow-up-right as paths on its 24px grid, for the result grid's canvas, which
- *  draws a foreign key's mark itself and cannot hold a component. */
+/** Lucide's arrows as paths on its 24px grid, for the result grid's canvas, which draws a
+ *  foreign key's mark and a column's sort direction itself and cannot hold a component. */
 export const PATHS = {
   arrowUpRight: ["M7 7h10v10", "M7 17 17 7"],
+  // A column's sort direction in the grid's header, drawn on the same canvas.
+  arrowUp: ["m5 12 7-7 7 7", "M12 19V5"],
+  arrowDown: ["M12 5v14", "m19 12-7 7-7-7"],
 };
 
 /** One icon. `filled` fills its outline, for a toggle that is on (a default's star). The size is
- *  16, or 20 in the activity bar; the few other sizes left go as their areas move to Lucide.
+ *  16, or 20 in the activity bar (a place's CSS may draw it smaller, as a result tab's 12px pin).
  *  `className` adds a place's own class (a tab's kind takes the tab's colour) to `icon`. */
-export function Icon({ name, size = 16, filled = false, className }: { name: IconName; size?: number; filled?: boolean; className?: string }) {
+export function Icon({ name, size = 16, filled = false, className }: { name: IconName; size?: 16 | 20; filled?: boolean; className?: string }) {
   const Shape = ICONS[name];
   return <Shape className={className ? `icon ${className}` : "icon"} size={size} fill={filled ? "currentColor" : "none"} aria-hidden="true" focusable="false" />;
 }

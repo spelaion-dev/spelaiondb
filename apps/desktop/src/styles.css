@@ -4115,7 +4115,7 @@ span.pick-key {
   font-size: var(--text-sm);
   line-height: normal;
 }
-.pending-row-mark { color: var(--success); font-weight: 600; }
+.pending-row-mark { flex: none; color: var(--success); }
 .pending-row-values { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font: inherit; }
 .viewer-edit-actions {
   display: flex;

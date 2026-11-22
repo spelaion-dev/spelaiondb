@@ -156,20 +156,32 @@ const KEY_ICON = 12;
 const KEY_GAP = 4;
 /** The grid's own key for following a foreign key (Ctrl+click does it too). */
 const FOLLOW_SHORTCUT = "Ctrl+Enter";
-let keyIconPaths: Path2D[] | null = null;
+/** A column's sort direction in its header: Lucide's arrow at this size, then its place among
+ *  several sort keys. */
+const SORT_ICON = 12;
+const pathCache = new Map<keyof typeof PATHS, Path2D[]>();
 
-/** Lucide's arrow-up-right at `KEY_ICON` pixels, its top-left corner at (x, y). */
-function drawKeyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
-  keyIconPaths ??= PATHS.arrowUpRight.map((d) => new Path2D(d));
+/** One of Lucide's icons from `PATHS` at `size` pixels, its top-left corner at (x, y). */
+function drawPaths(ctx: CanvasRenderingContext2D, name: keyof typeof PATHS, x: number, y: number, size: number, color: string) {
+  let paths = pathCache.get(name);
+  if (!paths) {
+    paths = PATHS[name].map((d) => new Path2D(d));
+    pathCache.set(name, paths);
+  }
   ctx.save();
   ctx.translate(x, y);
-  ctx.scale(KEY_ICON / 24, KEY_ICON / 24);
+  ctx.scale(size / 24, size / 24);
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (const path of keyIconPaths) ctx.stroke(path);
+  for (const path of paths) ctx.stroke(path);
   ctx.restore();
+}
+
+/** Lucide's arrow-up-right at `KEY_ICON` pixels, its top-left corner at (x, y). */
+function drawKeyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  drawPaths(ctx, "arrowUpRight", x, y, KEY_ICON, color);
 }
 
 interface Cell {
@@ -288,19 +300,6 @@ const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
   { style: "qualified", key: "copyNamesQualified" },
   { style: "list", key: "copyNamesList" },
 ];
-
-function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "redo" | "revert" | "save" | "cancel" }) {
-  return <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {name === "add" && <><rect x="3" y="4" width="14" height="12" rx="1" /><path d="M10 7v6M7 10h6" /></>}
-    {name === "duplicate" && <><rect x="7" y="6" width="10" height="11" rx="1" /><path d="M13 6V3H3v11h4M12 9v5M9.5 11.5h5" /></>}
-    {name === "delete" && <><path d="M4 6h12M7 6V4h6v2M6 6l1 10h6l1-10M9 9v4M11 9v4" /></>}
-    {name === "undo" && <><path d="M7 6 3.5 9.5 7 13M4 9.5h7.5a4 4 0 0 1 0 8H10" /></>}
-    {name === "redo" && <><path d="M13 6l3.5 3.5L13 13M16 9.5H8.5a4 4 0 0 0 0 8H10" /></>}
-    {name === "revert" && <><path d="M3.5 4v4h4" /><path d="M4 8a6.5 6.5 0 1 1-.5 4" /></>}
-    {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4zM6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
-    {name === "cancel" && <><circle cx="10" cy="10" r="7" /><path d="m7 7 6 6M13 7l-6 6" /></>}
-  </svg>;
-}
 
 /** SQL spelling of each column filter operator, as SQLyog shows them. */
 const OPS: { op: FilterOpItem; sql: string }[] = [
@@ -1046,8 +1045,10 @@ export function ResultGrid({
       ctx.fillStyle = c.text;
       // The column's place in the sort: its direction and, with several keys, its position.
       const place = sortShown.findIndex((key) => key.column === col);
-      const mark = place < 0 ? "" : `${sortShown[place]?.descending ? "▼" : "▲"}${sortShown.length > 1 ? place + 1 : ""}`;
-      const markW = mark ? Math.ceil(ctx.measureText(mark).width) + 4 : 0;
+      const sorted = place >= 0;
+      const position = sorted && sortShown.length > 1 ? String(place + 1) : "";
+      const positionW = position ? Math.ceil(ctx.measureText(position).width) + 2 : 0;
+      const markW = sorted ? SORT_ICON + positionW + 4 : 0;
       // Under the name (SDB-385): the type, that it is masked, the zone its values are shown
       // in and the column's comment, each when it is asked for and known.
       const zone = cache.column(col)?.zone;
@@ -1061,11 +1062,16 @@ export function ResultGrid({
       ].filter((part) => part !== "").join(" · ");
       const nameY = typeLine ? 13 : HEADER_H / 2;
       ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - markW), x + PAD, nameY);
-      if (mark) {
-        ctx.fillStyle = c.accent;
-        ctx.textAlign = "right";
-        ctx.fillText(mark, x + w - PAD, nameY);
-        ctx.textAlign = "left";
+      if (sorted) {
+        const right = x + w - PAD;
+        if (position) {
+          ctx.fillStyle = c.accent;
+          ctx.textAlign = "right";
+          ctx.fillText(position, right, nameY);
+          ctx.textAlign = "left";
+        }
+        const arrow = sortShown[place]?.descending ? "arrowDown" : "arrowUp";
+        drawPaths(ctx, arrow, right - positionW - SORT_ICON, nameY - SORT_ICON / 2, SORT_ICON, c.accent);
       }
       ctx.font = c.typeFont;
       ctx.fillStyle = c.muted;
@@ -2270,7 +2276,7 @@ export function ResultGrid({
               disabled={hasPendingEdits}
               onClick={() => void applyColumnFilters((result.columnFilters ?? []).filter((_, j) => j !== i))}
             >
-              ×
+              <Icon name="x" />
             </button>
           </span>
         ))}
@@ -2935,24 +2941,24 @@ export function ResultGrid({
       <div className="result-editing">
         {editing && editing.inserts.length > 0 && <div className="pending-rows" aria-label={t("edit.newRows")}>
           {editing.inserts.map((values, index) => <div className="pending-row" key={index}>
-            <span className="pending-row-mark">+</span>
+            <Icon name="plus" className="pending-row-mark" />
             <button className="ghost small pending-row-values" title={t("edit.editNewRow")} disabled={editing.busy || sorting} onClick={() => setInserting({ values, index })}>{values.length ? values.map(({ column, value }) => `${result.columns[column]?.name ?? column}: ${value === null ? "NULL" : value}`).join(" · ") : t("edit.defaultRow")}</button>
-            <button className="ghost small" aria-label={t("edit.removeNewRow", { number: index + 1 })} disabled={editing.busy || sorting} onClick={() => editing.onRemoveInsert(index)}>×</button>
+            <button className="ghost small" aria-label={t("edit.removeNewRow", { number: index + 1 })} title={t("edit.removeNewRow", { number: index + 1 })} disabled={editing.busy || sorting} onClick={() => editing.onRemoveInsert(index)}><Icon name="x" /></button>
           </div>)}
         </div>}
         <div className="result-edit-toolbar" role="toolbar" aria-label={t(editing ? "edit.toolbar" : "queryPaging.label")}>
           {editing && <>
             <div className="result-row-actions" role="group" aria-label={t("edit.toolbar")}>
-              <button className="ghost" title={t("edit.shortcutAdd", { shortcut: keyText("addRow") })} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !ended(result)} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDuplicate", { shortcut: keyText("duplicateRow") })} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /><span>{t("edit.duplicateAction")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDelete", { shortcut: keyText("deleteSelectedRows") })} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /><span>{t("edit.deleteAction")}</span></button>
-              <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="revert" /><span>{t("edit.revertAction")}</span></button>
+              <button className="ghost" title={t("edit.shortcutAdd", { shortcut: keyText("addRow") })} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !ended(result)} onClick={() => setInserting({ values: [] })}><Icon name="addRow" /><span>{t("edit.addRow")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDuplicate", { shortcut: keyText("duplicateRow") })} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><Icon name="duplicateRow" /><span>{t("edit.duplicateAction")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDelete", { shortcut: keyText("deleteSelectedRows") })} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><Icon name="delete" /><span>{t("edit.deleteAction")}</span></button>
+              <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><Icon name="revert" /><span>{t("edit.revertAction")}</span></button>
             </div>
             <div className="result-commit-actions" role="group" aria-label={t("edit.pendingActions")}>
-              <button className="ghost" title={`${t("edit.undo")} (${UNDO_SHORTCUT})`} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><EditIcon name="undo" /></button>
-              <button className="ghost" title={`${t("edit.redo")} (${REDO_SHORTCUT})`} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><EditIcon name="redo" /></button>
-              <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave", { shortcut: keyText("saveEdits") })} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /><span>{t("edit.saveChanges")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDiscard", { shortcut: keyText("discardEdits") })} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><EditIcon name="cancel" /><span>{t("edit.discard")}</span></button>
+              <button className="ghost" title={`${t("edit.undo")} (${UNDO_SHORTCUT})`} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><Icon name="undo" /></button>
+              <button className="ghost" title={`${t("edit.redo")} (${REDO_SHORTCUT})`} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><Icon name="redo" /></button>
+              <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave", { shortcut: keyText("saveEdits") })} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><Icon name="save" /><span>{t("edit.saveChanges")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDiscard", { shortcut: keyText("discardEdits") })} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><Icon name="discard" /><span>{t("edit.discard")}</span></button>
             </div>
             <span className={`small result-edit-count${hasPendingEdits ? " has-pending" : " muted"}`} role="status">
               {hasPendingEdits ? t("edit.counts", { inserted: editing.inserts.length, deleted: editing.deleted.length, updated: updatedRows }) : t("edit.noPending")}
@@ -3127,7 +3133,7 @@ export function ResultGrid({
       <aside className="cell-viewer" aria-label={t("viewer.title")}>
         <header>
           <div className="cell-viewer-title"><strong>{t("viewer.title")}</strong></div>
-          <button className="ghost" aria-label={t("viewer.close", { shortcut: keyText("close") })} onClick={() => setViewer(false)}>×</button>
+          <button className="ghost" aria-label={t("viewer.close", { shortcut: keyText("close") })} title={t("viewer.close", { shortcut: keyText("close") })} onClick={() => setViewer(false)}><Icon name="x" /></button>
         </header>
         <p className="muted small">{t("viewer.selectCell")}</p>
       </aside>
@@ -3147,9 +3153,7 @@ export function ResultGrid({
           else setViewer(!viewer);
         }}
       >
-        <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <rect x="3" y="3.5" width="14" height="13" rx="1.5" /><path d="M11.5 4v12M5.5 7h3.5M5.5 10h3.5M5.5 13h2" />
-        </svg>
+        <Icon name="sidePanel" />
       </button>
       {tableData && keys.length > 0 && (
         <button
@@ -3167,7 +3171,7 @@ export function ResultGrid({
             }
           }}
         >
-          <Icon name="link" size={18} />
+          <Icon name="link" />
         </button>
       )}
       <button
@@ -3182,7 +3186,7 @@ export function ResultGrid({
           else openCalc();
         }}
       >
-        <Icon name="sigma" size={18} />
+        <Icon name="sigma" />
       </button>
       <button
         type="button"
@@ -3196,7 +3200,7 @@ export function ResultGrid({
           else openGroup();
         }}
       >
-        <Icon name="group" size={18} />
+        <Icon name="group" />
       </button>
     </div>
     {headerGhost && (
