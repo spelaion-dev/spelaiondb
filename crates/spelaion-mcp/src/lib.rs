@@ -458,8 +458,9 @@ pub struct ExplainArgs {
     pub connection: String,
     /// One read query for a new plan; omit when paging a cached plan_id.
     pub sql: Option<String>,
-    /// Opt in to the normalized plan tree (PostgreSQL, MySQL, MariaDB, SQL Server); omitted keeps the
-    /// user's JSON/TOON output.
+    // `{engines}` is filled in when the server starts (`with_plan_engines`).
+    /// Opt in to the normalized plan tree on {engines}; omitted keeps the user's JSON/TOON
+    /// output.
     pub structured: Option<bool>,
     /// Legacy output only; omitted keeps the user's configured JSON/TOON format.
     pub output_format: Option<OutputFormat>,
@@ -497,6 +498,47 @@ pub struct WriteArgs {
     pub sql: String,
 }
 
+/// Where `explain_query`'s description and its `structured` argument name the engines that
+/// structured plans work on.
+const PLAN_ENGINES: &str = "{engines}";
+
+/// The engines agents can ask for a structured plan on, as a sentence names them ("A, B or
+/// C"), from the core's own capabilities (SDB-103): a new engine there is named here with no
+/// change to this crate.
+fn plan_engine_names() -> String {
+    let names: Vec<&str> = spelaion_core::plan::agent_plan_engines()
+        .into_iter()
+        .map(Engine::label)
+        .collect();
+    match names.split_last() {
+        None => "no engine yet".into(),
+        Some((last, [])) => (*last).into(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+/// `router` with [`PLAN_ENGINES`] replaced by the engines' names in `explain_query`'s
+/// description and in its `structured` argument's.
+fn with_plan_engines(mut router: ToolRouter<SpelaionMcp>) -> ToolRouter<SpelaionMcp> {
+    let names = plan_engine_names();
+    if let Some(route) = router.map.get_mut("explain_query") {
+        let tool = &mut route.attr;
+        if let Some(description) = &tool.description {
+            tool.description = Some(description.replace(PLAN_ENGINES, &names).into());
+        }
+        let mut schema = (*tool.input_schema).clone();
+        if let Some(serde_json::Value::String(text)) = schema
+            .get_mut("properties")
+            .and_then(|properties| properties.get_mut("structured"))
+            .and_then(|structured| structured.get_mut("description"))
+        {
+            *text = text.replace(PLAN_ENGINES, &names);
+        }
+        tool.input_schema = Arc::new(schema);
+    }
+    router
+}
+
 #[tool_router]
 impl SpelaionMcp {
     pub fn new(options: ServerOptions) -> Result<Self, String> {
@@ -526,7 +568,7 @@ impl SpelaionMcp {
                 plans: spelaion_core::plan::PlanStore::new(),
                 plan_connections: Mutex::new(HashMap::new()),
             }),
-            tool_router: Self::tool_router(),
+            tool_router: with_plan_engines(Self::tool_router()),
         })
     }
 
@@ -1530,7 +1572,7 @@ impl SpelaionMcp {
     }
 
     #[tool(
-        description = concat!("Shows an estimated read-query plan, never ANALYZE. Set structured=true on PostgreSQL, MySQL, MariaDB or SQL Server for the same normalized core tree, metrics and findings as the desktop. Responses are complete JSON pages within 60 KB: continue with connection, plan_id=summary.id and offset=page.nextOffset, omitting sql (no re-execution). Release with release=true. By default, preserve the user's JSON/TOON output_format on every engine.", failure_codes!()),
+        description = concat!("Shows an estimated read-query plan, never ANALYZE. Set structured=true on {engines} for the same normalized core tree, metrics and findings as the desktop. Responses are complete JSON pages within 60 KB: continue with connection, plan_id=summary.id and offset=page.nextOffset, omitting sql (no re-execution). Release with release=true. By default, preserve the user's JSON/TOON output_format on every engine.", failure_codes!()),
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn explain_query(

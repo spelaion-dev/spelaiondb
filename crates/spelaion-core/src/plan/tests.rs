@@ -462,3 +462,39 @@ fn raw_windows_keep_unicode_boundaries_and_mcp_never_slices_a_large_node() {
     assert!(store.raw_window(summary.id, 1).is_err()); // Inside the UTF-8 BOM.
     assert!(store.tool_json(summary.id, 0, 50, 60_000).is_err());
 }
+
+/// The engines whose plans the core reads, and those agents may ask for them on (SDB-103). A
+/// change here changes what `explain_query` tells agents: its tests read the same list.
+#[test]
+fn the_engines_with_plans_come_from_the_plan_reader_and_the_agents_barrier() {
+    use spelaion_config::Engine;
+    let reads: Vec<Engine> = Engine::ALL
+        .into_iter()
+        .filter(|&e| reads_plans(e))
+        .collect();
+    assert_eq!(
+        reads,
+        [
+            Engine::Postgres,
+            Engine::Sqlite,
+            Engine::Mysql,
+            Engine::Mariadb,
+            Engine::Duckdb,
+            Engine::Sqlserver,
+            // SQLite's dialect, read by the same plan reader.
+            Engine::Libsql,
+        ]
+    );
+    // libSQL has no barrier for agents (ADR-058): its connections are never theirs.
+    assert_eq!(
+        agent_plan_engines(),
+        [
+            Engine::Postgres,
+            Engine::Sqlite,
+            Engine::Mysql,
+            Engine::Mariadb,
+            Engine::Duckdb,
+            Engine::Sqlserver,
+        ]
+    );
+}

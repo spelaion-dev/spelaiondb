@@ -20,8 +20,9 @@ mod tests;
 pub(crate) use mysql::Flavor;
 pub(crate) use run::PreparedPlan;
 pub use run::{
-    AnalyzeUnavailable, ExplainOptions, ExplainPolicy, PlanCapabilities, PlanPreflight, explain,
-    explain_preflight, explain_read_only, plan_capabilities,
+    AnalyzeUnavailable, ExplainOptions, ExplainPolicy, PlanCapabilities, PlanPreflight,
+    agent_plan_engines, explain, explain_preflight, explain_read_only, plan_capabilities,
+    reads_plans,
 };
 pub use store::{PlanStore, RawWindow};
 

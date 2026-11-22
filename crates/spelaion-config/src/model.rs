@@ -350,6 +350,41 @@ impl Engine {
         }
     }
 
+    /// The engine's name as people write it, for messages ("SQL Server", "libSQL").
+    pub fn label(self) -> &'static str {
+        match self {
+            Engine::Postgres => "PostgreSQL",
+            Engine::Mysql => "MySQL",
+            Engine::Mariadb => "MariaDB",
+            Engine::Sqlserver => "SQL Server",
+            Engine::Sqlite => "SQLite",
+            Engine::Duckdb => "DuckDB",
+            Engine::Mongodb => "MongoDB",
+            Engine::Clickhouse => "ClickHouse",
+            Engine::Redis => "Redis",
+            Engine::Trino => "Trino",
+            Engine::Presto => "Presto",
+            Engine::Oracle => "Oracle",
+            Engine::Libsql => "libSQL",
+            Engine::Cassandra => "Cassandra",
+            Engine::Tdengine => "TDengine",
+            Engine::Flightsql => "Arrow Flight SQL",
+            Engine::Dremio => "Dremio",
+            Engine::Gizmosql => "GizmoSQL",
+            Engine::Neo4j => "Neo4j",
+            Engine::Hive => "Apache Hive",
+            Engine::Spark => "Spark's Thrift server",
+            Engine::Kyuubi => "Apache Kyuubi",
+            Engine::Impala => "Apache Impala",
+            Engine::Databend => "Databend",
+            Engine::Spanner => "Cloud Spanner",
+            Engine::Elasticsearch => "Elasticsearch",
+            Engine::Opensearch => "OpenSearch",
+            Engine::Solr => "Solr",
+            Engine::Meilisearch => "Meilisearch",
+        }
+    }
+
     /// Whether the engine is queried with SQL. One that is not (ADR-056) has no read-only mode
     /// and no agents until its own barrier exists, and none has one yet.
     pub fn is_sql(self) -> bool {

@@ -63,6 +63,22 @@ fn supported(engine: &str) -> bool {
     )
 }
 
+/// Whether the core reads `engine`'s plans as a tree ([`explain`]): its dialect is one the
+/// plan reader writes an `EXPLAIN` for, the same check every plan starts with.
+pub fn reads_plans(engine: spelaion_config::Engine) -> bool {
+    crate::dialect_of(engine).is_some_and(|dialect| supported(dialect.name()))
+}
+
+/// The engines agents can ask for a structured plan on (SDB-103): the core reads their plans
+/// and agents see their connections (`has_read_barrier`), in `Engine::ALL`'s order. What the
+/// MCP server tells agents is built from this, never from a list of its own.
+pub fn agent_plan_engines() -> Vec<spelaion_config::Engine> {
+    spelaion_config::Engine::ALL
+        .into_iter()
+        .filter(|&engine| reads_plans(engine) && engine.has_read_barrier())
+        .collect()
+}
+
 pub fn plan_capabilities(session: &Session, policy: &ExplainPolicy) -> PlanCapabilities {
     let engine = session.dialect().name();
     let supported = supported(engine);
