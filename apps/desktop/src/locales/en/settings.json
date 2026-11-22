@@ -369,5 +369,18 @@
     "attribution": "Attribution",
     "attributionHint": "The credit the server asks maps to show. It is shown on the map.",
     "remove": "Remove tile server"
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "hint": "Every command of the app and the keys that run it. Find one by its name or by its keys, such as {{example}}.",
+    "search": "Search by name or keys",
+    "searchLabel": "Search commands",
+    "noMatch": "No command matches.",
+    "places": {
+      "global": "Anywhere",
+      "editor": "SQL editor",
+      "grid": "Result grid",
+      "none": "Without a shortcut"
+    }
   }
 }
