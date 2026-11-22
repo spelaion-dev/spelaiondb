@@ -9,6 +9,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
+import { webviewPage } from "./cdpPage.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const checkout = spawnSync("git", ["rev-parse", "HEAD"], { cwd:root, encoding:"utf8", windowsHide:true });
@@ -70,7 +71,7 @@ let app, browser, page, created = false;
 async function start(args = []) {
   app = spawn(exe, args, { cwd: profile, env: { ...process.env, SPELAION_USER_DIR: profile, SPELAION_PLAN_PASSWORD: "spelaion", SPELAION_NO_UPDATES: "1", SPELAION_MCP_CLIENTS_HOME: join(profile, "clients"), KUBECONFIG: join(profile, "none"), WEBVIEW2_USER_DATA_FOLDER: join(profile, "webview"), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` }, windowsHide: true, stdio: "inherit" });
   for (let n = 0; n < 90; n++) { try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`); break; } catch { await new Promise(done => setTimeout(done, 500)); } }
-  assert.ok(browser); page = browser.contexts()[0].pages()[0]; page.setDefaultTimeout(30_000);
+  assert.ok(browser); page = await webviewPage(browser); page.setDefaultTimeout(30_000);
   await page.locator(".activity-bar .settings-button").waitFor();
 }
 async function stop() {

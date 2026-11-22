@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { chromium } from "playwright-core";
+import { webviewPage } from "./cdpPage.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const profile = mkdtempSync(join(tmpdir(), "spelaion-library-"));
@@ -24,7 +25,7 @@ try {
     catch { await new Promise((done) => setTimeout(done, 500)); }
   }
   assert.ok(browser, "native app opens its CDP port");
-  page = browser.contexts()[0].pages()[0]; page.setDefaultTimeout(30_000);
+  page = await webviewPage(browser); page.setDefaultTimeout(30_000);
   await page.locator(".activity-bar .settings-button").waitFor();
   await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("set_language", { language: "en" }));
   const db = new DatabaseSync(join(profile, "db/state.db"));

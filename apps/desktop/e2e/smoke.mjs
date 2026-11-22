@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 import { commandLines, requestClose } from "./processes.mjs";
+import { webviewPage } from "./cdpPage.mjs";
 
 if (process.platform === "linux") {
   console.error("smoke.mjs drives WebView2 over CDP; on Linux run node e2e/smoke-linux.mjs (AGENTS.md)");
@@ -273,7 +274,8 @@ function testKubectls() {
  *  the focus, as it would in a window the user is working in: focus and blur events, `:focus`
  *  and `document.hasFocus()` behave as they do for a user. */
 async function appPage() {
-  const page = browser.contexts()[0].pages()[0];
+  // Every start (the first and each restart) waits for WebView2's context and page.
+  const page = await webviewPage(browser);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
   watchContentSecurityPolicy(page);
