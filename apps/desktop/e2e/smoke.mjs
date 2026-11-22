@@ -4233,7 +4233,11 @@ try {
   assert.equal(await idColumn.getAttribute("aria-selected"), "false");
   // Drop: the core's SQL first, without "Cascade" on SQLite, which has none.
   await amountColumn.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Drop…" }).click();
+  // The explorer's menus show each item's key beside it, as the tab menu does (SDB-85).
+  const dropItem = page.getByRole("menuitem", { name: "Drop…" });
+  assert.equal(await dropItem.locator(".menu-shortcut").innerText(), "Delete");
+  assert.equal(await dropItem.getAttribute("aria-keyshortcuts"), "Delete");
+  await dropItem.click();
   const dropColumn = page.getByRole("dialog", { name: "Drop renamed_probe.amount?" });
   await dropColumn.getByLabel("SQL that will run").filter({ hasText: "ALTER TABLE renamed_probe DROP COLUMN amount;" }).waitFor();
   assert.equal(await dropColumn.locator('input[name="cascade"]').count(), 0);

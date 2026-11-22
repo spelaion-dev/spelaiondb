@@ -35,6 +35,12 @@ export function keyText(id: KeyId): string {
   return shortcutText(KEYS[id].shortcut);
 }
 
+/** A shortcut as `aria-keyshortcuts` writes it: "Control+Shift+C", "Meta+C" on macOS. */
+export function ariaKeyShortcuts(shortcut: string): string {
+  const ctrl = isMac() ? "Meta" : "Control";
+  return shortcut.replace(/^Ctrl(?=\+)/, ctrl);
+}
+
 /** "Label (Shortcut)", for a tooltip; the label alone without a shortcut. */
 export function withShortcut(label: string, shortcut: string): string {
   return shortcut ? `${label} (${shortcut})` : label;

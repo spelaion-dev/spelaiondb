@@ -7,7 +7,7 @@ import { useTranslation } from "react-i18next";
 import type { ConnectionItem } from "../api";
 import { useApp } from "../store";
 import { disconnectAll, hasSessions } from "../connectionControl";
-import { shortcutText } from "../shortcuts";
+import { ariaKeyShortcuts, shortcutText } from "../shortcuts";
 
 /** The actions that need the explorer node's own state; the rest only need the store. */
 export interface ConnectionMenuActions {
@@ -29,10 +29,10 @@ export interface ConnectionMenuActions {
 
 /** The keys a menu item names: shown right-aligned and given to assistive technology. */
 const SHORTCUTS = {
-  openByName: { text: "Ctrl+Shift+D", aria: "Control+Shift+D" },
-  refresh: { text: "F5", aria: "F5" },
-  copy: { text: "Ctrl+C", aria: "Control+C" },
-  paste: { text: "Ctrl+V", aria: "Control+V" },
+  openByName: "Ctrl+Shift+D",
+  refresh: "F5",
+  copy: "Ctrl+C",
+  paste: "Ctrl+V",
 } as const;
 
 export function ConnectionMenu({
@@ -75,14 +75,14 @@ export function ConnectionMenu({
         role="menuitem"
         className={options.danger ? "danger-text" : undefined}
         aria-label={label}
-        aria-keyshortcuts={shortcut?.aria}
+        aria-keyshortcuts={shortcut ? ariaKeyShortcuts(shortcut) : undefined}
         onClick={() => {
           onClose(false);
           act();
         }}
       >
         <span>{label}</span>
-        <span className="menu-shortcut">{shortcut ? shortcutText(shortcut.text) : ""}</span>
+        <span className="menu-shortcut">{shortcut ? shortcutText(shortcut) : ""}</span>
       </button>
     );
   };

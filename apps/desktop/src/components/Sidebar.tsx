@@ -78,7 +78,8 @@ import { ObjectMenu } from "./ObjectMenu";
 import { MissingPlugin } from "./MissingPlugin";
 import { FolderMenuButton } from "./FolderMenu";
 import { folderSwitchBlocked, switchFolder } from "../folders";
-import { commandShortcut, keyText } from "../shortcuts";
+import { ariaKeyShortcuts, commandShortcut, keyText, shortcutText } from "../shortcuts";
+import { matchesShortcut } from "../commandRegistry";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -112,9 +113,34 @@ function useOnChange(value: unknown, action: () => void) {
   }, [value]);
 }
 
+/**
+ * An explorer row's own keys (docs/ui-guidelines.md, "Explorer row"): the handlers below match
+ * them, and the row's menus show them beside their items (SDB-85).
+ */
+const EXPLORER_SHORTCUTS = {
+  refresh: "F5",
+  rename: "F2",
+  drop: "Delete",
+  copyNames: "Ctrl+C",
+  copyQualifiedNames: "Ctrl+Shift+C",
+} as const;
+
+/**
+ * A menu item with its shortcut right-aligned, as in the tab menu. Its accessible name stays its
+ * label, and assistive technology gets the keys as `aria-keyshortcuts`.
+ */
+function ShortcutMenuItem({ label, shortcut, className, onClick }: { label: string; shortcut: string; className?: string; onClick(): void }) {
+  return (
+    <button role="menuitem" className={className} aria-label={label} aria-keyshortcuts={ariaKeyShortcuts(shortcut)} onClick={onClick}>
+      <span>{label}</span>
+      <span className="menu-shortcut">{shortcutText(shortcut)}</span>
+    </button>
+  );
+}
+
 /** F5 on a row refreshes what that row shows (and not the rows around it). */
 function isRefreshKey(e: React.KeyboardEvent): boolean {
-  if (e.key !== "F5") return false;
+  if (!matchesShortcut(e, EXPLORER_SHORTCUTS.refresh)) return false;
   e.preventDefault();
   e.stopPropagation();
   return true;
@@ -435,7 +461,7 @@ const CREATE_FOLDERS: Partial<Record<SchemaFolder, CreateKindItem>> = {
 
 /** Delete drops the focused object (after its dialog), as in DBeaver. */
 function isDropKey(e: React.KeyboardEvent): boolean {
-  if (e.key !== "Delete" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
+  if (!matchesShortcut(e, EXPLORER_SHORTCUTS.drop)) return false;
   e.preventDefault();
   e.stopPropagation();
   return true;
@@ -445,9 +471,7 @@ function isDropKey(e: React.KeyboardEvent): boolean {
 function DropMenuItem({ onClick }: { onClick(): void }) {
   const { t } = useTranslation("shell");
   return (
-    <button role="menuitem" className="danger-text" title="Delete" onClick={onClick}>
-      {t("objectChange.dropMenu")}
-    </button>
+    <ShortcutMenuItem className="danger-text" label={t("objectChange.dropMenu")} shortcut={EXPLORER_SHORTCUTS.drop} onClick={onClick} />
   );
 }
 
@@ -829,9 +853,7 @@ function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
             {t("showInExplorer")}
           </button>
           <hr />
-          <button role="menuitem" title="Delete" onClick={remove}>
-            {t("removeBookmark")}
-          </button>
+          <ShortcutMenuItem label={t("removeBookmark")} shortcut={EXPLORER_SHORTCUTS.drop} onClick={remove} />
         </ObjectMenu>
       )}
       {error && (
@@ -845,7 +867,7 @@ function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
 
 /** F2 renames the focused object, as in DBeaver. */
 function isRenameKey(e: React.KeyboardEvent): boolean {
-  if (e.key !== "F2" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
+  if (!matchesShortcut(e, EXPLORER_SHORTCUTS.rename)) return false;
   e.preventDefault();
   e.stopPropagation();
   return true;
@@ -869,10 +891,11 @@ function handleCopyKey(
   paths: () => ObjectPathItem[],
   onError: (message: string) => void,
 ): boolean {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== "c") return false;
+  const qualified = matchesShortcut(e, EXPLORER_SHORTCUTS.copyQualifiedNames);
+  if (!qualified && !matchesShortcut(e, EXPLORER_SHORTCUTS.copyNames)) return false;
   e.preventDefault();
   e.stopPropagation();
-  copyNames(session, paths(), e.shiftKey).catch((err: unknown) => onError(errorText(err)));
+  copyNames(session, paths(), qualified).catch((err: unknown) => onError(errorText(err)));
   return true;
 }
 
@@ -897,12 +920,16 @@ function CopyMenuItems({
   };
   return (
     <>
-      <button role="menuitem" onClick={() => copy(false)} title="Ctrl+C">
-        {several ? t("copyNames", { count }) : t("copyName")}
-      </button>
-      <button role="menuitem" onClick={() => copy(true)} title="Ctrl+Shift+C">
-        {several ? t("copyQualifiedNames", { count }) : t("copyQualifiedName")}
-      </button>
+      <ShortcutMenuItem
+        label={several ? t("copyNames", { count }) : t("copyName")}
+        shortcut={EXPLORER_SHORTCUTS.copyNames}
+        onClick={() => copy(false)}
+      />
+      <ShortcutMenuItem
+        label={several ? t("copyQualifiedNames", { count }) : t("copyQualifiedName")}
+        shortcut={EXPLORER_SHORTCUTS.copyQualifiedNames}
+        onClick={() => copy(true)}
+      />
     </>
   );
 }
@@ -2336,9 +2363,7 @@ function SchemaNode({
             </button>
           )}
           <hr />
-          <button role="menuitem" onClick={refresh}>
-            {t("refreshSchema")}
-          </button>
+          <ShortcutMenuItem label={t("refreshSchema")} shortcut={EXPLORER_SHORTCUTS.refresh} onClick={refresh} />
           <button
             role="menuitem"
             onClick={() => {
@@ -2845,9 +2870,7 @@ function ObjectNode({
               {t("editSource")}
             </button>
           )}
-          <button role="menuitem" onClick={refresh}>
-            {t("refresh")}
-          </button>
+          <ShortcutMenuItem label={t("refresh")} shortcut={EXPLORER_SHORTCUTS.refresh} onClick={refresh} />
           <hr />
           <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
           <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
@@ -2863,16 +2886,14 @@ function ObjectNode({
             </button>
           )}
           {canRename && (
-            <button
-              role="menuitem"
-              title="F2"
+            <ShortcutMenuItem
+              label={t("objectChange.renameMenu")}
+              shortcut={EXPLORER_SHORTCUTS.rename}
               onClick={() => {
                 setMenu(null);
                 setRenaming(true);
               }}
-            >
-              {t("objectChange.renameMenu")}
-            </button>
+            />
           )}
           <DropMenuItem
             onClick={() => {
@@ -3191,16 +3212,14 @@ function ColumnRow({
       {menu && (
         <ObjectMenu at={menu}>
           <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
-          <button
-            role="menuitem"
-            title="F2"
+          <ShortcutMenuItem
+            label={t("objectChange.renameMenu")}
+            shortcut={EXPLORER_SHORTCUTS.rename}
             onClick={() => {
               setMenu(null);
               setRenaming(true);
             }}
-          >
-            {t("objectChange.renameMenu")}
-          </button>
+          />
           <button
             role="menuitem"
             onClick={() => {
