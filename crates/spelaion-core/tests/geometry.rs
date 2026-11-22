@@ -490,6 +490,35 @@ async fn postgis() {
         MapCrs::LonLat,
     );
 
+    // Well-known text (SDB-214): `ST_AsText` without the SRID, `ST_AsEWKT` with it.
+    let expressions: Vec<String> = SHAPES
+        .iter()
+        .map(|(wkt, _)| format!("ST_AsText(ST_GeomFromText('{wkt}', 4326))"))
+        .collect();
+    let result = query(label, &session, &rows_sql(&expressions)).await;
+    let expected: Vec<Expected> = SHAPES
+        .iter()
+        .map(|(_, geojson)| expect(geojson, None, GeoFormat::Wkt))
+        .collect();
+    check(
+        label,
+        &session,
+        result,
+        "text",
+        &expected,
+        MapCrs::AssumedLonLat,
+    );
+    let expressions: Vec<String> = SHAPES
+        .iter()
+        .map(|(wkt, _)| format!("ST_AsEWKT(ST_GeomFromText('{wkt}', 4326))"))
+        .collect();
+    let result = query(label, &session, &rows_sql(&expressions)).await;
+    let expected: Vec<Expected> = SHAPES
+        .iter()
+        .map(|(_, geojson)| expect(geojson, Some(4326), GeoFormat::Wkt))
+        .collect();
+    check(label, &session, result, "text", &expected, MapCrs::LonLat);
+
     // Web Mercator, and a point with Z and M.
     let result = query(
         label,
@@ -556,6 +585,36 @@ async fn mysql_and_mariadb() {
             &session,
             result,
             "geometry",
+            &expected,
+            MapCrs::AssumedLonLat,
+        );
+
+        // The same shapes as `ST_AsText` writes them (SDB-214).
+        let result = query(
+            label,
+            &session,
+            "SELECT ST_AsText(g) FROM geo_places ORDER BY n",
+        )
+        .await;
+        let native = session
+            .results()
+            .get(result)
+            .expect("stored result")
+            .read()
+            .unwrap()
+            .schema()
+            .columns[0]
+            .native_type
+            .clone();
+        let expected: Vec<Expected> = SHAPES
+            .iter()
+            .map(|(_, geojson)| expect(geojson, None, GeoFormat::Wkt))
+            .collect();
+        check(
+            label,
+            &session,
+            result,
+            &native,
             &expected,
             MapCrs::AssumedLonLat,
         );

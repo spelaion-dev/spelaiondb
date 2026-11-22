@@ -183,7 +183,10 @@
   (`geometry`, `geography`), and that decides. An older plugin says `udt` for every CLR type:
   then a value at SRID 0 is geometry (geography always has an SRID), and one with an SRID is
   never guessed: it is not drawn, and `MapNote::SqlServerTypeUnknown` (the cell) and
-  `ColumnMap::type_unknown` (the column) say why.
+  `ColumnMap::type_unknown` (the column) say why. A text cell whose whole value is well-known
+  text (WKT, or EWKT with `SRID=…;`, as `ST_AsText` and `ST_AsEWKT` write it; SDB-214) is read
+  too, in any column, with the same bounds (nesting, finite coordinates, one geometry and
+  nothing after it).
   `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
   PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
   (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.

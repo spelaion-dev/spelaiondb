@@ -473,7 +473,7 @@ export function CellViewer(props: {
 }
 
 /** Names of the stored formats (brand and format names: not translated). */
-const GEO_FORMATS: Record<GeoFormat, string> = { wkb: "WKB", ewkb: "EWKB", mysql: "MySQL", spatialite: "SpatiaLite", geoPackage: "GeoPackage", sqlServer: "SQL Server" };
+const GEO_FORMATS: Record<GeoFormat, string> = { wkb: "WKB", ewkb: "EWKB", mysql: "MySQL", spatialite: "SpatiaLite", geoPackage: "GeoPackage", sqlServer: "SQL Server", wkt: "WKT" };
 
 /** The cell's geometry on a map, or every geometry of its column (read from the core's current
  *  view of the result, at most the core's limit of shapes). */
