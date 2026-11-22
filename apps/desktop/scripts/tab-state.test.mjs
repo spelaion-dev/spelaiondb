@@ -13,6 +13,7 @@ import {
   cancelling,
   connectFailed,
   connectFailure,
+  connectedConnections,
   connectedWith,
   connectionBusy,
   connectionInUse,
@@ -164,6 +165,10 @@ test("over every tab: busy, in use and open answer for one connection", () => {
   assert.equal(isConnected(tabs[1]), true);
   assert.equal(explorerSessionOpen(["pg"], "pg"), true);
   assert.equal(explorerSessionOpen(["pg"], "my"), false);
+  // What the explorer subscribes to: only connected tabs count, and a run changes nothing.
+  assert.deepEqual(connectedConnections(tabs), ["my"]);
+  const withRun = tabs.map((item) => (item.id === "b" ? { ...item, run: running } : item));
+  assert.deepEqual(connectedConnections(withRun), connectedConnections(tabs));
 });
 
 /** The kinds of question the dialog store queues, read from its `Requests` interface. */

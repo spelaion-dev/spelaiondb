@@ -9,10 +9,10 @@ import { useApp } from "../store";
 
 export function CommandMenuItem({ id, tab, onClose }: { id: CommandId; tab: string | null; onClose(): void }) {
   const { t } = useTranslation();
-  // Whether it can run, and its name (Pin / Unpin), follow the tabs.
-  useApp((s) => s.tabs);
-  useApp((s) => s.closedTabs.length);
   const context: CommandContext = { tab, source: "menu" };
+  // Whether it can run, and its name (Pin / Unpin), follow the tabs: re-rendered when one of
+  // them changes, not on every change to a tab (SDB-110).
+  useApp((s) => `${s.tabs.length}|${s.closedTabs.length}|${commandEnabled(id, context)}|${commandLabel(id, context)}`);
   const shortcut = commandSpec(id).shortcut;
   return (
     <button

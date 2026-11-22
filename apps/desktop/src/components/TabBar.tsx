@@ -4,6 +4,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useShallow } from "zustand/react/shallow";
 import { closeQueryTab, defaultTabLabel, tabLabel } from "../connect";
 import { topDialog } from "../modalFocus";
 import { isModified } from "../sqlFiles";
@@ -46,7 +47,9 @@ interface Drag {
 
 export function TabBar({ hidden }: { hidden: boolean }) {
   const { t } = useTranslation(["app", "shell", "editor"]);
-  const tabs = useApp((s) => s.tabs);
+  // Only the tabs' ids and order: what a tab shows is read by its own TabItem, so a change
+  // inside one tab (its run, its connection) re-renders only that tab's item (SDB-110).
+  const tabIds = useApp(useShallow((s) => s.tabs.map((tab) => tab.id)));
   const activeTab = useApp((s) => s.activeTab);
   const renaming = useApp((s) => s.renamingTab);
   const setActiveTab = useApp((s) => s.setActiveTab);
@@ -75,6 +78,7 @@ export function TabBar({ hidden }: { hidden: boolean }) {
 
   /** Where among the other tabs a tab dropped at `x` lands, kept inside its group. */
   function dropIndex(id: string, x: number): number {
+    const tabs = useApp.getState().tabs;
     const others = tabs.filter((tab) => tab.id !== id);
     let index = 0;
     for (const tab of others) {
@@ -97,154 +101,29 @@ export function TabBar({ hidden }: { hidden: boolean }) {
   }
 
   // Where the dragged tab would land: before one of the others, or after the last of them.
-  const others = drag?.dragging ? tabs.filter((tab) => tab.id !== drag.id) : [];
-  const dropBefore = drag?.dragging ? others[drag.target]?.id ?? null : null;
-  const dropAfter = drag?.dragging && drag.target >= others.length ? others[others.length - 1]?.id ?? null : null;
+  const others = drag?.dragging ? tabIds.filter((id) => id !== drag.id) : [];
+  const dropBefore = drag?.dragging ? others[drag.target] ?? null : null;
+  const dropAfter = drag?.dragging && drag.target >= others.length ? others[others.length - 1] ?? null : null;
+  const strip: TabStrip = { tabIds, swallowClick, dragRef, updateDrag, dropIndex, focusTab, openMenuAt, setMenu };
 
   return (
     <div className="tab-strip" hidden={hidden}>
       <div className="tabbar" role="tablist" ref={bar}>
-        {tabs.map((tab, index) => {
-          const label = tabLabel(tab);
-          const active = tab.id === activeTab;
-          const running = isRunning(tab);
-          const status = statusName(tab);
-          const transaction = transactionOf(tab);
-          const classes = [
-            "tab",
-            active ? "active" : "",
-            tab.pinned ? "pinned" : "",
-            drag?.dragging && drag.id === tab.id ? "dragging" : "",
-            dropBefore === tab.id ? "drop-before" : "",
-            dropAfter === tab.id ? "drop-after" : "",
-          ].filter(Boolean).join(" ");
-          return (
-            <div
-              key={tab.id}
-              id={`workspace-${tab.id}`}
-              role="tab"
-              aria-selected={active}
-              data-pinned={tab.pinned ? "true" : undefined}
-              className={classes}
-              tabIndex={active ? 0 : -1}
-              title={[tab.title ? `${tab.title} (${defaultTabLabel(tab)})` : label, tab.file?.path].filter(Boolean).join("\n")}
-              onClick={() => {
-                if (swallowClick.current) {
-                  swallowClick.current = false;
-                  return;
-                }
-                setActiveTab(tab.id);
-              }}
-              onAuxClick={(e) => {
-                // A middle click closes, like a browser tab; never a pinned one.
-                if (e.button !== 1 || tab.pinned) return;
-                e.preventDefault();
-                void closeQueryTab(tab.id);
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setActiveTab(tab.id);
-                setMenu({ id: tab.id, x: e.clientX, y: e.clientY });
-              }}
-              onPointerDown={(e) => {
-                if (e.button !== 0 || renaming === tab.id) return;
-                if ((e.target as Element).closest("button, input")) return;
-                updateDrag({ id: tab.id, pointer: e.pointerId, startX: e.clientX, dragging: false, target: index });
-              }}
-              onPointerMove={(e) => {
-                const current = dragRef.current;
-                if (!current || current.id !== tab.id || current.pointer !== e.pointerId) return;
-                if (!current.dragging) {
-                  if (Math.abs(e.clientX - current.startX) < DRAG_THRESHOLD) return;
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                }
-                const target = dropIndex(tab.id, e.clientX);
-                if (!current.dragging || target !== current.target) updateDrag({ ...current, dragging: true, target });
-              }}
-              onPointerUp={(e) => {
-                const current = dragRef.current;
-                if (!current || current.id !== tab.id) return;
-                updateDrag(null);
-                if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-                if (!current.dragging) return;
-                swallowClick.current = true;
-                // The click after the drag may not come (the pointer left the tab): forget it soon.
-                setTimeout(() => { swallowClick.current = false; }, 0);
-                useApp.getState().moveTab(tab.id, current.target);
-                setActiveTab(tab.id);
-              }}
-              onPointerCancel={() => updateDrag(null)}
-              onDoubleClick={(e) => {
-                if ((e.target as Element).closest("button, input")) return;
-                startRename(tab.id);
-              }}
-              onKeyDown={(e) => {
-                if (e.target !== e.currentTarget || tabs.length === 0) return;
-                if (e.key === "F2" && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-                  e.preventDefault();
-                  startRename(tab.id);
-                  return;
-                }
-                if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
-                  e.preventDefault();
-                  openMenuAt(tab.id, e.currentTarget);
-                  return;
-                }
-                let next: number;
-                if (e.key === "ArrowRight") next = (index + 1) % tabs.length;
-                else if (e.key === "ArrowLeft") next = (index + tabs.length - 1) % tabs.length;
-                else if (e.key === "Home") next = 0;
-                else if (e.key === "End") next = tabs.length - 1;
-                else return;
-                e.preventDefault();
-                const target = tabs[next];
-                if (target) focusTab(target.id);
-              }}
-            >
-              <TabIcon kind={tabKind(tab)} />
-              {running ? (
-                <span className="tab-running" role="img" aria-label={t("tabs.running")} title={t("tabs.running")} />
-              ) : (
-                <span className={`dot dot-${status}`} role="img" aria-label={t(`editor:status.${status}`)} title={t(`editor:status.${status}`)} />
-              )}
-              {transaction?.kind === "followed" && transaction.inTransaction && (
-                <span className={`tab-tx${transaction.transaction.kind === "failed" ? " tab-tx-failed" : ""}`} title={t("editor:transaction.tabBadge")} aria-label={t("editor:transaction.tabBadge")}>TX</span>
-              )}
-              {renaming === tab.id ? (
-                <RenameInput tab={tab} onDone={() => document.getElementById(`workspace-${tab.id}`)?.focus()} />
-              ) : (
-                <span className="tab-label">{label}</span>
-              )}
-              {isModified(tab) && (
-                <span className="tab-unsaved" role="img" aria-label={t("tabs.unsaved")} title={t("tabs.unsaved")} />
-              )}
-              {tab.pinned ? (
-                <button
-                  className="close tab-unpin"
-                  aria-label={t("tabs.unpinButton", { name: label })}
-                  title={`${t("tabs.unpin")} (${commandSpec("tab.pin").shortcut})`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    useApp.getState().setPinned(tab.id, false);
-                  }}
-                >
-                  <Icon name="pin" />
-                </button>
-              ) : (
-                <button
-                  className="close"
-                  aria-label={t("closeTab", { name: label })}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void closeQueryTab(tab.id);
-                  }}
-                >
-                  <Icon name="x" />
-                </button>
-              )}
-            </div>
-          );
-        })}
+        {tabIds.map((id, index) => (
+          <TabItem
+            key={id}
+            id={id}
+            index={index}
+            active={id === activeTab}
+            renaming={renaming === id}
+            marks={[
+              drag?.dragging && drag.id === id ? "dragging" : "",
+              dropBefore === id ? "drop-before" : "",
+              dropAfter === id ? "drop-after" : "",
+            ].filter(Boolean).join(" ")}
+            strip={strip}
+          />
+        ))}
       </div>
       <button className="new-tab" type="button" onClick={() => addTab(null)} title={t("newQueryShortcut")} aria-label={t("newQueryShortcut")}><Icon name="plus" /></button>
       <FileMenuButton />
@@ -254,10 +133,187 @@ export function TabBar({ hidden }: { hidden: boolean }) {
   );
 }
 
+/** What a tab's item needs from the strip: the order, the drag and the menu. */
+interface TabStrip {
+  tabIds: string[];
+  swallowClick: { current: boolean };
+  dragRef: { current: Drag | null };
+  updateDrag(next: Drag | null): void;
+  dropIndex(id: string, x: number): number;
+  focusTab(id: string): void;
+  openMenuAt(id: string, element: HTMLElement): void;
+  setMenu(menu: { id: string; x: number; y: number }): void;
+}
+
+/** What one tab shows in the strip, as plain values: its item re-renders only when one of them
+ *  changes, never for its run's progress or results (SDB-110). */
+function tabView(tab: Tab) {
+  const transaction = transactionOf(tab);
+  return {
+    label: tabLabel(tab),
+    title: [tab.title ? `${tab.title} (${defaultTabLabel(tab)})` : tabLabel(tab), tab.file?.path].filter(Boolean).join("\n"),
+    kind: tabKind(tab),
+    pinned: Boolean(tab.pinned),
+    running: isRunning(tab),
+    status: statusName(tab),
+    transaction: transaction?.kind === "followed" && transaction.inTransaction
+      ? (transaction.transaction.kind === "failed" ? "failed" : "open")
+      : null,
+    modified: isModified(tab),
+  };
+}
+
+function TabItem({ id, index, active, renaming, marks, strip }: {
+  id: string;
+  index: number;
+  active: boolean;
+  renaming: boolean;
+  /** The drag's classes on this tab. */
+  marks: string;
+  strip: TabStrip;
+}) {
+  const { t } = useTranslation(["app", "shell", "editor"]);
+  const view = useApp(useShallow((s) => {
+    const tab = s.tabs.find((item) => item.id === id);
+    return tab ? tabView(tab) : null;
+  }));
+  if (!view) return null;
+  const { tabIds, swallowClick, dragRef, updateDrag, dropIndex, focusTab, openMenuAt, setMenu } = strip;
+  const setActiveTab = useApp.getState().setActiveTab;
+  const classes = ["tab", active ? "active" : "", view.pinned ? "pinned" : "", marks].filter(Boolean).join(" ");
+  return (
+    <div
+      id={`workspace-${id}`}
+      role="tab"
+      aria-selected={active}
+      data-pinned={view.pinned ? "true" : undefined}
+      className={classes}
+      tabIndex={active ? 0 : -1}
+      title={view.title}
+      onClick={() => {
+        if (swallowClick.current) {
+          swallowClick.current = false;
+          return;
+        }
+        setActiveTab(id);
+      }}
+      onAuxClick={(e) => {
+        // A middle click closes, like a browser tab; never a pinned one.
+        if (e.button !== 1 || view.pinned) return;
+        e.preventDefault();
+        void closeQueryTab(id);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setActiveTab(id);
+        setMenu({ id, x: e.clientX, y: e.clientY });
+      }}
+      onPointerDown={(e) => {
+        if (e.button !== 0 || renaming) return;
+        if ((e.target as Element).closest("button, input")) return;
+        updateDrag({ id, pointer: e.pointerId, startX: e.clientX, dragging: false, target: index });
+      }}
+      onPointerMove={(e) => {
+        const current = dragRef.current;
+        if (!current || current.id !== id || current.pointer !== e.pointerId) return;
+        if (!current.dragging) {
+          if (Math.abs(e.clientX - current.startX) < DRAG_THRESHOLD) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }
+        const target = dropIndex(id, e.clientX);
+        if (!current.dragging || target !== current.target) updateDrag({ ...current, dragging: true, target });
+      }}
+      onPointerUp={(e) => {
+        const current = dragRef.current;
+        if (!current || current.id !== id) return;
+        updateDrag(null);
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+        if (!current.dragging) return;
+        swallowClick.current = true;
+        // The click after the drag may not come (the pointer left the tab): forget it soon.
+        setTimeout(() => { swallowClick.current = false; }, 0);
+        useApp.getState().moveTab(id, current.target);
+        setActiveTab(id);
+      }}
+      onPointerCancel={() => updateDrag(null)}
+      onDoubleClick={(e) => {
+        if ((e.target as Element).closest("button, input")) return;
+        startRename(id);
+      }}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || tabIds.length === 0) return;
+        if (e.key === "F2" && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+          e.preventDefault();
+          startRename(id);
+          return;
+        }
+        if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+          e.preventDefault();
+          openMenuAt(id, e.currentTarget);
+          return;
+        }
+        let next: number;
+        if (e.key === "ArrowRight") next = (index + 1) % tabIds.length;
+        else if (e.key === "ArrowLeft") next = (index + tabIds.length - 1) % tabIds.length;
+        else if (e.key === "Home") next = 0;
+        else if (e.key === "End") next = tabIds.length - 1;
+        else return;
+        e.preventDefault();
+        const target = tabIds[next];
+        if (target) focusTab(target);
+      }}
+    >
+      <TabIcon kind={view.kind} />
+      {view.running ? (
+        <span className="tab-running" role="img" aria-label={t("tabs.running")} title={t("tabs.running")} />
+      ) : (
+        <span className={`dot dot-${view.status}`} role="img" aria-label={t(`editor:status.${view.status}`)} title={t(`editor:status.${view.status}`)} />
+      )}
+      {view.transaction && (
+        <span className={`tab-tx${view.transaction === "failed" ? " tab-tx-failed" : ""}`} title={t("editor:transaction.tabBadge")} aria-label={t("editor:transaction.tabBadge")}>TX</span>
+      )}
+      {renaming ? (
+        <RenameInput id={id} onDone={() => document.getElementById(`workspace-${id}`)?.focus()} />
+      ) : (
+        <span className="tab-label">{view.label}</span>
+      )}
+      {view.modified && (
+        <span className="tab-unsaved" role="img" aria-label={t("tabs.unsaved")} title={t("tabs.unsaved")} />
+      )}
+      {view.pinned ? (
+        <button
+          className="close tab-unpin"
+          aria-label={t("tabs.unpinButton", { name: view.label })}
+          title={`${t("tabs.unpin")} (${commandSpec("tab.pin").shortcut})`}
+          onClick={(e) => {
+            e.stopPropagation();
+            useApp.getState().setPinned(id, false);
+          }}
+        >
+          <Icon name="pin" />
+        </button>
+      ) : (
+        <button
+          className="close"
+          aria-label={t("closeTab", { name: view.label })}
+          onClick={(e) => {
+            e.stopPropagation();
+            void closeQueryTab(id);
+          }}
+        >
+          <Icon name="x" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** The tab's name, edited in place: Enter or leaving keeps it, Escape forgets it. */
-function RenameInput({ tab, onDone }: { tab: Tab; onDone(): void }) {
+function RenameInput({ id, onDone }: { id: string; onDone(): void }) {
   const { t } = useTranslation("app");
-  const [value, setValue] = useState(tabLabel(tab));
+  // Read once: the name being typed is this input's own until it is kept.
+  const [tab] = useState(() => useApp.getState().tabs.find((item) => item.id === id));
+  const [value, setValue] = useState(tab ? tabLabel(tab) : "");
   const input = useRef<HTMLInputElement>(null);
   const finished = useRef(false);
   useEffect(() => {
@@ -269,7 +325,7 @@ function RenameInput({ tab, onDone }: { tab: Tab; onDone(): void }) {
     finished.current = true;
     const app = useApp.getState();
     // The default name typed back is no name of the user's.
-    if (keep) app.renameTab(tab.id, value === defaultTabLabel(tab) ? "" : value);
+    if (keep && tab) app.renameTab(id, value === defaultTabLabel(tab) ? "" : value);
     app.setRenamingTab(null);
     onDone();
   };
@@ -277,7 +333,7 @@ function RenameInput({ tab, onDone }: { tab: Tab; onDone(): void }) {
     <input
       ref={input}
       className="tab-rename"
-      aria-label={t("tabs.renameLabel", { name: tabLabel(tab) })}
+      aria-label={t("tabs.renameLabel", { name: tab ? tabLabel(tab) : value })}
       value={value}
       size={Math.max(8, Math.min(40, value.length + 1))}
       onChange={(e) => setValue(e.target.value)}
@@ -384,6 +440,8 @@ function recentOrder(): string[] {
   return [...recent, ...tabs.map((tab) => tab.id).filter((id) => !recent.includes(id))];
 }
 
+const NO_TABS: Tab[] = [];
+
 /**
  * Ctrl+Tab: while Ctrl is held, Tab and Shift+Tab move through the tabs most recently used
  * first; releasing Ctrl switches to the chosen one, Escape keeps the current one. One quick
@@ -393,7 +451,8 @@ function TabSwitcher() {
   const { t } = useTranslation("app");
   const [state, setState] = useState<{ order: string[]; index: number } | null>(null);
   const ref = useRef(state);
-  const tabs = useApp((s) => s.tabs);
+  // The tabs only while the switcher is open: closed, a change to a tab costs it nothing.
+  const tabs = useApp((s) => (state ? s.tabs : NO_TABS));
 
   useEffect(() => {
     const update = (next: { order: string[]; index: number } | null) => {

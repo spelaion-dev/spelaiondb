@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
 import { chooseFolder, workspaceParent } from "../dialogs";
 import { Trans, useTranslation } from "react-i18next";
 import {
@@ -47,7 +48,7 @@ import { sortByName } from "../explorerSort";
 import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
-import { connectionOpen, explorerSessionOpen, isConnected, isRunning, statusName } from "../tabState";
+import { connectedConnections, explorerSessionOpen, isConnected, isRunning, statusName } from "../tabState";
 import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
 import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
@@ -1300,14 +1301,18 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const explorer = usePreferences((s) => s.explorer);
   useEffect(() => setClosedFilteredFolders(new Set()), [filterText, activeTags.join("\u0000"), explorer.connectedOnly]);
   const explorerConnected = useApp((s) => s.explorerConnected);
-  const tabs = useApp((s) => s.tabs);
+  // What the tree needs from the tabs, as plain values: a tab's run never re-renders the
+  // explorer (SDB-110).
+  const tabConnections = useApp(useShallow((s) => connectedConnections(s.tabs)));
   /** Opened in the explorer or used by a connected tab. */
-  const connected = (c: ConnectionItem) => connectionOpen(tabs, explorerConnected, c.id);
+  const connected = (c: ConnectionItem) => explorerSessionOpen(explorerConnected, c.id) || tabConnections.includes(c.id);
   // "Link with editor": the active tab's connection, schema and table, shown in the tree.
-  const activeTab = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab) ?? null);
-  const linked = activeTab
-    ? [activeTab.id, activeTab.connectionId, statusName(activeTab), isRunning(activeTab), activeTab.table?.schema, activeTab.table?.name].join("|")
-    : "";
+  const linked = useApp((s) => {
+    const activeTab = s.tabs.find((tab) => tab.id === s.activeTab);
+    return activeTab
+      ? [activeTab.id, activeTab.connectionId, statusName(activeTab), isRunning(activeTab), activeTab.table?.schema, activeTab.table?.name].join("|")
+      : "";
+  });
   useEffect(() => {
     const tab = useApp.getState().tabs.find((t) => t.id === useApp.getState().activeTab);
     if (!explorer.linkWithEditor || !tab?.connectionId) return;
