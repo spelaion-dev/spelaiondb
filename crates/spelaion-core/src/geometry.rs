@@ -1,8 +1,9 @@
 //! Geometry values on a map (ADR-045). Each engine stores a geometry its own way: PostGIS as
 //! EWKB (its text is that in hexadecimal), MySQL and MariaDB as a four-byte SRID followed by
 //! WKB, SpatiaLite in its own blob, GeoPackage files in theirs, DuckDB's spatial extension as
-//! WKB. Here every one of them becomes the same GeoJSON geometry, which is the only thing the
-//! map view receives: it never parses database bytes itself.
+//! WKB, SQL Server in its CLR serialization (MS-SSCLRT). Here every one of them becomes the same
+//! GeoJSON geometry, which is the only thing the map view receives: it never parses database
+//! bytes itself.
 //!
 //! The bytes are untrusted: every count is checked against the bytes left before anything is
 //! allocated, nesting is bounded, a value must be read to its last byte, and a coordinate that
@@ -168,6 +169,8 @@ pub enum GeoFormat {
     Spatialite,
     /// A GeoPackage geometry: its header, then WKB.
     GeoPackage,
+    /// SQL Server's `geometry` or `geography`, in its CLR serialization (MS-SSCLRT).
+    SqlServer,
 }
 
 /// The coordinates a value had before Z and M were left out.
@@ -274,23 +277,25 @@ pub fn is_geometry_type(native_type: &str) -> bool {
 
 /// The cell as a geometry, if it is one. Bytes are recognised by their format (SpatiaLite's
 /// and GeoPackage's blobs by their markers, WKB and MySQL's by reading cleanly to the end), in
-/// any column; text only in a spatial column (PostGIS's hexadecimal EWKB).
+/// any column, and SQL Server's in a column of a CLR type; text only in a spatial column
+/// (PostGIS's hexadecimal EWKB).
 pub fn read_geometry(value: &Value, native_type: &str) -> Option<GeoValue> {
+    read_cell_geometry(value, native_type).ok().flatten()
+}
+
+/// [`read_geometry`], and why a value that is a geometry is not drawn ([`MapNote`]).
+pub fn read_cell_geometry(value: &Value, native_type: &str) -> Result<Option<GeoValue>, MapNote> {
     let spatial = is_geometry_type(native_type);
-    match value {
-        Value::Bytes(bytes) => read_bytes(bytes, spatial),
-        Value::Text(text) | Value::Native(text) if spatial => {
-            let bytes = decode_hex(text.trim())?;
-            let (value, ewkb) = read_wkb(&bytes)?;
-            Some(GeoValue {
-                format: if ewkb {
-                    GeoFormat::Ewkb
-                } else {
-                    GeoFormat::Wkb
-                },
-                ..value
-            })
+    Ok(match value {
+        Value::Bytes(bytes) => {
+            let clr = match clr_type(native_type) {
+                Some(clr) => read_clr(bytes, clr)?,
+                None => None,
+            };
+            clr.filter(|value| spatial || value.geometry.points() > 0)
+                .or_else(|| read_bytes(bytes, spatial))
         }
+        Value::Text(text) | Value::Native(text) if spatial => read_hex_wkb(text.trim()),
         Value::Null
         | Value::Bool(_)
         | Value::Int(_)
@@ -306,7 +311,21 @@ pub fn read_geometry(value: &Value, native_type: &str) -> Option<GeoValue> {
         | Value::Interval(_)
         | Value::Array(_)
         | Value::Native(_) => None,
-    }
+    })
+}
+
+/// PostGIS's text for a geometry: its EWKB in hexadecimal.
+fn read_hex_wkb(text: &str) -> Option<GeoValue> {
+    let bytes = decode_hex(text)?;
+    let (value, ewkb) = read_wkb(&bytes)?;
+    Some(GeoValue {
+        format: if ewkb {
+            GeoFormat::Ewkb
+        } else {
+            GeoFormat::Wkb
+        },
+        ..value
+    })
 }
 
 fn read_bytes(bytes: &[u8], spatial: bool) -> Option<GeoValue> {
@@ -791,6 +810,288 @@ fn compressed_positions(
     Some(out)
 }
 
+/// The CLR type of a SQL Server column, as far as its native type tells: its two spatial
+/// types are serialized alike, but geography keeps latitude before longitude.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClrType {
+    Geometry,
+    Geography,
+    /// A CLR type the driver did not name (`udt`): see [`read_clr`].
+    Unnamed,
+}
+
+/// Why a value that is a geometry is not drawn on the map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum MapNote {
+    /// A SQL Server spatial value with an SRID in a column the driver did not name (`udt`):
+    /// it may be geometry (x first) or geography (latitude first), and is not guessed. A
+    /// SQL Server plugin that names the column's type draws it.
+    SqlServerTypeUnknown,
+}
+
+/// A SQL Server spatial value as its column's CLR type says. A value of a type the driver did
+/// not name is geometry when it has no SRID (geography always has one); with an SRID it could
+/// be either, and drawing a geometry with its axes swapped would mislead: it is not drawn,
+/// and says why.
+fn read_clr(bytes: &[u8], clr: ClrType) -> Result<Option<GeoValue>, MapNote> {
+    match clr {
+        ClrType::Geometry => Ok(read_sqlserver(bytes, false)),
+        ClrType::Geography => Ok(read_sqlserver(bytes, true)),
+        ClrType::Unnamed => match read_sqlserver(bytes, false) {
+            Some(value) if value.srid.is_some() => Err(MapNote::SqlServerTypeUnknown),
+            other => Ok(other),
+        },
+    }
+}
+
+/// Whether a column's values may be SQL Server's spatial serialization, and of which type.
+fn clr_type(native_type: &str) -> Option<ClrType> {
+    let name = native_type.trim().to_ascii_lowercase();
+    match name.rsplit('.').next().unwrap_or(&name) {
+        "geometry" => Some(ClrType::Geometry),
+        "geography" => Some(ClrType::Geography),
+        "udt" => Some(ClrType::Unnamed),
+        _ => None,
+    }
+}
+
+/// One figure of a SQL Server value: a run of its points (a ring, a line or a point).
+struct Figure {
+    first_point: usize,
+}
+
+/// One shape: its parent shape (none for the root), its first figure (none when empty) and its
+/// OpenGIS type.
+struct Shape {
+    parent: Option<usize>,
+    first_figure: Option<usize>,
+    kind: u8,
+}
+
+/// SQL Server's `geometry` and `geography` (MS-SSCLRT, versions 1 and 2), little-endian: the
+/// SRID, the version, the properties (Z, M, valid, a single point, a single line segment,
+/// larger than a hemisphere), then either that point or segment, or every point, its Z and M
+/// values, the figures (runs of points) and the shapes (a tree of OpenGIS types over the
+/// figures). Arcs, curves and the full globe are not drawn. `geography` reads each point
+/// latitude first, as geography stores it.
+fn read_sqlserver(data: &[u8], geography: bool) -> Option<GeoValue> {
+    let mut bytes = Bytes::new(data);
+    let srid = bytes.u32(true)? as i32;
+    let version = bytes.u8()?;
+    let known_flags = match version {
+        1 => 0b1_1111,
+        2 => 0b11_1111,
+        _ => return None,
+    };
+    let flags = bytes.u8()?;
+    if flags & !known_flags != 0 {
+        return None;
+    }
+    let (z, m) = (flags & 0x01 != 0, flags & 0x02 != 0);
+    let (single_point, single_segment) = (flags & 0x08 != 0, flags & 0x10 != 0);
+    if single_point && single_segment {
+        return None;
+    }
+    let dimensions = Dimensions::new(z, m);
+    // Z and M follow all the points, a double per point each.
+    let extra = usize::from(z) + usize::from(m);
+    let point = |bytes: &mut Bytes| {
+        let a = bytes.f64(true)?;
+        let b = bytes.f64(true)?;
+        finite(if geography { [b, a] } else { [a, b] })
+    };
+    let geometry = if single_point || single_segment {
+        let n = if single_point { 1 } else { 2 };
+        let points = (0..n)
+            .map(|_| point(&mut bytes))
+            .collect::<Option<Vec<_>>>()?;
+        bytes.take(8 * extra * n)?;
+        if single_point {
+            Geometry::Point {
+                coordinates: points[0].to_vec(),
+            }
+        } else {
+            Geometry::LineString {
+                coordinates: points,
+            }
+        }
+    } else {
+        let n = bytes.count(true, 16 + 8 * extra)?;
+        let points = (0..n)
+            .map(|_| point(&mut bytes))
+            .collect::<Option<Vec<_>>>()?;
+        bytes.take(8 * extra * n)?;
+        let figures = sqlserver_figures(&mut bytes, version, points.len())?;
+        let shapes = sqlserver_shapes(&mut bytes, figures.len())?;
+        sqlserver_geometry(&points, &figures, &shapes)?
+    };
+    (bytes.left() == 0).then_some(GeoValue {
+        geometry,
+        srid: u32::try_from(srid).ok().filter(|&s| s != 0),
+        format: GeoFormat::SqlServer,
+        dimensions,
+    })
+}
+
+/// The figures, each the offset of its first point; offsets never go back. Version 1 marks a
+/// figure as an interior ring, a stroke or an exterior ring; version 2 as a point, a line, an
+/// arc or a composite curve, and arcs and composite curves are not drawn.
+fn sqlserver_figures(bytes: &mut Bytes, version: u8, points: usize) -> Option<Vec<Figure>> {
+    let n = bytes.count(true, 5)?;
+    let mut figures = Vec::with_capacity(n);
+    let mut last = 0;
+    for _ in 0..n {
+        let attribute = bytes.u8()?;
+        let drawn = match version {
+            1 => attribute <= 2,
+            _ => attribute <= 1,
+        };
+        let first_point = bytes.u32(true)? as usize;
+        if !drawn || first_point < last || first_point > points {
+            return None;
+        }
+        last = first_point;
+        figures.push(Figure { first_point });
+    }
+    Some(figures)
+}
+
+/// The shapes: the first is the root, with no parent; every other's parent comes before it.
+/// Figure offsets never go back.
+fn sqlserver_shapes(bytes: &mut Bytes, figures: usize) -> Option<Vec<Shape>> {
+    let n = bytes.count(true, 9)?;
+    let mut shapes: Vec<Shape> = Vec::with_capacity(n);
+    let mut last_figure = 0;
+    for index in 0..n {
+        let parent = bytes.u32(true)?;
+        let figure = bytes.u32(true)?;
+        let kind = bytes.u8()?;
+        // -1 is "none" for both.
+        let parent = (parent != u32::MAX).then_some(parent as usize);
+        let first_figure = (figure != u32::MAX).then_some(figure as usize);
+        match parent {
+            None if index == 0 => {}
+            Some(parent) if parent < index => {}
+            _ => return None,
+        }
+        if let Some(figure) = first_figure {
+            if figure < last_figure || figure >= figures {
+                return None;
+            }
+            last_figure = figure;
+        }
+        shapes.push(Shape {
+            parent,
+            first_figure,
+            kind,
+        });
+    }
+    (!shapes.is_empty()).then_some(shapes)
+}
+
+/// A SQL Server value's points, figures and shapes, read into geometries.
+struct ClrShapes<'a> {
+    points: &'a [Position],
+    figures: &'a [Figure],
+    shapes: &'a [Shape],
+    /// Each shape's children, in order.
+    children: Vec<Vec<usize>>,
+}
+
+impl ClrShapes<'_> {
+    /// A figure's points: up to the next figure's first point.
+    fn figure_points(&self, figure: usize) -> &[Position] {
+        let end = self
+            .figures
+            .get(figure + 1)
+            .map_or(self.points.len(), |next| next.first_point);
+        &self.points[self.figures[figure].first_point..end]
+    }
+
+    /// A shape's own figures: up to the next shape's first figure.
+    fn shape_figures(&self, index: usize) -> std::ops::Range<usize> {
+        let Some(first) = self.shapes[index].first_figure else {
+            return 0..0;
+        };
+        let end = self.shapes[index + 1..]
+            .iter()
+            .find_map(|shape| shape.first_figure)
+            .unwrap_or(self.figures.len());
+        first..end
+    }
+
+    /// A shape as a geometry: points, lines and polygons from their figures, multi forms and
+    /// collections from their children.
+    fn geometry(&self, index: usize, depth: usize) -> Option<Geometry> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let kind = Kind::from_code(u32::from(self.shapes[index].kind))?;
+        let own = self.shape_figures(index);
+        Some(match kind {
+            Kind::Point => match own.len() {
+                0 => Geometry::Point {
+                    coordinates: Vec::new(),
+                },
+                1 => match self.figure_points(own.start) {
+                    [position] => Geometry::Point {
+                        coordinates: position.to_vec(),
+                    },
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            Kind::LineString => match own.len() {
+                0 => Geometry::LineString {
+                    coordinates: Vec::new(),
+                },
+                1 => Geometry::LineString {
+                    coordinates: self.figure_points(own.start).to_vec(),
+                },
+                _ => return None,
+            },
+            Kind::Polygon => Geometry::Polygon {
+                coordinates: own
+                    .map(|figure| self.figure_points(figure).to_vec())
+                    .collect(),
+            },
+            Kind::MultiPoint | Kind::MultiLineString | Kind::MultiPolygon | Kind::Collection => {
+                let parts = self.children[index]
+                    .iter()
+                    .map(|&child| self.geometry(child, depth + 1))
+                    .collect::<Option<Vec<_>>>()?;
+                multi(kind, parts)?
+            }
+        })
+    }
+}
+
+/// The root shape as a geometry. Only multi forms and collections have children.
+fn sqlserver_geometry(
+    points: &[Position],
+    figures: &[Figure],
+    shapes: &[Shape],
+) -> Option<Geometry> {
+    let mut children = vec![Vec::new(); shapes.len()];
+    for (index, shape) in shapes.iter().enumerate() {
+        if let Some(parent) = shape.parent {
+            if !matches!(shapes[parent].kind, 4..=7) {
+                return None;
+            }
+            children[parent].push(index);
+        }
+    }
+    ClrShapes {
+        points,
+        figures,
+        shapes,
+        children,
+    }
+    .geometry(0, 0)
+}
+
 /// One shape of a column's map: the row it is on (a position of the current view) and its
 /// geometry.
 #[derive(Debug, Clone, PartialEq)]
@@ -814,6 +1115,9 @@ pub struct ColumnMap {
     pub nulls: usize,
     /// Values that are not a geometry this map can draw.
     pub unreadable: usize,
+    /// SQL Server values in a column whose type the driver did not name, with an SRID: geometry
+    /// or geography, not drawn ([`MapNote::SqlServerTypeUnknown`]).
+    pub type_unknown: usize,
     /// Values past [`VIEW_LIMIT`], left out like the cell viewer withholds them.
     pub too_big: usize,
     /// The map stopped at [`MAP_MAX_SHAPES`] or [`MAP_MAX_POINTS`] before the last row.
@@ -843,6 +1147,7 @@ pub fn column_map(result: &StoredResult, column: usize) -> Result<ColumnMap, Map
         rows_read: 0,
         nulls: 0,
         unreadable: 0,
+        type_unknown: 0,
         too_big: 0,
         truncated: false,
     };
@@ -866,10 +1171,18 @@ pub fn column_map(result: &StoredResult, column: usize) -> Result<ColumnMap, Map
             map.too_big += 1;
             continue;
         }
-        let Some(geo) = read_geometry(&value, &meta.native_type) else {
-            map.rows_read += 1;
-            map.unreadable += 1;
-            continue;
+        let geo = match read_cell_geometry(&value, &meta.native_type) {
+            Ok(Some(geo)) => geo,
+            Ok(None) => {
+                map.rows_read += 1;
+                map.unreadable += 1;
+                continue;
+            }
+            Err(MapNote::SqlServerTypeUnknown) => {
+                map.rows_read += 1;
+                map.type_unknown += 1;
+                continue;
+            }
         };
         let count = geo.geometry.points();
         if map.shapes.len() == MAP_MAX_SHAPES || points + count > MAP_MAX_POINTS {
@@ -929,6 +1242,162 @@ mod tests {
         for name in ["BLOB", "bytea", "text", "varchar(10)", "points", "geo"] {
             assert!(!is_geometry_type(name), "{name}");
         }
+    }
+
+    /// Reads SQL Server bytes (written by SQL Server 2022 with `CAST(… AS varbinary(max))`) as
+    /// a value of `native` type, and returns its GeoJSON and SRID.
+    fn sqlserver(native: &str, text: &str) -> Option<(String, Option<u32>, Dimensions)> {
+        let value = read_geometry(&Value::Bytes(hex(text)), native)?;
+        assert_eq!(value.format, GeoFormat::SqlServer);
+        Some((value.geometry.to_geojson(), value.srid, value.dimensions))
+    }
+
+    #[test]
+    fn sql_server_geometry_and_geography() {
+        let point = r#"{"type":"Point","coordinates":[20.0,10.0]}"#;
+        // geometry::Point(20, 10, 4326): x then y.
+        let geometry_point = "E6100000010C00000000000034400000000000002440";
+        // geography::Point(10, 20, 4326): latitude 10, longitude 20, stored latitude first.
+        let geography_point = "E6100000010C00000000000024400000000000003440";
+        assert_eq!(
+            sqlserver("geometry", geometry_point),
+            Some((point.into(), Some(4326), Dimensions::Xy))
+        );
+        assert_eq!(
+            sqlserver("geography", geography_point),
+            Some((point.into(), Some(4326), Dimensions::Xy))
+        );
+        // A CLR type the driver did not name: with an SRID it may be either, and is not drawn
+        // (nor guessed); at SRID 0 it can only be geometry.
+        for bytes in [geometry_point, geography_point] {
+            assert_eq!(
+                read_cell_geometry(&Value::Bytes(hex(bytes)), "udt"),
+                Err(MapNote::SqlServerTypeUnknown)
+            );
+            assert_eq!(read_geometry(&Value::Bytes(hex(bytes)), "udt"), None);
+        }
+        let line = r#"{"type":"LineString","coordinates":[[1.0,2.0],[3.0,4.0]]}"#;
+        assert_eq!(
+            sqlserver(
+                "udt",
+                "000000000114000000000000F03F000000000000004000000000000008400000000000001040"
+            ),
+            Some((line.into(), None, Dimensions::Xy))
+        );
+        // geography::STGeomFromText('LINESTRING(1 2, 3 4)', 4326): WKT is longitude first.
+        assert_eq!(
+            sqlserver(
+                "geography",
+                "E610000001140000000000000040000000000000F03F00000000000010400000000000000840"
+            )
+            .map(|v| v.0),
+            Some(line.into())
+        );
+        // POLYGON((0 0, 4 0, 4 4, 0 0)).
+        assert_eq!(
+            sqlserver(
+                "geometry",
+                "000000000104040000000000000000000000000000000000000000000000000010400000000000000000000000000000104000000000000010400000000000000000000000000000000001000000020000000001000000FFFFFFFF0000000003"
+            )
+            .map(|v| v.0),
+            Some(r#"{"type":"Polygon","coordinates":[[[0.0,0.0],[4.0,0.0],[4.0,4.0],[0.0,0.0]]]}"#.into())
+        );
+        // GEOMETRYCOLLECTION(POINT(1 2), LINESTRING(0 0, 1 1)).
+        assert_eq!(
+            sqlserver(
+                "udt",
+                "00000000010403000000000000000000F03F000000000000004000000000000000000000000000000000000000000000F03F000000000000F03F020000000100000000010100000003000000FFFFFFFF0000000007000000000000000001000000000100000002"
+            )
+            .map(|v| v.0),
+            Some(r#"{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1.0,2.0]},{"type":"LineString","coordinates":[[0.0,0.0],[1.0,1.0]]}]}"#.into())
+        );
+        // POINT(1 2 3): Z is read and left out.
+        assert_eq!(
+            sqlserver(
+                "geometry",
+                "00000000010D000000000000F03F00000000000000400000000000000840"
+            ),
+            Some((
+                r#"{"type":"Point","coordinates":[1.0,2.0]}"#.into(),
+                None,
+                Dimensions::Xyz
+            ))
+        );
+        // POINT EMPTY: a geometry in a spatial column; outside one, more likely something else.
+        let empty = "000000000104000000000000000001000000FFFFFFFFFFFFFFFF01";
+        assert_eq!(
+            sqlserver("geometry", empty).map(|v| v.0),
+            Some(r#"{"type":"Point","coordinates":[]}"#.into())
+        );
+        assert_eq!(read_geometry(&Value::Bytes(hex(empty)), "udt"), None);
+        // CIRCULARSTRING(0 0, 1 1, 2 0): curves are not drawn.
+        let arc = "0000000002040300000000000000000000000000000000000000000000000000F03F000000000000F03F0000000000000040000000000000000001000000020000000001000000FFFFFFFF0000000008";
+        assert_eq!(read_geometry(&Value::Bytes(hex(arc)), "geometry"), None);
+        // Only a column of a CLR type is read this way.
+        assert_eq!(
+            read_geometry(&Value::Bytes(hex(geometry_point)), "varbinary"),
+            None
+        );
+    }
+
+    #[test]
+    fn hostile_sql_server_bytes_are_not_geometries() {
+        let polygon = hex(
+            "000000000104040000000000000000000000000000000000000000000000000010400000000000000000000000000000104000000000000010400000000000000000000000000000000001000000020000000001000000FFFFFFFF0000000003",
+        );
+        let read = |bytes: &[u8]| read_sqlserver(bytes, false);
+        assert!(read(&polygon).is_some());
+        // Cut anywhere, or with a byte too many.
+        for end in 0..polygon.len() {
+            assert!(read(&polygon[..end]).is_none(), "cut at {end}");
+        }
+        let mut longer = polygon.clone();
+        longer.push(0);
+        assert!(read(&longer).is_none());
+        let with = |at: usize, value: &[u8]| {
+            let mut bytes = polygon.clone();
+            bytes[at..at + value.len()].copy_from_slice(value);
+            bytes
+        };
+        // An unknown version, unknown flags, a single point and segment at once.
+        assert!(read(&with(4, &[3])).is_none());
+        assert!(read(&with(5, &[0x44])).is_none());
+        assert!(read(&with(5, &[0x18])).is_none());
+        // A point count the bytes cannot hold.
+        assert!(read(&with(6, &[0xFF, 0xFF, 0xFF, 0x7F])).is_none());
+        // A figure past the points, an arc in version 1's places, a shape past the figures, a
+        // parent after its child, a curve type.
+        let figure = 6 + 4 + 4 * 16 + 4;
+        assert!(read(&with(figure + 1, &[5, 0, 0, 0])).is_none());
+        assert!(read(&with(figure, &[3])).is_none());
+        let shape = figure + 5 + 4;
+        assert!(read(&with(shape + 4, &[1, 0, 0, 0])).is_none());
+        assert!(read(&with(shape, &[0, 0, 0, 0])).is_none());
+        assert!(read(&with(shape + 8, &[8])).is_none());
+        // A coordinate that is not a finite number.
+        assert!(read(&with(10, &f64::NAN.to_le_bytes())).is_none());
+        // Shapes nested deeper than the bound.
+        // The header, no points, no figures, then the shape count and the shapes.
+        let deep = MAX_DEPTH + 2;
+        let mut nested = vec![0, 0, 0, 0, 1, 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        nested.splice(14..18, (deep as u32).to_le_bytes());
+        for index in 0..deep {
+            let parent = if index == 0 {
+                u32::MAX
+            } else {
+                index as u32 - 1
+            };
+            nested.extend(parent.to_le_bytes());
+            nested.extend(u32::MAX.to_le_bytes());
+            nested.push(7);
+        }
+        assert!(read(&nested).is_none());
+        nested.truncate(18 + 9 * 3);
+        nested.splice(14..18, 3u32.to_le_bytes());
+        assert_eq!(
+            read(&nested).map(|v| v.geometry.to_geojson()),
+            Some(r#"{"type":"GeometryCollection","geometries":[{"type":"GeometryCollection","geometries":[{"type":"GeometryCollection","geometries":[]}]}]}"#.into())
+        );
     }
 
     #[test]

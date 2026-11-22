@@ -1499,6 +1499,8 @@ export type CellViewItem_Deserialize = {
 	limit: number | null,
 	/**  The value read as a geometry, for the map view (ADR-045). */
 	geometry?: GeoItem_Deserialize | null,
+	/**  Why a value that is a geometry is not drawn on the map (SDB-213). */
+	mapNote?: MapNote | null,
 };
 
 /**
@@ -1523,6 +1525,8 @@ export type CellViewItem_Serialize = {
 	limit: number | null,
 	/**  The value read as a geometry, for the map view (ADR-045). */
 	geometry: GeoItem_Serialize | null,
+	/**  Why a value that is a geometry is not drawn on the map (SDB-213). */
+	mapNote: MapNote | null,
 };
 
 /**  `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file. */
@@ -1714,6 +1718,8 @@ export type ColumnMapItem_Deserialize = {
 	rowsRead: number,
 	nulls: number,
 	unreadable: number,
+	/**  SQL Server values of a type the plugin did not name, with an SRID: not drawn (SDB-213). */
+	typeUnknown: number,
 	tooBig: number,
 	truncated: boolean,
 	/**  The most shapes a column's map holds. */
@@ -1730,6 +1736,8 @@ export type ColumnMapItem_Serialize = {
 	rowsRead: number,
 	nulls: number,
 	unreadable: number,
+	/**  SQL Server values of a type the plugin did not name, with an SRID: not drawn (SDB-213). */
+	typeUnknown: number,
 	tooBig: number,
 	truncated: boolean,
 	/**  The most shapes a column's map holds. */
@@ -3151,7 +3159,9 @@ export type GeoFormat =
 /**  SpatiaLite's own blob. */
 "spatialite" | 
 /**  A GeoPackage geometry: its header, then WKB. */
-"geoPackage";
+"geoPackage" | 
+/**  SQL Server's `geometry` or `geography`, in its CLR serialization (MS-SSCLRT). */
+"sqlServer";
 
 /**
  *  A cell or a column read as geometry, for the map (ADR-045): GeoJSON from the core, never
@@ -4045,6 +4055,15 @@ export type MapCrs =
  *  drawn as they are on a plain background, never over tiles.
  */
 "plane";
+
+/**  Why a value that is a geometry is not drawn on the map. */
+export type MapNote = 
+/**
+ *  A SQL Server spatial value with an SRID in a column the driver did not name (`udt`):
+ *  it may be geometry (x first) or geography (latitude first), and is not guessed. A
+ *  SQL Server plugin that names the column's type draws it.
+ */
+"sqlServerTypeUnknown";
 
 /**  The map view's background (ADR-045): tiles from the user's server, off by default. */
 export type MapPreferencesItem = {

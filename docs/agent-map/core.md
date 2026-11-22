@@ -175,9 +175,15 @@
   `table_stats.rs` a table's sizes and row estimate from the catalog; `tests/server_observation.rs`
   makes one session wait for another's row lock on every engine and checks the pair.
   `geometry.rs` (ADR-045) reads geometry values into GeoJSON for the cell panel's map: PostGIS's
-  EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs and
-  DuckDB's WKB, as untrusted bytes (counts checked before allocating, bounded nesting, read to
-  the last byte); `column_map` puts a column of the current view on one map, bounded.
+  EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs,
+  DuckDB's WKB and SQL Server's CLR serialization (MS-SSCLRT, SDB-213), as untrusted bytes
+  (counts checked before allocating, bounded nesting, read to the last byte); `column_map` puts
+  a column of the current view on one map, bounded. SQL Server's geometry and geography are
+  serialized alike but geography stores latitude first: the plugin names a CLR column's type
+  (`geometry`, `geography`), and that decides. An older plugin says `udt` for every CLR type:
+  then a value at SRID 0 is geometry (geography always has an SRID), and one with an SRID is
+  never guessed: it is not drawn, and `MapNote::SqlServerTypeUnknown` (the cell) and
+  `ColumnMap::type_unknown` (the column) say why.
   `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
   PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
   (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
