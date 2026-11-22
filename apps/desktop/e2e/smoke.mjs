@@ -9046,8 +9046,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("Port", { exact: true }).fill(String(silent.address().port));
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await log.locator(".step.running", { hasText: "Log in to postgres" }).waitFor();
-  await log.getByRole("button", { name: "Stop" }).click();
-  await wizard.locator(".test-result", { hasText: "Stopped" }).waitFor();
+  await log.getByRole("button", { name: "Cancel test", exact: true }).click();
+  await wizard.locator(".test-result", { hasText: "Cancelled" }).waitFor();
   await log.locator(".step.stopped", { hasText: "Log in to postgres" }).waitFor();
   // Reaching the address opened and closed one connection; the stopped login's is closed too.
   assert.ok(silentSockets.length >= 2, `connections: ${silentSockets.length}`);

@@ -171,8 +171,8 @@
     "title": "Connection test",
     "okNetwork": "The network reaches the database",
     "failed": "Failed at step {{step}}: {{kind}}",
-    "stopped": "Stopped",
-    "stop": "Stop",
+    "cancelled": "Cancelled",
+    "cancel": "Cancel test",
     "copy": "Copy diagnostics",
     "copied": "Copied",
     "close": "Close the test log",
@@ -182,7 +182,7 @@
       "ok": "OK",
       "failed": "Failed",
       "skipped": "Not run",
-      "stopped": "Stopped"
+      "stopped": "Cancelled"
     },
     "steps": {
       "resolve": "Read the configuration and secrets",
