@@ -146,9 +146,71 @@ export function menuCommands(menu: CommandMenu): CommandSpec[] {
   return COMMANDS.filter((command: CommandSpec) => command.menus?.includes(menu) ?? false);
 }
 
-/** "Label (Shortcut)", for a tooltip. */
-export function withShortcut(label: string, spec: CommandSpec): string {
-  return spec.shortcut ? `${label} (${spec.shortcut})` : label;
+/**
+ * Keys that are not app commands: a region's own keys (the grid, the explorer, a dialog), shown
+ * in its tooltips and hints (SDB-86). Each says the row of the shortcut map
+ * (`docs/ui-guidelines.md`) that lists it, and `scripts/commands.test.mjs` checks it is there.
+ * A gesture is written with `click` as its key ("Ctrl+click"). No translated string writes a
+ * shortcut: it interpolates one of these, or a command's, through `shortcuts.ts`.
+ */
+export const KEYS = {
+  submit: { shortcut: "Enter", where: "Dialogs, menus, separators" },
+  close: { shortcut: "Escape", where: "Dialogs, menus, separators" },
+  switchTabs: { shortcut: "Ctrl+Tab", where: "Anywhere" },
+  selectAll: { shortcut: "Ctrl+A", where: "Result grid" },
+  copy: { shortcut: "Ctrl+C", where: "Result grid" },
+  copyWithHeaders: { shortcut: "Ctrl+Shift+C", where: "Result grid" },
+  cellViewer: { shortcut: "Enter", where: "Result grid" },
+  findNext: { shortcut: "F3", where: "Result grid" },
+  findPrevious: { shortcut: "Shift+F3", where: "Result grid" },
+  findNextInBox: { shortcut: "Enter", where: "Result grid" },
+  findPreviousInBox: { shortcut: "Shift+Enter", where: "Result grid" },
+  findMatchCase: { shortcut: "Alt+C", where: "Result grid" },
+  sortThen: { shortcut: "Shift+click", where: "Result grid" },
+  selectColumn: { shortcut: "Ctrl+click", where: "Result grid" },
+  editCell: { shortcut: "F2", where: "Table data edits" },
+  addRow: { shortcut: "Alt+Insert", where: "Table data edits" },
+  duplicateRow: { shortcut: "Ctrl+Alt+Insert", where: "Table data edits" },
+  deleteRows: { shortcut: "Delete", where: "Table data edits" },
+  deleteSelectedRows: { shortcut: "Alt+Delete", where: "Table data edits" },
+  setNull: { shortcut: "Ctrl+Alt+N", where: "Table data edits" },
+  saveEdits: { shortcut: "Ctrl+S", where: "Table data edits" },
+  discardEdits: { shortcut: "Ctrl+R", where: "Table data edits" },
+  openOverview: { shortcut: "Ctrl+Enter", where: "Explorer row" },
+  pasteConnection: { shortcut: "Ctrl+V", where: "Explorer row" },
+  openObjectByClick: { shortcut: "Ctrl+click", where: "SQL editor" },
+  snippetNext: { shortcut: "Tab", where: "SQL editor" },
+  snippetPrevious: { shortcut: "Shift+Tab", where: "SQL editor" },
+} as const satisfies Record<string, { shortcut: string; where: string }>;
+
+export type KeyId = keyof typeof KEYS;
+
+/** How a shortcut is written for the person reading it (SDB-86). */
+export interface ShortcutStyle {
+  /** macOS: ⌘ for Ctrl (the handlers take Cmd for Ctrl), ⌥ for Alt, ⇧ for Shift, no "+". */
+  mac: boolean;
+  /** A key's name in the interface's language ("Mayús", "Intro"), or the key as written. */
+  keyName(key: string): string;
+}
+
+const MAC_MODIFIERS: Record<string, string> = { Ctrl: "⌘", Shift: "⇧", Alt: "⌥" };
+const MAC_KEYS: Record<string, string> = { Enter: "↩", Delete: "⌦", Tab: "⇥" };
+
+/**
+ * A shortcut as written in this module ("Ctrl+Shift+Enter") put in words for the reader:
+ * "Ctrl+Shift+Enter" in English, "Ctrl+Mayús+Intro" in Spanish, "⇧⌘↩" on macOS. A modifier
+ * alone ("Ctrl", for "keep Ctrl down") is written the same way.
+ */
+export function shortcutLabel(shortcut: string, style: ShortcutStyle): string {
+  // "Ctrl+-" ends with its key: split on the "+" before the last character.
+  const at = shortcut.lastIndexOf("+", shortcut.length - 2);
+  const key = at < 0 ? shortcut : shortcut.slice(at + 1);
+  const modifiers = at < 0 ? [] : shortcut.slice(0, at).split("+");
+  if (!style.mac) return [...modifiers, key].map((part) => style.keyName(part)).join("+");
+  // Apple's order: ⌥ ⇧ ⌘, then the key; a click reads "⌘-click".
+  const marks = ["Alt", "Shift", "Ctrl"].filter((m) => modifiers.includes(m)).map((m) => MAC_MODIFIERS[m]).join("");
+  const keyText = MAC_MODIFIERS[key] ?? MAC_KEYS[key] ?? style.keyName(key);
+  return key === "click" && marks ? `${marks}-${keyText}` : marks + keyText;
 }
 
 const MODIFIERS = ["Ctrl", "Shift", "Alt"] as const;

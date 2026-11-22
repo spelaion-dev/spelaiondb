@@ -7,6 +7,7 @@ import { readClipboardText } from "./clipboardText";
 import { fieldList } from "./fieldNames";
 import i18n from "./i18n";
 import { refreshConnections } from "./components/Sidebar";
+import { keyText } from "./shortcuts";
 import { useApp, useDialogs } from "./store";
 
 /**
@@ -75,7 +76,7 @@ export async function pasteFromClipboard(): Promise<void> {
   try {
     text = await readClipboardText();
   } catch {
-    throw new Error(i18n.t("connections:copies.clipboardUnavailable"));
+    throw new Error(i18n.t("connections:copies.clipboardUnavailable", { shortcut: keyText("pasteConnection") }));
   }
   await pasteConnection(text);
 }

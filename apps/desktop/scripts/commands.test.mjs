@@ -8,10 +8,12 @@ import test from "node:test";
 import {
   COMMANDS,
   globalCommandFor,
+  KEYS,
   matchesShortcut,
   menuCommands,
   paletteCommands,
   parseShortcut,
+  shortcutLabel,
 } from "../src/commandRegistry.ts";
 
 const src = resolve(import.meta.dirname, "../src");
@@ -118,6 +120,61 @@ test("shortcuts are written as the guidelines say, unique, and in the shortcut m
     const grid = command.id.startsWith("edits.") ? "Table data edits" : "Result grid";
     const where = command.scope === "global" ? "Anywhere" : command.scope === "grid" ? grid : "SQL editor";
     assert.ok(row(where).includes(command.shortcut), `${command.shortcut} (${command.id}) in the "${where}" row of the shortcut map`);
+  }
+});
+
+/** A row of the shortcut map itself (the table after "| Where | Keys |"), not of the places table. */
+function shortcutMapRow(where) {
+  const docs = readFileSync(resolve(import.meta.dirname, "../../../docs/ui-guidelines.md"), "utf8");
+  const map = docs.slice(docs.indexOf("| Where | Keys |"));
+  return map.split("\n").find((line) => line.startsWith(`| ${where} |`)) ?? "";
+}
+
+test("a region's own keys (KEYS) are written as the guidelines say and in the shortcut map", () => {
+  for (const [id, { shortcut, where }] of Object.entries(KEYS)) {
+    assert.ok(parseShortcut(shortcut), `${id}: ${shortcut}`);
+    assert.ok(shortcutMapRow(where).includes(shortcut), `${shortcut} (KEYS.${id}) in the "${where}" row of the shortcut map`);
+  }
+});
+
+test("a shortcut is put in words with the language's key names, and with ⌘ ⌥ ⇧ on macOS (SDB-86)", () => {
+  const spanish = { Shift: "Mayús", Enter: "Intro", Delete: "Supr", Escape: "Esc", click: "clic" };
+  const windows = { mac: false, keyName: (key) => key };
+  const es = { mac: false, keyName: (key) => spanish[key] ?? key };
+  const mac = { mac: true, keyName: (key) => (key === "Escape" ? "Esc" : key) };
+  assert.equal(shortcutLabel("Ctrl+Shift+Enter", windows), "Ctrl+Shift+Enter");
+  assert.equal(shortcutLabel("Ctrl+Shift+Enter", es), "Ctrl+Mayús+Intro");
+  assert.equal(shortcutLabel("Ctrl+Shift+Enter", mac), "⇧⌘↩");
+  assert.equal(shortcutLabel("Shift+Alt+F", mac), "⌥⇧F");
+  assert.equal(shortcutLabel("Ctrl+Alt+D", mac), "⌥⌘D");
+  assert.equal(shortcutLabel("Ctrl+-", windows), "Ctrl+-");
+  assert.equal(shortcutLabel("Ctrl+-", mac), "⌘-");
+  assert.equal(shortcutLabel("Ctrl+,", mac), "⌘,");
+  assert.equal(shortcutLabel("Escape", mac), "Esc");
+  assert.equal(shortcutLabel("Alt+Delete", es), "Alt+Supr");
+  assert.equal(shortcutLabel("Ctrl", mac), "⌘");
+  assert.equal(shortcutLabel("Ctrl+click", es), "Ctrl+clic");
+  assert.equal(shortcutLabel("Ctrl+click", mac), "⌘-click");
+});
+
+test("no translated string writes a shortcut: it interpolates one (SDB-86)", () => {
+  // Labels that name a key or a setting, not a shortcut to press.
+  const names = new Set(["app.json commands.categories.tab", "editor.json results.copyDelimiters.tab", "editor.json export.delimiters.tab", "settings.json editor.tabSize"]);
+  const written = /\b(Ctrl|Cmd|Alt|Shift|Mayús)\b|\bF\d{1,2}\b|\((Esc|Escape|Enter|Intro|Del|Supr)\b|\b(press|pulsa|pulsar|before|antes de)\s+(Enter|Intro|Tab|Esc|Escape)\b|^(Enter|Intro|Tab)\b|[;,.]\s+(Enter|Intro|Escape|Tab)\b/;
+  for (const lang of ["en", "es"]) {
+    const dir = resolve(src, "locales", lang);
+    for (const file of ["app.json", "connections.json", "editor.json", "mcp.json", "settings.json", "shell.json"]) {
+      const walk = (node, path) => {
+        if (typeof node === "string") {
+          const at = `${file} ${path}`;
+          if (!names.has(at)) assert.ok(!written.test(node), `${lang}/${at} writes a shortcut: ${node}`);
+        } else if (node && typeof node === "object") {
+          // The key names themselves ("Mayús", "Intro"), which shortcuts.ts reads.
+          for (const [key, value] of Object.entries(node)) if (!(file === "shell.json" && path === "" && key === "keys")) walk(value, path ? `${path}.${key}` : key);
+        }
+      };
+      walk(JSON.parse(readFileSync(resolve(dir, file), "utf8")), "");
+    }
   }
 });
 

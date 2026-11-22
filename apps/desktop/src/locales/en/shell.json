@@ -96,7 +96,7 @@
   "loadingDetails": "Loading table details…",
   "connecting": "Connecting…",
   "quickFilter": "Filter the explorer",
-  "quickFilterHint": "Find connections by name, tag, type or host, and filter what is loaded (Ctrl+Shift+F)",
+  "quickFilterHint": "Find connections by name, tag, type or host, and filter what is loaded ({{shortcut}})",
   "quickFilterPlaceholder": "Name, tag, type or host",
   "quickFilterNothing": "No connection, schema or loaded object matches the filter.",
   "moveFailed": "Could not move {{name}}: {{detail}}",
@@ -178,7 +178,7 @@
   },
   "tableDetails": {
     "title": "{{section}} of {{table}}",
-    "openHint": "Double-click or Ctrl+Enter to open the overview",
+    "openHint": "Double-click or {{shortcut}} to open the overview",
     "name": "Name",
     "type": "Type",
     "nullable": "Nullable",
@@ -570,7 +570,7 @@
     "results": "Objects found",
     "searching": "Searching…",
     "nothing": "Nothing has that name in what the explorer shows.",
-    "hint": "↑ ↓ to choose, Enter to open it and show it in the explorer.",
+    "hint": "↑ ↓ to choose, {{enter}} to open it and show it in the explorer.",
     "noneConnected": "Connect a connection in the explorer first: the search reads its catalog."
   },
   "setActiveSchema": "Set as the editor's schema",
@@ -941,5 +941,16 @@
     "type": "Type",
     "index": "Index",
     "other": "Other"
+  },
+  "keys": {
+    "Ctrl": "Ctrl",
+    "Shift": "Shift",
+    "Alt": "Alt",
+    "Enter": "Enter",
+    "Escape": "Esc",
+    "Delete": "Delete",
+    "Insert": "Insert",
+    "Tab": "Tab",
+    "click": "click"
   }
 }

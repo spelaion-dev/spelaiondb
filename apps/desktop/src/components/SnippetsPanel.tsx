@@ -4,6 +4,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { call, commands, type SnippetItem } from "../api";
 import type { SnippetFolderItem } from "../bindings";
 import { useApp } from "../store";
+import { commandShortcut } from "../shortcuts";
 import { ConfirmDelete } from "./ConfirmDelete";
 import { Icon } from "./Icons";
 
@@ -60,7 +61,7 @@ export function SnippetsPanel() {
       <div className="history-search library-filters"><input type="text" autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("snippets.searchPlaceholder")} aria-label={t("snippets.searchLabel")} /><label>{t("snippets.folder")}<select aria-label={t("snippets.folder")} value={folder} onChange={(event) => setFolder(event.target.value)}><option value="all">{t("snippets.allFolders")}</option><option value="unfiled">{t("snippets.unfiled")}</option>{folders.map((choice) => <option key={choice.id} value={choice.id}>{choice.name}{choice.personal ? ` · ${t("snippets.personal")}` : ""}</option>)}</select></label><p className="muted small">{t("snippets.help")}</p></div>
       {error && <div className="history-fetch-error banner library-alert" role="alert"><p>{error}</p><button onClick={() => setRefresh((value) => value + 1)} disabled={busy}>{t("history.retry")}</button></div>}
       <div className="history-entries" aria-busy={busy}>
-        {!busy && !error && items.length === 0 && <div className="empty">{t(query || folder !== "all" ? "snippets.noMatches" : "snippets.empty")}</div>}
+        {!busy && !error && items.length === 0 && <div className="empty">{t(query || folder !== "all" ? "snippets.noMatches" : "snippets.empty", { shortcut: commandShortcut("file.save") })}</div>}
         {items.map((item) => <article className="history-entry snippet-entry" key={item.id}>
           <div className="history-entry-heading"><strong className="snippet-name">{item.name}</strong>{item.personal && <span className="tag">{t("snippets.personal")}</span>}</div>
           <div className="history-meta muted small"><span>{connections.find((connection) => connection.id === item.connection)?.name ?? (item.connection || t("snippets.noConnection"))}</span><span>{folders.find((choice) => choice.id === item.folderId)?.name ?? t("snippets.unfiled")}</span></div>

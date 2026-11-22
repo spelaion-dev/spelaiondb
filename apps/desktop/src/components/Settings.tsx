@@ -20,6 +20,7 @@ import { SnippetSettings } from "./SnippetSettings";
 import { ScreenBoundary } from "./ScreenBoundary";
 import { copyDiagnostics, openIssuePage } from "../diagnostics";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
+import { commandShortcut, keyText } from "../shortcuts";
 
 type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map";
 const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map"];
@@ -201,7 +202,7 @@ function EditorSettings() {
             {zooms.map((zoom) => <option key={zoom} value={zoom}>{t("appearance.percent", { value: zoom })}</option>)}
           </select>
         </label>
-        <p className="muted small">{t("editor.zoomHint")}</p>
+        <p className="muted small">{t("editor.zoomHint", { zoomIn: commandShortcut("editor.zoomIn"), zoomOut: commandShortcut("editor.zoomOut"), zoomReset: commandShortcut("editor.zoomReset") })}</p>
         {(["lineNumbers", "wordWrap"] as const).map((key) => <label className="check" key={key}><input type="checkbox" name={`editor-${key}`} checked={preferences[key]} onChange={(e) => void setEditor({ ...preferences, [key]: e.target.checked })} />{t(`editor.${key}`)}</label>)}
       </fieldset>
       <fieldset disabled={busy} className="settings-choice">
@@ -212,7 +213,7 @@ function EditorSettings() {
           </select>
         </label>)}
       </fieldset>
-      <p className="muted small">{t("editor.snippets")}</p>
+      <p className="muted small">{t("editor.snippets", { next: keyText("snippetNext"), previous: keyText("snippetPrevious") })}</p>
       <p className="muted small">{t("editor.restoreHint")}</p>
       <label className="check">
         <input type="checkbox" name="reconnectOnStart" checked={reconnect} disabled={busy} onChange={(e) => void setReconnect(e.target.checked)} />

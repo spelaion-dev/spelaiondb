@@ -3,7 +3,8 @@
 // the command palette and the global shortcuts.
 
 import { useTranslation } from "react-i18next";
-import { commandSpec, type CommandId } from "../commandRegistry";
+import type { CommandId } from "../commandRegistry";
+import { commandShortcut } from "../shortcuts";
 import { commandEnabled, commandLabel, runCommand, type CommandContext } from "../commands";
 import { useApp } from "../store";
 
@@ -13,7 +14,7 @@ export function CommandMenuItem({ id, tab, onClose }: { id: CommandId; tab: stri
   // Whether it can run, and its name (Pin / Unpin), follow the tabs: re-rendered when one of
   // them changes, not on every change to a tab (SDB-110).
   useApp((s) => `${s.tabs.length}|${s.closedTabs.length}|${commandEnabled(id, context)}|${commandLabel(id, context)}`);
-  const shortcut = commandSpec(id).shortcut;
+  const shortcut = commandShortcut(id);
   return (
     <button
       role="menuitem"
@@ -25,7 +26,7 @@ export function CommandMenuItem({ id, tab, onClose }: { id: CommandId; tab: stri
       }}
     >
       <span>{t(commandLabel(id, context))}</span>
-      <span className="menu-shortcut">{shortcut ?? ""}</span>
+      <span className="menu-shortcut">{shortcut}</span>
     </button>
   );
 }

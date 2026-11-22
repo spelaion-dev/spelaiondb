@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import type { CellEditItem, ColumnItem } from "../api";
 import type { TableView } from "../store";
 import { TableFilterBox } from "./TableFilterBox";
+import { keyText } from "../shortcuts";
 import { Icon } from "./Icons";
 
 export const PAGE_SIZES = [100, 500, 1000, 5000];
@@ -181,7 +182,7 @@ export function PageControls(props: {
         className="page-number"
         inputMode="numeric"
         aria-label={t("pages.page")}
-        title={t("pages.pageHint")}
+        title={t("pages.pageHint", { enter: keyText("submit") })}
         value={text}
         disabled={locked}
         onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ""))}

@@ -18,7 +18,8 @@ import { printableGridKey } from "../gridTyping";
 import { formatsValues, useDisplayFormat } from "../displayFormat";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
 import { GRID_COMMAND_EVENT, useDialogs, type FilterMode, type ResultMeta, type SortState } from "../store";
-import { commandSpec, matchesShortcut } from "../commandRegistry";
+import { commandSpec, matchesShortcut, type KeyId } from "../commandRegistry";
+import { keyText, shortcutText, withShortcut } from "../shortcuts";
 import { useExport } from "./ExportDialog";
 import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
 import { Icon, PATHS } from "./Icons";
@@ -143,9 +144,9 @@ const inside = (b: Bounds, row: number, col: number) => row >= b.r0 && row <= b.
 /** The copy defaults "Copy special…" opens with (SDB-388), as the core keeps them. */
 const loadCopyDefaults = (): Promise<CopySpecialItem> => call(commands.copyDefaults());
 
-const COPY_ITEMS: { key: string; format: TextFormat; header: boolean }[] = [
-  { key: "copy", format: "tsv", header: false },
-  { key: "copyWithHeaders", format: "tsv", header: true },
+const COPY_ITEMS: { key: string; format: TextFormat; header: boolean; shortcut?: KeyId }[] = [
+  { key: "copy", format: "tsv", header: false, shortcut: "copy" },
+  { key: "copyWithHeaders", format: "tsv", header: true, shortcut: "copyWithHeaders" },
   { key: "copyCsv", format: "csv", header: true },
   { key: "copyJson", format: "json", header: false },
   { key: "copyMarkdown", format: "markdown", header: true },
@@ -771,7 +772,7 @@ export function ResultGrid({
     const describe = (value: string | null) => {
       const text = value === null ? "NULL" : value.length > 500 ? t("results.accessibleTruncated", { value: value.slice(0, 500) }) : value;
       expose(t("results.accessibleCell", { row, column: column.name, type: column.nativeType, value: text }) +
-        (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: FOLLOW_SHORTCUT })}` : ""));
+        (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: shortcutText(FOLLOW_SHORTCUT) })}` : ""));
     };
     const key = `${activeRow}:${activeColumn}`;
     if (activeEdits && key in activeEdits) describe(activeEdits[key] ?? null);
@@ -2396,7 +2397,7 @@ export function ResultGrid({
         className="grid-select-all"
         style={{ width: rowNumW, height: HEADER_H }}
         aria-label={t("results.selectAll")}
-        title={`${t("results.selectAll")} (Ctrl+A)`}
+        title={withShortcut(t("results.selectAll"), keyText("selectAll"))}
         disabled={!result.rows || !visibleCols.length}
         onClick={() => {
           scrollerRef.current?.focus({ preventScroll: true });
@@ -2473,16 +2474,16 @@ export function ResultGrid({
                   if (menu.cell) void startEdit(menu.cell);
                 }}
               >
-                {t("edit.editCell")}
+                {t("edit.editCell", { shortcut: keyText("editCell") })}
               </button>
               <button role="menuitem" onClick={() => void setSelectedValue()}>
                 {t("edit.setValue")}
               </button>
               <button role="menuitem" onClick={() => void pasteFromMenu()}>
-                <span>{t("edit.paste")}</span><span className="menu-shortcut">{PASTE_SHORTCUT}</span>
+                <span>{t("edit.paste")}</span><span className="menu-shortcut">{shortcutText(PASTE_SHORTCUT)}</span>
               </button>
               <button role="menuitem" onClick={() => bulkEdit({ kind: "fillDown" })}>
-                <span>{t("edit.fillDown")}</span><span className="menu-shortcut">{FILL_DOWN_SHORTCUT}</span>
+                <span>{t("edit.fillDown")}</span><span className="menu-shortcut">{shortcutText(FILL_DOWN_SHORTCUT)}</span>
               </button>
               <button
                 role="menuitem"
@@ -2491,7 +2492,7 @@ export function ResultGrid({
                   setSelectedNull();
                 }}
               >
-                <span>{t("edit.setNull")}</span><span className="menu-shortcut">{SET_NULL_SHORTCUT}</span>
+                <span>{t("edit.setNull")}</span><span className="menu-shortcut">{shortcutText(SET_NULL_SHORTCUT)}</span>
               </button>
               <GridSubmenu label={t("edit.changeCells")}>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "trim" })}>{t("edit.trim")}</button>
@@ -2511,7 +2512,7 @@ export function ResultGrid({
                   editing.onUndo();
                 }}
               >
-                <span>{t("edit.undo")}</span><span className="menu-shortcut">{UNDO_SHORTCUT}</span>
+                <span>{t("edit.undo")}</span><span className="menu-shortcut">{shortcutText(UNDO_SHORTCUT)}</span>
               </button>
               <button
                 role="menuitem"
@@ -2521,7 +2522,7 @@ export function ResultGrid({
                   editing.onRedo();
                 }}
               >
-                <span>{t("edit.redo")}</span><span className="menu-shortcut">{REDO_SHORTCUT}</span>
+                <span>{t("edit.redo")}</span><span className="menu-shortcut">{shortcutText(REDO_SHORTCUT)}</span>
               </button>
               <button
                 role="menuitem"
@@ -2530,7 +2531,7 @@ export function ResultGrid({
                   editing.onDelete(selectedRows());
                 }}
               >
-                {t("edit.deleteRows", { count: selectedRows().length })}
+                {t("edit.deleteRows", { count: selectedRows().length, shortcut: keyText("deleteRows") })}
               </button>
               {selectedRows().some((r) => editing.deleted.includes(r) || Object.keys(editing.cells).some((k) => k.startsWith(`${r}:`))) && (
                 <button
@@ -2540,7 +2541,7 @@ export function ResultGrid({
                     editing.onRevert(selectedRows());
                   }}
                 >
-                  <span>{t("edit.revert")}</span><span className="menu-shortcut">{REVERT_SHORTCUT}</span>
+                  <span>{t("edit.revert")}</span><span className="menu-shortcut">{shortcutText(REVERT_SHORTCUT)}</span>
                 </button>
               )}
               <hr />
@@ -2566,7 +2567,7 @@ export function ResultGrid({
               openCellViewer();
             }}
           >
-            {t("viewer.open")}
+            {t("viewer.open", { shortcut: keyText("cellViewer") })}
           </button>
           {menu.cell && (
             <button
@@ -2630,7 +2631,7 @@ export function ResultGrid({
           {menu.cell && (keyColumns.get(menu.cell.col) ?? []).map((key) => (
             <button key={`key:${key.schema}.${key.table}:${key.name}`} role="menuitem" onClick={() => menu.cell && void followKey(menu.cell, key)}>
               {t("references.openReferenced", { table: key.table })}
-              <span className="menu-shortcut">{FOLLOW_SHORTCUT}</span>
+              <span className="menu-shortcut">{shortcutText(FOLLOW_SHORTCUT)}</span>
             </button>
           ))}
           {tableData && keys.length > 0 && (
@@ -2649,7 +2650,7 @@ export function ResultGrid({
           <GridSubmenu label={t("results.copyMenu")}>
             {COPY_ITEMS.map((item) => (
               <button key={item.key} role="menuitem" onClick={() => void copy(item.format, item.header)}>
-                {t(`results.${item.key}`)}
+                {t(`results.${item.key}`, { shortcut: item.shortcut ? keyText(item.shortcut) : "" })}
               </button>
             ))}
             {displayFormats && (
@@ -2899,16 +2900,16 @@ export function ResultGrid({
         <div className="result-edit-toolbar" role="toolbar" aria-label={t(editing ? "edit.toolbar" : "queryPaging.label")}>
           {editing && <>
             <div className="result-row-actions" role="group" aria-label={t("edit.toolbar")}>
-              <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !ended(result)} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDuplicate")} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /><span>{t("edit.duplicateAction")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDelete")} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /><span>{t("edit.deleteAction")}</span></button>
+              <button className="ghost" title={t("edit.shortcutAdd", { shortcut: keyText("addRow") })} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !ended(result)} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDuplicate", { shortcut: keyText("duplicateRow") })} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /><span>{t("edit.duplicateAction")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDelete", { shortcut: keyText("deleteSelectedRows") })} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /><span>{t("edit.deleteAction")}</span></button>
               <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="revert" /><span>{t("edit.revertAction")}</span></button>
             </div>
             <div className="result-commit-actions" role="group" aria-label={t("edit.pendingActions")}>
               <button className="ghost" title={`${t("edit.undo")} (${UNDO_SHORTCUT})`} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><EditIcon name="undo" /></button>
               <button className="ghost" title={`${t("edit.redo")} (${REDO_SHORTCUT})`} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><EditIcon name="redo" /></button>
-              <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave")} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /><span>{t("edit.saveChanges")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDiscard")} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><EditIcon name="cancel" /><span>{t("edit.discard")}</span></button>
+              <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave", { shortcut: keyText("saveEdits") })} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /><span>{t("edit.saveChanges")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDiscard", { shortcut: keyText("discardEdits") })} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><EditIcon name="cancel" /><span>{t("edit.discard")}</span></button>
             </div>
             <span className={`small result-edit-count${hasPendingEdits ? " has-pending" : " muted"}`} role="status">
               {hasPendingEdits ? t("edit.counts", { inserted: editing.inserts.length, deleted: editing.deleted.length, updated: updatedRows }) : t("edit.noPending")}
@@ -3083,7 +3084,7 @@ export function ResultGrid({
       <aside className="cell-viewer" aria-label={t("viewer.title")}>
         <header>
           <div className="cell-viewer-title"><strong>{t("viewer.title")}</strong></div>
-          <button className="ghost" aria-label={t("viewer.close")} onClick={() => setViewer(false)}>×</button>
+          <button className="ghost" aria-label={t("viewer.close", { shortcut: keyText("close") })} onClick={() => setViewer(false)}>×</button>
         </header>
         <p className="muted small">{t("viewer.selectCell")}</p>
       </aside>
@@ -3291,7 +3292,7 @@ function HeaderMenuItems(props: {
   };
   return (
     <>
-      <button role="menuitem" onClick={props.onSelect}>{t("results.selectColumn")}</button>
+      <button role="menuitem" onClick={props.onSelect}>{t("results.selectColumn", { gesture: keyText("selectColumn") })}</button>
       <button role="menuitem" onClick={props.onFit}>{t("results.fitColumn")}</button>
       <hr />
       <button role="menuitem" disabled={!props.canHide} onClick={props.onHide}>
@@ -3314,8 +3315,8 @@ function HeaderMenuItems(props: {
       <button role="menuitem" disabled={props.masked} title={noSortHint} onClick={() => props.onSort([{ column: props.column, descending: true }])}>{t("results.sortDesc")}</button>
       {others.length > 0 && (
         <>
-          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint")} onClick={() => props.onSort(then(false))}>{t("results.sortThenAsc")}</button>
-          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint")} onClick={() => props.onSort(then(true))}>{t("results.sortThenDesc")}</button>
+          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint", { gesture: keyText("sortThen") })} onClick={() => props.onSort(then(false))}>{t("results.sortThenAsc")}</button>
+          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint", { gesture: keyText("sortThen") })} onClick={() => props.onSort(then(true))}>{t("results.sortThenDesc")}</button>
         </>
       )}
       {props.sort.length > 0 && <button role="menuitem" onClick={() => props.onSort([])}>{t("results.sortClear")}</button>}

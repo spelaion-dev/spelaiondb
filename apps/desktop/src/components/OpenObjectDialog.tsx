@@ -8,6 +8,7 @@ import { connectTabFromExplorer, explorerDatabase } from "../connect";
 import { usePreferences } from "../preferences";
 import { topDialog } from "../modalFocus";
 import { useApp } from "../store";
+import { keyText } from "../shortcuts";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -185,7 +186,7 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
                 ? t("openByName.searching")
                 : text.trim() !== "" && found.length === 0 && !error
                   ? t("openByName.nothing")
-                  : t("openByName.hint")}
+                  : t("openByName.hint", { enter: keyText("submit") })}
             </p>
           </>
         )}

@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
-import { commandSpec, withShortcut, type CommandId } from "../commandRegistry";
+import { commandSpec, type CommandId } from "../commandRegistry";
+import { commandTitle } from "../shortcuts";
 import { activeContext, runCommand } from "../commands";
 import { useApp } from "../store";
 
@@ -30,7 +31,7 @@ function ActivityButton({ command, icon, pressed, controls, className }: { comma
       className={`activity-button${className ? ` ${className}` : ""}`}
       data-command={command}
       aria-label={label}
-      title={withShortcut(label, spec)}
+      title={commandTitle(label, command)}
       aria-pressed={pressed}
       aria-controls={controls}
       onClick={() => runCommand(command, activeContext("menu"))}

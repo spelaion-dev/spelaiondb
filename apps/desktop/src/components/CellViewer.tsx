@@ -17,6 +17,7 @@ import { canShowTiles, MapView, type MapFeature } from "./MapView";
 import { chooseOpenFile, chooseSavePath } from "../dialogs";
 import { usePicker, ValuePicker, type PickedEdit, type PickerSource } from "./ValuePicker";
 import { formatJson } from "../formatJson";
+import { keyText } from "../shortcuts";
 
 type View =
   | { kind: "null" }
@@ -290,7 +291,7 @@ export function CellViewer(props: {
               <strong>{t("viewer.rowTitle", { number: (row + 1).toLocaleString(i18n.language) })}</strong>
               <span className="muted small">{t("viewer.columns", { count: props.columns.length })}</span>
             </div>
-            <button className="ghost cell-viewer-close" aria-label={t("viewer.close")} onClick={props.onClose}>×</button>
+            <button className="ghost cell-viewer-close" aria-label={t("viewer.close", { shortcut: keyText("close") })} onClick={props.onClose}>×</button>
           </div>
           <div className="cell-viewer-controls">{modes}</div>
         </header>
@@ -342,7 +343,7 @@ export function CellViewer(props: {
               {length ? ` · ${length}` : ""}
             </span>
           </div>
-          <button className="ghost cell-viewer-close" aria-label={t("viewer.close")} onClick={props.onClose}>×</button>
+          <button className="ghost cell-viewer-close" aria-label={t("viewer.close", { shortcut: keyText("close") })} onClick={props.onClose}>×</button>
         </div>
         <div className="cell-viewer-controls">
           {modes}
@@ -445,7 +446,7 @@ export function CellViewer(props: {
           )}
           {binary && shown?.kind === "null" && <p className="muted cell-viewer-null">NULL</p>}
           <footer className="viewer-edit-actions" role="toolbar" aria-label={t("viewer.editActions")}>
-            <span className="muted small">{t(hasEdit ? "viewer.pendingEdit" : binary ? "viewer.binaryHint" : "viewer.editHint")}</span>
+            <span className="muted small">{t(hasEdit ? "viewer.pendingEdit" : binary ? "viewer.binaryHint" : "viewer.editHint", { shortcut: keyText("editCell") })}</span>
             {jsonCandidate && <button className="ghost small" disabled={formattedJson === null} onClick={() => {
               if (formattedJson !== null) { props.onEdit?.(row, column, formattedJson === item?.text ? undefined : formattedJson); setJsonView("raw"); }
             }}>{t("viewer.formatJson")}</button>}
@@ -459,7 +460,7 @@ export function CellViewer(props: {
                 {loadingFile ? t("viewer.loadingFile") : t("viewer.load")}
               </button>
             )}
-            <button className="ghost small" title={t("edit.setNullHint")} disabled={!item || (hasEdit ? editText === null : item.kind === "null")} onClick={() => props.onEdit?.(row, column, item?.kind === "null" ? undefined : null)}>{t("edit.setNull")}</button>
+            <button className="ghost small" title={t("edit.setNullHint", { shortcut: keyText("setNull") })} disabled={!item || (hasEdit ? editText === null : item.kind === "null")} onClick={() => props.onEdit?.(row, column, item?.kind === "null" ? undefined : null)}>{t("edit.setNull")}</button>
           </footer>
         </>
       )}
