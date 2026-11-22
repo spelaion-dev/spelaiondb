@@ -178,6 +178,55 @@ test("no translated string writes a shortcut: it interpolates one (SDB-86)", () 
   }
 });
 
+test("a table's or a view's explorer menu and its palette actions offer the same things (SDB-92)", () => {
+  // The items the menu's shared components put in it, by their `data-action`.
+  const parts = {
+    CopyMenuItems: ["copyName", "copyQualifiedName"],
+    BookmarkMenuItem: ["bookmark"],
+    DropMenuItem: ["drop"],
+    FilterMenuItems: ["hide", "showOnly"],
+    MaintenanceMenu: ["maintenance"],
+  };
+  const sidebar = read("components/Sidebar.tsx");
+  for (const [part, ids] of Object.entries(parts)) {
+    const source = functionSource("components/Sidebar.tsx", part);
+    for (const id of ids) assert.match(source, new RegExp(`action="${id}"`), `${part} marks its item ${id}`);
+  }
+  assert.match(sidebar, /function GenerateMenu\([^)]*action/, "GenerateMenu passes its trigger's action on");
+  const ids = (source, pattern) => new Set([...source.matchAll(pattern)].map((m) => m[1]));
+  const templates = "generate:*";
+
+  const node = functionSource("components/Sidebar.tsx", "ObjectNode");
+  const menu = ids(node, /\baction="([^"]+)"/g);
+  for (const [part, partIds] of Object.entries(parts)) if (node.includes(`<${part}`)) for (const id of partIds) menu.add(id);
+  if (node.includes("data-action={`generate:${template}`}")) menu.add(templates);
+
+  const actions = functionSource("commands.ts", "relationActions");
+  const palette = ids(actions, /\bid: "([^"]+)"/g);
+  if (actions.includes("id: `generate:${template}`")) palette.add(templates);
+
+  // Items that need the row they were opened on, or what was chosen in the tree.
+  const menuOnly = new Set([
+    "countRows", // its result is drawn in the row
+    "refresh", // reads the row's details again
+    "hide", // changes the connection's explorer filter through its node
+    "showOnly",
+    "join", // the tables chosen with Ctrl+click
+    "innerJoin",
+    "maintenance", // a submenu of the actions the core lists for that object
+  ]);
+  const paletteOnly = new Set(["openStructure", "newConsole", "showInExplorer"]);
+  const without = (set, others) => [...set].filter((id) => !others.has(id)).sort();
+  assert.deepEqual(without(menu, menuOnly), without(palette, paletteOnly));
+  for (const id of menuOnly) assert.ok(menu.has(id), `${id} is still in the menu`);
+  for (const id of paletteOnly) assert.ok(palette.has(id), `${id} is still in the palette`);
+  // Both call the shared actions, not their own copies.
+  for (const shared of ["openRelationSql", "exportRelations", "importIntoTable", "openRelationDiagram", "editViewSource", "duplicateTable", "renameRelation", "dropRelation", "openRelationDdl"]) {
+    assert.match(node, new RegExp(`\\b${shared}\\(`), `the menu calls ${shared}`);
+    assert.match(actions, new RegExp(`\\b${shared}\\(`), `the palette calls ${shared}`);
+  }
+});
+
 test("shortcuts parse with modifiers in the order Ctrl, Shift, Alt", () => {
   assert.deepEqual(parseShortcut("Ctrl+Shift+PageDown"), { ctrl: true, shift: true, alt: false, key: "pagedown" });
   assert.deepEqual(parseShortcut("Shift+Alt+F"), { ctrl: false, shift: true, alt: true, key: "f" });
