@@ -43,6 +43,7 @@
     "empty": "Write a query and press {{shortcut}}.",
     "result": "Result {{number}}",
     "messages": "Messages",
+    "messagesError": "with errors",
     "running": "Running query…",
     "paused": "Paused at statement {{index}}",
     "cancelling": "Cancelling query…",

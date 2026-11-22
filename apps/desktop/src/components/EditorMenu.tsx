@@ -1,4 +1,4 @@
-// The SQL editor's menu (SDB-438): the right click, the Menu key and the ☰ button open the same
+// The SQL editor's menu (SDB-438): the right click, the Menu key and the menu button open the same
 // one. Its groups, their order and its submenus are the registry's (`editorMenu()` in
 // `commandRegistry.ts`); each item runs its command as the action column and the shortcuts do.
 
@@ -9,6 +9,7 @@ import { editorMenu, type CommandId } from "../commandRegistry";
 import { commandShortcut } from "../shortcuts";
 import { activeContext, commandEnabled, commandLabel, runCommand } from "../commands";
 import { Submenu, moveInMenu } from "./Submenu";
+import { Icon } from "./Icons";
 
 export function EditorActionsButton({ runName }: { runName: string }) {
   const { t } = useTranslation("editor");
@@ -18,7 +19,7 @@ export function EditorActionsButton({ runName }: { runName: string }) {
     <button ref={button} className="editor-action editor-menu-button" aria-label={t("actions.menu")} title={t("actions.menu")} aria-haspopup="menu" aria-expanded={open !== null} onClick={() => {
       const rect = button.current!.getBoundingClientRect(); setOpen(open ? null : { x: rect.right, y: rect.top });
     }}>
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+      <Icon name="menu" />
     </button>
     {open && <EditorMenu {...open} runName={runName} onClose={() => { setOpen(null); button.current?.focus(); }} />}
   </>;

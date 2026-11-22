@@ -43,6 +43,7 @@
     "empty": "Escribe una consulta y pulsa {{shortcut}}.",
     "result": "Resultado {{number}}",
     "messages": "Mensajes",
+    "messagesError": "con errores",
     "running": "Ejecutando consulta…",
     "paused": "En pausa en la sentencia {{index}}",
     "cancelling": "Cancelando consulta…",

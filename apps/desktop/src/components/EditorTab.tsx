@@ -61,19 +61,6 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-function EditorActionIcon({ name }: { name: "run" | "script" | "format" | "save" | "saveAs" | "cancel" }) {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      {name === "run" && <path d="M6.5 3.8v12.4l9-6.2z" fill="currentColor" stroke="none" />}
-      {name === "script" && <><path d="M3.5 4h9M3.5 7.5h6M3.5 11h4M3.5 14.5h4" /><path d="M11 9.5v6l4.5-3z" fill="currentColor" stroke="none" /></>}
-      {name === "format" && <><path d="M4 4.5h12M4 8h8M7 11.5h9M7 15h6" /><path d="M4 11v4" /></>}
-      {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4z" /><path d="M6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
-      {name === "saveAs" && <><path d="M5 3.5h6.5L15 7v9.5H5z" /><path d="M11.5 3.5V7H15M8 12.5h4M10 10.5v4" /></>}
-      {name === "cancel" && <rect x="5" y="5" width="10" height="10" rx="1" fill="currentColor" stroke="none" />}
-    </svg>
-  );
-}
-
 function translated(text: Translation, t: TFunction<"editor">, numbers: Intl.NumberFormat): string {
   const values: Record<string, string | number> = {};
   for (const [key, value] of Object.entries(text.values ?? {})) {
@@ -1709,34 +1696,34 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
           <div className="editor-actions" role="toolbar" aria-label={t("editorActions")}>
             {running ? (
               <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} disabled={cancelRequested} onClick={() => void cancelRun()}>
-                <EditorActionIcon name="cancel" />
+                <Icon name="stopped" filled />
               </button>
             ) : (
               <button className="editor-action editor-action-run" data-run-target={runLabel?.kind ?? ""} aria-label={runName} title={`${runPicks ? t("runSelectionPickHint", { count: runLabel?.statements }) : runName} (${commandShortcut("editor.run")})`} disabled={historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
-                <EditorActionIcon name="run" />
+                <Icon name="run" filled />
               </button>
             )}
             <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint", { shortcut: commandShortcut("editor.runScript") })} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
-              <EditorActionIcon name="script" />
+              <Icon name="runScript" />
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
             <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
             <EditorActionsButton runName={runName} />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint", { shortcut: commandShortcut("editor.format") })} onClick={() => editor.current?.format()}>
-              <EditorActionIcon name="format" />
+              <Icon name="format" />
             </button>
             {tab.file ? (
               <button className="editor-action" aria-label={t("files.saveFile")} title={t("files.saveFileHint", { shortcut: commandShortcut("file.save") })} onClick={() => void saveTab(tab.id)}>
-                <EditorActionIcon name="save" />
+                <Icon name="save" />
               </button>
             ) : (
               <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint", { shortcut: commandShortcut("file.save") })} onClick={() => void saveQuery()}>
-                <EditorActionIcon name="save" />
+                <Icon name="save" />
               </button>
             )}
             <button className="editor-action" aria-label={t("files.saveAs")} title={t("files.saveAsHint", { shortcut: commandShortcut("file.saveAs") })} onClick={() => void saveTabAs(tab.id)}>
-              <EditorActionIcon name="saveAs" />
+              <Icon name="saveAs" />
             </button>
           </div>
           <SqlEditor
@@ -2006,7 +1993,8 @@ function Results({
           results={run.results}
           activeResult={run.activeResult}
           session={table ? null : session}
-          messages={`${t("results.messages")}${run.messages.some((m) => m.kind === "error") ? " ⚠" : ""}`}
+          messages={t("results.messages")}
+          messagesError={run.messages.some((m) => m.kind === "error")}
           onSelect={onSelect}
         />
         {active && <div className="result-tools">

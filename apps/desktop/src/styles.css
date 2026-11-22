@@ -2018,10 +2018,20 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.result-tab svg {
+.result-tab svg,
+.result-tabs .messages-tab svg {
   flex: none;
   width: 12px;
   height: 12px;
+}
+/* The messages tab, with a warning mark when a message is an error. */
+.result-tabs .messages-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+.result-tabs .messages-tab .icon {
+  color: var(--danger);
 }
 .result-tabs .result-tab-close {
   display: inline-flex;
