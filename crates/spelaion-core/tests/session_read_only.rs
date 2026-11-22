@@ -26,8 +26,8 @@ use spelaion_core::{
 use spelaion_driver_api::{ExecEvent, ExecOptions, Secret};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{cleaning_up, run_cleanup};
 
 fn unique(prefix: &str) -> String {
@@ -359,6 +359,7 @@ fn targets(workspace: &Workspace) -> Vec<Target> {
 
 #[tokio::test]
 async fn a_session_made_read_only_refuses_writes_on_every_engine_and_can_be_turned_back() {
+    let _turn = crate::serial::file_turn(module_path!());
     let workspace = Workspace::new();
     create_files(&workspace).await;
     let mut tested = Vec::new();
@@ -485,6 +486,7 @@ async fn a_session_made_read_only_refuses_writes_on_every_engine_and_can_be_turn
 
 #[tokio::test]
 async fn nothing_makes_a_read_only_connections_session_writable() {
+    let _turn = crate::serial::file_turn(module_path!());
     let workspace = Workspace::new();
     create_files(&workspace).await;
     let mut tested = Vec::new();

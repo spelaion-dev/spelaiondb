@@ -11,7 +11,7 @@
 //! - A search over 50 tables stops when cancelled mid-way, and the session is still usable.
 //! - A search cancelled at any point (as each table starts or ends) reports how it ended.
 
-mod engines;
+use crate::engines;
 
 use std::sync::{Arc, Mutex};
 
@@ -236,6 +236,7 @@ fn matched(hit: &SearchHit) -> Vec<&str> {
 
 #[tokio::test]
 async fn data_search_finds_values_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         tables(label, &session).await;
         let (_, has_large, _, _) = types(label);
@@ -439,6 +440,7 @@ async fn data_search_finds_values_on_every_engine() {
 
 #[tokio::test]
 async fn a_search_over_fifty_tables_stops_when_cancelled() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let names: Vec<String> = (0..50).map(|i| format!("ds_many_{i:02}")).collect();
         let mut setup = Vec::new();
@@ -526,6 +528,7 @@ async fn a_search_over_fifty_tables_stops_when_cancelled() {
 /// end fails in seconds instead of hanging.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_search_cancelled_at_any_point_reports_how_it_ended() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let names: Vec<String> = (0..4).map(|i| format!("ds_point_{i}")).collect();
         let drops: Vec<String> = names.iter().map(|n| format!("DROP TABLE {n}")).collect();
@@ -601,6 +604,7 @@ async fn a_search_cancelled_at_any_point_reports_how_it_ended() {
 /// A statement that runs for a long time is stopped by Cancel, not waited for.
 #[tokio::test]
 async fn cancel_stops_the_running_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_PG") else {
         return;
     };
@@ -653,6 +657,7 @@ async fn cancel_stops_the_running_statement() {
 /// A read-only connection (a SQLite file opened read-only) searches like any other.
 #[tokio::test]
 async fn a_read_only_connection_can_search() {
+    let _turn = crate::serial::file_turn(module_path!());
     let path = std::env::temp_dir().join(format!("spelaion-data-search-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&path);
     {
@@ -754,6 +759,7 @@ mod statements {
 
     #[test]
     fn the_value_is_bound_never_written() {
+        let _turn = crate::serial::file_turn(module_path!());
         let value = "x'); DROP TABLE orders; --";
         let options = DataSearchOptions {
             numbers: true,
@@ -789,6 +795,7 @@ mod statements {
 
     #[test]
     fn options_choose_the_columns() {
+        let _turn = crate::serial::file_turn(module_path!());
         let pick = |options: &DataSearchOptions, value: &str| {
             table_search_sql(
                 d("postgres").as_ref(),
@@ -838,6 +845,7 @@ mod statements {
 
     #[test]
     fn sql_server_uses_top_and_the_rest_limit() {
+        let _turn = crate::serial::file_turn(module_path!());
         let options = DataSearchOptions {
             rows_per_table: 7,
             ..DataSearchOptions::default()
@@ -865,6 +873,7 @@ mod statements {
 
     #[test]
     fn names_are_quoted() {
+        let _turn = crate::serial::file_turn(module_path!());
         let mut odd = columns();
         odd[1].name = "a\"b".into();
         let sql = table_search_sql(

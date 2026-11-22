@@ -1,7 +1,7 @@
 //! Sessions over a real SQL Server (testing/docker). Without
 //! `SPELAION_TEST_MSSQL=127.0.0.1:11433` they are skipped, which does not count as tested.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -39,6 +39,7 @@ async fn session(database: &str) -> Option<Session> {
 
 #[tokio::test]
 async fn process_monitor_lists_and_ends_sqlserver_sessions() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (Some(monitor), Some(target)) = (session("master").await, session("master").await) else {
         return;
     };
@@ -111,6 +112,7 @@ async fn process_monitor_lists_and_ends_sqlserver_sessions() {
 
 #[tokio::test]
 async fn process_monitor_shows_the_current_sqlserver_session_without_admin_rights() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(admin) = session("master").await else {
         return;
     };
@@ -230,6 +232,7 @@ async fn texts(session: &Session, sql: &str) -> Vec<String> {
 /// A procedure (or any batch) with several result sets: each one is a result, all complete.
 #[tokio::test]
 async fn batches_with_several_result_sets_give_several_results() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = spelaion().await else {
         return;
     };
@@ -247,6 +250,7 @@ async fn batches_with_several_result_sets_give_several_results() {
 
 #[tokio::test]
 async fn table_data_pages_and_edits_in_one_transaction() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = spelaion().await else {
         return;
     };
@@ -384,6 +388,7 @@ async fn editable(session: &Session, sql: &str) -> Option<(String, String)> {
 
 #[tokio::test]
 async fn query_results_resolve_their_table_as_the_server_does() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = spelaion().await else {
         return;
     };

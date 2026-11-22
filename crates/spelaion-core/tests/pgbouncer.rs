@@ -20,8 +20,6 @@ use spelaion_core::{
 use spelaion_driver_api::{ExecEvent, ExecOptions, InsertTarget, Secret, TextRows, Value};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
-mod engines;
-
 fn server() -> Option<(String, u16)> {
     let Ok(value) = std::env::var("SPELAION_TEST_PGBOUNCER") else {
         eprintln!("SPELAION_TEST_PGBOUNCER not set: test skipped");
@@ -149,6 +147,7 @@ async fn bound(open: &OpenConnection, sql: &str, params: &[&str]) -> Result<Stri
 
 #[tokio::test]
 async fn statements_parameters_and_the_catalog_work_behind_a_transaction_pooler() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = server() else { return };
     let ws = Workspace::new();
     let open = ws.open(&server, Some("transaction")).await;
@@ -182,6 +181,7 @@ async fn statements_parameters_and_the_catalog_work_behind_a_transaction_pooler(
 
 #[tokio::test]
 async fn a_transaction_an_import_and_an_agent_read_work_behind_a_transaction_pooler() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = server() else { return };
     let ws = Workspace::new();
     let open = ws.open(&server, Some("transaction")).await;
@@ -244,6 +244,7 @@ async fn a_transaction_an_import_and_an_agent_read_work_behind_a_transaction_poo
 
 #[tokio::test]
 async fn the_session_s_schema_is_refused_with_why_behind_a_transaction_pooler() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = server() else { return };
     let ws = Workspace::new();
     let open = ws.open(&server, Some("transaction")).await;
@@ -272,6 +273,7 @@ async fn the_session_s_schema_is_refused_with_why_behind_a_transaction_pooler() 
 /// that relies on its session.
 #[tokio::test]
 async fn without_the_setting_a_transaction_pooler_loses_the_driver_s_statements() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = server() else { return };
     let ws = Workspace::new();
     let open = ws.open(&server, None).await;

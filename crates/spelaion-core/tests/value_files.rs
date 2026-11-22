@@ -6,7 +6,7 @@
 //! by its bytes and saved to a file byte for byte; a file loaded into a cell becomes exactly
 //! one UPDATE by primary key, and reading the page again gives the file back.
 
-mod engines;
+use crate::engines;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -198,6 +198,7 @@ fn scratch(label: &str, name: &str) -> PathBuf {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn images_are_fetched_saved_and_loaded_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let png = content(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR", 100_000, 7);
     let gif = content(b"GIF89a", 90_000, 11);
     for engine in engines().await {
@@ -334,6 +335,7 @@ async fn images_are_fetched_saved_and_loaded_on_every_engine() {
 /// A value past the limit waits for "load anyway"; it is still recognised and saved whole.
 #[tokio::test(flavor = "multi_thread")]
 async fn big_values_wait_for_load_anyway() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = &session(
         &*engines::sqlite(),
         ConnectParams {

@@ -1,7 +1,7 @@
 //! Duplicating, copying and pasting connections (ADR-030), with temporary directories and a
 //! fake secret backend (the real keychain is never touched).
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 
@@ -40,6 +40,7 @@ writes = "confirm"
 
 #[test]
 fn duplicating_keeps_every_setting_and_comment_under_a_new_name() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("dup-personal");
     fx.write("user/tunnels/bastion.toml", BASTION);
     fx.write("user/connections/prod/orders.toml", FULL);
@@ -101,6 +102,7 @@ fn duplicating_keeps_every_setting_and_comment_under_a_new_name() {
 
 #[test]
 fn duplicating_copies_the_keychain_password_inside_the_core() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("dup-secret");
     fx.write(
         "user/connections/db.toml",
@@ -191,6 +193,7 @@ fn duplicating_copies_the_keychain_password_inside_the_core() {
 
 #[test]
 fn team_copies_need_the_original_as_trusted_and_are_pinned() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("dup-team");
     fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
     fx.write("repo/.spelaion/connections/eu/orders.toml", FULL);
@@ -264,6 +267,7 @@ fn team_copies_need_the_original_as_trusted_and_are_pinned() {
 
 #[test]
 fn copied_text_has_no_secrets_and_pastes_back_as_a_personal_connection() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("clipboard");
     fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
     fx.write("repo/.spelaion/connections/eu/orders.toml", FULL);
@@ -358,6 +362,7 @@ fn copied_text_has_no_secrets_and_pastes_back_as_a_personal_connection() {
 
 #[test]
 fn pasted_text_cannot_create_what_the_form_could_not_or_read_secrets() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("paste-malicious");
     let backend = FakeBackend::default();
     let config = fx.config();
@@ -519,6 +524,7 @@ fn pasted_text_cannot_create_what_the_form_could_not_or_read_secrets() {
 
 #[test]
 fn connection_urls_paste_without_their_password() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("paste-url");
     let backend = FakeBackend::default();
     let pasted = paste_connection(

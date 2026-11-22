@@ -11,7 +11,7 @@
 //! table without an error, and puts back a row changed in between. A masked column is
 //! exported as the mask in every format.
 
-mod engines;
+use crate::engines;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -387,6 +387,7 @@ fn rows_of(batches: &[RecordBatch]) -> Vec<Vec<String>> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn every_format_reads_back_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for case in cases().await {
         let label = case.label;
         let store = Arc::new(ResultStore::new());
@@ -545,6 +546,7 @@ async fn every_format_reads_back_on_every_engine() {
 /// An upsert needs a table with a primary key, and the whole key in the export.
 #[tokio::test(flavor = "multi_thread")]
 async fn upserts_without_a_key_are_refused() {
+    let _turn = crate::serial::file_turn(module_path!());
     let path = scratch("nokey.sqlite");
     std::fs::write(&path, b"").unwrap();
     let case = Case {

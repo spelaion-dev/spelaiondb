@@ -13,7 +13,7 @@
 //! one. To write them again:
 //! `docker run --rm debian:bookworm-slim sh -c "apt-get update && apt-get install -y spatialite-bin && echo \"SELECT hex(GeomFromText('POINT(1 2)', 4326));\" | spatialite /tmp/x.db"`.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -212,6 +212,7 @@ fn check(
 
 #[tokio::test]
 async fn spatialite_and_geopackage_blobs_in_sqlite() {
+    let _turn = crate::serial::file_turn(module_path!());
     let label = "sqlite";
     let session = session(&*engines::sqlite(), memory()).await;
     // As SpatiaLite's `AddGeometryColumn` declares them.
@@ -356,6 +357,7 @@ async fn spatialite_and_geopackage_blobs_in_sqlite() {
 
 #[tokio::test]
 async fn wkb_blobs_in_duckdb() {
+    let _turn = crate::serial::file_turn(module_path!());
     let label = "duckdb";
     let session = session(&*engines::duckdb(), memory()).await;
     let expressions: Vec<String> = WKB.iter().map(|h| format!("from_hex('{h}')")).collect();
@@ -376,6 +378,7 @@ async fn wkb_blobs_in_duckdb() {
 
 #[tokio::test]
 async fn duckdb_spatial() {
+    let _turn = crate::serial::file_turn(module_path!());
     let label = "duckdb spatial";
     let required = std::env::var("SPELAION_TEST_DUCKDB_SPATIAL").is_ok();
     let session = session(&*engines::duckdb(), memory()).await;
@@ -442,6 +445,7 @@ async fn duckdb_spatial() {
 
 #[tokio::test]
 async fn postgis() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_PG") else {
         return;
     };
@@ -512,6 +516,7 @@ async fn postgis() {
 
 #[tokio::test]
 async fn mysql_and_mariadb() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, var, driver) in [
         ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
         ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),

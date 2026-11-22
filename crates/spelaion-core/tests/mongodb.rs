@@ -8,7 +8,7 @@
 //! plugin (pinned, or `SPELAION_DEV_PLUGIN_MONGODB`). Without them it is skipped, which does not
 //! count as tested.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -109,6 +109,7 @@ fn texts(results: &ResultStore, id: ResultId, name: &str) -> Vec<Option<String>>
 
 #[tokio::test]
 async fn a_script_of_shell_statements_runs_each_as_its_command() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, results)) = session("spelaion_core_mongo").await else {
         return;
     };
@@ -147,6 +148,7 @@ db.getCollection("people").deleteOne({_id: 2})
 
 #[tokio::test]
 async fn what_the_core_cannot_read_is_refused_in_place_and_never_sent() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, _results)) = session("spelaion_core_mongo_refused").await else {
         return;
     };
@@ -173,6 +175,7 @@ async fn what_the_core_cannot_read_is_refused_in_place_and_never_sent() {
 
 #[tokio::test]
 async fn the_current_database_is_where_a_statement_runs() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, results)) = session("spelaion_core_mongo_a").await else {
         return;
     };
@@ -201,6 +204,7 @@ db.getSiblingDB("spelaion_core_mongo_a").here.find()"#,
 
 #[test]
 fn the_guard_asks_before_what_mongodb_would_lose() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = spelaion_dialect::for_engine("mongodb").expect("MongoDB's language");
     let plain = Safeguards::default();
     let production = Safeguards {

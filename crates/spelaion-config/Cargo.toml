@@ -5,6 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# The integration tests are one binary (tests/main.rs, SDB-168).
+autotests = false
+
+# Every file of tests/ in one binary, linked once; its files still run one after another
+# (tests/serial.rs). `cargo test -p spelaion-config <file name>` runs one file.
+[[test]]
+name = "config"
+path = "tests/main.rs"
 
 [dependencies]
 # DBeaver obscures its saved credentials with AES-128-CBC (dbeaver.rs); TablePlus encrypts

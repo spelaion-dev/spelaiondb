@@ -51,6 +51,7 @@ fn entry(json: &serde_json::Value) -> &serde_json::Value {
 
 #[test]
 fn paths_on_each_system() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("paths");
     let windows = ClientEnv::under(&root, Os::Windows);
     let expect = |client, rel: &str| {
@@ -101,6 +102,7 @@ fn paths_on_each_system() {
 
 #[test]
 fn a_missing_file_is_created_with_only_our_server() {
+    let _turn = crate::serial::file_turn(module_path!());
     for client in JSON_CLIENTS {
         let root = temp("missing");
         let path = config_path(client, &ClientEnv::under(&root, Os::Windows));
@@ -149,6 +151,7 @@ fn a_missing_file_is_created_with_only_our_server() {
 
 #[test]
 fn other_servers_and_keys_stay_byte_for_byte() {
+    let _turn = crate::serial::file_turn(module_path!());
     let original = "{\n    \"globalShortcut\": \"Ctrl+Space\",\n    \"mcpServers\": {\n        \"filesystem\": {\n            \"command\": \"npx\",\n            \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"C:\\\\Users\\\\me\"],\n            \"env\": {\"TOKEN\": \"keep-me\"}\n        }\n    },\n    \"numbers\": [1.0, 2e3, -0]\n}\n";
     for client in JSON_CLIENTS {
         let root = temp("others");
@@ -192,6 +195,7 @@ fn other_servers_and_keys_stay_byte_for_byte() {
 
 #[test]
 fn a_file_without_servers_gets_the_key_at_its_indentation() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("no-servers");
     let path = root.join(".claude.json");
     // Claude Code's file: other keys, tabs, Windows line endings, a byte order mark.
@@ -244,6 +248,7 @@ fn a_file_without_servers_gets_the_key_at_its_indentation() {
 
 #[test]
 fn an_existing_entry_is_updated_keeping_the_users_additions() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("existing");
     let path = root.join("claude_desktop_config.json");
     let original = "{\n  \"mcpServers\": {\n    \"spelaiondb\": {\n      \"command\": \"C:\\\\old\\\\spelaiondb.exe\",\n      \"args\": [\"mcp\", \"--workspace\", \"C:\\\\repo\"],\n      \"env\": { \"SPELAION_USER_DIR\": \"D:\\\\me\" }\n    },\n    \"other\": { \"command\": \"x\" }\n  }\n}\n";
@@ -288,6 +293,7 @@ fn an_existing_entry_is_updated_keeping_the_users_additions() {
 
 #[test]
 fn codex_toml_keeps_comments_other_servers_and_extra_keys() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("codex");
     let path = root.join("config.toml");
     let original = "# My Codex settings\nmodel = \"gpt-5\"  # the default\n\n[mcp_servers.github]\ncommand = \"npx\"\nargs = [\"-y\", \"github-mcp\"]\nenv = { GITHUB_TOKEN = \"keep-me\" }\n\n[profiles.fast]\nmodel = \"mini\"\n";
@@ -343,6 +349,7 @@ fn codex_toml_keeps_comments_other_servers_and_extra_keys() {
 
 #[test]
 fn files_that_do_not_parse_are_never_written() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("broken");
     for (client, name, text) in [
         (McpClient::Cursor, "mcp.json", "{\"mcpServers\": {,}}"),
@@ -377,6 +384,7 @@ fn files_that_do_not_parse_are_never_written() {
 
 #[test]
 fn a_file_that_changed_after_the_diff_was_shown_is_not_written() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("changed");
     let path = root.join("mcp.json");
     std::fs::write(&path, "{\"mcpServers\": {}}").unwrap();
@@ -415,6 +423,7 @@ fn a_file_that_changed_after_the_diff_was_shown_is_not_written() {
 
 #[test]
 fn backups_never_overwrite_each_other() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("backups");
     let path = root.join("mcp.json");
     for n in 0..3 {
@@ -442,6 +451,7 @@ fn backups_never_overwrite_each_other() {
 
 #[test]
 fn manual_configuration_and_the_claude_code_command() {
+    let _turn = crate::serial::file_turn(module_path!());
     let text = manual_config(McpClient::Cursor, &command());
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
@@ -471,6 +481,7 @@ fn manual_configuration_and_the_claude_code_command() {
 
 #[test]
 fn a_big_file_with_a_small_change_shows_a_short_diff() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("big");
     let path = root.join(".claude.json");
     let mut original = String::from("{\n  \"projects\": {\n");
@@ -489,6 +500,7 @@ fn a_big_file_with_a_small_change_shows_a_short_diff() {
 
 #[test]
 fn only_the_change_that_was_shown_is_written() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("shown");
     let path = root.join("mcp.json");
     std::fs::write(&path, "{\"mcpServers\": {}}").unwrap();
@@ -514,6 +526,7 @@ fn only_the_change_that_was_shown_is_written() {
 
 #[test]
 fn the_cli_is_found_next_to_the_app_then_on_the_path() {
+    let _turn = crate::serial::file_turn(module_path!());
     let root = temp("cli");
     let app_dir = root.join("app");
     let bin_dir = root.join("bin");
@@ -574,6 +587,7 @@ fn mode(path: &Path) -> u32 {
 #[cfg(unix)]
 #[test]
 fn a_private_file_and_its_backup_stay_private() {
+    let _turn = crate::serial::file_turn(module_path!());
     use std::os::unix::fs::PermissionsExt as _;
     for client in [McpClient::ClaudeCode, McpClient::Codex] {
         let root = temp("private");
@@ -606,6 +620,7 @@ fn a_private_file_and_its_backup_stay_private() {
 #[cfg(unix)]
 #[test]
 fn a_linked_file_stays_a_link() {
+    let _turn = crate::serial::file_turn(module_path!());
     use std::os::unix::fs::PermissionsExt as _;
     let root = temp("linked");
     let dotfiles = root.join("dotfiles");
@@ -656,6 +671,7 @@ fn a_linked_file_stays_a_link() {
 #[cfg(unix)]
 #[test]
 fn a_new_file_is_owner_only() {
+    let _turn = crate::serial::file_turn(module_path!());
     for client in [McpClient::ClaudeCode, McpClient::Codex, McpClient::Cursor] {
         let root = temp("new-private");
         let path = config_path(client, &ClientEnv::under(&root, Os::Linux));

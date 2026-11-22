@@ -171,6 +171,7 @@ fn unique(prefix: &str) -> String {
 /// semicolons; a transaction across statements is read from the server.
 #[tokio::test]
 async fn a_script_runs_statement_by_statement_with_its_transaction() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("databend-script", "").await else {
         return;
     };
@@ -248,6 +249,7 @@ async fn a_script_runs_statement_by_statement_with_its_transaction() {
 /// The server's error stops the script at its statement, and the session goes on.
 #[tokio::test]
 async fn an_error_stops_at_its_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("databend-error", "").await else {
         return;
     };
@@ -268,6 +270,7 @@ async fn an_error_stops_at_its_statement() {
 /// The connection's `[session]` setup runs when the session opens, and holds.
 #[tokio::test]
 async fn the_session_setup_holds() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct(
         "databend-setup",
         "\n[session]\nsetup = \"SET timezone = 'Asia/Tokyo';\"\n",
@@ -284,6 +287,7 @@ async fn the_session_setup_holds() {
 
 #[tokio::test]
 async fn the_explorer_lists_databases_tables_and_views() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("databend-explorer", "").await else {
         return;
     };
@@ -313,6 +317,7 @@ async fn the_explorer_lists_databases_tables_and_views() {
 
 #[test]
 fn the_guard_asks_before_what_databend_would_lose() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = spelaion_dialect::for_engine("databend").expect("Databend's dialect");
     let plain = Safeguards::default();
     let production = Safeguards {
@@ -346,6 +351,7 @@ fn the_guard_asks_before_what_databend_would_lose() {
 
 #[test]
 fn databend_has_no_read_only_mode_nor_agents() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("databend-no-barrier");
     ws.write(
         ".spelaion/connections/ro.toml",
@@ -375,6 +381,7 @@ fn databend_has_no_read_only_mode_nor_agents() {
 /// Through the two bastions of `testing/docker`: the plugin connects to the tunnel's local end.
 #[tokio::test]
 async fn databend_through_two_bastions() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }
@@ -405,6 +412,7 @@ async fn databend_through_two_bastions() {
 /// end; the plugin reads no proxy from the environment, so it never goes around it.
 #[tokio::test]
 async fn databend_through_a_socks_proxy() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }

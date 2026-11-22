@@ -3,7 +3,7 @@
 //! SQLite always runs. PostgreSQL needs `SPELAION_TEST_PG` and the tunnels need
 //! `SPELAION_TEST_SSH` (see `testing/docker`).
 
-mod engines;
+use crate::engines;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -145,6 +145,7 @@ fn toml_path(path: &Path) -> String {
 
 #[tokio::test]
 async fn sqlite_from_config() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("sqlite");
     ws.write("data/app.db", "");
     ws.write(
@@ -188,6 +189,7 @@ impl Driver for Stand {
 /// dialect: the session splits, classifies and guards with the core's dialect for that engine.
 #[tokio::test]
 async fn a_driver_put_in_place_brings_only_the_wire() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("stand-in");
     ws.write("data/app.db", "");
     ws.write(
@@ -235,6 +237,7 @@ database = \"data/app.db\"
 
 #[tokio::test]
 async fn duckdb_from_config() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("duckdb");
     std::fs::create_dir_all(ws.base.join("repo/data")).unwrap();
     engines::create_database(
@@ -269,6 +272,7 @@ async fn duckdb_from_config() {
 
 #[tokio::test]
 async fn postgres_direct_with_a_command_secret() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_PG") else {
         eprintln!("SPELAION_TEST_PG not set: test skipped");
         return;
@@ -296,6 +300,7 @@ async fn postgres_direct_with_a_command_secret() {
 
 #[tokio::test]
 async fn prompted_passwords_must_be_supplied() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("prompt");
     ws.write(
         ".spelaion/connections/pg.toml",
@@ -312,6 +317,7 @@ async fn prompted_passwords_must_be_supplied() {
 /// name, even though the driver connects to the tunnel's local end.
 #[tokio::test]
 async fn postgres_through_two_bastions_with_verify_full() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;
@@ -365,6 +371,7 @@ async fn postgres_through_two_bastions_with_verify_full() {
 /// the same bastion use a single SSH chain, which closes when the last connection closes.
 #[tokio::test]
 async fn connections_share_one_tunnel() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;
@@ -423,6 +430,7 @@ async fn connections_share_one_tunnel() {
 /// secret reference, as any other.
 #[tokio::test]
 async fn connections_go_through_a_proxy_from_their_tunnel_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let proxies: Vec<(&str, String)> = [
         ("socks5", "SPELAION_TEST_SOCKS"),
         ("http", "SPELAION_TEST_HTTP_PROXY"),
@@ -516,6 +524,7 @@ fn ephemeral_ports() -> std::ops::RangeInclusive<u16> {
 /// local end listens; the tunnel's network settings are used as written.
 #[tokio::test]
 async fn local_ports_follow_the_connection_and_the_personal_range() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;
@@ -579,6 +588,7 @@ async fn local_ports_follow_the_connection_and_the_personal_range() {
 /// wrong user fails at the hop that rejects it, and nothing is written to disk.
 #[tokio::test]
 async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;
@@ -651,6 +661,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
 /// end but checks the certificate against the server's real name ("mysql").
 #[tokio::test]
 async fn mysql_through_two_bastions_with_verify_full() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;
@@ -728,6 +739,7 @@ fn first_result(events: &[CoreEvent]) -> spelaion_core::ResultId {
 
 #[tokio::test]
 async fn sqlite_on_a_server_through_two_hops() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;
@@ -1030,6 +1042,7 @@ async fn sqlite_on_a_server_through_two_hops() {
 /// how it writes every later result. They are refused, and the session reads as before.
 #[tokio::test]
 async fn sqlite_on_a_server_never_runs_a_command_after_a_comment() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;
@@ -1089,6 +1102,7 @@ async fn sqlite_on_a_server_never_runs_a_command_after_a_comment() {
 
 #[tokio::test]
 async fn sqlite_on_a_server_says_what_is_wrong() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;
@@ -1178,6 +1192,7 @@ impl Interaction for RefuseHosts {
 /// ADR-022: `.spelaion/known_hosts` in the repository verifies a newcomer's first connection.
 #[tokio::test]
 async fn the_teams_known_hosts_verifies_a_newcomers_first_connection() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;

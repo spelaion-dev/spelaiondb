@@ -128,6 +128,7 @@ fn changed(result: Result<ResolvedConnection, ResolveError>) -> spelaion_config:
 
 #[test]
 fn team_types_apply_only_from_a_trusted_repository_and_as_reviewed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("team");
     let team = fx.write("repo/.spelaion/connection-types.toml", TEAM);
     fx.write(
@@ -219,6 +220,7 @@ fn team_types_apply_only_from_a_trusted_repository_and_as_reviewed() {
 
 #[test]
 fn every_way_a_team_file_could_drop_a_safeguard_is_reviewed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("team-ways");
     let team = fx.write("repo/.spelaion/connection-types.toml", TEAM);
     fx.write(
@@ -285,6 +287,7 @@ fn every_way_a_team_file_could_drop_a_safeguard_is_reviewed() {
 
 #[test]
 fn a_new_team_type_waits_for_review_only_where_it_is_used() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("team-new");
     fx.write(
         "repo/.spelaion/connections/ledger.toml",
@@ -313,6 +316,7 @@ fn a_new_team_type_waits_for_review_only_where_it_is_used() {
 
 #[test]
 fn production_can_be_tightened_but_never_loosened() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("production");
     // The team tries to turn Production's confirmation off and rename it; the user's own file
     // tries too. Writing `false` is the same as not writing it.
@@ -364,6 +368,7 @@ fn production_can_be_tightened_but_never_loosened() {
 
 #[test]
 fn type_files_are_validated() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("validate");
     for (content, expected) in [
         ("[types.\"Bad Id\"]\n", "an id is lowercase"),
@@ -389,6 +394,7 @@ fn type_files_are_validated() {
 
 #[test]
 fn personal_types_are_saved_keeping_the_rest_of_the_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("personal");
     let path = fx.user().join("connection-types.toml");
     let staging = ConnectionTypeConfig {
@@ -458,6 +464,7 @@ fn personal_types_are_saved_keeping_the_rest_of_the_file() {
 
 #[test]
 fn check_warns_about_agents_writing_where_a_type_confirms_data_changes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("check");
     fx.write(
         "repo/.spelaion/connection-types.toml",
@@ -494,6 +501,7 @@ const PAYMENTS: &str = "schema_version = 1\n[types.payments]\nname = \"Payments\
 
 #[test]
 fn a_duplicated_connection_keeps_its_type_and_safeguards() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("duplicate");
     fx.write("user/connection-types.toml", PAYMENTS);
     fx.write("user/connections/ledger.toml", &sqlite("payments"));
@@ -522,6 +530,7 @@ fn a_duplicated_connection_keeps_its_type_and_safeguards() {
 
 #[test]
 fn a_pasted_connection_takes_its_type_from_here_and_cannot_bring_one() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("paste");
     fx.write("user/connection-types.toml", PAYMENTS);
     fx.write("user/connections/ledger.toml", &sqlite("payments"));
@@ -599,6 +608,7 @@ fn sqlite_draft(fx: &Fixture, id: &str) -> ConnectionDraft {
 
 #[test]
 fn changing_the_engine_keeps_the_type_and_the_name_pattern_shows_its_id() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("engine-pattern");
     fx.write("user/connection-types.toml", PAYMENTS);
     fx.write("user/connections/ledger.toml", &sqlite("payments"));
@@ -632,6 +642,7 @@ fn changing_the_engine_keeps_the_type_and_the_name_pattern_shows_its_id() {
 
 #[test]
 fn commit_safeguards_only_add_up_and_production_has_smart_commit() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("commit");
     // The team tries to switch Production's smart commit off; the user tries on a team type
     // that asks for it. Writing `false` is the same as not writing it (ADR-031).
@@ -661,6 +672,7 @@ fn commit_safeguards_only_add_up_and_production_has_smart_commit() {
 
 #[test]
 fn switching_a_team_commit_safeguard_off_or_on_is_reviewed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("commit-review");
     let with = "schema_version = 1\n[types.ledger]\nname = \"Ledger\"\nsmart_commit = true\n";
     let team = fx.write("repo/.spelaion/connection-types.toml", with);

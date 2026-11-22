@@ -4,7 +4,7 @@
 //! unlocked and dropped; and the password is looked for, and never found, in the history, the
 //! audit, the store's file and the errors the core returned.
 
-mod engines;
+use crate::engines;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -208,6 +208,7 @@ const SECOND: &str = "Sec'ond;Pass\\word-2";
 
 #[tokio::test]
 async fn accounts_are_created_logged_in_given_a_new_password_locked_and_dropped() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines() {
         let label = engine.label;
         let admin = engine.session().await;
@@ -301,6 +302,7 @@ async fn accounts_are_created_logged_in_given_a_new_password_locked_and_dropped(
 
 #[tokio::test]
 async fn roles_and_database_users_are_created_and_dropped() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines() {
         let label = engine.label;
         let admin = engine.session().await;
@@ -463,6 +465,7 @@ async fn assert_nothing_leaked(history: QueryHistory, path: &Path, label: &str, 
 /// one and dropped; the passwords never reach the history, the audit, the store or an error.
 #[tokio::test]
 async fn a_contained_database_user_logs_in_with_its_own_password_and_it_never_leaks() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(engine) = engines().into_iter().find(|e| e.label == "sqlserver") else {
         return;
     };
@@ -572,6 +575,7 @@ async fn a_contained_database_user_logs_in_with_its_own_password_and_it_never_le
 
 #[tokio::test]
 async fn a_new_password_never_reaches_the_history_the_audit_or_an_error() {
+    let _turn = crate::serial::file_turn(module_path!());
     // MySQL and MariaDB also under NO_BACKSLASH_ESCAPES, where the password's literal is
     // written another way (SDB-262).
     let runs = engines().into_iter().flat_map(|engine| {
@@ -668,6 +672,7 @@ async fn a_new_password_never_reaches_the_history_the_audit_or_an_error() {
 /// that setting, so such a password is still refused before anything runs.
 #[tokio::test]
 async fn a_backslash_in_a_password_is_written_as_the_sessions_mode_reads_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines() {
         let label = engine.label;
         let setting = match label {

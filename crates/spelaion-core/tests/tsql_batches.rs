@@ -3,7 +3,7 @@
 //! statement inside it. The run itself needs `SPELAION_TEST_MSSQL=127.0.0.1:11433`
 //! (testing/docker); without it that test is skipped, which does not count as tested.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -71,6 +71,7 @@ async fn first_cells(session: &Session, script: &str) -> Vec<String> {
 
 #[tokio::test]
 async fn a_declared_variable_is_known_to_the_statements_after_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };
@@ -117,6 +118,7 @@ fn risk(script: &str) -> Option<Risk> {
 /// also when the parser cannot read some other statement of the batch.
 #[test]
 fn the_guard_still_sees_every_statement_of_the_batch() {
+    let _turn = crate::serial::file_turn(module_path!());
     assert_eq!(
         risk("declare @x int = 1; delete from t"),
         Some(Risk::DeleteAll)
@@ -155,6 +157,7 @@ fn the_guard_still_sees_every_statement_of_the_batch() {
 /// Agents: a batch with a DECLARE is still not one read nor one allowed write.
 #[test]
 fn agents_still_refuse_a_batch_with_variables() {
+    let _turn = crate::serial::file_turn(module_path!());
     let batch = "declare @x int = 1; select @x;";
     assert_eq!(SqlServerDialect.split_statements(batch).len(), 1);
     assert!(classify_read_only("sqlserver", batch).is_err());
@@ -170,6 +173,7 @@ fn agents_still_refuse_a_batch_with_variables() {
 /// "Run the statement under the cursor" runs the whole batch from any line after the DECLARE.
 #[test]
 fn the_cursor_picks_the_whole_batch() {
+    let _turn = crate::serial::file_turn(module_path!());
     let script = "select 0;\ndeclare @id int = 5;\nselect @id;\nselect @id + 1;\nGO\nselect 9";
     let batch = "declare @id int = 5;\nselect @id;\nselect @id + 1;";
     for line in ["declare", "select @id;", "select @id + 1"] {

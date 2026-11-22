@@ -1,6 +1,6 @@
 //! Sessions over in-memory DuckDB: they always run, with nothing external.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -74,6 +74,7 @@ async fn texts(session: &Session, sql: &str) -> Vec<String> {
 /// scanner untouched.
 #[tokio::test]
 async fn scripts_split_like_duckdb_reads_them() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let events = run(
         &session,
@@ -97,6 +98,7 @@ async fn scripts_split_like_duckdb_reads_them() {
 
 #[tokio::test]
 async fn tables_are_counted_and_paged() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     run(
         &session,
@@ -126,6 +128,7 @@ async fn tables_are_counted_and_paged() {
 
 #[tokio::test]
 async fn table_edits_apply_in_one_transaction_by_primary_key() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     run(
         &session,
@@ -242,6 +245,7 @@ async fn table_edits_apply_in_one_transaction_by_primary_key() {
 
 #[tokio::test]
 async fn risky_statements_are_recognized() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let risks = spelaion_core::script_risks(
         session.dialect().as_ref(),
@@ -255,6 +259,7 @@ async fn risky_statements_are_recognized() {
 /// before anything is sent (`agents_engines.rs` tries the ways around it).
 #[tokio::test]
 async fn read_only_mode_never_reads_local_files() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let result = session
         .run_read_only(
@@ -278,6 +283,7 @@ async fn editable(session: &Session, sql: &str) -> Option<(String, String)> {
 
 #[tokio::test]
 async fn query_results_never_edit_a_table_shadowed_by_a_temporary_one() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     run(
         &session,

@@ -6,7 +6,7 @@
 //! plugin (pinned, or `SPELAION_DEV_PLUGIN_CASSANDRA`). Without them it is skipped, which does
 //! not count as tested.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -90,6 +90,7 @@ fn texts(results: &ResultStore, id: ResultId, name: &str) -> Vec<Option<String>>
 
 #[tokio::test]
 async fn a_script_of_cql_runs_each_statement_and_a_batch_whole() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, results)) = session().await else {
         return;
     };
@@ -122,6 +123,7 @@ async fn a_script_of_cql_runs_each_statement_and_a_batch_whole() {
 
 #[tokio::test]
 async fn use_is_refused_in_place_and_never_sent() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, _results)) = session().await else {
         return;
     };
@@ -148,6 +150,7 @@ async fn use_is_refused_in_place_and_never_sent() {
 
 #[test]
 fn the_guard_reads_cql_with_its_own_lists() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = spelaion_dialect::for_engine("cassandra").expect("CQL");
     let plain = Safeguards::default();
     let production = Safeguards {

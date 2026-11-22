@@ -8,7 +8,7 @@
 //!   must be SQL the engine reads back.
 //! - Find works on the stored result whatever engine produced it.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -158,6 +158,7 @@ const OK: usize = 3;
 
 #[tokio::test]
 async fn filter_by_value_keeps_the_same_rows_in_the_server_and_in_the_core() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let id = items(label, &session, "ge_filter").await;
         let stored = session.results().get(id).unwrap();
@@ -236,6 +237,7 @@ async fn filter_by_value_keeps_the_same_rows_in_the_server_and_in_the_core() {
 
 #[tokio::test]
 async fn copied_in_lists_and_column_names_are_sql_the_engine_reads() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let id = items(label, &session, "ge_copy").await;
         let stored = session.results().get(id).unwrap();
@@ -286,6 +288,7 @@ async fn copied_in_lists_and_column_names_are_sql_the_engine_reads() {
 
 #[tokio::test]
 async fn find_searches_the_stored_result_of_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, _) in engines().await {
         let id = items(label, &session, "ge_find").await;
         let stored = session.results().get(id).unwrap();
@@ -340,6 +343,7 @@ async fn first_cell(label: &str, session: &Session, sql: &str) -> String {
 /// hit exactly that row, and a copied INSERT loads the value unchanged.
 #[tokio::test]
 async fn mysql_and_mariadb_read_backslashes_as_the_sessions_sql_mode_does() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         if label != "mysql" && label != "mariadb" {
             continue;
@@ -505,6 +509,7 @@ async fn mysql_and_mariadb_read_backslashes_as_the_sessions_sql_mode_does() {
 /// copied under one language loads the same values under the other.
 #[tokio::test]
 async fn sqlserver_date_literals_mean_the_same_under_every_language() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         if label != "sqlserver" {
             continue;
@@ -683,6 +688,7 @@ async fn sqlserver_date_literals_mean_the_same_under_every_language() {
 /// a copied INSERT loads the same values back.
 #[tokio::test]
 async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         if label != "sqlserver" {
             continue;
@@ -902,6 +908,7 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
 /// finishes with every row and the server's text.
 #[tokio::test]
 async fn mysql_zero_dates_far_down_sort_filter_and_export() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         if label != "mysql" && label != "mariadb" {
             continue;

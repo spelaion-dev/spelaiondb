@@ -3,7 +3,7 @@
 //! their `SPELAION_TEST_*` variables (without them they are skipped, which does not count as
 //! tested).
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -176,6 +176,7 @@ async fn generated(session: &Session, schema: &str, table: &str, template: SqlTe
 
 #[tokio::test]
 async fn selects_by_key_and_writes_by_key_run_everywhere() {
+    let _turn = crate::serial::file_turn(module_path!());
     let pid = std::process::id();
     let items = format!("gen_items_{pid}");
     let codes = format!("gen_codes_{pid}");
@@ -278,6 +279,7 @@ async fn selects_by_key_and_writes_by_key_run_everywhere() {
 
 #[tokio::test]
 async fn upserts_and_merges_insert_then_update() {
+    let _turn = crate::serial::file_turn(module_path!());
     let pid = std::process::id();
     let items = format!("gen_upsert_{pid}");
     for (label, session, schema) in engines().await {
@@ -334,6 +336,7 @@ async fn upserts_and_merges_insert_then_update() {
 
 #[tokio::test]
 async fn updates_from_and_deletes_using_a_source() {
+    let _turn = crate::serial::file_turn(module_path!());
     let pid = std::process::id();
     let items = format!("gen_from_{pid}");
     for (label, session, schema) in engines().await {
@@ -403,6 +406,7 @@ async fn updates_from_and_deletes_using_a_source() {
 
 #[tokio::test]
 async fn joins_between_chosen_tables_run_everywhere() {
+    let _turn = crate::serial::file_turn(module_path!());
     let pid = std::process::id();
     let (customer, orders, other) = (
         format!("gen_customer_{pid}"),

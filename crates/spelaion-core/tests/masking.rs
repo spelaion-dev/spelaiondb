@@ -8,7 +8,7 @@
 //! reads, edits that would write the mask back, filtering by a masked cell and following a
 //! masked key. Only revealing one cell gives the value.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -234,6 +234,7 @@ fn export(result: &StoredResult, format: ExportFormat) -> String {
 
 #[tokio::test]
 async fn the_grid_copies_and_exports_from_the_store_get_the_mask() {
+    let _turn = crate::serial::file_turn(module_path!());
     let _serial = SERIAL.lock().await;
     for (label, session, _, _) in engines().await {
         setup(label, &session).await;
@@ -340,6 +341,7 @@ async fn the_grid_copies_and_exports_from_the_store_get_the_mask() {
 
 #[tokio::test]
 async fn sorting_filtering_searching_and_the_calc_panel_never_see_the_value() {
+    let _turn = crate::serial::file_turn(module_path!());
     let _serial = SERIAL.lock().await;
     for (label, session, _, _) in engines().await {
         setup(label, &session).await;
@@ -438,6 +440,7 @@ async fn sorting_filtering_searching_and_the_calc_panel_never_see_the_value() {
 
 #[tokio::test]
 async fn edits_never_write_the_mask_or_read_through_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let _serial = SERIAL.lock().await;
     for (label, session, schema, _) in engines().await {
         setup(label, &session).await;
@@ -608,6 +611,7 @@ async fn edits_never_write_the_mask_or_read_through_it() {
 
 #[tokio::test]
 async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
+    let _turn = crate::serial::file_turn(module_path!());
     let _serial = SERIAL.lock().await;
     let dir = std::env::temp_dir().join(format!("spelaion-masking-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -784,6 +788,7 @@ async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
 
 #[tokio::test]
 async fn a_session_without_rules_masks_nothing() {
+    let _turn = crate::serial::file_turn(module_path!());
     let driver = engines::sqlite();
     let conn = driver
         .connect(&ConnectParams {
@@ -820,6 +825,7 @@ async fn a_session_without_rules_masks_nothing() {
 /// day an engine reports origins this test says so.
 #[tokio::test]
 async fn an_alias_does_not_unmask_a_column_where_the_engine_reports_its_origin() {
+    let _turn = crate::serial::file_turn(module_path!());
     let _serial = SERIAL.lock().await;
     let dir = std::env::temp_dir().join(format!("spelaion-masking-alias-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -909,6 +915,7 @@ async fn an_alias_does_not_unmask_a_column_where_the_engine_reports_its_origin()
 /// mask too.
 #[tokio::test]
 async fn the_grouping_panel_groups_a_masked_column_by_its_mask() {
+    let _turn = crate::serial::file_turn(module_path!());
     use spelaion_core::GroupRequest;
     let _serial = SERIAL.lock().await;
     for (label, session, _, _) in engines().await {
@@ -1005,6 +1012,7 @@ async fn the_grouping_panel_groups_a_masked_column_by_its_mask() {
 /// query's pages nor a table data tab's ORDER BY are written for one, by any name.
 #[tokio::test]
 async fn a_sort_read_from_the_server_is_never_by_a_masked_column() {
+    let _turn = crate::serial::file_turn(module_path!());
     use spelaion_core::{ColumnSort, first_query_page_sql, query_pages_exactly, table_order_by};
     let _serial = SERIAL.lock().await;
     for (label, session, schema, _) in engines().await {

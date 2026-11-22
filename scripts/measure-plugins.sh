@@ -49,7 +49,7 @@ for engine in $engines; do
 done
 echo "building (optimised)…" >&2
 cargo build --release --bins "${packages[@]}" >&2
-cargo test --release -p spelaion-core --test import --no-run >&2
+cargo test --release -p spelaion-core --test core --no-run >&2
 
 target=$(cargo metadata --format-version 1 --no-deps | sed -E 's/.*"target_directory":"([^"]*)".*/\1/' | sed 's#\\\\#/#g')
 suffix=""
@@ -67,7 +67,8 @@ done
 import() {
   local label=$1 test=$2
   shift 2
-  env "$@" cargo test --release -p spelaion-core --test import -- --nocapture "$test" 2>&1 |
+  # tests/import.rs is the `import` module of the core's one test binary (SDB-168).
+  env "$@" cargo test --release -p spelaion-core --test core -- --nocapture "import::$test" 2>&1 |
     sed -n "s/^.*\(DuckDB\|SQLite\|PostgreSQL\|MySQL\|MariaDB\|SQL Server\): 1000000 rows into \(a new\|an existing\) table in \(.*\)$/$label|\1: import into \2 table|\3/p" >> "$out"
 }
 

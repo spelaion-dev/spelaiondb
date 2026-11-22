@@ -112,6 +112,7 @@ const TEAM_TYPES: &str =
 
 #[test]
 fn rules_combine_from_the_connection_the_user_and_the_type() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("combine");
     fx.write(
         "user/user.toml",
@@ -140,6 +141,7 @@ fn rules_combine_from_the_connection_the_user_and_the_type() {
 
 #[test]
 fn every_way_a_repository_could_unmask_a_column_is_reviewed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("review");
     let types = fx.write("repo/.spelaion/connection-types.toml", TEAM_TYPES);
     let connection = fx.write("repo/.spelaion/connections/team.toml", CONNECTION);
@@ -185,6 +187,7 @@ fn every_way_a_repository_could_unmask_a_column_is_reviewed() {
 
 #[test]
 fn a_user_file_that_does_not_load_masks_everything() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("broken-user");
     fx.write(
         "user/connections/mine.toml",
@@ -211,6 +214,7 @@ fn a_user_file_that_does_not_load_masks_everything() {
 
 #[test]
 fn masking_patterns_are_validated_where_they_load() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("validate");
     let long = "x".repeat(129);
     let many = (0..101)
@@ -247,6 +251,7 @@ fn masking_patterns_are_validated_where_they_load() {
 
 #[test]
 fn a_pasted_connection_can_add_masking_but_never_take_it_away() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("paste");
     fx.write(
         "user/user.toml",
@@ -269,6 +274,7 @@ fn a_pasted_connection_can_add_masking_but_never_take_it_away() {
 
 #[test]
 fn the_form_keeps_the_rules_when_a_connection_is_edited() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("form");
     fx.write("user/connections/mine.toml", CONNECTION);
     let config = load(None, &fx.user());
@@ -305,6 +311,7 @@ fn the_form_keeps_the_rules_when_a_connection_is_edited() {
 
 #[test]
 fn the_users_patterns_are_saved_keeping_the_rest_of_the_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("user-file");
     let user = fx.write(
         "user/user.toml",

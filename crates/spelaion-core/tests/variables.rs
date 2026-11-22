@@ -90,6 +90,7 @@ fn risks(dialect: &dyn Dialect, script: &str) -> Vec<Risk> {
 
 #[test]
 fn every_dialect_is_covered() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in ENGINES {
         dialect(engine);
     }
@@ -102,6 +103,7 @@ fn every_dialect_is_covered() {
 /// is refused: whatever the value holds.
 #[test]
 fn no_value_changes_how_many_statements_a_script_has() {
+    let _turn = crate::serial::file_turn(module_path!());
     let attempts = [
         "1; DROP TABLE users",
         "1;\nDROP TABLE users",
@@ -173,6 +175,7 @@ fn no_value_changes_how_many_statements_a_script_has() {
 /// every SQL dialect, before the guard is even asked.
 #[test]
 fn a_value_holding_a_second_statement_is_refused_on_every_sql_dialect() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in SQL_ENGINES {
         let dialect = dialect(engine);
         let script = "select * from orders where customer = ${customer}";
@@ -201,6 +204,7 @@ fn a_value_holding_a_second_statement_is_refused_on_every_sql_dialect() {
 /// `WHERE` the guard would read stays where the user wrote it.
 #[test]
 fn a_value_cannot_hide_the_rest_of_its_statement_on_any_sql_dialect() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in SQL_ENGINES {
         let dialect = dialect(engine);
         let script = "delete from orders where customer = ${customer} and status = 'draft'";
@@ -233,6 +237,7 @@ fn a_value_cannot_hide_the_rest_of_its_statement_on_any_sql_dialect() {
 /// left empty or commented out, ask like the same statement typed by hand.
 #[test]
 fn the_guard_reads_the_statement_with_its_values_on_every_sql_dialect() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in SQL_ENGINES {
         let dialect = dialect(engine);
         let check = |script: &str, pairs: &[(&str, &str)], expected: &[Risk]| {
@@ -283,6 +288,7 @@ fn the_guard_reads_the_statement_with_its_values_on_every_sql_dialect() {
 /// A variable is only what the user set: never the environment, whatever it is called.
 #[test]
 fn a_name_is_never_read_from_the_environment() {
+    let _turn = crate::serial::file_turn(module_path!());
     // SAFETY-free: the variable is read, not set; PATH exists on every machine that runs this.
     let path = std::env::var("PATH").unwrap_or_default();
     assert!(!path.is_empty());
@@ -317,6 +323,7 @@ fn a_name_is_never_read_from_the_environment() {
 /// In a string, a quoted name or a comment, `${…}` is the user's text on every dialect.
 #[test]
 fn variables_in_strings_names_and_comments_are_never_touched() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in SQL_ENGINES {
         let dialect = dialect(engine);
         let script = "select '${v}' as a -- ${v}\n, 1 /* ${v} */ from t";
@@ -341,6 +348,7 @@ fn variables_in_strings_names_and_comments_are_never_touched() {
 /// no variables: nothing is written into it.
 #[test]
 fn a_language_without_code_ranges_has_no_variables() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in [
         "redis",
         "elasticsearch",

@@ -28,7 +28,7 @@ use spelaion_core::{
 use spelaion_driver_api::{Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, SecretRequest};
 
-mod support;
+use crate::support;
 use support::{cleaning_up, run_cleanup};
 
 /// The password of the account each test creates: distinctive, so finding any piece of it in a
@@ -276,6 +276,7 @@ const PG_IMAGE: &str = "postgis/postgis:17-3.5-alpine";
 
 #[tokio::test]
 async fn postgres_dumps_and_restores_through_two_hops() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (Ok(ssh), Ok(pg)) = (
         std::env::var("SPELAION_TEST_SSH"),
         std::env::var("SPELAION_TEST_PG"),
@@ -607,11 +608,13 @@ async fn mysql_round_trip(engine: &str, server_var: &str, host_in_network: &str,
 
 #[tokio::test]
 async fn mysql_dumps_and_restores_through_two_hops() {
+    let _turn = crate::serial::file_turn(module_path!());
     mysql_round_trip("mysql", "SPELAION_TEST_MYSQL", "mysql", "mysql:8.4").await;
 }
 
 #[tokio::test]
 async fn mariadb_dumps_and_restores_through_two_hops() {
+    let _turn = crate::serial::file_turn(module_path!());
     mysql_round_trip(
         "mariadb",
         "SPELAION_TEST_MARIADB",

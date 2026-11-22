@@ -109,6 +109,7 @@ fn analyzed() -> ExplainOptions {
 
 #[tokio::test]
 async fn sqlserver_plans_keep_the_session_and_discard_user_results() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(open) = open(false).await else {
         return;
     };
@@ -211,6 +212,7 @@ async fn sqlserver_plans_keep_the_session_and_discard_user_results() {
 
 #[tokio::test]
 async fn sqlserver_read_only_connection_rejects_forged_analyze_confirmation() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(writable) = open(false).await else {
         return;
     };

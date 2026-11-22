@@ -2,7 +2,7 @@
 //! not got in SpelaionDB yet is refused when it loads, never let through: read-only mode (its
 //! barrier is not built) and session setup statements (they are SQL).
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture, personal};
 use spelaion_config::{Engine, Resolver};
@@ -21,6 +21,7 @@ fn problems(fx: &Fixture) -> String {
 
 #[test]
 fn a_mongodb_connection_loads_and_resolves_with_its_port() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("mongodb-loads");
     fx.write("user/connections/shop.toml", BASE);
     assert_eq!(problems(&fx), "");
@@ -39,6 +40,7 @@ fn a_mongodb_connection_loads_and_resolves_with_its_port() {
 
 #[test]
 fn a_mongodb_connection_needs_where_its_server_is() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("mongodb-host");
     fx.write(
         "user/connections/shop.toml",
@@ -49,6 +51,7 @@ fn a_mongodb_connection_needs_where_its_server_is() {
 
 #[test]
 fn read_only_is_refused_on_mongodb_rather_than_let_writes_through() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("mongodb-read-only");
     fx.write(
         "user/connections/shop.toml",
@@ -65,6 +68,7 @@ fn read_only_is_refused_on_mongodb_rather_than_let_writes_through() {
 
 #[test]
 fn session_setup_is_refused_on_mongodb() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("mongodb-session");
     for session in [
         "\n[session]\nsetup = \"SET x = 1\"\n",

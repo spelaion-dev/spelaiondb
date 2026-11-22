@@ -12,7 +12,7 @@
 //! selection of key columns only and a table without a primary key are refused with their
 //! reason.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -322,6 +322,7 @@ fn table_source(case: &Case) -> UpdateSource {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn copied_updates_bring_every_row_back_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for case in cases().await {
         let label = case.label;
         let store = Arc::new(ResultStore::new());
@@ -529,6 +530,7 @@ async fn session_masked(case: &Case, store: &Arc<ResultStore>, policy: MaskPolic
 /// ClickHouse declares no transactions, so the app applies no edits there and copies none.
 #[tokio::test(flavor = "multi_thread")]
 async fn engines_without_edits_refuse_copy_as_update() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_CLICKHOUSE") else {
         return;
     };

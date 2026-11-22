@@ -1,10 +1,11 @@
 //! HTTP engines deliberately have no read barrier or SQL session setup (ADR-056).
-mod common;
+use crate::common;
 use common::{FakeBackend, Fixture, personal};
 use spelaion_config::{Engine, Resolver};
 
 #[test]
 fn search_connections_resolve_and_refuse_unsupported_barriers_and_session_setup() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (engine, port) in [
         (Engine::Elasticsearch, 9200),
         (Engine::Opensearch, 9200),

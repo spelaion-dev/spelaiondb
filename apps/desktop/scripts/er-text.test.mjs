@@ -1,6 +1,6 @@
 // The ER diagram's text exports (ADR-046) parsed by their own tools: Mermaid's `erDiagram`
 // parser and DBML's (`@dbml/core`). The texts are written by the core: `cargo test -p
-// spelaion-core --test er_diagram` checks the fixtures in `fixtures/er` are what the core writes
+// spelaion-core er_diagram::` checks the fixtures in `fixtures/er` are what the core writes
 // now (and rewrites them with `SPELAION_UPDATE_ER_FIXTURES=1`); this test, run by `npm run
 // build` and so by CI, checks every one of them parses and keeps what the model had.
 import assert from "node:assert/strict";

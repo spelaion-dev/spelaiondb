@@ -2,7 +2,7 @@
 //! session of ours (ADR-049). SQLite and DuckDB need nothing external; the file runs on
 //! PostgreSQL and MySQL need `SPELAION_TEST_PG` and `SPELAION_TEST_MYSQL`.
 
-mod engines;
+use crate::engines;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -173,6 +173,7 @@ fn no_part_files(folder: &Path) {
 
 #[tokio::test]
 async fn sqlite_is_copied_with_vacuum_into_even_read_only() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("sqlite");
     std::fs::write(ws.data("shop.db"), "").unwrap();
     ws.connection("shop", "engine = \"sqlite\"\ndatabase = \"data/shop.db\"\n");
@@ -230,6 +231,7 @@ async fn sqlite_is_copied_with_vacuum_into_even_read_only() {
 
 #[tokio::test]
 async fn duckdb_exports_a_folder_and_imports_it_into_another_database() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("duckdb");
     for name in ["source.duckdb", "target.duckdb"] {
         engines::create_database(Engine::Duckdb, &ws.data(name)).await;
@@ -342,6 +344,7 @@ fn write_file(path: &Path, failing: bool) {
 
 #[tokio::test]
 async fn sql_files_run_with_progress_and_are_refused_unconfirmed_or_read_only() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("runfile");
     std::fs::write(ws.data("app.db"), "").unwrap();
     ws.connection("app", "engine = \"sqlite\"\ndatabase = \"data/app.db\"\n");
@@ -485,6 +488,7 @@ async fn sql_files_run_with_progress_and_are_refused_unconfirmed_or_read_only() 
 /// The same file on PostgreSQL and MySQL, and a cancel that stops a long statement.
 #[tokio::test]
 async fn sql_files_run_on_servers_and_stop_on_cancel() {
+    let _turn = crate::serial::file_turn(module_path!());
     let servers = [
         (
             "postgres",
@@ -594,6 +598,7 @@ async fn sql_files_run_on_servers_and_stop_on_cancel() {
 /// needs no server.
 #[tokio::test]
 async fn a_cancelled_file_run_runs_nothing_after_the_cancel() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("runfile-cancel");
     std::fs::write(ws.data("app.db"), "").unwrap();
     ws.connection("app", "engine = \"sqlite\"\ndatabase = \"data/app.db\"\n");

@@ -4,7 +4,7 @@
 //! connection; the move saved the store it had loaded, untrusted, and the trust was gone.
 //! `TrustStore::update` makes each change start from what the earlier ones saved.
 
-mod common;
+use crate::common;
 
 use std::sync::mpsc;
 use std::thread;
@@ -37,6 +37,7 @@ fn slow_update(
 
 #[test]
 fn a_move_while_the_repository_is_being_trusted_keeps_the_trust() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("trust-update-move");
     fx.write("repo/.spelaion/connections/shop.toml", SHOP);
     let config = fx.config();
@@ -62,6 +63,7 @@ fn a_move_while_the_repository_is_being_trusted_keeps_the_trust() {
 
 #[test]
 fn a_revoke_while_another_change_is_saving_stays() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("trust-update-revoke");
     fx.write("repo/.spelaion/connections/shop.toml", SHOP);
     let config = fx.config();

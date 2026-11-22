@@ -8,7 +8,7 @@
 //! key; a failure in the last one must roll back the other 999; and once it is fixed, the
 //! 1,000 must be applied together.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -223,6 +223,7 @@ fn shown(pending: &PendingEdits) -> Shown {
 
 #[tokio::test]
 async fn bulk_edits_of_a_thousand_rows_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         create_table(label, &session).await;
         let page = load_page(label, &session, schema).await;
