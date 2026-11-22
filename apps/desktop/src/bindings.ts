@@ -3583,6 +3583,11 @@ export type ImportReport = {
 	skipped: ImportSkip[],
 	/**  Connections imported without the password the client kept in the keychain, and why. */
 	passwordErrors: ImportSkip[],
+	/**
+	 *  Imported or replaced connections that brought setup statements (SDB-99): SQL that runs on
+	 *  every new session, which the user should know about.
+	 */
+	withSetup: string[],
 };
 
 /**  The user's choices; the core writes every statement from them. */

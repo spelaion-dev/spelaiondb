@@ -169,11 +169,15 @@ export function ConnectionImport(props: {
         {done > 0 && (
           <ul className="conn-import-report">
             {report.imported.map((name) => (
-              <li key={`i-${name}`}>{name}</li>
+              <li key={`i-${name}`}>
+                {name}
+                {report.withSetup.includes(name) && <span className="muted small"> · {t("importer.setupTag")}</span>}
+              </li>
             ))}
             {report.replaced.map((name) => (
               <li key={`r-${name}`}>
                 {name} <span className="muted small">· {t("importer.replacedTag")}</span>
+                {report.withSetup.includes(name) && <span className="muted small"> · {t("importer.setupTag")}</span>}
               </li>
             ))}
           </ul>
