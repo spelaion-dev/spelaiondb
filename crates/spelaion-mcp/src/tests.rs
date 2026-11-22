@@ -2017,3 +2017,114 @@ async fn a_tool_call_that_panics_answers_an_error_and_the_server_keeps_working()
     let after = query(&server, "~/notes", "select count(*) from notes").await;
     assert!(!refused(&after), "{}", body(&after));
 }
+
+/// The catalog tools' answers stop within the limit and say how to ask for the rest (SDB-120),
+/// on a database of a few thousand tables.
+#[tokio::test]
+async fn catalog_answers_on_thousands_of_tables_stay_within_the_limit() {
+    let p = personal(false);
+    {
+        let conn = rusqlite::Connection::open(&p.db).unwrap();
+        let mut ddl = String::from("begin;");
+        for i in 0..3_000 {
+            ddl.push_str(&format!(
+                "create table customer_account_history_{i:04} (id integer primary key, note text);"
+            ));
+        }
+        // A default of any length, over several lines, as a catalog can hold.
+        ddl.push_str(&format!(
+            "create table defaults (body text default ('{}\n- fake_column text'));commit;",
+            "d".repeat(10_000)
+        ));
+        conn.execute_batch(&ddl).unwrap();
+    }
+    let structured = |result: &CallToolResult| result.structured_content.clone().unwrap();
+
+    let access = p.server.begin().await;
+    let all = p
+        .server
+        .list_objects_inner(
+            &access,
+            Parameters(ListObjectsArgs {
+                connection: "~/notes".into(),
+                schema: Some("main".into()),
+                filter: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let text = body(&all);
+    assert!(text.len() <= format::MAX_RESPONSE, "{}", text.len());
+    let facts = structured(&all);
+    assert_eq!(facts["complete"], false);
+    assert_eq!(facts["narrow_with"], "filter");
+    let omitted = facts["omitted"].as_u64().unwrap();
+    assert!(omitted > 0);
+    assert_eq!(facts["shown"].as_u64().unwrap() + omitted, 3_002);
+    assert_eq!(
+        text.lines().last().unwrap(),
+        format!(
+            "… {omitted} more objects are not listed: narrow with the filter argument (part of the name)."
+        )
+    );
+
+    // The filter returns the ones left out.
+    let narrowed = p
+        .server
+        .list_objects_inner(
+            &access,
+            Parameters(ListObjectsArgs {
+                connection: "~/notes".into(),
+                schema: Some("main".into()),
+                filter: Some("HISTORY_29".into()),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(structured(&narrowed)["complete"], true);
+    assert_eq!(body(&narrowed).lines().count(), 100);
+    assert!(body(&narrowed).contains("- customer_account_history_2999 (Table"));
+
+    let search = p
+        .server
+        .search_schema_inner(
+            &access,
+            Parameters(SearchArgs {
+                connection: "~/notes".into(),
+                query: "a".into(),
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(body(&search).len() <= format::MAX_RESPONSE);
+    assert_eq!(structured(&search)["narrow_with"], "query");
+    assert!(
+        body(&search)
+            .lines()
+            .last()
+            .unwrap()
+            .ends_with("search with a longer query.")
+    );
+
+    let described = p
+        .server
+        .describe_table_inner(
+            &access,
+            Parameters(DescribeArgs {
+                connection: "~/notes".into(),
+                schema: "main".into(),
+                table: "defaults".into(),
+            }),
+        )
+        .await
+        .unwrap();
+    let text = body(&described);
+    assert_eq!(structured(&described)["complete"], true, "{text}");
+    let column = text
+        .lines()
+        .find(|line| line.starts_with("- body "))
+        .unwrap();
+    assert!(column.ends_with('…'), "{column}");
+    assert!(column.chars().count() < 260, "{}", column.len());
+    assert!(!text.contains("fake_column"), "{text}");
+}

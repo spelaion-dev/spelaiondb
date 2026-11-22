@@ -83,6 +83,26 @@ fn cut(text: String) -> String {
     }
 }
 
+/// Untrusted catalog text (a comment, a default) as one line of at most `MAX_CELL`
+/// characters: its first line, control characters as spaces, and `…` when anything was left
+/// out, so it can neither take the whole answer nor add lines that look like other objects.
+pub(crate) fn one_line(text: &str) -> String {
+    let mut lines = text.lines();
+    let first: String = lines
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let cut_text = cut(first.clone());
+    if cut_text != first || lines.any(|line| !line.trim().is_empty()) {
+        format!("{}…", cut_text.trim_end_matches('…'))
+    } else {
+        cut_text
+    }
+}
+
 /// `-?(0|[1-9][0-9]*)(\.[0-9]+)?`: a number both formats can write as it is.
 fn is_plain_number(s: &str) -> bool {
     let digits = s.strip_prefix('-').unwrap_or(s);

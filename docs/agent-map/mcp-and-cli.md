@@ -13,7 +13,11 @@
   `Liveness`, `open.rs`: its health, its tunnel, its connection, asked by both `Cached::usable`
   and a call that fails); the call that meets a lost session fails and is never
   retried, and the next call opens a new one. Query rows go out as JSON or TOON (`format.rs`); any change there
-  keeps every cell quoted so data cannot add rows or fields.
+  keeps every cell quoted so data cannot add rows or fields. The catalog tools' answers
+  (`list_objects`, `search_schema`, `describe_table`) are built in `catalog.rs` (SDB-120): their
+  lines stop within `format::MAX_RESPONSE` and end with an "N more" line, comments and defaults
+  are cut to one line (`format::one_line`), and the structured content is `{"complete",
+  "shown", "omitted", "narrow_with"}`, described in `catalog_limit!` and `docs/guide/mcp.md`.
   Every refusal and failure answers its sentence unchanged (clients may match on it) and, as
   `structuredContent`, `{"code", "retry"}` (SDB-374). The code and `retry` are decided in the
   core (`agent_state.rs`, `AgentFailure`) from the core's error types, never from text; the
