@@ -76,3 +76,18 @@ A failed write says `retry: true` only when its transaction is known to be rolle
 `read_only_because` is one of `all_agents`, `connection_override`, `connection`,
 `writes_denied`, `confirm_unsupported` and `engine_without_writes`. Hidden connections are
 never listed.
+
+## Long catalog answers
+
+`list_objects`, `search_schema` and `describe_table` stop listing before an answer passes about
+60,000 characters, the limit a query's rows already respect (SDB-120). The last line then says
+how many entries were left out and how to narrow. Comments and column defaults are cut to one
+line of at most 200 characters. Their structured content says the same in a stable shape:
+
+```json
+{ "complete": false, "shown": 1190, "omitted": 1812, "narrow_with": "filter" }
+```
+
+`narrow_with` names the argument that asks for the rest: `filter` for `list_objects`, `query`
+for `search_schema` (a longer text). It is absent when the answer is complete, and for
+`describe_table`, whose columns cannot be narrowed.
