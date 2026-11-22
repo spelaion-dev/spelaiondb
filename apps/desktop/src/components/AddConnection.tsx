@@ -126,8 +126,8 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
                   ? t("formTitle", { engine: (kind ?? engine).name })
                   : t("title")}
           </h2>
-          <button className="ghost" aria-label={t("close")} onClick={close}>
-            ×
+          <button className="ghost" aria-label={t("close")} title={t("close")} onClick={close}>
+            <Icon name="x" />
           </button>
         </div>
         {loadError ? (
@@ -681,7 +681,7 @@ function ConnectionForm(props: {
   const tlsNote = (warning: TlsWarningItem | null, className = "") =>
     warning && (
       <p className={`tls-warning small${className}`} role="status">
-        <Icon name="shieldAlert" size={14} />
+        <Icon name="shieldAlert" />
         <span>{tlsWarningText(t, warning)}</span>
       </p>
     );
