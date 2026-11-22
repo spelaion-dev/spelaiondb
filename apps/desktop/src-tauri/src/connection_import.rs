@@ -19,7 +19,23 @@ use spelaion_driver_api::Secret;
 use tauri::State;
 
 use crate::dto::TlsModeItem;
-use crate::{AppState, CmdResult, source_of};
+use crate::{AppState, CmdResult, check_setup_before_saving, source_of};
+
+/// Each connection's startup SQL checked by the core before it is shown or saved (SDB-104,
+/// ADR-037): where the read-only barrier applies, what could write is taken out and listed.
+fn vet_setups(
+    state: &AppState,
+    config: &Config,
+    connections: &mut [ImportedConnection],
+) -> CmdResult<()> {
+    let trust = spelaion_config::TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let types = spelaion_config::ConnectionTypes::load(config, &trust);
+    for connection in connections {
+        let kind = types.resolve(Some(connection.env.as_str()));
+        spelaion_core::vet_imported_setup(connection, &kind);
+    }
+    Ok(())
+}
 
 fn client_named(name: &str) -> CmdResult<ImportClient> {
     match name {
@@ -144,6 +160,9 @@ pub struct ImportItem {
     /// project's.
     pub existing_personal: Option<ExistingItem>,
     pub existing_project: Option<ExistingItem>,
+    /// The session setup it brings (SQL run on every new session, ADR-037), already checked by
+    /// the core; empty for none.
+    pub setup: String,
     /// What the client has that SpelaionDB does not import.
     pub unmapped: Vec<String>,
 }
@@ -190,6 +209,7 @@ fn item(config: &Config, c: &ImportedConnection) -> ImportItem {
         read_only: c.read_only,
         existing_personal: existing(config, c, Source::User),
         existing_project: existing(config, c, Source::Workspace),
+        setup: c.session.setup.clone(),
         unmapped: c.unmapped.clone(),
     }
 }
@@ -239,7 +259,7 @@ pub async fn scan_connections(
     };
     let ImportRead {
         place,
-        connections: found,
+        connections: mut found,
     } = match read_blocking(client, path, file_password).await {
         Ok(read) => read,
         Err(ImportReadError::NeedsPassword) => return Ok(unread(true, false, false)),
@@ -250,6 +270,7 @@ pub async fn scan_connections(
         }
     };
     let config = state.config.read().await;
+    vet_setups(&state, &config, &mut found)?;
     Ok(ImportScan {
         dir: place,
         connections: found.iter().map(|c| item(&config, c)).collect(),
@@ -358,6 +379,7 @@ pub async fn import_connections(
         .into_iter()
         .filter(|c| action_of(&c.id).is_some_and(|a| a != DuplicateAction::Skip))
         .collect();
+    vet_setups(&state, &*state.config.read().await, &mut chosen)?;
     let mut report = ImportReport {
         imported: Vec::new(),
         replaced: Vec::new(),
@@ -483,6 +505,13 @@ async fn import_one(
                     let id = existing.id.clone();
                     let name = existing.name();
                     let draft = spelaion_config::replacement_draft(existing, &plan.connection);
+                    // As the form checks a setup before saving: the type or read-only mode of
+                    // the connection it replaces may restrict it further.
+                    check_setup_before_saving(
+                        state,
+                        &config,
+                        &draft.to_file(&config).map_err(|e| e.to_string())?,
+                    )?;
                     let written = spelaion_config::update_connection(
                         &config,
                         &id,
@@ -518,6 +547,7 @@ async fn import_one(
         let added = {
             let config = state.config.read().await;
             let file = draft.to_file(&config).map_err(|e| e.to_string())?;
+            check_setup_before_saving(state, &config, &file)?;
             let result = spelaion_config::add_connection(
                 &config,
                 &draft,

@@ -17,6 +17,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use crate::conn_url::parse_connection_url;
+use crate::draft::SessionDraft;
 use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls, KeychainItem};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
@@ -652,6 +653,7 @@ fn connection_of(
         ssh,
         proxy: None,
         tls,
+        session: SessionDraft::default(),
         unmapped,
     }
 }

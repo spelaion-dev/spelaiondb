@@ -423,6 +423,7 @@
     "skip": "No importarla",
     "importCopy": "Importarla como copia",
     "replace": "Sustituir {{name}}",
+    "setup": "Sentencias de inicio: se ejecutan en cada sesión nueva",
     "unmapped_one": "{{count}} ajuste no se importa",
     "unmapped_other": "{{count}} ajustes no se importan",
     "folder": "Carpeta",

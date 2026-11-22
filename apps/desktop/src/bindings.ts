@@ -3458,6 +3458,11 @@ export type ImportItem_Deserialize = {
 	 */
 	existingPersonal?: ExistingItem | null,
 	existingProject?: ExistingItem | null,
+	/**
+	 *  The session setup it brings (SQL run on every new session, ADR-037), already checked by
+	 *  the core; empty for none.
+	 */
+	setup: string,
 	/**  What the client has that SpelaionDB does not import. */
 	unmapped: string[],
 };
@@ -3496,6 +3501,11 @@ export type ImportItem_Serialize = {
 	 */
 	existingPersonal: ExistingItem | null,
 	existingProject: ExistingItem | null,
+	/**
+	 *  The session setup it brings (SQL run on every new session, ADR-037), already checked by
+	 *  the core; empty for none.
+	 */
+	setup: string,
 	/**  What the client has that SpelaionDB does not import. */
 	unmapped: string[],
 };

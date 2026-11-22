@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use spelaion_driver_api::Secret;
 
 use crate::datagrip::{Node, parse_text, shown};
+use crate::draft::SessionDraft;
 use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls, KeychainItem};
 use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
@@ -486,6 +487,7 @@ fn connection_of(
         ssh,
         proxy: None,
         tls,
+        session: SessionDraft::default(),
         unmapped,
     }
 }

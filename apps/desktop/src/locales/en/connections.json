@@ -423,6 +423,7 @@
     "skip": "Skip it",
     "importCopy": "Import it as a copy",
     "replace": "Replace {{name}}",
+    "setup": "Setup statements: run on every new session",
     "unmapped_one": "{{count}} setting is not imported",
     "unmapped_other": "{{count}} settings are not imported",
     "folder": "Folder",
