@@ -53,8 +53,16 @@ the implementation uses to decide which results qualify and which rows an edit r
    MySQL and MariaDB expose no table id without the `PROCESS` privilege, so a table dropped and
    created again in the same second as the original, with the read in between, is not told
    apart. The identity is read when the eligibility check runs, which the desktop asks for as
-   soon as the run finishes. Table data pages are not bound this way: their rows come from the
-   core's own SELECT of the table the page names.
+   soon as the run finishes.
+
+   **Table data pages are bound by the core too (SDB-440).** When the core writes a table data
+   page's SELECT (`table_page_sql_by_key`, or `table_rows_sql_by_key` for every row), the
+   session records that statement with its table and identity. A run that sends exactly that
+   statement binds the results it creates to that table. On an engine that keeps no identity
+   for a table, the name alone is recorded. A name that holds no single table, such as a view,
+   or whose identity cannot be read, is not recorded, so its page stays read-only.
+   `result_edit_table` refuses every result the core has not bound, so a page cannot name a
+   table for rows the core did not read from it.
 5. **Positions refer to the view the user edited (SDB-138).** Pending edits belong to the stored
    result. While they are pending, the core refuses changes to its sort, text filter or column
    filters, including removing a filter. Appending a page is allowed when it preserves the
@@ -72,7 +80,9 @@ the implementation uses to decide which results qualify and which rows an edit r
   projection, missing keys, duplicate result columns, views, joins and ambiguous names.
 - [Edit provenance tests](../../crates/spelaion-core/tests/edit_source.rs) cover different
   sessions and database changes, and that edits stop once the table is dropped or replaced
-  (SDB-433). [Pending edit tests](../../crates/spelaion-core/src/pending.rs)
+  (SDB-433). They also check that a table data page is bound to its table and stops once the
+  table is replaced, and that an unbound query result is refused even when it names its table
+  (SDB-440). [Pending edit tests](../../crates/spelaion-core/src/pending.rs)
   cover filter and sort changes and the append of a page without moving edited rows.
 - The [desktop smoke test](../../apps/desktop/e2e/smoke.mjs) edits a simple query result and
   checks that a join's result stays read-only.

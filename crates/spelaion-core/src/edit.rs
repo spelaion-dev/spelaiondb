@@ -163,16 +163,19 @@ async fn query_result_table(
     check_result_columns(&table, &columns, true)?;
     // The result keeps the table it was matched to (SDB-433): the first time it is recorded,
     // afterwards it must still be the same table.
-    let Some(identity) = table_identity(session, &table.object.schema, &table.object.name)
+    let identity = match table_identity(session, &table.object.schema, &table.object.name)
         .await
         .map_err(UpdateCopyError::Failed)?
-    else {
-        return Err(UpdateCopyError::TableNotCertain(name));
+    {
+        TableIdentity::Of(identity) => identity,
+        TableIdentity::NoSingleTable | TableIdentity::NotKept => {
+            return Err(UpdateCopyError::TableNotCertain(name));
+        }
     };
     let bound = ResultTable {
         schema: table.object.schema.clone(),
         name: table.object.name.clone(),
-        identity,
+        identity: Some(identity),
     };
     let stored = session
         .results()
@@ -188,10 +191,21 @@ async fn query_result_table(
     Ok((target, table))
 }
 
-/// What the engine identifies the table `schema.name` by, read now, or `None` when the engine
-/// has no such identity or no single table has that name (SDB-433). It changes when the table
-/// is dropped and created again, or another table takes its name, so a result's rows are
-/// never written into a table that only shares the name of the one they were read from.
+/// What [`table_identity`] read for a name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TableIdentity {
+    /// What the engine identifies the table by now.
+    Of(String),
+    /// No single table has that name (none, or it is a view).
+    NoSingleTable,
+    /// The engine keeps no identity for a table: the name is all there is to go by.
+    NotKept,
+}
+
+/// What the engine identifies the table `schema.name` by, read now (SDB-433). It changes when
+/// the table is dropped and created again, or another table takes its name, so a result's
+/// rows are never written into a table that only shares the name of the one they were read
+/// from.
 ///
 /// - PostgreSQL: the table's `oid`.
 /// - SQL Server: its `object_id` and `create_date`.
@@ -205,7 +219,7 @@ async fn table_identity(
     session: &Session,
     schema: &str,
     name: &str,
-) -> Result<Option<String>, String> {
+) -> Result<TableIdentity, String> {
     let engine = session.dialect().name();
     let literal = |text: &str| sql_literal(&Value::Text(text.to_string()), engine);
     let sql = match engine {
@@ -235,7 +249,7 @@ async fn table_identity(
                 literal(name)
             );
             if scalar_count_metadata(session, &exists).await? != 1 {
-                return Ok(None);
+                return Ok(TableIdentity::NoSingleTable);
             }
             format!("PRAGMA {quoted}.schema_version")
         }
@@ -245,14 +259,34 @@ async fn table_identity(
             literal(schema),
             literal(name)
         ),
-        _ => return Ok(None),
+        _ => return Ok(TableIdentity::NotKept),
     };
     Ok(match scalar_metadata(session, &sql).await? {
-        Some(Value::Text(text)) => Some(text),
-        Some(Value::Int(n)) => Some(n.to_string()),
-        Some(Value::Decimal(text)) => Some(text),
-        _ => None,
+        Some(Value::Text(text)) => TableIdentity::Of(text),
+        Some(Value::Int(n)) => TableIdentity::Of(n.to_string()),
+        Some(Value::Decimal(text)) => TableIdentity::Of(text),
+        _ => TableIdentity::NoSingleTable,
     })
+}
+
+/// Records the table data page statement the core wrote for `schema.name` on `session`, with
+/// the table's identity, so that the results of a run that sends it are bound to that table
+/// (SDB-440). A name that holds no single table now (a view), or whose identity cannot be
+/// read, is not recorded: its page shows its rows, which are then never editable.
+pub(crate) async fn record_table_page(session: &Session, schema: &str, name: &str, sql: &str) {
+    let identity = match table_identity(session, schema, name).await {
+        Ok(TableIdentity::Of(identity)) => Some(identity),
+        Ok(TableIdentity::NotKept) => None,
+        Ok(TableIdentity::NoSingleTable) | Err(_) => return,
+    };
+    session.record_table_page(
+        sql,
+        ResultTable {
+            schema: schema.to_string(),
+            name: name.to_string(),
+            identity,
+        },
+    );
 }
 
 /// A count read as core metadata (outside the user's transaction statement count).
@@ -269,10 +303,12 @@ async fn scalar_count_metadata(session: &Session, sql: &str) -> Result<i64, Stri
 /// The session and table a result's edits are written through (SDB-433), decided by the core:
 ///
 /// - rows read through another session, or in another database, are refused (SDB-137);
-/// - a query result the core found editable is written only to the table it was matched to:
-///   `schema.name` must name that table, and the name must still hold the same table
-///   ([`table_identity`]); a table dropped, replaced or no longer certain refuses the edit;
-/// - any other result is a table data page, whose rows its own SELECT of `schema.name` read.
+/// - only a result the core bound to a table is edited (SDB-440): a query result it found
+///   editable, or a table data page that ran the SELECT the core wrote for it; any other
+///   result is refused, whatever table the caller names;
+/// - its edits are written only to that table: `schema.name` must name it, and where the
+///   engine keeps an identity the name must still hold the same table ([`table_identity`]);
+///   a table dropped, replaced or no longer certain refuses the edit.
 ///
 /// The table's description, with its primary key, is always read again from the catalog.
 pub async fn result_edit_table(
@@ -294,13 +330,18 @@ pub async fn result_edit_table(
         target.check(&stored)?;
         stored.table().cloned()
     };
-    if let Some(bound) = bound {
-        if bound.schema != schema || bound.name != name {
-            return Err(EditError::NotThisTable(bound.name));
-        }
+    let Some(bound) = bound else {
+        return Err(EditError::NotBound);
+    };
+    if bound.schema != schema || bound.name != name {
+        return Err(EditError::NotThisTable(bound.name));
+    }
+    if let Some(expected) = &bound.identity {
         match table_identity(session, &bound.schema, &bound.name).await {
-            Ok(Some(identity)) if identity == bound.identity => {}
-            Ok(_) => return Err(EditError::TableChanged(bound.name)),
+            Ok(TableIdentity::Of(identity)) if identity == *expected => {}
+            Ok(TableIdentity::Of(_) | TableIdentity::NoSingleTable | TableIdentity::NotKept) => {
+                return Err(EditError::TableChanged(bound.name));
+            }
             Err(message) => {
                 return Err(EditError::TableUnverified {
                     table: bound.name,
@@ -463,6 +504,7 @@ impl From<EditError> for UpdateCopyError {
             | EditError::NotOneRow { .. }
             | EditError::Masked(_)
             | EditError::Source(_)
+            | EditError::NotBound
             | EditError::NotThisTable(_)
             | EditError::TableChanged(_)
             | EditError::TableUnverified { .. }
@@ -669,7 +711,12 @@ pub enum EditError {
     /// The session could not say which database it is in.
     #[error("could not tell which database this tab is in: {0}")]
     Source(String),
-    /// A query result's rows belong to another table than the one named (SDB-433).
+    /// The core bound the result to no table (SDB-440): its rows are not a table's to edit.
+    #[error(
+        "these rows are not tied to a table, so they cannot be edited: open the table's data or run the query again"
+    )]
+    NotBound,
+    /// A result's rows belong to another table than the one named (SDB-433).
     #[error("these rows were read from {0}, not from the table named: run the query again")]
     NotThisTable(String),
     /// The table's name no longer holds the table the rows were read from (SDB-433).

@@ -129,20 +129,22 @@ pub struct StoredResult {
     /// Where the rows were read (SDB-137); `None` when it is not known, and then nothing is
     /// written from these rows.
     source: Option<ResultSource>,
-    /// The table a query's rows were matched to when the core found them editable (SDB-433);
-    /// `None` until then, and for a table data page, whose table its SELECT names.
+    /// The table the rows were read from, as the core bound it: a query's when the core found
+    /// it editable (SDB-433), a table data page's when it ran the SELECT the core wrote for it
+    /// (SDB-440). `None` for any other result, whose rows are never edited.
     table: Option<ResultTable>,
 }
 
-/// The table an editable query result's rows belong to (SDB-433), recorded the first time the
-/// core finds the result editable: its qualified name and what the engine identifies that
-/// table by ([`crate::edit`]'s `table_identity`). Edits are written only while the same name
-/// still holds the same table.
+/// The table a result's rows belong to, bound by the core (SDB-433, SDB-440): its qualified
+/// name and what the engine identifies that table by ([`crate::edit`]'s `table_identity`).
+/// Edits are written only while the same name still holds the same table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResultTable {
     pub(crate) schema: String,
     pub(crate) name: String,
-    pub(crate) identity: String,
+    /// `None` only on an engine that keeps no identity for a table, where the name is all
+    /// there is to go by; never for an editable query result.
+    pub(crate) identity: Option<String>,
 }
 
 impl ResultTable {
@@ -912,6 +914,16 @@ impl ResultStore {
     pub(crate) fn set_source(&self, id: ResultId, source: Option<ResultSource>) {
         if let Some(result) = self.get(id) {
             result.write().expect("result lock poisoned").source = source;
+        }
+    }
+
+    /// Binds a result the core just created to the table its statement read (SDB-440).
+    pub(crate) fn bind_table_of(&self, id: ResultId, table: ResultTable) {
+        if let Some(result) = self.get(id) {
+            result
+                .write()
+                .expect("result lock poisoned")
+                .bind_table(table);
         }
     }
 

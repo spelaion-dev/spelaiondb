@@ -18,7 +18,8 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_core::{
     CellEdit, CellInput, CoreEvent, EditError, PendingEdit, ResultId, ResultStore, Session,
-    apply_edits, edit_statements, editable_query_table, file_change, result_edit_table,
+    TablePage, apply_edits, edit_statements, editable_query_table, file_change, result_edit_table,
+    table_page_sql_by_key,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
@@ -546,6 +547,137 @@ async fn edits_follow_the_table_the_rows_were_read_from() {
             Err(EditError::TableChanged(name.clone())),
             "{label}: dropped"
         );
+    }
+}
+
+/// A table data page is bound to its table by the core when it runs the SELECT the core wrote
+/// for it (SDB-440): its edits are written while that table is intact, and refused when the
+/// page names another table or once the name holds another table. A query result the core did
+/// not bind is refused whatever table the caller names, even the one it read. Every engine of
+/// `pairs`, on its first database.
+#[tokio::test]
+async fn only_results_the_core_bound_to_a_table_are_edited() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for pair in pairs("bound").await {
+        let label = pair.label;
+        let store = Arc::new(ResultStore::new());
+        let session = session(&pair, &pair.first, &store).await;
+        let schema = if pair.schema.is_empty() {
+            session
+                .connection()
+                .current_database()
+                .await
+                .unwrap()
+                .expect("a database")
+        } else {
+            pair.schema.to_string()
+        };
+        let create = async |value: &str| {
+            run(label, &session, "drop table if exists edit_page").await;
+            run(
+                label,
+                &session,
+                "create table edit_page (id int primary key, name varchar(40))",
+            )
+            .await;
+            run(
+                label,
+                &session,
+                &format!("insert into edit_page values (1, '{value}')"),
+            )
+            .await;
+        };
+        let read_name = async || {
+            let id = run(label, &session, "select name from edit_page where id = 1")
+                .await
+                .expect("a result");
+            let stored = session.results().get(id).expect("kept");
+            let stored = stored.read().unwrap();
+            match stored.value_at(0, 0) {
+                Some(Value::Text(text)) => text,
+                other => panic!("{label}: name is {other:?}"),
+            }
+        };
+        // A result with one change typed into the grid.
+        let typed = |result: ResultId| {
+            let stored = session.results().get(result).unwrap();
+            let mut stored = stored.write().unwrap();
+            stored
+                .edit_pending(PendingEdit::Type(CellEdit {
+                    row: 0,
+                    column: 1,
+                    value: Some(CellInput::Text("changed".into())),
+                }))
+                .unwrap();
+        };
+        // The table data tab's page, as the app loads it: the core writes it, then it runs.
+        let page = async || {
+            let sql = table_page_sql_by_key(
+                &session,
+                &TablePage {
+                    schema: schema.clone(),
+                    name: "edit_page".into(),
+                    filter: String::new(),
+                    order_by: String::new(),
+                    limit: 100,
+                    offset: 0,
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{label}: page: {e}"));
+            let result = run(label, &session, &sql).await.expect("a result");
+            typed(result);
+            result
+        };
+        let statements = async |result: ResultId, name: &str| {
+            let (target, table) = result_edit_table(&session, result, &schema, name).await?;
+            let stored = session.results().get(result).unwrap();
+            let stored = stored.read().unwrap();
+            edit_statements(&target, &table, &stored, &stored.pending().changes())
+        };
+
+        // A query result nobody bound: refused, even naming the table it read.
+        create("before").await;
+        let unbound = run(label, &session, "select id, name from edit_page")
+            .await
+            .expect("a result");
+        typed(unbound);
+        assert_eq!(
+            statements(unbound, "edit_page").await.map(|_| ()),
+            Err(EditError::NotBound),
+            "{label}: an unbound query result"
+        );
+
+        // A page: bound to its table and written to it, never to another table named.
+        let result = page().await;
+        assert!(
+            matches!(
+                statements(result, "another_table").await,
+                Err(EditError::NotThisTable(_))
+            ),
+            "{label}: another table named"
+        );
+        let applied = statements(result, "edit_page")
+            .await
+            .unwrap_or_else(|e| panic!("{label}: page: {e}"));
+        assert_eq!(apply_edits(&session, &applied).await, Ok(1), "{label}");
+        assert_eq!(read_name().await, "changed", "{label}");
+
+        // Dropped and created again under the same name, with the same key: refused.
+        create("before").await;
+        let result = page().await;
+        if matches!(label, "mysql" | "mariadb") {
+            // Their identity is the creation time, to the second.
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+        create("recreated").await;
+        assert_eq!(
+            statements(result, "edit_page").await.map(|_| ()),
+            Err(EditError::TableChanged("edit_page".into())),
+            "{label}: recreated"
+        );
+        assert_eq!(read_name().await, "recreated", "{label}: nothing written");
+        run(label, &session, "drop table edit_page").await;
     }
 }
 
