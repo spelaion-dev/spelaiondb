@@ -36,3 +36,6 @@ if [ -n "$previous" ]; then
   echo
   echo "**Full changelog:** [$previous...$tag]($repo/compare/$previous...$tag)"
 fi
+# SignPath Foundation asks for the policy on every download page (ADR-063).
+echo
+echo "**Code signing policy:** [what is signed, by whom, and what the app contacts]($repo/blob/main/docs/code-signing-policy.md)"
