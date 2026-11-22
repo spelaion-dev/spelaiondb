@@ -9,6 +9,7 @@ import { topDialog } from "../modalFocus";
 import { isModified } from "../sqlFiles";
 import { startRename } from "../tabActions";
 import { type Tab, useApp } from "../store";
+import { isRunning, statusName, transactionOf } from "../tabState";
 import { FileMenuButton } from "./FileMenu";
 import { Icon } from "./Icons";
 import { commandSpec, type CommandId } from "../commandRegistry";
@@ -106,7 +107,9 @@ export function TabBar({ hidden }: { hidden: boolean }) {
         {tabs.map((tab, index) => {
           const label = tabLabel(tab);
           const active = tab.id === activeTab;
-          const running = tab.run?.running ?? false;
+          const running = isRunning(tab);
+          const status = statusName(tab);
+          const transaction = transactionOf(tab);
           const classes = [
             "tab",
             active ? "active" : "",
@@ -202,10 +205,10 @@ export function TabBar({ hidden }: { hidden: boolean }) {
               {running ? (
                 <span className="tab-running" role="img" aria-label={t("tabs.running")} title={t("tabs.running")} />
               ) : (
-                <span className={`dot dot-${tab.status}`} role="img" aria-label={t(`editor:status.${tab.status}`)} title={t(`editor:status.${tab.status}`)} />
+                <span className={`dot dot-${status}`} role="img" aria-label={t(`editor:status.${status}`)} title={t(`editor:status.${status}`)} />
               )}
-              {(tab.transaction?.state === "open" || tab.transaction?.state === "failed") && (
-                <span className={`tab-tx${tab.transaction.state === "failed" ? " tab-tx-failed" : ""}`} title={t("editor:transaction.tabBadge")} aria-label={t("editor:transaction.tabBadge")}>TX</span>
+              {transaction?.kind === "followed" && transaction.inTransaction && (
+                <span className={`tab-tx${transaction.transaction.kind === "failed" ? " tab-tx-failed" : ""}`} title={t("editor:transaction.tabBadge")} aria-label={t("editor:transaction.tabBadge")}>TX</span>
               )}
               {renaming === tab.id ? (
                 <RenameInput tab={tab} onDone={() => document.getElementById(`workspace-${tab.id}`)?.focus()} />

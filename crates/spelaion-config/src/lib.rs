@@ -68,9 +68,9 @@ pub use engine_change::EngineChange;
 pub use error::{ConfigError, ProblemKind, ResolveError};
 pub use heidisql::{HeidiSqlError, heidisql_has_registry, read_heidisql, read_heidisql_registry};
 pub use import::{
-    DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedProxy, ImportedSsh,
-    ImportedTls, KeychainItem, TargetFolder, find_duplicate, import_names, import_plan,
-    read_stored_passwords, replacement_draft,
+    DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedPassword, ImportedProxy,
+    ImportedSsh, ImportedTls, KeychainItem, TargetFolder, find_duplicate, import_names,
+    import_plan, read_stored_passwords, replacement_draft,
 };
 pub use load::{
     CONNECTION_TYPES_FILE, Config, ConnectionEntry, ConnectionId, PlainTextError, Source,

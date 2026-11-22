@@ -1,5 +1,7 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::{is_white_space_at, trimmed};
+
 /// SQLite dialect.
 pub struct SqliteDialect;
 
@@ -127,7 +129,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
         match c {
             b';' if depth <= 0 => {
                 if has_code {
-                    spans.push(trimmed(script, start, i));
+                    spans.extend(trimmed(script, start, i));
                 }
                 i += 1;
                 start = i;
@@ -155,7 +157,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
                 i = end;
             }
             _ => {
-                if !c.is_ascii_whitespace() {
+                if !is_white_space_at(script, i) {
                     has_code = true;
                 }
                 i += 1;
@@ -163,7 +165,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
         }
     }
     if has_code {
-        spans.push(trimmed(script, start, b.len()));
+        spans.extend(trimmed(script, start, b.len()));
     }
     spans
 }
@@ -243,16 +245,6 @@ fn skip_until(b: &[u8], mut j: usize, end: u8, doubled: bool) -> usize {
         j += 1;
     }
     b.len()
-}
-
-fn trimmed(script: &str, start: usize, end: usize) -> StatementSpan {
-    let text = &script[start..end];
-    let lead = text.len() - text.trim_start().len();
-    let trail = text.len() - text.trim_end().len();
-    StatementSpan {
-        start: start + lead,
-        end: end - trail,
-    }
 }
 
 #[cfg(test)]

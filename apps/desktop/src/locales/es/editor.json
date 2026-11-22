@@ -35,8 +35,33 @@
     "empty": "Escribe una consulta y pulsa Ctrl+Intro.",
     "result": "Resultado {{number}}",
     "messages": "Mensajes",
-    "running": "Ejecutando…",
+    "running": "Ejecutando consulta…",
+    "paused": "En pausa en la sentencia {{index}}",
+    "cancelling": "Cancelando consulta…",
+    "elapsed": "{{seconds}} s",
+    "cancelQuery": "Cancelar consulta",
+    "cancelFailed": "No se pudo cancelar la consulta: {{detail}}",
     "loading": " (cargando)",
+    "partial": {
+      "cancelled_one": "Parcial: cancelada tras {{formattedCount}} fila",
+      "cancelled_other": "Parcial: cancelada tras {{formattedCount}} filas",
+      "failed_one": "Parcial: falló tras {{formattedCount}} fila",
+      "failed_other": "Parcial: falló tras {{formattedCount}} filas",
+      "timedOut_one": "Parcial: superó su tiempo límite tras {{formattedCount}} fila",
+      "timedOut_other": "Parcial: superó su tiempo límite tras {{formattedCount}} filas",
+      "connectionLost_one": "Parcial: se perdió la conexión tras {{formattedCount}} fila",
+      "connectionLost_other": "Parcial: se perdió la conexión tras {{formattedCount}} filas",
+      "hint": "La sentencia se detuvo antes de su última fila: solo se muestran las filas que llegaron. Ejecútala de nuevo para tener el resultado completo."
+    },
+    "partialCalc": "{{partial}}. Estos números solo cuentan las filas que llegaron.",
+    "partialChart": "{{partial}}. El gráfico solo muestra las filas que llegaron.",
+    "partialExport": "{{partial}}. Las filas cargadas son solo las que llegaron.",
+    "rowsFailed": "No se pudieron cargar las filas: {{detail}}",
+    "freed": {
+      "title": "Este resultado ya no se conserva",
+      "body": "Sus filas se liberaron. Ejecuta su consulta de nuevo para leerlas.",
+      "rerun": "Ejecutar de nuevo"
+    },
     "rows_one": "{{formattedCount}} fila",
     "rows_other": "{{formattedCount}} filas",
     "duration": "{{duration}} ms",
@@ -239,7 +264,8 @@
       "cancelled": "Cancelado en la sentencia {{index}}.",
       "transactionAborted": "La sentencia {{index}} abortó la transacción: el servidor solo la deshará, así que el resto no se ejecutó. Haz rollback y vuelve a ejecutar el resto.",
       "transactionRolledBack": "La sentencia {{index}} deshizo la transacción, así que el resto no se ejecutó: se habría ejecutado sin las sentencias anteriores.",
-      "closed": "La pestaña se cerró mientras el error de la sentencia {{index}} esperaba respuesta."
+      "closed": "La sesión se cerró mientras el error de la sentencia {{index}} esperaba respuesta.",
+      "sessionLost": "Se perdió la conexión mientras el error de la sentencia {{index}} esperaba respuesta."
     },
     "paused": "La sentencia {{index}} falló: esperando tu respuesta."
   },

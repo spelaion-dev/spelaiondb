@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    ColumnStats, ColumnStatsError, ColumnStatsRequest, CoreEvent, ExportCancel, ResultStore,
-    Session, Stat, add_condition, column_stats, count_table_rows,
+    ColumnStats, ColumnStatsError, ColumnStatsRequest, CoreEvent, JobCancel, ResultStore, Session,
+    Stat, add_condition, column_stats, count_table_rows,
 };
 use spelaion_driver_api::{ConnectParams, Driver, LogicalType, Secret, TlsMode};
 
@@ -146,7 +146,7 @@ fn request(schema: &str, column: &str, logical: LogicalType, filter: &str) -> Co
 }
 
 async fn stats(label: &str, session: &Session, request: &ColumnStatsRequest) -> ColumnStats {
-    column_stats(session, request, &ExportCancel::new())
+    column_stats(session, request, &JobCancel::new())
         .await
         .unwrap_or_else(|e| panic!("{label}: {} → {e}", request.column))
 }
@@ -277,7 +277,7 @@ async fn column_statistics_on_every_engine() {
             let outcome = column_stats(
                 &session,
                 &request(schema, "name", LogicalType::Text, filter),
-                &ExportCancel::new(),
+                &JobCancel::new(),
             )
             .await;
             assert!(
@@ -287,7 +287,7 @@ async fn column_statistics_on_every_engine() {
         }
 
         // Cancelled before it starts: nothing runs.
-        let cancel = ExportCancel::new();
+        let cancel = JobCancel::new();
         cancel.cancel().await;
         assert_eq!(
             column_stats(
@@ -346,7 +346,7 @@ async fn a_number_the_engine_refuses_leaves_the_others() {
         sample_rows: 1_000,
         top: 10,
     };
-    let s = column_stats(&session, &request, &ExportCancel::new())
+    let s = column_stats(&session, &request, &JobCancel::new())
         .await
         .unwrap();
     assert_eq!((s.rows, s.nulls), (3, 1));

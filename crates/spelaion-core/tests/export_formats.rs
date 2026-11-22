@@ -21,7 +21,7 @@ use arrow::datatypes::DataType;
 use futures_util::StreamExt;
 use spelaion_config::MaskingRules;
 use spelaion_core::{
-    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, ExportCancel, ExportFormat, JsonOptions, MASK,
+    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, ExportFormat, JobCancel, JsonOptions, MASK,
     MaskPolicy, ResultId, ResultStore, Session, SqlOptions, StreamExport, TableSource,
     TextEncoding, export_table,
 };
@@ -296,16 +296,9 @@ async fn export(
         schema: case.schema.into(),
         ..table()
     };
-    export_table(
-        &session,
-        &source,
-        path,
-        export,
-        &ExportCancel::new(),
-        &|_| {},
-    )
-    .await
-    .unwrap_or_else(|e| panic!("{}: {:?}: {e}", case.label, export.format));
+    export_table(&session, &source, path, export, &JobCancel::new(), &|_| {})
+        .await
+        .unwrap_or_else(|e| panic!("{}: {:?}: {e}", case.label, export.format));
 }
 
 /// A decimal's text without what says nothing: `12.50` and `12.5` are the same number.
@@ -587,15 +580,8 @@ async fn upserts_without_a_key_are_refused() {
                 order_by: String::new(),
             };
             let out = scratch(&format!("{name}.sql"));
-            let result = export_table(
-                &session,
-                &source,
-                &out,
-                &export,
-                &ExportCancel::new(),
-                &|_| {},
-            )
-            .await;
+            let result =
+                export_table(&session, &source, &out, &export, &JobCancel::new(), &|_| {}).await;
             (result.map(|_| ()).map_err(|e| e.to_string()), out)
         }
     };

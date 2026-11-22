@@ -74,7 +74,7 @@ fn every_server_comes_with_its_address_user_and_maintenance_database() {
         assert_eq!(c.database, "spelaion", "{name}");
         assert_eq!(c.user, "spelaion", "{name}");
         assert!(
-            c.password.is_none() && c.stored_password.is_none() && !c.has_password(),
+            c.password.is_none() && c.password.keychain_item().is_none() && !c.has_password(),
             "{name}"
         );
         assert!(
@@ -243,7 +243,7 @@ fn passwords_pgadmin_saved_are_never_read_and_the_preview_says_so() {
     // The query tool's ad hoc connections are not pgAdmin's servers.
     assert!(!all.iter().any(|c| c.name == "Query tool one-off"));
     let local = named(&all, "Local PG");
-    assert!(local.password.is_none() && local.stored_password.is_none());
+    assert!(local.password.is_none() && local.password.keychain_item().is_none());
     assert!(
         local
             .unmapped

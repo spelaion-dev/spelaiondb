@@ -456,10 +456,7 @@ async fn closing_marks_down_and_frees_the_port() {
     let addr = tunnel.local_addr();
     let mut state = tunnel.state();
     tunnel.close().await;
-    assert!(matches!(
-        &*state.borrow_and_update(),
-        TunnelState::Down { .. }
-    ));
+    assert_eq!(*state.borrow_and_update(), TunnelState::Closed);
     // The local port stops accepting connections.
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(tokio::net::TcpStream::connect(addr).await.is_err());
@@ -795,6 +792,8 @@ async fn a_pinned_type_with_another_key_still_blocks() {
 struct Relay {
     port: u16,
     frozen: Arc<std::sync::atomic::AtomicBool>,
+    /// The copies of every connection it carries, so they can be cut.
+    pipes: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
 }
 
 impl Relay {
@@ -802,8 +801,10 @@ impl Relay {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let local = listener.local_addr().unwrap().port();
         let frozen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pipes = Arc::new(Mutex::new(Vec::new()));
         let upstream = format!("{host}:{port}");
         let flag = frozen.clone();
+        let carried = pipes.clone();
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
                 let Ok(server) = tokio::net::TcpStream::connect(&upstream).await else {
@@ -811,18 +812,31 @@ impl Relay {
                 };
                 let (client_read, client_write) = client.into_split();
                 let (server_read, server_write) = server.into_split();
-                tokio::spawn(pipe(client_read, server_write, flag.clone()));
-                tokio::spawn(pipe(server_read, client_write, flag.clone()));
+                let up = tokio::spawn(pipe(client_read, server_write, flag.clone()));
+                let down = tokio::spawn(pipe(server_read, client_write, flag.clone()));
+                carried
+                    .lock()
+                    .unwrap()
+                    .extend([up.abort_handle(), down.abort_handle()]);
             }
         });
         Relay {
             port: local,
             frozen,
+            pipes,
         }
     }
 
     fn freeze(&self) {
         self.frozen.store(true, Ordering::SeqCst);
+    }
+
+    /// Closes every connection it carries, as a bastion that restarts or a network that drops
+    /// does: the client sees its session end.
+    fn cut(&self) {
+        for pipe in self.pipes.lock().unwrap().drain(..) {
+            pipe.abort();
+        }
     }
 }
 
@@ -854,7 +868,7 @@ async fn down_within(tunnel: &Tunnel, limit: Duration) -> Option<String> {
     match down {
         Ok(Ok(state)) => match &*state {
             TunnelState::Down { reason } => Some(reason.clone()),
-            TunnelState::Up => None,
+            TunnelState::Opening | TunnelState::Up | TunnelState::Closed => None,
         },
         Ok(Err(_)) | Err(_) => None,
     }
@@ -935,6 +949,111 @@ async fn a_server_that_never_answers_times_out_as_configured() {
         other => panic!("expected a timeout at hop 1: {:?}", other.err()),
     }
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+}
+
+/// Accepts the first hop's key at once and keeps the second hop's question open until it is
+/// given up, as a person who has not answered yet.
+#[derive(Default)]
+struct HoldsTheSecondHop {
+    asked: tokio::sync::Notify,
+    given_up: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Marks the question given up when it is dropped unanswered.
+struct GivenUp(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for GivenUp {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl Interaction for HoldsTheSecondHop {
+    async fn confirm_unknown_host(&self, host: &HostInfo) -> bool {
+        if host.hop == 0 {
+            return true;
+        }
+        let _open = GivenUp(self.given_up.clone());
+        self.asked.notify_one();
+        std::future::pending::<bool>().await
+    }
+    async fn ask_secret(&self, _: &SecretRequest) -> Option<Secret> {
+        None
+    }
+}
+
+/// SDB-366: the first hop lost while the second one waits for the person fails the opening
+/// with the first hop's reason, at once. It is never reported as up, and the second hop's
+/// question is given up with it (its dialog closes, ADR-032). Nothing is reopened (ADR-007).
+#[tokio::test]
+async fn a_hop_lost_while_the_next_one_waits_fails_the_open() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("lost-while-opening");
+    let relay = Relay::to(&host, port).await;
+    let spec = two_hops("127.0.0.1", relay.port);
+    let person = Arc::new(HoldsTheSecondHop::default());
+    let opening = tokio::spawn({
+        let known = known.known();
+        let person = person.clone();
+        async move { Tunnel::connect(&spec, &known, person).await }
+    });
+    tokio::time::timeout(Duration::from_secs(20), person.asked.notified())
+        .await
+        .expect("the second hop asks about its key");
+    relay.cut();
+    let result = tokio::time::timeout(Duration::from_secs(15), opening)
+        .await
+        .expect("losing the first hop must end the opening, not leave it waiting")
+        .unwrap();
+    match result {
+        Err(error @ SshError::Hop { hop: 0, .. }) => {
+            assert!(
+                error.to_string().starts_with("hop 1 (127.0.0.1): "),
+                "{error}"
+            );
+        }
+        Err(other) => panic!("expected the first hop's loss: {other}"),
+        Ok(_) => panic!("a tunnel whose first hop was lost was reported as open"),
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !person.given_up.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the second hop's question is given up with the opening");
+}
+
+/// SDB-366: closing a tunnel that was already lost keeps the reason it went down.
+#[tokio::test]
+async fn closing_a_lost_tunnel_keeps_its_reason() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("lost-then-closed");
+    let relay = Relay::to(&host, port).await;
+    let tunnel = Tunnel::open(
+        &two_hops("127.0.0.1", relay.port),
+        postgres(),
+        &known.known(),
+        TestUi::accepting(),
+    )
+    .await
+    .unwrap();
+    relay.cut();
+    let reason = down_within(&tunnel, Duration::from_secs(10))
+        .await
+        .expect("cutting the first hop takes the tunnel down");
+    assert!(reason.starts_with("hop "), "{reason}");
+    tunnel.close().await;
+    assert_eq!(
+        *tunnel.state().borrow(),
+        TunnelState::Down { reason },
+        "closing keeps why it went down"
+    );
 }
 
 /// A person who takes `delay` to compare each fingerprint, then accepts it.

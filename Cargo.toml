@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/spelaion-dev/spelaiondb"
@@ -33,6 +33,10 @@ futures-util = "0.3"
 insta = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# Property tests of what reads text and files no one wrote by hand (SDB-156): the splitters, the
+# placeholders, the barriers and the readers of untrusted files. Tests only. No `fork` or
+# `timeout`, which would bring a process runner along.
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

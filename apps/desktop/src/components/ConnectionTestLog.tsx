@@ -5,28 +5,29 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Channel } from "@tauri-apps/api/core";
-import { commands, type TestReportItem, type TestStepItem } from "../api";
-
-let nextTest = Math.floor(Math.random() * 1_000_000);
+import { type TestReportItem, type TestStepItem } from "../api";
+import type { JobTicket } from "../bindings";
+import { startJob, type Job } from "../jobs";
 
 /** A test running or finished, and how to start and stop one. */
 export function useConnectionTest() {
   const [steps, setSteps] = useState<TestStepItem[] | null>(null);
   const [report, setReport] = useState<TestReportItem | null>(null);
   const [running, setRunning] = useState(false);
-  const current = useRef<number | null>(null);
+  const current = useRef<Job | null>(null);
 
   // A form closed while a test runs stops it: what it opened is closed in the core.
   useEffect(
     () => () => {
-      if (current.current !== null) void commands.stopConnectionTest(current.current).catch(() => undefined);
+      current.current?.cancel();
     },
     [],
   );
 
-  /** Runs `start` with a fresh test id and a channel for its steps. */
-  async function run<T>(start: (test: number, onStep: Channel<TestStepItem[]>) => Promise<T>): Promise<T> {
-    const test = ++nextTest;
+  /** Runs `start` with a new test job's channel (its id is the core's, SDB-369) and a channel
+   *  for its steps. */
+  async function run<T>(start: (job: Channel<JobTicket>, onStep: Channel<TestStepItem[]>) => Promise<T>): Promise<T> {
+    const test = startJob();
     current.current = test;
     const channel = new Channel<TestStepItem[]>();
     channel.onmessage = (next) => {
@@ -36,7 +37,7 @@ export function useConnectionTest() {
     setReport(null);
     setRunning(true);
     try {
-      return await start(test, channel);
+      return await start(test.channel, channel);
     } finally {
       if (current.current === test) {
         current.current = null;
@@ -51,7 +52,7 @@ export function useConnectionTest() {
   }
 
   function stop() {
-    if (current.current !== null) void commands.stopConnectionTest(current.current).catch(() => undefined);
+    current.current?.cancel();
   }
 
   /** Forgets the last test (the form changed). A running one is stopped. */

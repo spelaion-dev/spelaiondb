@@ -62,7 +62,8 @@
       "ok": "OK",
       "error": "Error",
       "refused": "Refused",
-      "cleared": "Log cleared"
+      "cleared": "Log cleared",
+      "unknown": "Unknown"
     },
     "refresh": "Refresh",
     "loading": "Loading…",

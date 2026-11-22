@@ -225,7 +225,12 @@ stops it as if its consumer had gone (it does not cancel anything else on the se
 `cancel` (`{"session":1}`) is a request: it interrupts what that session is running, as the
 engine allows (PostgreSQL's cancel request, a TDS attention, `KILL QUERY` from a second
 connection). It can arrive while a statement runs and must be obeyed then. The interrupted
-statement ends its stream with a `cancelled` error.
+statement ends its stream with a `cancelled` error. A `cancel` read after an `execute` of the
+same session is for that statement, even when it arrives before the statement has started: a
+plugin hands a session's `execute` and `cancel` to its driver in the order it read them (the
+Rust SDK starts the statement, its driver's `execute` polled once, before the cancel read after
+it reaches the driver; SDB-428). A `cancel` with nothing running stops nothing, and never the
+statement read after it.
 
 ## Loading rows
 `insert_rows` loads rows into a table (ADR-038). The rows arrive first, as data frames on a

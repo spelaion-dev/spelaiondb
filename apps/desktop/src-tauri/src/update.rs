@@ -8,15 +8,17 @@
 //! updater knows how to replace: those are told that a new version exists and where it is,
 //! and `update_install` refuses them (SDB-198).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_desktop_macros::command;
 use tauri::utils::config::BundleType;
 use tauri::{AppHandle, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
-use tokio::sync::Mutex;
+use tauri_specta::Event as _;
 
 use crate::CmdResult;
+pub use crate::update_state::UpdateStatus;
+use crate::update_state::{Found, UpdateChanged, UpdateState};
 
 /// Where the app looks for `latest.json`: the latest public release (ADR-021). Releases are
 /// published as "latest" (not as pre-releases), which this address follows.
@@ -32,12 +34,12 @@ const RELEASES_PAGE: &str = "https://github.com/spelaion-dev/spelaiondb/releases
 /// switch them off, never point them somewhere else.
 const SWITCH_OFF: &str = "SPELAION_NO_UPDATES";
 
-/// The update found by the last check, kept for `update_install`.
-#[derive(Default)]
-pub struct PendingUpdate(Mutex<Option<Update>>);
+/// The update's state (SDB-377): what the last check found, kept for `update_install` until
+/// it is installed, also after a download that failed.
+pub type PendingUpdate = UpdateState<Update>;
 
 /// How this copy of the app gets a new version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum UpdateMethod {
     /// The app downloads, verifies and installs it itself ("Install and restart"): Windows,
@@ -49,21 +51,6 @@ pub enum UpdateMethod {
     Rpm,
     /// A Linux binary that is none of those: the new version is downloaded by hand.
     ReleasesPage,
-}
-
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum UpdateStatus {
-    /// Updates are switched off in this run (`SPELAION_NO_UPDATES`).
-    Unavailable,
-    UpToDate,
-    #[serde(rename_all = "camelCase")]
-    Available {
-        version: String,
-        current_version: String,
-        notes: Option<String>,
-        method: UpdateMethod,
-    },
 }
 
 /// Decides how a copy of the app is updated. `bundle` is the bundle type Tauri's bundler
@@ -138,7 +125,11 @@ pub async fn update_check(
     pending: State<'_, PendingUpdate>,
 ) -> CmdResult<UpdateStatus> {
     if std::env::var_os(SWITCH_OFF).is_some() {
-        return Ok(UpdateStatus::Unavailable);
+        return Ok(pending.switched_off());
+    }
+    // A download is running: what is known, without checking again.
+    if pending.downloading() {
+        return Ok(pending.status());
     }
     // The plugin catalogue is read with the app's updates (ADR-055, point 7), under the core's
     // rule (`fetch::updates_allowed`), without holding this check up.
@@ -153,36 +144,47 @@ pub async fn update_check(
         .check()
         .await
         .map_err(|e| e.to_string())?;
-    let method = this_install(&app);
-    let status = match &update {
-        Some(update) => UpdateStatus::Available {
+    // Only an update this copy can install is kept for `update_install` (`UpdateState`).
+    let found = update.map(|update| {
+        let found = Found {
             version: update.version.clone(),
             current_version: update.current_version.clone(),
             notes: update.body.clone(),
-            method,
-        },
-        None => UpdateStatus::UpToDate,
-    };
-    // Only an update this copy can install is kept for `update_install`.
-    *pending.0.lock().await = update.filter(|_| method == UpdateMethod::InApp);
-    Ok(status)
+        };
+        (update, found)
+    });
+    Ok(pending.checked(found, this_install(&app)))
+}
+
+/// What the page shows about updates now (SDB-377).
+#[command]
+pub async fn update_status(pending: State<'_, PendingUpdate>) -> CmdResult<UpdateStatus> {
+    Ok(pending.status())
 }
 
 /// Downloads and installs the update the last check found, then restarts the app. Open tabs
 /// come back with their SQL, not executed (AGENTS.md). Refused for an install the app cannot
-/// replace (see `update_method`), whatever the web view asks.
+/// replace (see `update_method`), whatever the web view asks. The download's progress goes to
+/// the page (`UpdateChanged`); when it fails, the update stays to be installed again (SDB-377).
 #[command]
 pub async fn update_install(app: AppHandle, pending: State<'_, PendingUpdate>) -> CmdResult<()> {
     if let Some(reason) = refusal(this_install(&app)) {
         return Err(reason);
     }
-    let Some(update) = pending.0.lock().await.take() else {
-        return Err("there is no update to install: check for updates first".into());
+    let changed = |status| {
+        let _ = UpdateChanged { status }.emit(&app);
     };
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|e| e.to_string())?;
+    crate::update_state::install(
+        &pending,
+        |update, progress| async move {
+            update
+                .download_and_install(progress, || {})
+                .await
+                .map_err(|e| e.to_string())
+        },
+        &changed,
+    )
+    .await?;
     app.restart()
 }
 
@@ -306,6 +308,7 @@ mod tests {
             current_version: "0.7.99".into(),
             notes: None,
             method: UpdateMethod::ReleasesPage,
+            install: crate::update_state::InstallStatus::Ready,
         };
         let json = serde_json::to_value(status).unwrap();
         assert_eq!(json["kind"], "available");

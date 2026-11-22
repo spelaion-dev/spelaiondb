@@ -10,4 +10,9 @@
   itself is `src/components/PluginsSettings.tsx` (Settings → Plugins) and only shows the core's
   overview; `src/plugins.ts` shares it with the "add connection" picker and a connection that
   could not open (`MissingPlugin.tsx`), which send to the page when an engine's plugin is not
-  installed.
+  installed. Each plugin's install (idle, downloading with bytes of the total, failed with why)
+  is held by the adapter (`PluginOps`), not the page, and sent as `pluginInstallChanged`, so a
+  download started in Settings shows in the picker and `MissingPlugin` too (SDB-373). What the
+  views ask (does an engine need its plugin, what Install fetches, what an install is doing) is
+  answered once in `src/pluginStatus.ts` (`scripts/plugin-status.test.mjs`), from the core's
+  `PluginState::availability`.

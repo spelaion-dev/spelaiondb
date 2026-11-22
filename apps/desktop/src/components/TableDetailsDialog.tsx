@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type DependenciesItem, type NewIndexKindItem, type ObjectActionsItem, type ObjectPropertiesItem, type ObjectTargetItem, type PartitioningItem, type SchemaObjectItem, type TableDetails, type TableKeyItem } from "../api";
 import { connectTabFromExplorer, explorerDatabase, EXPLORER_REFRESH_EVENT, openSession, openTableData } from "../connect";
 import { useApp, type Tab } from "../store";
+import { CONNECTING, DISCONNECTED, connectFailure, connectedWith, lostSession, statusName } from "../tabState";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { NewTableElementDialog } from "./NewTableElementDialog";
 import { StructureDialog } from "./StructureDialog";
@@ -13,6 +14,9 @@ type Row = { cells: string[]; target?: ObjectTargetItem; rebuildDrop?: DroppedCo
 
 /** Catalog data is loaded on this tab's own session, independently of the explorer. */
 export function TableDetailsView({ tab }: { tab: Tab }) {
+  const status = statusName(tab);
+  /** Why it has no session: lost, or the last attempt to connect failed. */
+  const disconnectedWhy = lostSession(tab)?.reason ?? connectFailure(tab);
   const { t, i18n } = useTranslation("shell");
   const view = tab.tableDetails!;
   const { schema, name: table, kind } = view;
@@ -40,7 +44,7 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
   const refresh = useCallback(() => { setNeedsRefresh(false); setRevision((value) => value + 1); }, []);
 
   useEffect(() => {
-    if (tab.status !== "connected") { setLoading(false); return; }
+    if (status !== "connected") { setLoading(false); return; }
     if (needsRefresh) return;
     let current = true;
     setLoading(true);
@@ -69,19 +73,19 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
     }).catch((e: unknown) => { if (current) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [tab.id, tab.status, schema, table, kind, revision, needsRefresh]);
+  }, [tab.id, status, schema, table, kind, revision, needsRefresh]);
 
   async function reconnect() {
     if (!tab.connectionId) return;
     // A reconnect never repeats the catalog read; the user chooses when to refresh.
     setNeedsRefresh(true);
     setDetails(null);
-    useApp.getState().updateTab(tab.id, { status: "connecting" });
+    useApp.getState().setConnection(tab.id, CONNECTING);
     try {
-      const version = await openSession(tab.id, tab.connectionId);
-      useApp.getState().updateTab(tab.id, { status: version === null ? "disconnected" : "connected", serverVersion: version, ...(version === null ? {} : { lost: undefined }) });
+      const session = await openSession(tab.id, tab.connectionId);
+      useApp.getState().setConnection(tab.id, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
-      useApp.getState().updateTab(tab.id, { status: "disconnected" });
+      useApp.getState().setConnection(tab.id, DISCONNECTED);
       setError(e instanceof Error ? e.message : String(e));
     }
   }
@@ -182,13 +186,13 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
         </div>
         <div className="table-details-actions">
           <span className="table-details-count">{t("tableDetails.count", { count: rows.length })}</span>
-          {creates && <button type="button" className="primary" disabled={tab.status !== "connected" || loading || !details || !canCreate}
+          {creates && <button type="button" className="primary" disabled={status !== "connected" || loading || !details || !canCreate}
             title={!canCreate ? t("newTableElement.unsupported") : undefined} onClick={() => setCreating(true)}>{t("newTableElement.add")}</button>}
-          {kind === "columns" && <button type="button" disabled={tab.status !== "connected" || loading || !details}
+          {kind === "columns" && <button type="button" disabled={status !== "connected" || loading || !details}
             onClick={() => setEditing({ columns: selected.length > 0 ? selected : undefined })}>{t(selected.length > 0 ? "structure.editSelected" : "structure.editColumns", { count: selected.length })}</button>}
-          {kind === "properties" && <button type="button" disabled={tab.status !== "connected" || loading || !details}
+          {kind === "properties" && <button type="button" disabled={status !== "connected" || loading || !details}
             onClick={() => setEditing({})}>{t("structure.editComment")}</button>}
-          <button type="button" disabled={tab.status !== "connected" || loading} onClick={refresh}>{t("refresh")}</button>
+          <button type="button" disabled={status !== "connected" || loading} onClick={refresh}>{t("refresh")}</button>
         </div>
       </div>
       {actions && creates && !canCreate && <p className="muted">{t("newTableElement.unsupported")}</p>}
@@ -200,11 +204,11 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       {kind === "dependencies" && dependencies && dependencies.untracked.length > 0 && <p className="muted small">{t("tableDetails.untracked", {
         kinds: dependencies.untracked.map((k) => t(`dependencyKinds.${k}`).toLowerCase()).join(", "),
       })}</p>}
-      {(error || (tab.status === "disconnected" && (tab.lost || tab.run?.error?.message))) && <p className="error" role="alert">{error ?? tab.lost ?? tab.run?.error?.message}</p>}
-      {tab.status === "disconnected" && <button type="button" onClick={() => void reconnect()} disabled={!tab.connectionId}>{t("tableDetails.reconnect")}</button>}
-      {tab.status === "connected" && needsRefresh && <p className="muted">{t("tableDetails.refreshAfterReconnect")}</p>}
-      {tab.status === "connecting" || loading ? <p className="muted">{t("tableDetails.loading")}</p> : null}
-      {tab.status === "connected" && details && (
+      {(error || disconnectedWhy) && <p className="error" role="alert">{error ?? disconnectedWhy}</p>}
+      {status === "disconnected" && <button type="button" onClick={() => void reconnect()} disabled={!tab.connectionId}>{t("tableDetails.reconnect")}</button>}
+      {status === "connected" && needsRefresh && <p className="muted">{t("tableDetails.refreshAfterReconnect")}</p>}
+      {status === "connecting" || loading ? <p className="muted">{t("tableDetails.loading")}</p> : null}
+      {status === "connected" && details && (
         <>
           {kind === "columns" && selected.length > 0 && actions && (
             <div className="table-details-actions">

@@ -5,6 +5,14 @@
   continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
   ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
   IPC windows).
+  A stored result's end is one type, `ResultEnd` (SDB-367, ADR-060): `Loading`, `Whole`, or
+  `Partial(PartialReason)` (cancelled, failed, timed out, connection lost). Only `session.rs`
+  sets it, where a statement's stream stops (and `end_on_panic` for a run that panics), and it
+  announces it with `CoreEvent::ResultEnded` before the statement's own end; a partial result
+  keeps its rows and is still sorted, filtered and charted as the rows it has (SDB-275). Ask
+  `StoredResult::end()`, never the statement's messages. A freed result is `ResultFreed`
+  (`ResultStore::stored`), one typed error with one text. `src/result_end_tests.rs` pins every
+  ending.
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included); a
   server that speaks another engine's protocol is a kind of that engine's connection there
   (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169; TiDB, OceanBase
@@ -42,7 +50,12 @@
   typed password goes with it only to the same login on the same route (`carried_password`);
   otherwise the tab connects as a new one does. Nothing is run again (`tests/session_source.rs`).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
-  there needs tests that try to get around them. `guard.rs` lists the statements the app
+  there needs tests that try to get around them. `tests/properties.rs` (SDB-156) generates
+  them: a write or a refused function hidden in every place it can go is never a read, and a
+  destructive statement never passes the guard unasked; it also checks the `:name` scanner
+  (`params.rs`: only placeholders in code are found and bound, a value stays in its literal),
+  that pasted text, any import file and any `.sql` file read without a panic, and that SQLite
+  itself agrees with its splitter on where each statement ends. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
   connection's type asks for: data changes on Production, every run where it confirms
   execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
@@ -69,7 +82,14 @@
   transaction: the state always comes from the driver (`Connection::transaction_state`, read
   after every statement), manual commit opens one with the engine's `BEGIN`, smart commit is a
   connection type safeguard, and `Session::close_needs_confirmation` is the check before
-  closing a tab, disconnecting or quitting; core-written statements use `run_generated`, never
+  closing a tab, disconnecting or quitting. The state is one enum, `TransactionLifecycle`
+  (`transaction/lifecycle.rs`, SDB-372, ADR-060): not followed, or followed with a
+  `CommitMode` (auto, manual, switched by smart commit) and a `TransactionPhase` (idle, open or
+  failed, with its statement count); it changes only through its own methods.
+  `TransactionStatus` is a read-only view made from it, and `closing_asks` is the one rule for
+  "must closing ask" (`closing_asks_from_last_state` for the quit question, which leaves out a
+  lost session). The page gets `TransactionStatusItem` (the state and the core's answers) and
+  derives nothing; core-written statements use `run_generated`, never
   the manual-commit `BEGIN`; `tests/transactions.rs` runs it on every engine. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
@@ -170,7 +190,11 @@
   `tests/value_display.rs` formats every engine's types and writes a filter from a formatted
   cell.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
-  runs those conditions, lists and names on every engine.
+  runs those conditions, lists and names on every engine. Its `sql_literal` writes every
+  literal the core writes (bound `:name` values, edits, copies, filters): where a backslash
+  escapes in a string (`spelaion_dialect::backslash_escapes`, checked against each splitter),
+  `\` and `'` go escaped with one, so no value ends its literal early (SDB-435); MySQL's go
+  as hex when they hold a backslash. No caller escapes values itself.
   "Copy special…" (SDB-388) is `export.rs`'s `copy_special` (delimiter, quote, row delimiter,
   NULL text, header, row numbers; the choices are the copy defaults, `History::copy_defaults`,
   checked before they are saved), and copy as UPDATE is its `copy_updates`, through an
@@ -368,3 +392,34 @@
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
   `classify.rs`, any change there needs tests that try to get around it.
+- Lifecycles (ADR-060): a state the core has (a session's health, run and transaction, a
+  tunnel, a stored result's end, a job's cancel and ending) is one enum with its transitions in
+  the type or actor that owns it, published on a watch when something follows it, and passed
+  to the adapters as is. Already explicit, leave as they are: `SessionHealth`, `ScriptStop`,
+  `StepStatus`, `TableStatus`, `HostFile`, `InstallState`, `AgentAccess`, `StartupAction`.
+  The implicit ones are SDB-366 to SDB-377, one pull request each, in the ADR's order; each
+  starts with a test that pins today's behaviour.
+- A session's run (`run_state.rs`, SDB-370): `Session::run_state()` is a watch of `RunState`
+  (idle, running a statement, paused with its ticket, cancelling), sent only when it changes.
+  A run the user sees (`RunKind::User`, `Generated`) holds a `RunGuard` from when it asks for
+  the session until it lets go of it or is dropped; the core's own reads (`Metadata`,
+  `Parsed`) hold none and never make the session busy (SDB-277). "Is it busy" is
+  `RunState::is_busy`, everywhere: Commit, Rollback, the auto-commit switch and closing read it,
+  and `Session::transaction_refusal` says what runs. The cancels are counted in `Runs`, the one
+  place the state is worked out. A failed statement says how it ended with `StatementEnd`
+  (failed, cancelled, timed out; `cancelled` and `timed_out` only mirror it, set by
+  `StatementError::ended`), `ScriptFinished` is built by `CoreEvent::finished` from its
+  summary, and the summary's `stop` says how every run ended: `None` only when it went through
+  every statement its mode let it run; a failure or a cancel names its statement even when it
+  was the last; `SessionLost` (the connection was lost while paused) is apart from `Closed`.
+  Tests: `run_state.rs` and `run_state_tests.rs`, one per transition.
+- Jobs (`job.rs`, SDB-368): every job takes a `JobCancel`, made by its caller before the
+  session exists and bound by the job itself (`attach`, after requesting a session run, so the
+  run sees the cancel); a cancel always goes through `Session::cancel`. How a job's result reads
+  as a `JobEnd` (done, stopped at a limit, cancelled or failed with what it kept, refused) is
+  written once there, per job; the app answers with `JobOutcome::from_end`. A read run again in
+  a session of its own enters and ends the engine's read-only transaction through
+  `export_stream::read_only_transaction`. A new job adds its conversion, not new flags.
+  `JobRegistry` (SDB-369) lists a program's running jobs under ids it makes: `start(kind)` gives
+  a `JobHandle` whose drop removes the entry (a panic too), and `cancel(id, kind)` refuses an id
+  of another kind. The desktop names its kinds in `src-tauri/src/jobs.rs`.

@@ -1,5 +1,7 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::{is_white_space_at, trimmed, white_space_before};
+
 /// PostgreSQL dialect.
 pub struct PostgresDialect;
 
@@ -162,6 +164,17 @@ fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80
 }
 
+/// The byte after the word that starts at `i`: at the first byte no name holds, or at white
+/// space (SDB-434).
+fn word_end(script: &str, i: usize) -> usize {
+    let b = script.as_bytes();
+    (i..b.len())
+        .find(|&j| {
+            !is_ident_byte(b[j]) || (script.is_char_boundary(j) && is_white_space_at(script, j))
+        })
+        .unwrap_or(b.len())
+}
+
 /// `CREATE [OR REPLACE] FUNCTION | PROCEDURE`: its SQL-standard body (`BEGIN ATOMIC … END`,
 /// PostgreSQL 14) is not quoted and holds semicolons.
 fn is_routine(words: &[String]) -> bool {
@@ -268,7 +281,7 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
                     .position(|&c| c == b'\n')
                     .map_or(b.len(), |p| i + p);
                 if !is_restrict(&script[i..end]) {
-                    spans.push(trimmed(script, i, end));
+                    spans.extend(trimmed(script, i, end));
                 }
                 i = (end + 1).min(b.len());
                 start = i;
@@ -305,8 +318,7 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
             },
             b';' if depth == 0 => {
                 i += 1;
-                if has_code {
-                    let span = trimmed(script, start, i - 1);
+                if let Some(span) = trimmed(script, start, i - 1).filter(|_| has_code) {
                     spans.push(span);
                     // Its data follows: skipped, never read as SQL.
                     if words.first().map(String::as_str) == Some("copy")
@@ -321,13 +333,13 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
                 has_code = false;
                 words.clear();
             }
+            // White space outside ASCII is no part of a word, and a word may follow it
+            // (SDB-434).
             c if (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
-                && (i == 0 || !is_ident_byte(b[i - 1])) =>
+                && (i == 0 || !is_ident_byte(b[i - 1]) || white_space_before(script, i))
+                && !is_white_space_at(script, i) =>
             {
-                let end = b[i..]
-                    .iter()
-                    .position(|&c| !is_ident_byte(c))
-                    .map_or(b.len(), |p| i + p);
+                let end = word_end(script, i);
                 let word = script[i..end].to_ascii_lowercase();
                 if words.len() < 4 {
                     words.push(word.clone());
@@ -342,8 +354,8 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
                 has_code = true;
                 i = end;
             }
-            c => {
-                if !c.is_ascii_whitespace() {
+            _ => {
+                if !is_white_space_at(script, i) {
                     has_code = true;
                 }
                 i += 1;
@@ -351,7 +363,7 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
         }
     }
     if has_code {
-        spans.push(trimmed(script, start, b.len()));
+        spans.extend(trimmed(script, start, b.len()));
     }
     (spans, blocks)
 }
@@ -537,16 +549,6 @@ fn dollar_tag(b: &[u8], i: usize) -> Option<usize> {
         j += 1;
     }
     (b.get(j) == Some(&b'$')).then_some(j)
-}
-
-fn trimmed(script: &str, start: usize, end: usize) -> StatementSpan {
-    let text = &script[start..end];
-    let lead = text.len() - text.trim_start().len();
-    let trail = text.len() - text.trim_end().len();
-    StatementSpan {
-        start: start + lead,
-        end: end - trail,
-    }
 }
 
 #[cfg(test)]

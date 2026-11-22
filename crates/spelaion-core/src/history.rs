@@ -16,7 +16,7 @@ use spelaion_store::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::table_filters::{StoredTableFilters, TableFilterChange, stored_table_filters};
-use crate::{CoreEvent, ResultId, ScriptOptions, Session};
+use crate::{CoreEvent, ResultId, ScriptOptions, Session, StatementEnd};
 
 /// Identity captured from the source session, never from a subsequently edited profile.
 #[derive(Debug, Clone, Default)]
@@ -97,7 +97,7 @@ enum Request {
         workspace: String,
         filter: HistoryFilter,
         path: PathBuf,
-        cancel: std::sync::Arc<crate::ExportCancel>,
+        cancel: std::sync::Arc<crate::JobCancel>,
         reply: Reply<usize>,
     },
     SnippetPage {
@@ -1596,7 +1596,7 @@ impl QueryHistory {
         workspace: String,
         filter: HistoryFilter,
         path: PathBuf,
-        cancel: std::sync::Arc<crate::ExportCancel>,
+        cancel: std::sync::Arc<crate::JobCancel>,
     ) -> Result<usize, HistoryError> {
         self.request(|reply| Request::ExportHistory {
             workspace,
@@ -1786,18 +1786,23 @@ impl QueryHistory {
                     CoreEvent::StatementFailed { error, .. } => {
                         if let Some(active) = active.take() {
                             let elapsed = active.started.elapsed();
-                            let message = if error.cancelled {
+                            let cancelled = match error.end {
+                                StatementEnd::Cancelled => true,
+                                StatementEnd::Failed | StatementEnd::TimedOut => false,
+                            };
+                            let message = if cancelled {
                                 "Query cancelled".to_string()
                             } else {
                                 error.message.clone()
                             };
                             let database=active.database.clone();
-                            if let Err(error) = history.record_database(active.finish(elapsed, Some(message), error.cancelled),database).await {
+                            if let Err(error) = history.record_database(active.finish(elapsed, Some(message), cancelled),database).await {
                                 yield warning(error);
                             }
                         }
                     }
                     CoreEvent::ResultStarted { .. }
+                    | CoreEvent::ResultEnded { .. }
                     | CoreEvent::Notice { .. }
                     | CoreEvent::ScriptFinished { .. }
                     | CoreEvent::ErrorPaused { .. }
@@ -1826,7 +1831,7 @@ fn export_history(
     workspace: &str,
     filter: &HistoryFilter,
     path: &std::path::Path,
-    cancel: &crate::ExportCancel,
+    cancel: &crate::JobCancel,
 ) -> Result<usize, StoreError> {
     use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
     use std::io::Write;
@@ -2927,7 +2932,7 @@ mod tests {
                 "/repo".into(),
                 HistoryFilter::default(),
                 output.clone(),
-                Arc::new(crate::ExportCancel::new()),
+                Arc::new(crate::JobCancel::new()),
             )
             .await
             .unwrap();
@@ -2939,7 +2944,7 @@ mod tests {
                 && !sql.contains("legacy-secret")
                 && !sql.contains("other-workspace")
         );
-        let cancel = Arc::new(crate::ExportCancel::new());
+        let cancel = Arc::new(crate::JobCancel::new());
         cancel.cancel().await;
         assert!(
             history
@@ -2971,7 +2976,7 @@ mod tests {
                         "/repo".into(),
                         HistoryFilter::default(),
                         path.to_path_buf(),
-                        Arc::new(crate::ExportCancel::new()),
+                        Arc::new(crate::JobCancel::new()),
                     ))
                 })
                 .unwrap();

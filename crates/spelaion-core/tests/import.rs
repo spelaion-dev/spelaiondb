@@ -17,9 +17,9 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
 use spelaion_core::{
-    ColumnKind, ColumnMapping, CoreEvent, IfExists, ImportCancel, ImportError, ImportProgress,
-    ImportRequest, ImportSource, ImportTarget, ParseOptions, ResultStore, Risk, Session,
-    plan_import, preview, run_import,
+    ColumnKind, ColumnMapping, CoreEvent, IfExists, ImportError, ImportProgress, ImportRequest,
+    ImportSource, ImportTarget, JobCancel, ParseOptions, ResultStore, Risk, Session, plan_import,
+    preview, run_import,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
@@ -219,7 +219,7 @@ async fn exercise(engine: Engine) {
         &NONE,
         true,
         true,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await;
@@ -251,7 +251,7 @@ async fn exercise(engine: Engine) {
         &production,
         false,
         false,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await;
@@ -272,7 +272,7 @@ async fn exercise(engine: Engine) {
         &production,
         false,
         true,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await
@@ -316,7 +316,7 @@ async fn exercise(engine: Engine) {
         &NONE,
         false,
         true,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await;
@@ -351,7 +351,7 @@ async fn exercise(engine: Engine) {
         &NONE,
         false,
         false,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await;
@@ -370,7 +370,7 @@ async fn exercise(engine: Engine) {
         &NONE,
         false,
         true,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await
@@ -421,7 +421,7 @@ async fn exercise(engine: Engine) {
         &NONE,
         false,
         false,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await
@@ -458,7 +458,7 @@ async fn exercise(engine: Engine) {
     );
 
     // Cancelled half way: only whole committed batches stay.
-    let cancel = Arc::new(ImportCancel::new());
+    let cancel = Arc::new(JobCancel::new());
     let committed = Arc::new(AtomicU64::new(0));
     let watcher = tokio::spawn({
         let cancel = cancel.clone();
@@ -520,7 +520,7 @@ async fn exercise(engine: Engine) {
         &NONE,
         false,
         false,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await;
@@ -766,7 +766,7 @@ async fn unicode_csv_values_are_previewed_and_imported_unchanged() {
         &NONE,
         false,
         false,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await
@@ -827,7 +827,7 @@ async fn pasted_tables_and_views() {
         &NONE,
         false,
         false,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await
@@ -877,7 +877,7 @@ async fn pasted_tables_and_views() {
         &NONE,
         false,
         true,
-        &ImportCancel::new(),
+        &JobCancel::new(),
         &nothing,
     )
     .await;

@@ -5,13 +5,14 @@ import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem } from "../api";
 import { useApp } from "../store";
+import { DISCONNECTED, connectionBusy } from "../tabState";
 import { confirmOpenTransactions } from "../connect";
 import { refreshConnections } from "./Sidebar";
 
 export function DeleteConnection({ connection }: { connection: ConnectionItem }) {
   const { t } = useTranslation("connections");
   const close = () => useApp.getState().setDeletingConnection(null);
-  const busyTabs = useApp((s) => s.tabs.some((tab) => tab.connectionId === connection.id && (tab.run?.running || tab.status === "connecting")));
+  const busyTabs = useApp((s) => connectionBusy(s.tabs, connection.id));
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const file = connection.personal
@@ -31,7 +32,7 @@ export function DeleteConnection({ connection }: { connection: ConnectionItem })
           call(commands.disconnect(session)).catch(() => undefined),
         ),
       );
-      for (const tab of tabs) app.updateTab(tab.id, { connectionId: null, status: "disconnected", serverVersion: null });
+      for (const tab of tabs) app.updateTab(tab.id, { connectionId: null, connectionState: DISCONNECTED });
       await call(commands.deleteConnection(connection.id));
       await refreshConnections();
       close();

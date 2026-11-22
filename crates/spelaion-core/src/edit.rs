@@ -172,8 +172,8 @@ fn result_columns(
 ) -> Result<Vec<String>, UpdateCopyError> {
     let stored = session
         .results()
-        .get(result)
-        .ok_or_else(|| UpdateCopyError::Failed("the result was freed".into()))?;
+        .stored(result)
+        .map_err(|e| UpdateCopyError::Failed(e.to_string()))?;
     let stored = stored
         .read()
         .map_err(|_| UpdateCopyError::Failed("result lock poisoned".into()))?;
@@ -749,6 +749,7 @@ pub(crate) async fn run_one(session: &Session, sql: &str) -> Result<Option<u64>,
             }
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::ScriptFinished { .. }
             | CoreEvent::ErrorPaused { .. }

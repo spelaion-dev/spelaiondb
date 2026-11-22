@@ -41,6 +41,7 @@ pub(crate) async fn read(session: &Session, sql: &str) -> Result<Rows, String> {
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }

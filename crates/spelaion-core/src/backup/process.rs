@@ -4,16 +4,15 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use spelaion_driver_api::Secret;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::Notify;
 
 use super::definer::strip_definer;
 use crate::Redactor;
+use crate::job::JobCancel;
 
 /// A GUI app must not flash a console window for each tool.
 pub(crate) fn no_window(command: &mut Command) {
@@ -24,54 +23,6 @@ pub(crate) fn no_window(command: &mut Command) {
     }
     #[cfg(not(windows))]
     let _ = command;
-}
-
-/// Stops a running backup, restore or file run. Created before anything starts, so a cancel
-/// that comes while the tunnel is still opening is not lost.
-#[derive(Default)]
-pub struct BackupCancel {
-    cancelled: AtomicBool,
-    notify: Notify,
-    /// The session whose run a cancel also stops (SQLite, DuckDB and file runs): its running
-    /// statement and every statement after it, through the session's own cancel (SDB-365).
-    session: std::sync::Mutex<Option<crate::session::SessionCancel>>,
-}
-
-impl BackupCancel {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub async fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        self.notify.notify_waiters();
-        let session = self.session.lock().expect("lock poisoned").clone();
-        if let Some(session) = session {
-            let _ = session.cancel().await;
-        }
-    }
-
-    /// The session whose run a cancel also stops. Called once the run is requested and before
-    /// it is polled, and followed by a look at [`BackupCancel::is_cancelled`]: a cancel that
-    /// came before finds no session here, and one that comes after stops the run.
-    pub(crate) fn attach(&self, session: &crate::Session) {
-        *self.session.lock().expect("lock poisoned") = Some(session.canceller());
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-
-    /// Resolves once cancelled.
-    pub(crate) async fn cancelled(&self) {
-        loop {
-            let notified = self.notify.notified();
-            if self.is_cancelled() {
-                return;
-            }
-            notified.await;
-        }
-    }
 }
 
 /// What a run reports as it goes.
@@ -148,7 +99,7 @@ pub(crate) fn command_line(program: &Path, args: &[String]) -> String {
 pub(crate) async fn run_tool(
     run: ToolRun,
     redactor: &Redactor,
-    cancel: &BackupCancel,
+    cancel: &JobCancel,
     events: EventSink<'_>,
 ) -> Result<RunEnd, std::io::Error> {
     let mut command = Command::new(&run.program);

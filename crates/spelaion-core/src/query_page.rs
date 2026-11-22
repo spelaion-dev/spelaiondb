@@ -26,7 +26,7 @@ use crate::generate::scalar_count;
 use crate::guard::sql_dialect;
 use crate::objects::active_schema;
 use crate::sort::{MAX_SORT_KEYS, SortKey};
-use crate::{CoreEvent, MAX_PAGE_ROWS, ResultId, Session};
+use crate::{CoreEvent, MAX_PAGE_ROWS, ResultEnd, ResultId, Session};
 
 /// The query, if it has a shape the core pages: one plain SELECT without its own limit,
 /// grouping, functions or subqueries. Pages also need [`Keyset`].
@@ -669,7 +669,10 @@ pub async fn append_query_page(
         .await
         .ok_or("this query cannot be paged")?;
     let after = {
-        let stored = session.results().get(target).ok_or("result was freed")?;
+        let stored = session
+            .results()
+            .stored(target)
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         if stored.rows() as u64 != offset || offset == 0 {
             return Err("the result changed while fetching more rows".into());
@@ -706,10 +709,14 @@ pub async fn append_query_page(
     let mut events = session.run_generated(&paged);
     let mut results = Vec::new();
     let mut failure = None;
+    // Only a whole page is appended (SDB-367): a page cut short would leave a gap before the
+    // next one.
+    let mut whole = true;
     while let Some(event) = events.next().await {
         match event {
             CoreEvent::ResultStarted { result, .. } => results.push(result),
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
+            CoreEvent::ResultEnded { end, .. } => whole &= end == ResultEnd::Whole,
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
             | CoreEvent::Notice { .. }
@@ -721,6 +728,8 @@ pub async fn append_query_page(
     }
     let outcome = if let Some(error) = failure {
         Err(error)
+    } else if !whole {
+        Err("the page was cut short: nothing was added".into())
     } else if let [source] = results.as_slice() {
         session
             .results()

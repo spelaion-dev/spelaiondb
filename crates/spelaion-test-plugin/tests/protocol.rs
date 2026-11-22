@@ -339,6 +339,56 @@ async fn cancel_is_obeyed_while_a_statement_runs() {
     assert_eq!(one(connection.as_ref(), "engine").await, "test");
 }
 
+/// SDB-428: a cancel written on the pipe right after `execute` stops that statement, every
+/// time. The plugin used to serve each request in a task of its own, so the cancel's could
+/// reach a driver that numbers its statements (as the MySQL and PostgreSQL plugins do) before
+/// the execute's had numbered it: the driver saw nothing in flight, and the statement ran.
+#[tokio::test]
+async fn a_cancel_written_right_after_execute_always_finds_its_statement() {
+    let plugin = Plugin::new(PROGRAM);
+    let connection = connect(&plugin).await;
+    let options = ExecOptions::default();
+    for round in 0..200 {
+        let handle = connection.cancel_handle();
+        // Polled in this order, so `execute` is on the pipe before `cancel`.
+        let (started, cancelled) = tokio::join!(
+            connection.execute("numbered-sleep 3000", &options),
+            handle.cancel()
+        );
+        cancelled.expect("the cancel is answered");
+        let events = within(started.expect("the statement starts").collect::<Vec<_>>()).await;
+        assert!(
+            matches!(events.last(), Some(Err(DriverError::Cancelled))),
+            "round {round}: the cancel missed its statement: {:?}",
+            shape(&events)
+        );
+    }
+}
+
+/// A cancel that arrives once its statement has ended reaches nothing: never the statement
+/// sent after it.
+#[tokio::test]
+async fn a_cancel_after_its_statement_ended_never_reaches_the_next() {
+    let plugin = Plugin::new(PROGRAM);
+    let connection = connect(&plugin).await;
+    let options = ExecOptions::default();
+    for _ in 0..20 {
+        let ended = run(connection.as_ref(), "numbered-sleep 1").await;
+        assert!(matches!(ended.last(), Some(Ok(ExecEvent::Done { .. }))));
+        within(connection.cancel_handle().cancel()).await.unwrap();
+        let next = connection
+            .execute("numbered-sleep 100", &options)
+            .await
+            .expect("the next statement starts");
+        let events = within(next.collect::<Vec<_>>()).await;
+        assert!(
+            matches!(events.last(), Some(Ok(ExecEvent::Done { .. }))),
+            "a cancel reached the next statement: {:?}",
+            shape(&events)
+        );
+    }
+}
+
 // ------------------------------------------------------------------------ loading rows
 
 #[tokio::test]

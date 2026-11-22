@@ -47,6 +47,7 @@ import { sortByName } from "../explorerSort";
 import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
+import { connectionOpen, explorerSessionOpen, isConnected, isRunning, statusName } from "../tabState";
 import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
 import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
@@ -732,7 +733,7 @@ function showBookmark(bookmark: BookmarkItem) {
 /** Opens a bookmark's object (a table's rows, another object's DDL); a schema, or an object of
  *  a connection not connected in the explorer yet, is shown in the tree instead. */
 async function openBookmark(bookmark: BookmarkItem) {
-  if (bookmark.kind === "schema" || !useApp.getState().explorerConnected.includes(bookmark.connection)) {
+  if (bookmark.kind === "schema" || !explorerSessionOpen(useApp.getState().explorerConnected, bookmark.connection)) {
     showBookmark(bookmark);
     return;
   }
@@ -1300,13 +1301,12 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => setClosedFilteredFolders(new Set()), [filterText, activeTags.join("\u0000"), explorer.connectedOnly]);
   const explorerConnected = useApp((s) => s.explorerConnected);
   const tabs = useApp((s) => s.tabs);
-  const tabConnected = tabs.filter((tab) => tab.status === "connected").map((tab) => tab.connectionId);
   /** Opened in the explorer or used by a connected tab. */
-  const connected = (c: ConnectionItem) => explorerConnected.includes(c.id) || tabConnected.includes(c.id);
+  const connected = (c: ConnectionItem) => connectionOpen(tabs, explorerConnected, c.id);
   // "Link with editor": the active tab's connection, schema and table, shown in the tree.
   const activeTab = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab) ?? null);
   const linked = activeTab
-    ? [activeTab.id, activeTab.connectionId, activeTab.status, activeTab.run?.running ?? false, activeTab.table?.schema, activeTab.table?.name].join("|")
+    ? [activeTab.id, activeTab.connectionId, statusName(activeTab), isRunning(activeTab), activeTab.table?.schema, activeTab.table?.name].join("|")
     : "";
   useEffect(() => {
     const tab = useApp.getState().tabs.find((t) => t.id === useApp.getState().activeTab);
@@ -1315,7 +1315,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     const reveal = useApp.getState().revealInExplorer;
     if (tab.table) return reveal({ connectionId, schema: tab.table.schema, name: tab.table.name });
     // A query tab: the schema its session is on, asked only while it is idle.
-    if (tab.status !== "connected" || tab.run?.running) return reveal({ connectionId });
+    if (!isConnected(tab) || isRunning(tab)) return reveal({ connectionId });
     let current = true;
     call(commands.activeSchema(tab.id))
       .then((schema) => {
@@ -2158,7 +2158,7 @@ function SchemaNode({
    *  this connection and idle. */
   const editorTab = useApp((s) => {
     const tab = s.tabs.find((t) => t.id === s.activeTab);
-    return tab && !tab.table && tab.connectionId === connectionId && tab.status === "connected" && !tab.run?.running
+    return tab && !tab.table && tab.connectionId === connectionId && isConnected(tab) && !isRunning(tab)
       ? tab.id
       : null;
   });
@@ -2707,7 +2707,8 @@ function ObjectNode({
   }, [menu, view, session, tableMenu]);
   // Until the engine's list arrives, only what every engine has.
   const templates: SqlTemplateItem[] = view ? ["select"] : (tableMenu ?? ["select", "insert", "update", "delete"]);
-  const bookmark: BookmarkItem = { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind, detail: "" };
+  // A relation's kind comes from the driver as text; the core refuses one it does not know.
+  const bookmark: BookmarkItem = { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind as BookmarkItem["kind"], detail: "" };
   /** What "Copy" takes: every table chosen with Ctrl+click, or this one. */
   const copyPaths: ObjectPathItem[] = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, names: [o.name] }));
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;

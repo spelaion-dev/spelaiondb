@@ -128,6 +128,7 @@ pub fn status(decision: Decision) -> &'static str {
         Decision::Failed => "error",
         Decision::Rejected => "refused",
         Decision::Cleared => "cleared",
+        Decision::Unknown => "unknown",
     }
 }
 

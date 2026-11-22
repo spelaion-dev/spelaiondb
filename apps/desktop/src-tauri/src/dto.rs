@@ -60,10 +60,89 @@ pub struct BookmarkItem {
     /// The schema the object is in, or the schema itself (with an empty `name`).
     pub schema: String,
     pub name: String,
-    /// `table`, `view`… for a relation, `function`, `sequence`… for another object, `schema`.
-    pub kind: String,
+    pub kind: BookmarkKindItem,
     /// A function's arguments…; empty if nothing tells it apart from others of its name.
     pub detail: String,
+}
+
+/// What a bookmark points at: `schema`, a relation's kind or another object's, as the drivers
+/// name them. Any other word is refused when the command is called (SDB-376).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BookmarkKindItem {
+    Schema,
+    Table,
+    PartitionedTable,
+    View,
+    MaterializedView,
+    ForeignTable,
+    Collection,
+    NodeLabel,
+    RelationshipType,
+    Function,
+    Procedure,
+    Aggregate,
+    Sequence,
+    Trigger,
+    Enum,
+    Domain,
+    Type,
+    Event,
+    Synonym,
+}
+
+impl From<spelaion_core::BookmarkKind> for BookmarkKindItem {
+    fn from(kind: spelaion_core::BookmarkKind) -> Self {
+        use spelaion_core::BookmarkKind as K;
+        match kind {
+            K::Schema => Self::Schema,
+            K::Table => Self::Table,
+            K::PartitionedTable => Self::PartitionedTable,
+            K::View => Self::View,
+            K::MaterializedView => Self::MaterializedView,
+            K::ForeignTable => Self::ForeignTable,
+            K::Collection => Self::Collection,
+            K::NodeLabel => Self::NodeLabel,
+            K::RelationshipType => Self::RelationshipType,
+            K::Function => Self::Function,
+            K::Procedure => Self::Procedure,
+            K::Aggregate => Self::Aggregate,
+            K::Sequence => Self::Sequence,
+            K::Trigger => Self::Trigger,
+            K::Enum => Self::Enum,
+            K::Domain => Self::Domain,
+            K::Type => Self::Type,
+            K::Event => Self::Event,
+            K::Synonym => Self::Synonym,
+        }
+    }
+}
+
+impl From<BookmarkKindItem> for spelaion_core::BookmarkKind {
+    fn from(kind: BookmarkKindItem) -> Self {
+        use BookmarkKindItem as K;
+        match kind {
+            K::Schema => Self::Schema,
+            K::Table => Self::Table,
+            K::PartitionedTable => Self::PartitionedTable,
+            K::View => Self::View,
+            K::MaterializedView => Self::MaterializedView,
+            K::ForeignTable => Self::ForeignTable,
+            K::Collection => Self::Collection,
+            K::NodeLabel => Self::NodeLabel,
+            K::RelationshipType => Self::RelationshipType,
+            K::Function => Self::Function,
+            K::Procedure => Self::Procedure,
+            K::Aggregate => Self::Aggregate,
+            K::Sequence => Self::Sequence,
+            K::Trigger => Self::Trigger,
+            K::Enum => Self::Enum,
+            K::Domain => Self::Domain,
+            K::Type => Self::Type,
+            K::Event => Self::Event,
+            K::Synonym => Self::Synonym,
+        }
+    }
 }
 
 impl From<spelaion_core::Bookmark> for BookmarkItem {
@@ -79,7 +158,7 @@ impl From<spelaion_core::Bookmark> for BookmarkItem {
             connection,
             schema,
             name,
-            kind,
+            kind: kind.into(),
             detail,
         }
     }
@@ -98,7 +177,7 @@ impl From<BookmarkItem> for spelaion_core::Bookmark {
             connection,
             schema,
             name,
-            kind,
+            kind: kind.into(),
             detail,
         }
     }
@@ -1588,10 +1667,33 @@ pub struct HistoryItem {
     pub duration_ms: i64,
     #[specta(type = specta_typescript::Number)]
     pub rows: i64,
-    pub error: Option<String>,
-    pub cancelled: bool,
+    pub outcome: HistoryOutcomeItem,
     pub database: Option<String>,
     pub pinned: bool,
+}
+
+/// How a statement of the history ended (`spelaion_core::HistoryOutcome`).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum HistoryOutcomeItem {
+    Succeeded,
+    Failed { error: String },
+    Cancelled,
+}
+
+impl From<spelaion_core::HistoryOutcome> for HistoryOutcomeItem {
+    fn from(outcome: spelaion_core::HistoryOutcome) -> Self {
+        use spelaion_core::HistoryOutcome;
+        match outcome {
+            HistoryOutcome::Succeeded => Self::Succeeded,
+            HistoryOutcome::Failed { error } => Self::Failed { error },
+            HistoryOutcome::Cancelled => Self::Cancelled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
@@ -1699,14 +1801,13 @@ impl From<spelaion_core::Snippet> for SnippetItem {
 impl From<spelaion_core::HistoryEntry> for HistoryItem {
     fn from(entry: spelaion_core::HistoryEntry) -> Self {
         Self {
+            outcome: entry.outcome().into(),
             id: entry.id,
             at_ms: entry.at_ms,
             connection: entry.connection,
             statement: entry.statement,
             duration_ms: entry.duration_ms,
             rows: entry.rows,
-            error: entry.error,
-            cancelled: entry.cancelled,
             database: entry.database,
             pinned: entry.pinned,
         }
@@ -1882,6 +1983,13 @@ pub enum ScriptEvent {
         result: u32,
         total_rows: u32,
     },
+    /// No more rows arrive for this result (SDB-367): whole, or cut short and why. Comes
+    /// before its statement's end.
+    ResultEnded {
+        index: u32,
+        result: u32,
+        end: ResultEndItem,
+    },
     Notice {
         index: u32,
         severity: String,
@@ -1904,9 +2012,8 @@ pub enum ScriptEvent {
         hint: Option<String>,
         /// Error position in bytes within the script, to underline it.
         script_offset: Option<u32>,
-        cancelled: bool,
-        /// It ran longer than the run's statement timeout.
-        timed_out: bool,
+        /// How it ended: failed, cancelled or timed out (SDB-370).
+        end: StatementEndItem,
     },
     /// The run waits for `answer_script_error` with this ticket (ADR-035).
     ErrorPaused {
@@ -1914,14 +2021,151 @@ pub enum ScriptEvent {
         ticket: u32,
         remaining: u32,
     },
+    /// The run ended; its summary says how.
     ScriptFinished {
-        executed: u32,
-        failed: bool,
         summary: ScriptSummaryItem,
     },
     HistoryWarning {
         message: String,
     },
+}
+
+/// How far a stored result got (SDB-367), as the core says it: the page shows it and never
+/// works it out from the statement's messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ResultEndItem {
+    /// Rows may still arrive.
+    Loading,
+    /// Every row of the statement.
+    Whole,
+    /// The statement stopped before its last row: the rows shown are not the whole answer.
+    Partial { reason: PartialReasonItem },
+}
+
+/// Why a window of rows could not be read (`fetch_window`, SDB-367).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WindowErrorItem {
+    /// The result is no longer kept: its query must run again.
+    Freed { message: String },
+    /// Anything else, as the core said it.
+    Failed { message: String },
+}
+
+impl From<spelaion_core::ResultFreed> for WindowErrorItem {
+    fn from(freed: spelaion_core::ResultFreed) -> Self {
+        Self::Freed {
+            message: freed.to_string(),
+        }
+    }
+}
+
+/// Why a result was cut short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PartialReasonItem {
+    Cancelled,
+    Failed,
+    TimedOut,
+    ConnectionLost,
+}
+
+impl From<spelaion_core::ResultEnd> for ResultEndItem {
+    fn from(end: spelaion_core::ResultEnd) -> Self {
+        use spelaion_core::{PartialReason, ResultEnd};
+        match end {
+            ResultEnd::Loading => Self::Loading,
+            ResultEnd::Whole => Self::Whole,
+            ResultEnd::Partial(reason) => Self::Partial {
+                reason: match reason {
+                    PartialReason::Cancelled => PartialReasonItem::Cancelled,
+                    PartialReason::Failed => PartialReasonItem::Failed,
+                    PartialReason::TimedOut => PartialReasonItem::TimedOut,
+                    PartialReason::ConnectionLost => PartialReasonItem::ConnectionLost,
+                },
+            },
+        }
+    }
+}
+
+/// How a statement that did not run to its end ended (SDB-370), as the core says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum StatementEndItem {
+    Failed,
+    Cancelled,
+    /// It ran longer than the run's statement timeout.
+    TimedOut,
+}
+
+impl From<spelaion_core::StatementEnd> for StatementEndItem {
+    fn from(end: spelaion_core::StatementEnd) -> Self {
+        use spelaion_core::StatementEnd;
+        match end {
+            StatementEnd::Failed => Self::Failed,
+            StatementEnd::Cancelled => Self::Cancelled,
+            StatementEnd::TimedOut => Self::TimedOut,
+        }
+    }
+}
+
+/// What an editor tab's session runs (SDB-370), as the core publishes it: the tab shows it and
+/// never works it out from the run's events. Statements are counted from 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum RunStateItem {
+    Idle,
+    /// The statement runs, or is the next to.
+    Running {
+        statement: u32,
+    },
+    /// The statement failed and the run waits for `answer_script_error` with this ticket.
+    Paused {
+        statement: u32,
+        ticket: u32,
+        remaining: u32,
+    },
+    /// A cancel was asked for; the run has not ended yet.
+    Cancelling {
+        statement: u32,
+    },
+}
+
+impl From<spelaion_core::RunState> for RunStateItem {
+    fn from(state: spelaion_core::RunState) -> Self {
+        use spelaion_core::RunState;
+        match state {
+            RunState::Idle => Self::Idle,
+            RunState::Running { statement } => Self::Running {
+                statement: u32_of(statement),
+            },
+            RunState::Paused {
+                statement,
+                ticket,
+                remaining,
+            } => Self::Paused {
+                statement: u32_of(statement),
+                ticket: u32::try_from(ticket.0).unwrap_or(u32::MAX),
+                remaining: u32_of(remaining),
+            },
+            RunState::Cancelling { statement } => Self::Cancelling {
+                statement: u32_of(statement),
+            },
+        }
+    }
 }
 
 fn u32_of(n: usize) -> u32 {
@@ -1961,7 +2205,7 @@ impl From<spelaion_core::ScriptSummary> for ScriptSummaryItem {
     }
 }
 
-/// Why a run stopped with statements left.
+/// Why a run stopped before going through every statement its mode let it run.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptStopItem {
@@ -1977,7 +2221,10 @@ pub enum ScriptStopKind {
     Cancelled,
     TransactionAborted,
     TransactionRolledBack,
+    /// The session closed while the run waited for an answer.
     Closed,
+    /// The connection was lost while the run waited for an answer.
+    SessionLost,
 }
 
 impl From<spelaion_core::ScriptStop> for ScriptStopItem {
@@ -1989,6 +2236,7 @@ impl From<spelaion_core::ScriptStop> for ScriptStopItem {
             ScriptStop::TransactionAborted { .. } => ScriptStopKind::TransactionAborted,
             ScriptStop::TransactionRolledBack { .. } => ScriptStopKind::TransactionRolledBack,
             ScriptStop::Closed { .. } => ScriptStopKind::Closed,
+            ScriptStop::SessionLost { .. } => ScriptStopKind::SessionLost,
         };
         Self {
             kind,
@@ -2242,6 +2490,11 @@ impl From<CoreEvent> for ScriptEvent {
                 result: u32::try_from(result.0).unwrap_or(u32::MAX),
                 total_rows: u32_of(total_rows),
             },
+            CoreEvent::ResultEnded { index, result, end } => ScriptEvent::ResultEnded {
+                index: u32_of(index),
+                result: result_number(result),
+                end: ResultEndItem::from(end),
+            },
             CoreEvent::Notice { index, notice } => ScriptEvent::Notice {
                 index: u32_of(index),
                 severity: notice.severity,
@@ -2267,8 +2520,7 @@ impl From<CoreEvent> for ScriptEvent {
                 detail: error.detail,
                 hint: error.hint,
                 script_offset: error.script_offset.map(u32_of),
-                cancelled: error.cancelled,
-                timed_out: error.timed_out,
+                end: error.end.into(),
             },
             CoreEvent::ErrorPaused {
                 index,
@@ -2279,13 +2531,7 @@ impl From<CoreEvent> for ScriptEvent {
                 ticket: u32::try_from(ticket.0).unwrap_or(u32::MAX),
                 remaining: u32_of(remaining),
             },
-            CoreEvent::ScriptFinished {
-                executed,
-                failed,
-                summary,
-            } => ScriptEvent::ScriptFinished {
-                executed: u32_of(executed),
-                failed,
+            CoreEvent::ScriptFinished { summary, .. } => ScriptEvent::ScriptFinished {
                 summary: ScriptSummaryItem::from(summary),
             },
             CoreEvent::HistoryWarning { message } => ScriptEvent::HistoryWarning { message },
@@ -3005,47 +3251,95 @@ pub struct SessionLost {
     pub open_transaction: bool,
 }
 
-/// What the core last read about a transaction (ADR-031).
+/// An editor tab's transaction, as the core keeps it (ADR-031, ADR-060): its state, and the
+/// core's answers to what the controls ask. The UI only shows it and derives nothing.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum TransactionStateItem {
-    Idle,
-    Open,
-    /// Open, but the engine will only roll it back.
-    Failed,
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TransactionStatusItem {
+    /// The tab does not follow its transaction (not an editor tab, or an engine that cannot
+    /// tell): it only runs in auto-commit.
+    NotFollowed,
+    Followed {
+        commit: CommitModeItem,
+        transaction: TransactionPhaseItem,
+        /// The connection type's smart commit.
+        smart_commit: bool,
+        /// Commit and Rollback apply: a transaction is open, also one that failed.
+        in_transaction: bool,
+        /// Auto-commit cannot be turned on now: commit or roll back first.
+        auto_commit_locked: bool,
+        /// Commit and Rollback are shown: in manual commit, or while a transaction is open.
+        end_actions_shown: bool,
+    },
 }
 
-/// An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it.
+/// How a followed tab commits.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct TransactionStatusItem {
-    /// The tab follows its transaction (an editor tab on an engine that can tell).
-    pub supported: bool,
-    pub auto_commit: bool,
-    /// The connection type's smart commit.
-    pub smart_commit: bool,
-    /// Manual commit came from smart commit: it ends with the transaction.
-    pub smart_switched: bool,
-    pub state: Option<TransactionStateItem>,
-    /// Statements run in the open transaction.
-    pub statements: u32,
+pub enum CommitModeItem {
+    /// Each statement commits as it runs.
+    Auto,
+    /// Changes wait for Commit, as the user or the connection type chose.
+    Manual,
+    /// Smart commit turned manual commit on: it ends with the transaction.
+    SmartSwitched,
+}
+
+/// Whether a transaction is open, as the driver last said.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TransactionPhaseItem {
+    Idle,
+    /// Open with work a Commit would keep; `statements` run in it.
+    Open {
+        statements: u32,
+    },
+    /// Open, but the engine will only roll it back.
+    Failed {
+        statements: u32,
+    },
+}
+
+impl From<spelaion_core::TransactionLifecycle> for TransactionStatusItem {
+    fn from(lifecycle: spelaion_core::TransactionLifecycle) -> Self {
+        use spelaion_core::{CommitMode, TransactionLifecycle, TransactionPhase};
+        match lifecycle {
+            TransactionLifecycle::NotFollowed => Self::NotFollowed,
+            TransactionLifecycle::Followed { commit, phase } => Self::Followed {
+                commit: match commit {
+                    CommitMode::Auto { .. } => CommitModeItem::Auto,
+                    CommitMode::Manual { .. } => CommitModeItem::Manual,
+                    CommitMode::SmartSwitched => CommitModeItem::SmartSwitched,
+                },
+                transaction: match phase {
+                    TransactionPhase::Idle => TransactionPhaseItem::Idle,
+                    TransactionPhase::Open { statements } => {
+                        TransactionPhaseItem::Open { statements }
+                    }
+                    TransactionPhase::Failed { statements } => {
+                        TransactionPhaseItem::Failed { statements }
+                    }
+                },
+                smart_commit: lifecycle.smart_commit(),
+                in_transaction: lifecycle.in_transaction(),
+                auto_commit_locked: lifecycle.auto_commit_locked(),
+                end_actions_shown: lifecycle.end_actions_shown(),
+            },
+        }
+    }
 }
 
 impl From<spelaion_core::TransactionStatus> for TransactionStatusItem {
-    fn from(s: spelaion_core::TransactionStatus) -> Self {
-        use spelaion_core::TransactionState;
-        Self {
-            supported: s.supported,
-            auto_commit: s.auto_commit,
-            smart_commit: s.smart_commit,
-            smart_switched: s.smart_switched,
-            state: s.state.map(|state| match state {
-                TransactionState::Idle => TransactionStateItem::Idle,
-                TransactionState::Open => TransactionStateItem::Open,
-                TransactionState::Failed => TransactionStateItem::Failed,
-            }),
-            statements: s.statements,
-        }
+    fn from(status: spelaion_core::TransactionStatus) -> Self {
+        status.lifecycle().into()
     }
 }
 
@@ -3087,6 +3381,14 @@ impl From<spelaion_core::TransactionOutcome> for TransactionOutcomeItem {
 pub struct TransactionChanged {
     pub session: String,
     pub status: TransactionStatusItem,
+}
+
+/// An editor tab's run state changed (SDB-370): sent only when it changes.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct RunChanged {
+    pub session: String,
+    pub state: RunStateItem,
 }
 
 /// The window was asked to close while sessions are open: the UI calls `quit_asking`, looks for
@@ -4139,6 +4441,35 @@ mod tests {
         // tab.
         let postgres = spelaion_core::dialect_of(spelaion_config::Engine::Postgres).expect("SQL");
         assert_eq!(postgres.browse_statement(&object), None);
+    }
+
+    /// Every bookmark kind the page sends is the store's own word for it, and a word the
+    /// store does not know is refused, never taken for another kind (SDB-376).
+    #[test]
+    fn every_bookmark_kind_is_the_store_s_and_an_unknown_one_is_refused() {
+        use super::BookmarkKindItem;
+        for kind in spelaion_core::BookmarkKind::ALL {
+            let item: BookmarkKindItem = serde_json::from_str(&format!("\"{}\"", kind.as_str()))
+                .unwrap_or_else(|e| panic!("{}: {e}", kind.as_str()));
+            assert_eq!(spelaion_core::BookmarkKind::from(item), kind);
+            assert_eq!(BookmarkKindItem::from(kind), item);
+        }
+        for unknown in ["dictionary", "Table", ""] {
+            assert!(
+                serde_json::from_str::<BookmarkKindItem>(&format!("\"{unknown}\"")).is_err(),
+                "{unknown:?}"
+            );
+        }
+    }
+
+    /// A record whose decision this build does not know stays unknown on the page.
+    #[test]
+    fn an_unknown_audit_decision_is_shown_as_unknown() {
+        use super::AuditStatusItem;
+        assert_eq!(
+            AuditStatusItem::from(spelaion_core::AuditDecision::Unknown),
+            AuditStatusItem::Unknown
+        );
     }
 }
 
@@ -5726,6 +6057,8 @@ pub enum AuditStatusItem {
     Error,
     Refused,
     Cleared,
+    /// A record whose decision this build does not know (SDB-376).
+    Unknown,
 }
 
 impl From<spelaion_core::AuditDecision> for AuditStatusItem {
@@ -5736,6 +6069,7 @@ impl From<spelaion_core::AuditDecision> for AuditStatusItem {
             AuditDecision::Failed => Self::Error,
             AuditDecision::Rejected => Self::Refused,
             AuditDecision::Cleared => Self::Cleared,
+            AuditDecision::Unknown => Self::Unknown,
         }
     }
 }
@@ -5747,6 +6081,7 @@ impl From<AuditStatusItem> for spelaion_core::AuditDecision {
             AuditStatusItem::Error => Self::Failed,
             AuditStatusItem::Refused => Self::Rejected,
             AuditStatusItem::Cleared => Self::Cleared,
+            AuditStatusItem::Unknown => Self::Unknown,
         }
     }
 }
@@ -6162,50 +6497,87 @@ pub struct ExportProgressItem {
     pub bytes: f64,
 }
 
-/// How a streaming export ended.
+/// How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
+/// export, an import, a backup, a restore, a file run, a data search, a column's statistics),
+/// read from `spelaion_core::JobEnd`. Generic over what the job returns (`T`) and what it
+/// leaves behind when it stops early (`K`: the rows an import committed, the files an export
+/// of several tables wrote, the tables a search read, or nothing).
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum ExportOutcome {
+pub enum JobOutcome<T, K> {
     Done {
-        summary: ExportSummaryItem,
+        result: T,
     },
-    Cancelled,
-    /// The connection's type confirms execution: ask, then export again with `confirmed`.
-    NeedsConfirmation,
-    /// Not a read: only the loaded rows can be exported.
-    NotARead {
-        message: String,
+    /// It stopped at a limit it was given, with what it found until then.
+    StoppedAtLimit {
+        result: T,
     },
+    /// What was already committed or written stays.
+    Cancelled {
+        kept: K,
+    },
+    /// What was already committed or written stays.
     Failed {
+        message: String,
+        kept: K,
+    },
+    /// The connection's type asks before it runs: ask, then run it again with `confirmed`.
+    NeedsConfirmation,
+    /// The connection's password must be asked first.
+    PasswordRequired,
+    /// Only a single read may run there (an export runs the query again).
+    NotARead {
         message: String,
     },
 }
 
+impl<T, K> JobOutcome<T, K> {
+    /// The job's ending, with what it returns and what it kept made into their items.
+    pub fn from_end<U, L>(
+        end: spelaion_core::JobEnd<U, L>,
+        result: impl FnOnce(U) -> T,
+        kept: impl FnOnce(L) -> K,
+    ) -> Self {
+        use spelaion_core::{JobEnd, Refusal};
+        match end {
+            JobEnd::Done(done) => Self::Done {
+                result: result(done),
+            },
+            JobEnd::StoppedAtLimit(done) => Self::StoppedAtLimit {
+                result: result(done),
+            },
+            JobEnd::Cancelled(left) => Self::Cancelled { kept: kept(left) },
+            JobEnd::Failed {
+                message,
+                kept: left,
+            } => Self::Failed {
+                message,
+                kept: kept(left),
+            },
+            JobEnd::Refused(Refusal::NeedsConfirmation) => Self::NeedsConfirmation,
+            JobEnd::Refused(Refusal::PasswordRequired) => Self::PasswordRequired,
+            JobEnd::Refused(Refusal::NotARead(message)) => Self::NotARead { message },
+        }
+    }
+}
+
+impl<T> JobOutcome<T, ()> {
+    /// A job that failed before the core ran it (its session could not be opened).
+    pub fn failed(message: String) -> Self {
+        Self::Failed { message, kept: () }
+    }
+}
+
+/// How a streaming export ended.
+pub type ExportOutcome = JobOutcome<ExportSummaryItem, ()>;
+
 impl From<Result<spelaion_core::FileSummary, spelaion_core::ExportError>> for ExportOutcome {
     fn from(result: Result<spelaion_core::FileSummary, spelaion_core::ExportError>) -> Self {
-        use spelaion_core::ExportError;
-        match result {
-            Ok(summary) => Self::Done {
-                summary: summary.into(),
-            },
-            Err(ExportError::Cancelled) => Self::Cancelled,
-            Err(ExportError::NeedsConfirmation) => Self::NeedsConfirmation,
-            Err(e @ ExportError::NotARead(_)) => Self::NotARead {
-                message: e.to_string(),
-            },
-            Err(
-                e @ (ExportError::Table(_)
-                | ExportError::Database(_)
-                | ExportError::Io { .. }
-                | ExportError::Invalid(_)),
-            ) => Self::Failed {
-                message: e.to_string(),
-            },
-        }
+        Self::from_end(result.into(), ExportSummaryItem::from, |()| ())
     }
 }
 
@@ -6237,16 +6609,37 @@ pub struct ExportedFileItem {
     pub summary: ExportSummaryItem,
 }
 
-/// How exporting several tables ended: the files written, and where it stopped if it did.
+impl From<spelaion_core::ExportedFile> for ExportedFileItem {
+    fn from(f: spelaion_core::ExportedFile) -> Self {
+        Self {
+            schema: f.schema,
+            name: f.name,
+            path: f.path.display().to_string(),
+            summary: f.summary.into(),
+        }
+    }
+}
+
+/// Where exporting several tables stopped: the files finished before, which stay, and the
+/// position of the table it stopped at.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct ExportTablesOutcome {
+pub struct TablesStoppedItem {
     pub files: Vec<ExportedFileItem>,
-    pub cancelled: bool,
-    /// Position of the table that failed, with why.
-    pub failed_table: Option<u32>,
-    pub error: Option<String>,
+    pub table: u32,
 }
+
+impl From<spelaion_core::TablesStopped> for TablesStoppedItem {
+    fn from(stopped: spelaion_core::TablesStopped) -> Self {
+        Self {
+            files: stopped.files.into_iter().map(Into::into).collect(),
+            table: u32::try_from(stopped.table).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// How exporting several tables ended: the files written, and where it stopped if it did.
+pub type ExportTablesOutcome = JobOutcome<Vec<ExportedFileItem>, TablesStoppedItem>;
 
 /// What the export dialog says before running a query again (see `spelaion_core::RerunCheck`).
 #[derive(Debug, Clone, Serialize, Type)]
@@ -6662,16 +7055,7 @@ impl ColumnStatsItem {
 }
 
 /// How asking for a column's statistics ended.
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ColumnStatsOutcome {
-    Done { stats: Box<ColumnStatsItem> },
-    Cancelled,
-}
+pub type ColumnStatsOutcome = JobOutcome<Box<ColumnStatsItem>, ()>;
 
 /// The kind of chart drawn from a result (ADR-040).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
@@ -7043,15 +7427,13 @@ impl From<spelaion_core::DataSearchEvent> for DataSearchEventItem {
     }
 }
 
-/// How a data search ended.
+/// What a data search read: the tables it read to the end and the hits it found. How it ended
+/// (done, cancelled, or stopped at the most hits a search returns) is its [`DataSearchOutcome`].
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DataSearchSummaryItem {
     pub tables: u32,
     pub hits: u32,
-    pub cancelled: bool,
-    /// It stopped at the most hits a search returns.
-    pub stopped: bool,
 }
 
 impl From<spelaion_core::DataSearchSummary> for DataSearchSummaryItem {
@@ -7059,11 +7441,12 @@ impl From<spelaion_core::DataSearchSummary> for DataSearchSummaryItem {
         Self {
             tables: u32::try_from(s.tables).unwrap_or(u32::MAX),
             hits: u32::try_from(s.hits).unwrap_or(u32::MAX),
-            cancelled: s.cancelled,
-            stopped: s.stopped,
         }
     }
 }
+
+/// How a data search ended: whichever way, with what it read.
+pub type DataSearchOutcome = JobOutcome<DataSearchSummaryItem, DataSearchSummaryItem>;
 
 /// What a cell panel's value picker writes (SDB-58): a date and time, one of the allowed values,
 /// or a row of the table a foreign key references. Exactly the field its `kind` names is set.

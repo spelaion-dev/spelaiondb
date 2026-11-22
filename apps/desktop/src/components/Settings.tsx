@@ -9,7 +9,9 @@ import type { LanguagePreference } from "../i18n";
 import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
-import { manualUpdateKey, useUpdate } from "../update";
+import { questionOpen } from "../tabState";
+import { isInstalling, manualUpdateKey, useUpdate } from "../update";
+import { UpdateInstallButton, UpdateProblem } from "./UpdateInstall";
 import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { PluginsSettings } from "./PluginsSettings";
@@ -32,8 +34,7 @@ export function SettingsDialog({ onClose }: { onClose(): void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Dialogs opened on top (trust, passwords…) handle their own Escape.
-      const dialogs = useDialogs.getState();
-      if (e.key === "Escape" && !dialogs.trust && !dialogs.password && dialogs.interactions.length === 0) onClose();
+      if (e.key === "Escape" && !questionOpen(useDialogs.getState())) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -876,11 +877,9 @@ function UpdateSettings() {
   const { t } = useTranslation("settings");
   const [version, setVersion] = useState("");
   const status = useUpdate((s) => s.status);
-  const checking = useUpdate((s) => s.checking);
-  const installing = useUpdate((s) => s.installing);
-  const install = useUpdate((s) => s.install);
+  const checking = useUpdate((s) => s.request.kind === "checking");
+  const installing = isInstalling(status);
   const checkAtStartup = useUpdate((s) => s.checkAtStartup);
-  const error = useUpdate((s) => s.error);
   const check = useUpdate((s) => s.check);
   const setCheckAtStartup = useUpdate((s) => s.setCheckAtStartup);
   const showNotes = useUpdate((s) => s.showNotes);
@@ -890,7 +889,7 @@ function UpdateSettings() {
   }, []);
   // Know at once whether this build can update at all; with no endpoint nothing is requested.
   useEffect(() => {
-    if (useUpdate.getState().status === null) void useUpdate.getState().check();
+    if (useUpdate.getState().status.kind === "unknown") void useUpdate.getState().check();
   }, []);
   const unavailable = status?.kind === "unavailable";
   const manual = status?.kind === "available" ? manualUpdateKey(status.method) : null;
@@ -922,20 +921,14 @@ function UpdateSettings() {
               {manual ? (
                 <button className="primary" onClick={() => void openReleasesPage()}>{t("updates.openReleases")}</button>
               ) : (
-                <button className="primary" disabled={installing} onClick={() => void install()}>
-                  {installing ? t("updates.installing") : t("updates.install")}
-                </button>
+                <UpdateInstallButton namespace="settings" group="updates" />
               )}
             </div>
           )}
           {!manual && <p className="muted small">{t("updates.hint")}</p>}
         </>
       )}
-      {error && (
-        <p className="error small" role="alert">
-          {t("updates.error")} {error}
-        </p>
-      )}
+      <UpdateProblem namespace="settings" group="updates" className="error small" />
       <ReportProblem />
     </>
   );

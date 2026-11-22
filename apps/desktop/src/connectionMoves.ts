@@ -7,6 +7,7 @@ import { call, commands, type ConnectionItem } from "./api";
 import i18n from "./i18n";
 import { refreshConnections } from "./components/Sidebar";
 import { useApp } from "./store";
+import { connectionInUse } from "./tabState";
 
 /** A connection's folder path as the core takes it: `prod/eu`, or `""` for none. */
 export function folderOf(connection: ConnectionItem): string {
@@ -25,10 +26,7 @@ export function foldersOf(connections: ConnectionItem[], personal: boolean): str
 
 /** Why the connection cannot move now, or null: a tab connected to it must disconnect first. */
 export function moveBlocked(connection: ConnectionItem): string | null {
-  const busy = useApp
-    .getState()
-    .tabs.some((tab) => tab.connectionId === connection.id && (tab.status !== "disconnected" || tab.run?.running));
-  return busy ? i18n.t("connections:move.inUse", { name: connection.name }) : null;
+  return connectionInUse(useApp.getState().tabs, connection.id) ? i18n.t("connections:move.inUse", { name: connection.name }) : null;
 }
 
 /** Moves a connection to `folder` and shows it there. Returns its new id. */

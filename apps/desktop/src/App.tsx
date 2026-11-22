@@ -31,8 +31,10 @@ import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./c
 import { activeContext, isCommandId, runCommand } from "./commands";
 import { commands, events } from "./api";
 import { usePreferences } from "./preferences";
-import { manualUpdateKey, useUpdate } from "./update";
+import { isInstalling, manualUpdateKey, useUpdate } from "./update";
+import { UpdateInstallButton, UpdateProblem } from "./components/UpdateInstall";
 import { useApp, useDialogs } from "./store";
+import { sessionLost } from "./tabState";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
 import { ScreenBoundary } from "./components/ScreenBoundary";
@@ -122,14 +124,18 @@ export default function App() {
     // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses.
     const unlistenLost = events.sessionLost.listen((e) => {
       const { session, reason, idleSeconds, openTransaction } = e.payload;
-      useApp.getState().updateTab(session, { status: "disconnected", lost: reason, idleClosed: idleSeconds ?? undefined, lostTransaction: openTransaction || undefined, transaction: undefined });
+      useApp.getState().setConnection(session, sessionLost(reason, idleSeconds, openTransaction));
       if (session.startsWith("meta:")) {
         window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: session.slice("meta:".length), idleSeconds } }));
       }
     });
     // The core keeps each editor tab's transaction (ADR-031); the tab only shows it.
     const unlistenTransaction = events.transactionChanged.listen((e) => {
-      useApp.getState().updateTab(e.payload.session, { transaction: e.payload.status });
+      useApp.getState().setTransaction(e.payload.session, e.payload.status);
+    });
+    // The core keeps each editor tab's run state (SDB-370); the tab only shows it.
+    const unlistenRun = events.runChanged.listen((e) => {
+      useApp.getState().updateTab(e.payload.session, { runState: e.payload.state });
     });
     // Closing the window with sessions open: the core held it; the UI quits or asks (SDB-140).
     const unlistenQuit = events.quitRequested.listen(() => void answerQuitRequest());
@@ -155,6 +161,7 @@ export default function App() {
       void unlistenClosed.then((f) => f());
       void unlistenLost.then((f) => f());
       void unlistenTransaction.then((f) => f());
+      void unlistenRun.then((f) => f());
       void unlistenQuit.then((f) => f());
       void unlistenLaunch.then((f) => f());
       window.removeEventListener("keydown", onKey);
@@ -289,9 +296,7 @@ function UpdateNotice() {
   const { t } = useTranslation("app");
   const status = useUpdate((s) => s.status);
   const dismissed = useUpdate((s) => s.dismissed);
-  const installing = useUpdate((s) => s.installing);
-  const error = useUpdate((s) => s.error);
-  const install = useUpdate((s) => s.install);
+  const installing = isInstalling(status);
   const dismiss = useUpdate((s) => s.dismiss);
   const showNotes = useUpdate((s) => s.showNotes);
   const openReleasesPage = useUpdate((s) => s.openReleasesPage);
@@ -304,15 +309,13 @@ function UpdateNotice() {
         {t("update.available", { version: status.version, current: status.currentVersion })}
         {manual && ` ${t(`update.${manual}`)}`}
       </span>
-      {error && <span className="error">{error}</span>}
+      <UpdateProblem namespace="app" group="update" className="error" />
       <div className="banner-actions">
         <button disabled={installing} onClick={showNotes}>{t("update.notesAction")}</button>
         {manual ? (
           <button className="primary" onClick={() => void openReleasesPage()}>{t("update.openReleases")}</button>
         ) : (
-          <button className="primary" disabled={installing} onClick={() => void install()}>
-            {installing ? t("update.installing") : t("update.install")}
-          </button>
+          <UpdateInstallButton namespace="app" group="update" />
         )}
         <button disabled={installing} onClick={dismiss}>
           {t("update.later")}

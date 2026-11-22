@@ -11,6 +11,7 @@ import { chooseOpenFile } from "../dialogs";
 import { useKeychainAvailable } from "../keychain";
 import { call, commands, type HopDraft, type KubernetesDraftItem, type PasswordMode, type ProxyDraft, type SshAuthItem, type SsmDraftItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
+import { questionOpen } from "../tabState";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
 
@@ -210,8 +211,7 @@ export function TunnelEditor(props: {
   useEffect(() => {
     // Escape closes this editor, not the connection wizard underneath.
     const onKey = (e: KeyboardEvent) => {
-      const dialogs = useDialogs.getState();
-      if (e.key !== "Escape" || dialogs.trust || dialogs.password || dialogs.interactions.length > 0) return;
+      if (e.key !== "Escape" || questionOpen(useDialogs.getState())) return;
       e.stopImmediatePropagation();
       props.onClose();
     };
@@ -292,7 +292,7 @@ export function TunnelEditor(props: {
   async function test() {
     setStatus({ kind: "idle" });
     try {
-      const attempt = () => log.run((id, onStep) => call(commands.testTunnel(draft, passwords, proxyPassword, id, onStep)));
+      const attempt = () => log.run((job, onStep) => call(commands.testTunnel(draft, passwords, proxyPassword, job, onStep)));
       let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {

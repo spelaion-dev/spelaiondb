@@ -20,9 +20,10 @@ use futures_util::StreamExt;
 use spelaion_driver_api::{Dialect, LogicalType, Value};
 
 use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comments};
-use crate::export_stream::{ExportCancel, barrier, drain, enter};
+use crate::export_stream::read_only_transaction;
 use crate::filter::FilterOp;
 use crate::generate::qualified;
+use crate::job::JobCancel;
 use crate::masking::MASK;
 use crate::session::{CoreEvent, Session};
 use crate::table_data::{PageError, check, push_clauses, value_condition};
@@ -120,6 +121,19 @@ pub enum ColumnStatsError {
     /// The column is masked (ADR-051): its values are not offered to pick from.
     #[error("the column is masked: its values are not offered")]
     Masked,
+}
+
+/// The read-only transaction around a statement could not be entered.
+impl From<crate::ExportError> for ColumnStatsError {
+    fn from(error: crate::ExportError) -> Self {
+        Self::Failed(error.to_string())
+    }
+}
+
+impl From<spelaion_driver_api::DriverError> for ColumnStatsError {
+    fn from(error: spelaion_driver_api::DriverError) -> Self {
+        Self::Failed(error.to_string())
+    }
 }
 
 /// Whether `MIN` and `MAX` mean something for the type in every engine.
@@ -222,39 +236,44 @@ fn checked(dialect: &dyn Dialect, sql: &str) -> Result<(), ColumnStatsError> {
 async fn read_rows(
     session: &Session,
     sql: &str,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
 ) -> Result<Vec<Vec<Value>>, ColumnStatsError> {
     checked(session.dialect().as_ref(), sql)?;
     if cancel.is_cancelled() {
         return Err(ColumnStatsError::Cancelled);
     }
-    let (begin, end) = barrier(session).map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
-    enter(session, begin)
-        .await
-        .map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
-    // Parsed here, and masked by `column_stats` for a masked column (ADR-051): the statements'
-    // columns are aliases, which the connection's patterns do not name.
-    let mut events = session.run_parsed(sql);
-    let mut results = Vec::new();
-    let mut failure = None;
-    while let Some(event) = events.next().await {
-        match event {
-            CoreEvent::ResultStarted { result: id, .. } => results.push(id),
-            CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
-            CoreEvent::StatementStarted { .. }
-            | CoreEvent::Rows { .. }
-            | CoreEvent::Notice { .. }
-            | CoreEvent::StatementFinished { .. }
-            | CoreEvent::ScriptFinished { .. }
-            | CoreEvent::ErrorPaused { .. }
-            | CoreEvent::HistoryWarning { .. } => {}
+    let run = async {
+        // Parsed here, and masked by `column_stats` for a masked column (ADR-051): the
+        // statements' columns are aliases, which the connection's patterns do not name.
+        let mut events = session.run_parsed(sql);
+        // Requested, not started: a cancel from here on stops it.
+        let Some(_attached) = cancel.attach(session) else {
+            return Err(ColumnStatsError::Cancelled);
+        };
+        let mut results = Vec::new();
+        let mut failure = None;
+        while let Some(event) = events.next().await {
+            match event {
+                CoreEvent::ResultStarted { result: id, .. } => results.push(id),
+                CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
+                CoreEvent::StatementStarted { .. }
+                | CoreEvent::Rows { .. }
+                | CoreEvent::ResultEnded { .. }
+                | CoreEvent::Notice { .. }
+                | CoreEvent::StatementFinished { .. }
+                | CoreEvent::ScriptFinished { .. }
+                | CoreEvent::ErrorPaused { .. }
+                | CoreEvent::HistoryWarning { .. } => {}
+            }
         }
-    }
-    drop(events);
-    if let Some(end) = end {
-        // Read-only either way: nothing to keep or lose.
-        let _ = drain(session, end).await;
-    }
+        Ok((results, failure))
+    };
+    let (results, failure) = match read_only_transaction(session, run, |_| false).await {
+        Ok(read) => read,
+        // A failure that came after a cancel is the cancel's.
+        Err(_) if cancel.is_cancelled() => return Err(ColumnStatsError::Cancelled),
+        Err(e) => return Err(e),
+    };
     let store = session.results();
     let rows = results.first().and_then(|id| {
         let stored = store.get(*id)?;
@@ -335,7 +354,7 @@ fn stat<T>(outcome: Result<T, ColumnStatsError>) -> Result<Stat<T>, ColumnStatsE
 pub async fn column_stats(
     session: &Session,
     request: &ColumnStatsRequest,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
 ) -> Result<ColumnStats, ColumnStatsError> {
     let dialect = session.dialect().clone();
     let masked = session
@@ -462,7 +481,7 @@ pub struct TopValues {
 pub async fn column_top_values(
     session: &Session,
     request: &ColumnStatsRequest,
-    cancel: &ExportCancel,
+    cancel: &JobCancel,
 ) -> Result<TopValues, ColumnStatsError> {
     if session
         .masking()

@@ -7,9 +7,9 @@ import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { AlterationPreviewItem, ColumnEditItem_Serialize as ColumnEditItem, DroppedConstraintItem, TableAlterationItem, TableStructureItem_Serialize as TableStructureItem } from "../bindings";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
-import { useApp, useDialogs } from "../store";
-
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorText, loadedValue, scriptText } from "../dialogState";
+import { useApp } from "../store";
+import { confirmShown, usePreviewThenApply } from "../useDialogState";
 
 export function StructureDialog({
   session,
@@ -40,10 +40,6 @@ export function StructureDialog({
   /** The table's comment as typed (SDB-393). */
   const [tableComment, setTableComment] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ key: string; value: AlterationPreviewItem } | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const previousFocus = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   useEffect(() => () => { if (previousFocus.current?.isConnected) previousFocus.current.focus(); }, []);
 
@@ -58,7 +54,7 @@ export function StructureDialog({
           .filter((c) => !only || only.includes(c.name))
           .map((c) => ({ name: c.name, dataType: c.dataType, nullable: c.nullable, default: c.default, comment: c.comment })));
       })
-      .catch((e: unknown) => { if (current) setLoadError(message(e)); });
+      .catch((e: unknown) => { if (current) setLoadError(errorText(e)); });
     return () => { current = false; };
     // The columns shown are chosen once, when the dialog opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -83,19 +79,11 @@ export function StructureDialog({
   const changed = alteration.columns.length > 0 || alteration.drop.length > 0 || commentChanged;
 
   // The SQL follows the form; an answer to an older state is ignored.
-  useEffect(() => {
-    if (!structure && !drop) return;
-    if (!changed) { setPreview(null); setPreviewError(null); return; }
-    let current = true;
-    const timer = window.setTimeout(() => {
-      call(commands.previewTableAlteration(session, JSON.parse(key) as TableAlterationItem))
-        .then((value) => { if (current) { setPreview({ key, value }); setPreviewError(null); } })
-        .catch((e: unknown) => { if (current) { setPreview(null); setPreviewError(message(e)); } });
-    }, 200);
-    return () => { current = false; window.clearTimeout(timer); };
-  }, [session, key, changed, structure, drop]);
-
-  const ready = preview !== null && preview.key === key;
+  const flow = usePreviewThenApply<AlterationPreviewItem>(session, changed ? key : null, 200, (asked) =>
+    call(commands.previewTableAlteration(session, JSON.parse(asked) as TableAlterationItem)));
+  const { preview, busy } = flow;
+  const ready = preview.kind === "ready";
+  const error = flow.apply.kind === "failed" ? flow.apply.message : null;
   const readOnly = connection?.readOnly ?? false;
   // Decided by the core from the connection's type (ADR-029).
   const production = connection?.kind?.safeguards.confirmDataChanges ?? false;
@@ -105,28 +93,18 @@ export function StructureDialog({
   }
 
   async function apply() {
-    if (!ready || !preview) return;
+    if (preview.kind !== "ready") return;
     const shown = preview.value;
-    let confirmed = false;
-    if (shown.risks.length > 0) {
-      const statements = shown.risks.map((r) => ({ sql: shown.statements[r.statement] ?? shown.sql, risk: r.risk }));
-      if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
-      confirmed = true;
-    }
-    setBusy(true);
-    setError(null);
-    try {
+    const confirmed = await confirmShown(connection?.name ?? "", shown);
+    if (confirmed === null) return;
+    await flow.run(async () => {
       await call(commands.applyTableAlteration(session, alteration, shown.sql, confirmed));
       onDone();
-    } catch (e) {
-      setError(t("structure.failed", { detail: message(e) }));
-    } finally {
-      setBusy(false);
-    }
+    }, (detail) => t("structure.failed", { detail }));
   }
 
   function openInEditor() {
-    if (!ready || !preview) return;
+    if (preview.kind !== "ready") return;
     const tab = useApp.getState().addTab(connectionId, preview.value.sql);
     connectTabFromExplorer(tab, session, explorerDatabase(connectionId, schema));
     onClose();
@@ -135,8 +113,9 @@ export function StructureDialog({
   const title = drop
     ? t("structure.dropTitle", { name: drop.label })
     : only?.length === 1 ? t("structure.columnTitle", { name: only[0], table }) : t("structure.title", { table });
-  const transactional = preview?.value.transactional ?? structure?.transactional ?? true;
-  const rebuilds = preview?.value.rebuilds ?? structure?.rebuilds ?? false;
+  const last = loadedValue(flow.last);
+  const transactional = last?.transactional ?? structure?.transactional ?? true;
+  const rebuilds = last?.rebuilds ?? structure?.rebuilds ?? false;
   return (
     <div className="modal-backdrop">
       <form
@@ -217,7 +196,7 @@ export function StructureDialog({
         )}
         <span className="muted small">{t("objectChange.sql")}</span>
         <pre className="object-change-sql mono structure-sql" aria-label={t("objectChange.sql")} aria-live="polite">
-          {!changed && !drop ? t("structure.nothing") : ready ? preview.value.sql : previewError ?? "…"}
+          {!changed && !drop ? t("structure.nothing") : scriptText(preview)}
         </pre>
         {production && <p className="warn small">{t("objectChange.production")}</p>}
         {readOnly && <p className="warn small">{t("objectChange.readOnly")}</p>}

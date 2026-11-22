@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use rmcp::model::CallToolResult;
 use spelaion_config::TrustStore;
-use spelaion_store::{Decision, Store, ToolOutput};
+use spelaion_store::{Decision, FailureCode, Store, ToolOutput};
 
 use super::*;
 
@@ -82,6 +82,27 @@ fn call(tool: &'static str) -> Call {
 
 fn refused(result: &CallToolResult) -> bool {
     result.is_error == Some(true)
+}
+
+/// The code and `retry` of a refused or failed call's structured content (SDB-374). A call
+/// that failed without one fails the test.
+fn code(result: &CallToolResult) -> (String, bool) {
+    assert!(refused(result), "{}", body(result));
+    let structured = result
+        .structured_content
+        .as_ref()
+        .unwrap_or_else(|| panic!("no structured content: {}", body(result)));
+    let object = structured.as_object().expect("an object");
+    assert_eq!(object.len(), 2, "only the code and retry: {structured}");
+    (
+        structured["code"].as_str().expect("a code").to_string(),
+        structured["retry"].as_bool().expect("retry"),
+    )
+}
+
+/// The code the audit log recorded for the latest call.
+fn last_code(user_dir: &Path) -> Option<FailureCode> {
+    app_store(user_dir).recent(1).unwrap()[0].code
 }
 
 /// What `list_connections` answers, as a new call of a running server.
@@ -1393,9 +1414,12 @@ async fn survives_ended_sessions(
     if refused(&next) {
         let text = body(&next);
         assert!(text.contains("next call opens a new session"), "{text}");
+        // A read whose session was lost may be run again: the next call opens a new one.
+        assert_eq!(code(&next), ("session_lost".into(), true));
         let last = &app_store(user_dir).recent(1).unwrap()[0];
         assert_eq!(last.decision, Decision::Failed, "{last:?}");
         assert_eq!(last.statement, "select pg_backend_pid()");
+        assert_eq!(last.code, Some(FailureCode::SessionLost));
     }
     let after = query(server, id, "select pg_backend_pid()").await;
     assert!(!refused(&after), "{}", body(&after));
@@ -1418,8 +1442,11 @@ async fn survives_ended_sessions(
             text.contains("not known whether the write was committed"),
             "{text}"
         );
+        // A write whose session was lost may have been committed: never "run it again".
+        assert_eq!(code(&next), ("session_lost".into(), false));
         let last = &app_store(user_dir).recent(1).unwrap()[0];
         assert_eq!(last.decision, Decision::Failed, "{last:?}");
+        assert_eq!(last.code, Some(FailureCode::SessionLost));
     } else {
         answered_done += 1;
     }
@@ -1511,6 +1538,34 @@ async fn postgres_sessions_ended_by_the_server_are_replaced() {
         || async { admin_run(&admin, &format!("drop table if exists {table}")).await },
     )
     .await;
+}
+
+/// A server that does not answer (nothing listens on its port) is a connection not available
+/// now, which may answer next time (SDB-374).
+#[tokio::test]
+async fn a_server_that_does_not_answer_is_connection_unavailable() {
+    if std::env::var("SPELAION_TEST_PG").is_err() {
+        eprintln!("SPELAION_TEST_PG not set: an unreachable PostgreSQL not tested over the MCP");
+        return;
+    }
+    let user_dir = temp("unreachable-pg");
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    std::fs::write(
+        user_dir.join("connections/down.toml"),
+        postgres_connection("127.0.0.1", Some("1"), "spelaion-mcp-down", "", true),
+    )
+    .unwrap();
+    let server = server(None, &user_dir, false);
+    let down = query(&server, "~/down", "select 1").await;
+    assert_eq!(
+        code(&down),
+        ("connection_unavailable".into(), true),
+        "{}",
+        body(&down)
+    );
+    let last = &app_store(&user_dir).recent(1).unwrap()[0];
+    assert_eq!(last.decision, Decision::Rejected, "{last:?}");
+    assert_eq!(last.code, Some(FailureCode::ConnectionUnavailable));
 }
 
 /// Accepts the test bastions' host keys once, so the headless server then finds them known.
@@ -1620,6 +1675,228 @@ async fn tunnelled_sessions_ended_by_the_server_are_replaced() {
     .await;
 }
 
+/// Each refusal and failure an agent can meet on a local file carries its code and whether to
+/// run it again, as structured content beside the unchanged sentence, and the audit log records
+/// the same code (SDB-374). The codes that need a server, a tunnel or a plugin are in the tests
+/// below and in `spelaion_core::agent_state`.
+#[tokio::test]
+async fn every_refusal_and_failure_carries_its_code() {
+    let p = personal(false);
+
+    // A connection that does not exist, or is not exposed.
+    let hidden = query(&p.server, "~/nowhere", "select 1").await;
+    assert!(
+        body(&hidden).contains("does not exist or is not exposed"),
+        "{}",
+        body(&hidden)
+    );
+    assert_eq!(code(&hidden), ("not_exposed".into(), false));
+    assert_eq!(last_code(&p.user_dir), Some(FailureCode::NotExposed));
+    let hidden = write(&p.server, "~/nowhere", INSERT).await;
+    assert_eq!(code(&hidden), ("not_exposed".into(), false));
+    let schema = p
+        .server
+        .audited(
+            call("list_objects"),
+            &p.server.begin().await,
+            "~/nowhere",
+            "schemas".into(),
+            async { answer("never") },
+        )
+        .await
+        .unwrap();
+    assert_eq!(code(&schema), ("not_exposed".into(), false));
+    assert_eq!(last_code(&p.user_dir), Some(FailureCode::NotExposed));
+
+    // A write the classifier refuses through run_query, and one the write barriers refuse.
+    let sneaked = query(&p.server, "~/notes", INSERT).await;
+    assert!(body(&sneaked).starts_with("Query rejected: "));
+    assert_eq!(code(&sneaked), ("refused_by_guard".into(), false));
+    assert_eq!(last_code(&p.user_dir), Some(FailureCode::RefusedByGuard));
+    let dropped = write(&p.server, "~/notes", "drop table notes").await;
+    assert!(body(&dropped).starts_with("Write rejected: "));
+    assert_eq!(code(&dropped), ("refused_by_guard".into(), false));
+    assert_eq!(last_code(&p.user_dir), Some(FailureCode::RefusedByGuard));
+
+    // The database refuses the statement.
+    let missing = query(&p.server, "~/notes", "select * from no_such_table").await;
+    assert_eq!(code(&missing), ("statement_failed".into(), false));
+    assert_eq!(last_code(&p.user_dir), Some(FailureCode::StatementFailed));
+    let missing = write(&p.server, "~/notes", "insert into no_such_table values (1)").await;
+    assert!(
+        body(&missing).contains("nothing was changed: the transaction was rolled back"),
+        "{}",
+        body(&missing)
+    );
+    assert_eq!(code(&missing), ("statement_failed".into(), false));
+    assert_eq!(last_code(&p.user_dir), Some(FailureCode::StatementFailed));
+    let described = p
+        .server
+        .describe_table_inner(
+            &p.server.begin().await,
+            Parameters(DescribeArgs {
+                connection: "~/notes".into(),
+                schema: "main".into(),
+                table: "no_such_table".into(),
+            }),
+        )
+        .await;
+    if let Err(failure) = described {
+        assert_eq!(failure.failure.code(), FailureCode::StatementFailed);
+        assert!(!failure.failure.retry());
+    }
+
+    // Arguments that do not go together.
+    let both = p
+        .server
+        .explain(
+            &call("explain_query"),
+            ExplainArgs {
+                connection: "~/notes".into(),
+                sql: Some("select 1".into()),
+                structured: Some(true),
+                output_format: None,
+                plan_id: Some(1),
+                offset: None,
+                limit: None,
+                release: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(code(&both), ("invalid_arguments".into(), false));
+    assert_eq!(last_code(&p.user_dir), Some(FailureCode::InvalidArguments));
+
+    // Every agent made read-only.
+    app_store(&p.user_dir).set_mcp_read_only(true).unwrap();
+    let read_only = write(&p.server, "~/notes", INSERT).await;
+    assert!(
+        body(&read_only).contains("the user made every agent read-only"),
+        "{}",
+        body(&read_only)
+    );
+    assert_eq!(code(&read_only), ("read_only".into(), false));
+    assert_eq!(last_code(&p.user_dir), Some(FailureCode::ReadOnly));
+    assert_eq!(rows(&p.db), 1);
+
+    // A call that worked records no code and carries none.
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&read));
+    assert!(read.structured_content.is_none());
+    assert_eq!(last_code(&p.user_dir), None);
+}
+
+/// Every tool's description names every code an agent can get, so a new code cannot be added
+/// to the core without telling agents.
+#[test]
+fn every_tool_description_lists_every_code() {
+    let tools = SpelaionMcp::tool_router().list_all();
+    assert_eq!(tools.len(), 7);
+    for tool in tools {
+        let description = tool.description.as_deref().unwrap_or_default();
+        for code in FailureCode::WRITTEN {
+            let code = code.as_str().unwrap();
+            assert!(
+                description.contains(code),
+                "{} does not name {code}",
+                tool.name
+            );
+        }
+        assert!(description.contains("\"retry\""), "{}", tool.name);
+    }
+}
+
+/// A read that runs out of time says so with its own code, and not to run it as it is again.
+#[tokio::test]
+async fn a_read_that_times_out_says_so() {
+    let user_dir = temp("timeout");
+    let db = database(&user_dir);
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    std::fs::write(
+        user_dir.join("connections/notes.toml"),
+        writable_connection(&db, ""),
+    )
+    .unwrap();
+    let server = SpelaionMcp::new(ServerOptions {
+        workspace: None,
+        user_dir: user_dir.clone(),
+        timeout: Duration::from_millis(300),
+        read_only: false,
+    })
+    .unwrap();
+    let slow = query(
+        &server,
+        "~/notes",
+        "with recursive n(i) as (select 1 union all select i + 1 from n) select count(*) from n",
+    )
+    .await;
+    assert_eq!(code(&slow), ("timed_out".into(), false), "{}", body(&slow));
+    assert_eq!(last_code(&user_dir), Some(FailureCode::TimedOut));
+}
+
+/// `list_connections` gives each visible connection's state as `AgentView` decides it, as
+/// structured content, and never names a hidden one.
+#[tokio::test]
+async fn list_connections_gives_each_connections_state() {
+    let p = personal(false);
+    std::fs::write(
+        p.user_dir.join("connections/hidden.toml"),
+        connection(&p.db, "exposed = false"),
+    )
+    .unwrap();
+    std::fs::write(
+        p.user_dir.join("connections/readonly.toml"),
+        connection(&p.db, "exposed = true"),
+    )
+    .unwrap();
+    let listed = |server: &SpelaionMcp| {
+        let server = server.clone();
+        async move {
+            let access = server.begin().await;
+            server
+                .list_connections_inner(&access)
+                .await
+                .unwrap()
+                .structured_content
+                .unwrap()
+        }
+    };
+    let state = listed(&p.server).await;
+    assert_eq!(state["all_agents_read_only"], false);
+    assert_eq!(state["repository_not_trusted"], false);
+    let connections = state["connections"].as_array().unwrap();
+    assert_eq!(connections.len(), 2, "{state}");
+    let find = |id: &str| {
+        connections
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap_or_else(|| panic!("{id} in {state}"))
+            .clone()
+    };
+    assert_eq!(
+        find("~/notes"),
+        serde_json::json!({"id": "~/notes", "engine": "sqlite", "access": "read_write"})
+    );
+    assert_eq!(
+        find("~/readonly"),
+        serde_json::json!({
+            "id": "~/readonly",
+            "engine": "sqlite",
+            "access": "read_only",
+            "read_only_because": "writes_denied",
+        })
+    );
+    assert!(!state.to_string().contains("hidden"), "{state}");
+
+    app_store(&p.user_dir).set_mcp_read_only(true).unwrap();
+    let state = listed(&p.server).await;
+    assert_eq!(state["all_agents_read_only"], true);
+    for c in state["connections"].as_array().unwrap() {
+        assert_eq!(c["access"], "read_only");
+        assert_eq!(c["read_only_because"], "all_agents");
+    }
+}
+
 /// A tool call that panics (SDB-163) answers with an error, is recorded as failed, and the
 /// server goes on answering. Before, rmcp's task for the request died without an answer: the
 /// agent waited until its own timeout and nothing reached the audit.
@@ -1632,7 +1909,7 @@ async fn a_tool_call_that_panics_answers_an_error_and_the_server_keeps_working()
         if std::hint::black_box(true) {
             panic!("a tool panicked with postgres://ann:hunter2@db/shop");
         }
-        tool_error("never")
+        tool_error(AgentFailure::internal(), "never")
     };
     let answer = tokio::time::timeout(
         Duration::from_secs(10),
@@ -1645,8 +1922,10 @@ async fn a_tool_call_that_panics_answers_an_error_and_the_server_keeps_working()
     let text = body(&answer);
     assert!(text.contains("internal error"), "{text}");
     assert!(!text.contains("hunter2"), "{text}");
+    assert_eq!(code(&answer), ("internal".into(), false));
     let last = &app_store(&user_dir).recent(1).unwrap()[0];
     assert_eq!(last.decision, Decision::Failed, "{last:?}");
+    assert_eq!(last.code, Some(FailureCode::Internal));
     assert_eq!(last.connection, "~/notes");
     assert_eq!(last.tool.as_deref(), Some("run_query"));
     assert!(

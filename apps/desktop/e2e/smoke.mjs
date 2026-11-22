@@ -3,8 +3,9 @@
 // not touch the user's configuration or keychain.
 //
 // Requirements: the app and the CLI (for the MCP activity steps) built in one command, so DuckDB
-// is compiled once (CONTRIBUTING.md): npx tauri build --no-bundle -- -p spelaion-desktop
-// -p spelaion-cli; Python, to make examples/demo/data/shop.db again at the start of every run
+// is compiled once, with the `e2e` feature that lets the app open WebView2's debugging port
+// (CONTRIBUTING.md): npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli
+// -p spelaion-plugin-fetch --features spelaion-desktop/e2e; Python, to make examples/demo/data/shop.db again at the start of every run
 // (examples/demo/make-shop-db.py), and, for the PostgreSQL steps, testing/docker up.
 //   node e2e/smoke.mjs [screenshots-dir]
 // On Linux (WebKitGTK has no CDP port) run the Linux pass instead: node e2e/smoke-linux.mjs.
@@ -24,6 +25,13 @@ import { commandLines, requestClose } from "./processes.mjs";
 
 if (process.platform === "linux") {
   console.error("smoke.mjs drives WebView2 over CDP; on Linux run node e2e/smoke-linux.mjs (AGENTS.md)");
+  process.exit(2);
+}
+
+// SPELAION_E2E_UNTIL must name a step of this file: a renamed step would otherwise let the run
+// go on past where it was meant to stop (CI stops before the steps that need testing/docker).
+if (process.env.SPELAION_E2E_UNTIL && !readFileSync(import.meta.filename, "utf8").includes(`step(${JSON.stringify(process.env.SPELAION_E2E_UNTIL).slice(0, -1)}`)) {
+  console.error(`SPELAION_E2E_UNTIL="${process.env.SPELAION_E2E_UNTIL}" is not the start of any step's text in smoke.mjs`);
   process.exit(2);
 }
 
@@ -113,7 +121,9 @@ function startApp(extraEnv = {}, extraArgs = []) {
       // drawing a window it sees as hidden: these flags keep it drawing and its timers running.
       // SPELAION_E2E_SHOW_WINDOW=1 opens it on screen, to watch a run.
       ...(process.env.SPELAION_E2E_SHOW_WINDOW === "1" ? {} : { SPELAION_E2E_OFFSCREEN: "1" }),
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: [
+      // WebView2's switches, passed by the app itself (webview_args.rs): GitHub's Windows runners
+      // ignore WebView2's own WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (SDB-155).
+      SPELAION_E2E_WEBVIEW2_ARGUMENTS: [
         `--remote-debugging-port=${port}`,
         "--disable-features=CalculateNativeWinOcclusion",
         "--disable-backgrounding-occluded-windows",
@@ -291,20 +301,60 @@ function checkContentSecurityPolicy() {
 
 async function connect() {
   for (let i = 0; i < 60; i++) {
+    if (app.exitCode !== null || app.signalCode !== null) {
+      throw new Error(`the app ended (${app.exitCode ?? app.signalCode}) before it opened the debugging port`);
+    }
     try {
       return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     } catch {
       await new Promise((r) => setTimeout(r, 500));
     }
   }
-  throw new Error("the app did not open the debugging port");
+  throw new Error(
+    `the app is running but did not open the debugging port ${port} in 30 s (was it built with --features spelaion-desktop/e2e? CONTRIBUTING.md)\n${startDiagnostics()}`,
+  );
+}
+
+/** What a start that never opened the debugging port left, to tell a webview that never started
+ *  from one started without the port (CI has no screen to look at): WebView2's processes and
+ *  whether they carry the port, and on Windows a picture of the desktop next to the screenshots. */
+function startDiagnostics() {
+  const lines = [];
+  try {
+    const webviews = commandLines(process.platform === "win32" ? "msedgewebview2" : "WebKitWebProcess");
+    lines.push(`webview processes: ${webviews.length}, with --remote-debugging-port=${port}: ${webviews.filter((l) => l.includes(`--remote-debugging-port=${port}`)).length}`);
+    // The browser process carries every switch WebView2 was given; the others are its children.
+    const browserProcess = webviews.find((l) => l.includes("--embedded-browser-webview")) ?? webviews[0];
+    if (browserProcess) lines.push(`  browser process: ${browserProcess}`);
+  } catch (e) {
+    lines.push(`could not list the webview processes: ${e.message}`);
+  }
+  if (process.platform === "win32") {
+    const picture = join(shots, "desktop-at-start.png");
+    try {
+      execFileSync("powershell", ["-NoProfile", "-Command", [
+        "Add-Type -AssemblyName System.Windows.Forms, System.Drawing",
+        "$b = [System.Windows.Forms.SystemInformation]::VirtualScreen",
+        "$i = New-Object System.Drawing.Bitmap $b.Width, $b.Height",
+        "[System.Drawing.Graphics]::FromImage($i).CopyFromScreen($b.Left, $b.Top, 0, 0, $i.Size)",
+        `$i.Save('${picture.replaceAll("'", "''")}')`,
+      ].join("; ")], { stdio: "ignore" });
+      lines.push(`the desktop: ${picture}`);
+    } catch (e) {
+      lines.push(`could not take a picture of the desktop: ${e.message}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 let failed = false;
+// The step that is running, named when the run fails (CI's error reads it).
+let currentStep = "starting the app";
 // The demo's shop.toml is changed during the run (ADR-022) and always put back.
 const shopOriginal = readFileSync(shopFile, "utf8");
-let browser = await connect();
+let browser;
 try {
+  browser = await connect();
   let page = await appPage();
   page.setDefaultTimeout(30_000);
   const shot = (name) => page.screenshot({ path: join(shots, `${name}.png`) });
@@ -314,6 +364,7 @@ try {
   const step = (text) => {
     checkContentSecurityPolicy();
     if (untilReached) throw untilComplete;
+    currentStep = text;
     if (process.env.SPELAION_E2E_UNTIL && text.startsWith(process.env.SPELAION_E2E_UNTIL)) untilReached = true;
     console.log(`· ${text}`);
   };
@@ -811,6 +862,79 @@ try {
   assert.equal(await editorDivider.getAttribute("aria-valuenow"), "42");
   await run(panel);
   await panel.locator(".statusline", { hasText: "6 rows" }).waitFor();
+  step("results: elapsed time, cancellation and toolbar Refresh (SDB-430)");
+  // Its runs stay out of the history, which the history step counts.
+  await setHistorySaving("Shop (SQLite)", false);
+  {
+    const tabStrip = page.locator(".tabbar");
+    const previousTab = await tabStrip.locator(".tab.active").elementHandle();
+    const busy = await newQuery("Shop (SQLite)", "with recursive spin(i) as (values(1) union all select i + 1 from spin) select count(*) from spin;");
+    const runningTab = await tabStrip.locator(".tab.active").elementHandle();
+    const progress = busy.locator(".result-run-progress");
+    const timer = progress.getByRole("timer");
+    const cancel = progress.getByRole("button", { name: "Cancel query", exact: true });
+    await run(busy);
+    await progress.getByText("Running query…", { exact: true }).waitFor();
+    assert.equal(await busy.locator(".grid-host").count(), 0);
+    const firstTick = await timer.textContent();
+    assert.match(firstTick, /^\d+\.\d s$/);
+    await page.waitForFunction(
+      ([el, first]) => el.textContent !== first,
+      [await timer.elementHandle(), firstTick],
+    );
+    await previousTab.click();
+    assert.equal(await progress.count(), 0);
+    await runningTab.click();
+    assert.notEqual(await timer.textContent(), firstTick);
+    await busy.getByRole("button", { name: "Maximize results (Ctrl+Alt+M)" }).click();
+    await busy.locator(".editor-pane").waitFor({ state: "hidden" });
+    const spinner = await progress.locator(".result-run-spinner").elementHandle();
+    await page.waitForFunction((el) => getComputedStyle(el).opacity === "1", spinner);
+    await shot("sdb-430-query-progress");
+    await cancel.click();
+    await progress.waitFor({ state: "detached" });
+    await busy.locator(".messages").getByText("Statement 1: Query cancelled", { exact: true }).waitFor();
+    await busy.getByRole("button", { name: "Restore the editor (Ctrl+Alt+M)" }).click();
+
+    // Send several batches, then block on the last row so cancellation can be tested during streaming.
+    await replaceQuery(busy, `with recursive
+      rows(i) as (values(1) union all select i + 1 from rows where i < 100000),
+      spin(n) as (values(1) union all select n + 1 from spin)
+      select i, case when i = 100000 then (select count(*) from spin) else i end as value from rows;`);
+    await run(busy);
+    await busy.locator('.grid-scroller[aria-label^="Result with "]:not([aria-label="Result with 0 rows"])').waitFor();
+    await busy.getByRole("button", { name: "Messages", exact: true }).click();
+    await cancel.click();
+    await progress.waitFor({ state: "detached" });
+    await busy.locator(".result-tab-list").getByRole("button", { name: /^Messages/ }).click();
+    await busy.locator(".messages").getByText("Statement 1: Query cancelled", { exact: true }).waitFor();
+
+    await replaceQuery(busy, "select id, name from customer order by id limit 1;");
+    await run(busy);
+    await busy.locator(".statusline", { hasText: /^1 row · \d+ ms$/ }).waitFor();
+    assert.equal(await progress.count(), 0);
+    const refresh = busy.locator(".result-tools").getByRole("button", { name: "Refresh", exact: true });
+    assert.equal(await busy.getByRole("button", { name: "Refresh", exact: true }).count(), 1);
+    assert.ok(await refresh.evaluate((button) => button.compareDocumentPosition(button.closest(".result-tools").querySelector("input")) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const before = await busy.locator(".result-tab-item.active").getAttribute("data-result");
+    await busy.getByRole("button", { name: "Add row", exact: true }).click();
+    await page.getByRole("dialog", { name: "New row" }).getByRole("button", { name: "Add", exact: true }).click();
+    await busy.getByRole("button", { name: "Discard new row 1" }).waitFor();
+    await refresh.click();
+    await busy.getByText("Apply or discard the pending changes first", { exact: true }).waitFor();
+    assert.equal(await busy.locator(".result-tab-item.active").getAttribute("data-result"), before);
+    await busy.getByRole("button", { name: "Discard new row 1" }).click();
+    await busy.getByText("No pending changes", { exact: true }).waitFor();
+    await refresh.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((old) => {
+      const active = document.querySelector(".tab-panel:not([hidden]) .result-tab-item.active");
+      return active !== null && active.getAttribute("data-result") !== old;
+    }, before);
+    await busy.locator(".statusline", { hasText: /^1 row · \d+ ms$/ }).waitFor();
+    await page.keyboard.press("Control+w");
+  }
+  await setHistorySaving("Shop (SQLite)", true);
   step("SQL syntax remains legible when switching themes");
   const originalSql = await panel.locator(".cm-content").innerText();
   await replaceQuery(panel, "SELECT 'soft red', 42 AS n;");
@@ -1162,7 +1286,15 @@ try {
   await page.mouse.move(resizeBox.x - 80, resizeBox.y + resizeBox.height / 2, { steps: 5 });
   await page.mouse.up();
   const wider = await viewerWidthWhen((width) => width > beforeWidth + 50);
-  assert.ok(wider > beforeWidth + 50, `drag should widen the viewer: ${beforeWidth} → ${wider}`);
+  if (!(wider > beforeWidth + 50)) {
+    // Its maximum follows the window: a screen smaller than the window's 1400×900 shrinks the
+    // window, and with it the room to widen (CI gives its runner a larger screen, SDB-155).
+    const room = await page.evaluate(() => {
+      const separator = document.querySelector('.tab-panel:not([hidden]) [role="separator"][aria-label="Resize cell value panel"]');
+      return `its maximum is ${separator?.getAttribute("aria-valuemax")}, in a window of ${innerWidth}×${innerHeight}`;
+    });
+    assert.fail(`drag should widen the viewer: ${beforeWidth} → ${wider} (${room})`);
+  }
   await viewerResize.focus();
   await page.keyboard.press("ArrowRight");
   const narrower = await viewerWidthWhen((width) => width < wider);
@@ -2650,6 +2782,8 @@ try {
   let paused = page.getByRole("dialog", { name: "Statement 1 failed" });
   await paused.getByText("2 statements after it have not run yet.").waitFor();
   await paused.getByText("UNIQUE constraint failed", { exact: false }).waitFor();
+  // The core's run state says where it waits (SDB-370).
+  await panel.locator(".result-run-progress", { hasText: "Paused at statement 1" }).waitFor();
   await shot("05e-script-error-ask");
   await paused.getByRole("button", { name: "Skip and continue" }).click();
   await paused.waitFor({ state: "detached" });
@@ -3428,6 +3562,21 @@ try {
     await shown.getByRole("button", { name: "Cancel", exact: true }).click();
     await activeTab.locator(".tab-running").waitFor({ state: "detached" });
     await activeTab.locator(".dot-connected").waitFor();
+    // A result cut short says so (SDB-367): cancelling a query while its rows arrive keeps the
+    // rows shown, and the strip reads "Partial: cancelled after N rows", not a whole result.
+    await replaceQuery(shown, "with recursive spin(i) as (select 1 union all select i + 1 from spin) select i from spin;");
+    await run(shown);
+    await shown.locator(".grid-host").waitFor();
+    await activeTab.locator(".tab-running").waitFor();
+    await shown.getByRole("button", { name: "Cancel", exact: true }).click();
+    await activeTab.locator(".tab-running").waitFor({ state: "detached" });
+    const partialStrip = shown.locator(".statusline .status-partial");
+    await partialStrip.waitFor();
+    assert.match(await partialStrip.innerText(), /^Partial: cancelled after [\d,]+ rows?$/);
+    assert.equal(await shown.locator(".statusline", { hasText: "(loading)" }).count(), 0, "a cut-short result is not loading any more");
+    await shown.getByRole("grid").focus();
+    await shown.getByRole("grid").getByRole("gridcell", { name: /^Row 1, i \(.*\): 1$/ }).waitFor();
+    await shot("sdb-367-partial-cancelled");
     // Maximize the results (button or Ctrl+Alt+M): the editor hides and comes back unchanged.
     await replaceQuery(shown, "select 1 as maximized;");
     await run(shown);
@@ -4399,7 +4548,7 @@ try {
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   await panel.getByText("This page only", { exact: true }).waitFor();
   const beforeRefresh = await panel.locator(".result-tab-item.active").getAttribute("data-result");
-  await panel.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true }).click();
+  await panel.locator(".result-tools").getByRole("button", { name: "Refresh", exact: true }).click();
   await page.waitForFunction(([old]) => document.querySelector('.tab-panel:not([hidden]) .result-tab-item.active')?.getAttribute("data-result") !== old, [beforeRefresh]);
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   // Export takes every row the WHERE keeps, in the ORDER BY, not only the page on screen.
@@ -4871,7 +5020,7 @@ try {
     // Match all the two conditions keep no row, and without Match case "ada" keeps both Adas,
     // so only "2 of 3 rows" says both were kept.
     {
-      const refresh = names.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true });
+      const refresh = names.locator(".result-tools").getByRole("button", { name: "Refresh", exact: true });
       const shown = await names.locator(".result-tab-item.active").getAttribute("data-result");
       await refresh.click();
       await page.waitForFunction(([old]) => {
@@ -4880,7 +5029,7 @@ try {
       }, [shown]);
       await names.locator(".statusline", { hasText: "2 of 3 rows" }).waitFor();
       await page.waitForFunction(() => {
-        const button = document.querySelector('.tab-panel:not([hidden]) .grid-footer button[aria-label="Refresh"]');
+        const button = document.querySelector('.tab-panel:not([hidden]) .result-tools button[aria-label="Refresh"]');
         return button !== null && !button.disabled;
       });
       assert.equal(await matchMode.getByRole("button", { name: "Match any", exact: true }).getAttribute("aria-pressed"), "true");
@@ -6602,8 +6751,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await head.getByRole("button").click();
     const lockDetails = monitor.getByRole("complementary", { name: "Lock details" });
     await lockDetails.locator(".process-sql-detail", { hasText: "pg_sleep(120)" }).waitFor();
-    // Ending the blocking session goes through the process monitor's checks and confirmation.
-    assert.ok(!(await lockDetails.getByRole("button", { name: "End connection" }).isDisabled()), "the blocking session can be ended from here");
+    // Ending the blocking session goes through the process monitor's checks and confirmation. The
+    // button stays disabled while a refresh is loading, so wait for it to turn on rather than
+    // reading it once.
+    await lockDetails.locator("button:enabled", { hasText: "End connection" }).waitFor({ timeout: 15_000 })
+      .catch(() => assert.fail("the blocking session can be ended from here"));
     await shot("07c-lock-view");
     await setTheme("dark", "dark");
     await head.getByText("Blocks 1 session", { exact: true }).waitFor();
@@ -6972,7 +7124,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.type("edited", { delay: 10 });
     assert.equal(await editor.inputValue(), "edited");
     await editor.press("Enter");
-    await panel.locator(".grid-footer").getByRole("button", { name: "Refresh", exact: true }).click();
+    await panel.locator(".result-tools").getByRole("button", { name: "Refresh", exact: true }).click();
     await panel.getByText("Apply or discard the pending changes first").waitFor();
     await panel.locator(".grid-scroller").focus();
     // The full value panel edits the same pending cell, and can be undone by row.
@@ -10336,7 +10488,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await chip.waitFor({ state: "detached" });
     await run(controlPanel);
     await controlPanel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
-    await controlPanel.getByText("this session is read-only, so nothing was run", { exact: false }).waitFor({ state: "detached" });
+    // The refusal shows twice (the error box and the Messages tab) until the new run replaces
+    // both: wait for every copy to go, not for one locator that may still match two.
+    await page.waitForFunction(() => ![...document.querySelectorAll(".tab-panel:not([hidden]) .error-box, .tab-panel:not([hidden]) .message")]
+      .some((element) => element.textContent.includes("this session is read-only, so nothing was run")));
     // A transaction open: Disconnect all asks first, and Cancel keeps it.
     await controlPanel.locator(".transaction-controls").getByRole("checkbox", { name: "Auto-commit" }).click();
     await controlPanel.locator(".transaction-controls input[type=checkbox]:not(:checked)").waitFor();
@@ -10473,7 +10628,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   else if (e === untilComplete) console.log(`\nOK. Smoke test passed up to "${process.env.SPELAION_E2E_UNTIL}".`);
   else {
     failed = true;
-    console.error("\nFAILED:", e);
+    console.error(`\nFAILED at step "${currentStep}":\n`, e);
     try {
       await browser.contexts()[0].pages()[0].screenshot({ path: join(shots, "failure.png") });
     } catch {}
@@ -10481,7 +10636,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 } finally {
   writeFileSync(shopFile, shopOriginal);
   restoreDemoConnections();
-  await browser.close().catch(() => {});
+  await browser?.close().catch(() => {});
   await stopApp();
   // WebView2 lets go of its profile (inside userDir) a moment after the app exits.
   try {

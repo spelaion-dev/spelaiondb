@@ -6,6 +6,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import { useApp, type Tab } from "../store";
+import { transactionOf } from "../tabState";
+import type { TransactionPhaseItem } from "../bindings";
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -18,20 +20,27 @@ export function TransactionControls({ tab, running, onNotice }: {
 }) {
   const { t } = useTranslation("editor");
   const [busy, setBusy] = useState(false);
-  const status = tab.transaction;
+  const status = transactionOf(tab);
   if (!status) return null;
-  if (!status.supported) {
-    return <span className="status" title={t("transaction.unsupported")}>{t("transaction.autoCommit")}</span>;
+  // The core's state and its answers (ADR-031, ADR-060): nothing here is worked out from flags.
+  switch (status.kind) {
+    case "notFollowed":
+      return <span className="status" title={t("transaction.unsupported")}>{t("transaction.autoCommit")}</span>;
+    case "followed":
+      break;
+    default: {
+      const unknown: never = status;
+      return unknown;
+    }
   }
-  const inTransaction = status.state === "open" || status.state === "failed";
-  const locked = status.autoCommit === false && inTransaction;
+  const { commit, transaction, smartCommit, inTransaction, autoCommitLocked, endActionsShown } = status;
   const disabled = running || busy;
 
   async function toggle(on: boolean) {
     setBusy(true);
     try {
       const transaction = await call(commands.setAutoCommit(tab.id, on));
-      useApp.getState().updateTab(tab.id, { transaction });
+      useApp.getState().setTransaction(tab.id, transaction);
     } catch (e) {
       onNotice({ text: message(e), error: true });
     } finally {
@@ -43,7 +52,7 @@ export function TransactionControls({ tab, running, onNotice }: {
     setBusy(true);
     try {
       const outcome = await call(commit ? commands.commitTransaction(tab.id) : commands.rollbackTransaction(tab.id));
-      useApp.getState().updateTab(tab.id, { transaction: outcome.status });
+      useApp.getState().setTransaction(tab.id, outcome.status);
       const said = outcome.notices.map((n) => n.message);
       onNotice({
         text: [t(commit ? "transaction.committed" : "transaction.rolledBack"), ...said].join(" "),
@@ -58,25 +67,18 @@ export function TransactionControls({ tab, running, onNotice }: {
 
   return (
     <span className="transaction-controls" role="group" aria-label={t("transaction.autoCommit")}>
-      <label className="check" title={locked ? t("transaction.autoCommitLocked") : status.smartCommit ? t("transaction.smartCommitHint") : t("transaction.autoCommitHint")}>
+      <label className="check" title={autoCommitLocked ? t("transaction.autoCommitLocked") : smartCommit ? t("transaction.smartCommitHint") : t("transaction.autoCommitHint")}>
         <input
           type="checkbox"
-          checked={status.autoCommit}
-          disabled={disabled || locked}
+          checked={commit === "auto"}
+          disabled={disabled || autoCommitLocked}
           onChange={(e) => void toggle(e.target.checked)}
         />
         {t("transaction.autoCommit")}
-        {status.smartCommit && <span className="smart">{t("transaction.smart")}</span>}
+        {smartCommit && <span className="smart">{t("transaction.smart")}</span>}
       </label>
-      {status.state === "open" && (
-        <span className="tx-badge" role="status" title={t("transaction.openHint")}>
-          {status.statements > 0 ? t("transaction.openCount", { count: status.statements }) : t("transaction.open")}
-        </span>
-      )}
-      {status.state === "failed" && (
-        <span className="tx-badge tx-badge-failed" role="status" title={t("transaction.failedHint")}>{t("transaction.failed")}</span>
-      )}
-      {(inTransaction || !status.autoCommit) && (
+      <TransactionBadge transaction={transaction} />
+      {endActionsShown && (
         <>
           <button className="ghost small" disabled={disabled || !inTransaction} onClick={() => void end(true)}>{t("transaction.commit")}</button>
           <button className="ghost small" disabled={disabled || !inTransaction} onClick={() => void end(false)}>{t("transaction.rollback")}</button>
@@ -84,4 +86,25 @@ export function TransactionControls({ tab, running, onNotice }: {
       )}
     </span>
   );
+}
+
+/** The TX badge: what the driver last said, as the core passed it on. */
+function TransactionBadge({ transaction }: { transaction: TransactionPhaseItem }) {
+  const { t } = useTranslation("editor");
+  switch (transaction.kind) {
+    case "idle":
+      return null;
+    case "open":
+      return (
+        <span className="tx-badge" role="status" title={t("transaction.openHint")}>
+          {transaction.statements > 0 ? t("transaction.openCount", { count: transaction.statements }) : t("transaction.open")}
+        </span>
+      );
+    case "failed":
+      return <span className="tx-badge tx-badge-failed" role="status" title={t("transaction.failedHint")}>{t("transaction.failed")}</span>;
+    default: {
+      const unknown: never = transaction;
+      return unknown;
+    }
+  }
 }

@@ -19,11 +19,11 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [007](0007-in-process-ssh.md) | In-process SSH with `russh` + hops through an external command | Conditional (phase 0) |
 | [008](0008-mcp.md) | MCP over stdio, profiles, defense in layers, read-only in v0.1 | Accepted |
 | [009](0009-configuration-and-secrets.md) | TOML configuration, layers, secret references, sync through git | Accepted |
-| [010](0010-frontend-and-results.md) | React + CodeMirror 6 + canvas grid; results in the core (Arrow) | Conditional (phase 0) |
+| [010](0010-frontend-and-results.md) | React + CodeMirror 6 + canvas grid, with results in the core (Arrow) and styling and layout choices superseded by ADR-062 | Conditional (phase 0) |
 | [011](0011-local-storage.md) | Local SQLite in WAL mode | Accepted |
 | [012](0012-ci-as-reviewer.md) | CI is the code reviewer | Accepted |
 | [013](0013-license-and-repo.md) | Apache-2.0 + DCO + trademark policy; monorepo (plugins have their own repositories: ADR-042) | Accepted |
-| [014](0014-editing-table-data.md) | Editing in table data tabs, by primary key, in one transaction (pending changes in the core: superseded by ADR-044) | Accepted |
+| [014](0014-editing-table-data.md) | Editing by primary key in one transaction (pending edits moved to the core by ADR-044, eligible query results added by ADR-061) | Accepted |
 | [015](0015-kubernetes-tunnels.md) | Kubernetes connections through `kubectl port-forward` | Accepted |
 | [016](0016-duckdb.md) | DuckDB driver: bundled, one open per file (its MCP part superseded by ADR-020) | Accepted |
 | [017](0017-sql-server.md) | SQL Server driver: tiberius, T-SQL batches, cancel by Attention | Accepted |
@@ -69,3 +69,6 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [057](0057-installers-carry-plugin-archives.md) | Installers carry our plugins as their release archives, installed into the user's plugin store at every start with the store's checks: a signed app and an AppImage change the programs they carry | Accepted |
 | [058](0058-sqlite-over-the-network.md) | SQLite over the network: libSQL is a plugin in its own repository that takes SQLite's catalog and typing from a library of this repository, shared with the compiled-in SQLite driver; no read-only mode nor agents until a read-only token can be recognised; D1 waits for an account | Accepted (implemented) |
 | [059](0059-oracle-thin-driver-and-a-jdbc-bridge.md) | Oracle is a native plugin on Oracle's own pure-Rust thin driver (`oracledb`, Apache-2.0 or UPL): nothing to install and nothing we cannot redistribute; a JDBC bridge is a plugin of its own, only for engines no open native driver reaches, with the user's Java runtime and URLs built by the core | Accepted (Oracle plugin implemented; no read-only mode or agents yet) |
+| [060](0060-lifecycles-are-explicit-state-types.md) | Every lifecycle is one explicit state type (a Rust enum, or a discriminated union only in the page), owned by the core and passed through by the adapters; jobs share one cancel and one ending; the implicit machines are made explicit one card at a time (SDB-365 to SDB-377), without changing what ADR-028, ADR-031, ADR-035 and ADR-044 decided | Accepted (being implemented) |
+| [061](0061-editing-query-results.md) | A plain single-table query result can be edited by primary key through the session and database that read it | Accepted (implemented) |
+| [062](0062-desktop-styling-and-layout.md) | Plain CSS and shared design tokens, with app-owned desktop components and panel layout | Accepted (implemented) |

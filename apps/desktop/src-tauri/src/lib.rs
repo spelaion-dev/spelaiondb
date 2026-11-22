@@ -1,6 +1,7 @@
 //! SpelaionDB desktop app: a thin Tauri adapter over `spelaion-core` (ADR-002). There is no
 //! database or security logic here: only translation between UI commands and the core.
 
+mod app_lifecycle;
 mod backup;
 mod clipboard_text;
 mod connection_import;
@@ -11,6 +12,7 @@ mod file_dialog;
 mod files;
 mod import;
 mod interaction;
+mod jobs;
 mod launch;
 mod library;
 mod mcp;
@@ -19,12 +21,13 @@ mod plans;
 mod plugins;
 mod startup;
 mod update;
+mod update_state;
+mod webview_args;
 
 use spelaion_desktop_macros::command;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use futures_util::StreamExt;
 use spelaion_config::{
@@ -32,7 +35,7 @@ use spelaion_config::{
     TrustStore, default_user_dir, load,
 };
 use spelaion_core::{
-    AppLog, Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect,
+    AppLog, Engines, ExportFormat, ExportOptions, FindQuery, GenericDialect, JobCancel,
     OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth,
     StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
     start_over,
@@ -53,7 +56,8 @@ use spelaion_driver_api::NameFilter;
 struct AppState {
     user_dir: PathBuf,
     workspace: RwLock<Option<PathBuf>>,
-    workspace_version: AtomicU64,
+    /// The open folder's generation, and whether it is changing (SDB-377).
+    folder: app_lifecycle::Folder,
     config: RwLock<Config>,
     /// The engines the next connection uses. Swapped whole when the plugins change (ADR-055):
     /// a connection already open keeps the plugin process it has. Read with `engines()`.
@@ -77,23 +81,13 @@ struct AppState {
     /// Writes the open tabs to the local store on a deadline (ADR-036).
     tabs: TabKeeper,
     pending: Pending,
-    /// The app is quitting: the user confirmed, or there was nothing to ask (ADR-031).
-    quitting: AtomicBool,
-    /// Where the window's last close request stands: `CLOSE_IDLE`, `CLOSE_SENT` or
-    /// `CLOSE_ASKING` (`on_close_requested`).
-    close_request: AtomicU8,
-    tests: ConnectionTests,
-    /// Streaming exports running, by the id the UI gave them (ADR-034).
-    exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
-    /// Imports running, by the id the UI gave them (ADR-038).
-    imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ImportCancel>>>,
-    /// Backups and restores running, by the id the UI gave them (ADR-049).
-    backups: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::backup::BackupCancel>>>,
+    /// Where quitting stands (ADR-031, SDB-377): one phase, changed only by `Quit`'s methods.
+    quit: app_lifecycle::Quit,
+    /// Every job running (exports, imports, backups, tests, row loads, plugin installs…),
+    /// under ids the registry makes, each listed while its command runs (SDB-369, `jobs.rs`).
+    jobs: jobs::Jobs,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
-    /// Loads of query rows running ("Load every row", page and row jumps; SDB-386), by the id
-    /// the UI gave them.
-    loads: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::LoadCancel>>>,
 }
 
 struct DesktopSession {
@@ -146,34 +140,6 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
     })
 }
 
-/// Connection tests running now, by the id the UI gave them, to stop them (ADR-032).
-#[derive(Default)]
-struct ConnectionTests(std::sync::Mutex<HashMap<u32, tokio::sync::oneshot::Sender<()>>>);
-
-impl ConnectionTests {
-    /// Registers a test; the future completes when it is stopped.
-    fn start(&self, test: u32) -> impl std::future::Future<Output = ()> + Send + 'static {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.0.lock().expect("lock poisoned").insert(test, tx);
-        async move {
-            // Forgotten without a stop (the test ended): never completes.
-            if rx.await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        }
-    }
-
-    fn stop(&self, test: u32) {
-        if let Some(tx) = self.0.lock().expect("lock poisoned").remove(&test) {
-            let _ = tx.send(());
-        }
-    }
-
-    fn end(&self, test: u32) {
-        self.0.lock().expect("lock poisoned").remove(&test);
-    }
-}
-
 type CmdResult<T> = Result<T, String>;
 
 impl AppState {
@@ -222,13 +188,13 @@ impl AppState {
     }
 
     async fn reload(&self) {
-        let version = self.workspace_version.load(Ordering::Acquire);
+        let moment = self.folder.moment();
         let workspace = self.workspace.read().await.clone();
         let loaded = load(workspace.as_deref(), &self.user_dir);
         let _ = self.change_trust(|trust| trust.adopt(&loaded));
         let mut config = self.config.write().await;
         // A reload started in the previous folder must not overwrite the new one.
-        if version == self.workspace_version.load(Ordering::Acquire) {
+        if self.folder.still(moment) {
             *config = loaded;
         }
     }
@@ -576,8 +542,8 @@ async fn column_map(
 ) -> CmdResult<ColumnMapItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
@@ -648,15 +614,8 @@ async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResul
 
 #[command]
 async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
-    let version = state.workspace_version.load(Ordering::Acquire);
-    if !version.is_multiple_of(2)
-        || state
-            .workspace_version
-            .compare_exchange(version, version + 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-    {
-        return Err("the folder is already changing".into());
-    }
+    // Settled again when it is dropped, whatever happens below, a panic included (SDB-377).
+    let switch = state.folder.begin_switch().map_err(|e| e.to_string())?;
     let old_sessions = std::mem::take(&mut *state.sessions.lock().await);
     for session in old_sessions.into_values() {
         if let Ok(open) = Arc::try_unwrap(session.open) {
@@ -666,8 +625,8 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
     {
         let mut workspace = state.workspace.write().await;
         *workspace = Some(PathBuf::from(&path));
-        // Stay odd while switching, but invalidate reloads that saw the old path.
-        state.workspace_version.fetch_add(2, Ordering::AcqRel);
+        // Still changing, but reloads that saw the old path are stale.
+        switch.path_changed();
     }
     let _ = std::fs::create_dir_all(&state.user_dir);
     // App state in the personal folder: replaced whole (a crash never leaves half a path) and
@@ -681,7 +640,7 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
     // for the folder not to open.
     let _ = state.history.add_recent_folder(path.clone()).await;
     state.reload().await;
-    state.workspace_version.fetch_add(1, Ordering::Release);
+    drop(switch);
     state.info().await
 }
 
@@ -1141,7 +1100,7 @@ async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkPr
 }
 
 /// Tests a connection that may not be saved yet, step by step (ADR-032): every change to its
-/// steps goes through `on_step`, and `stop_connection_test(test)` stops it. Nothing is
+/// steps goes through `on_step`, its ticket to `job`, and `cancel_job` stops it. Nothing is
 /// written: neither the file nor the keychain. `editing` is the connection being edited, if
 /// any: its stored password is used when none is typed. `network_only` stops before logging
 /// in. The steps, their errors and the diagnostics come from the core, redacted.
@@ -1152,7 +1111,7 @@ async fn test_connection(
     password: Option<String>,
     editing: Option<String>,
     network_only: bool,
-    test: u32,
+    job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1197,13 +1156,17 @@ async fn test_connection(
         password: password.filter(|p| !p.is_empty()).map(Secret::new),
         name,
     };
-    let stop = state.tests.start(test);
+    let running = jobs::start(&state, jobs::JobKind::ConnectionTest, &job);
+    let stop = {
+        let cancel = running.cancel().clone();
+        async move { cancel.cancelled().await }
+    };
     let observer = |steps: &[spelaion_core::TestStep]| {
         let _ = on_step.send(steps.iter().map(TestStepItem::from).collect());
     };
     let report =
         spelaion_core::test_connection(resolved, &state.engines(), options, &observer, stop).await;
-    state.tests.end(test);
+    drop(running);
     Ok(ConnectionTestOutcome::Tested {
         report: report.into(),
         tls_warning,
@@ -1220,13 +1183,6 @@ async fn draft_tls_warning(
     let draft = ConnectionDraft::try_from(draft)?;
     let config = state.config.read().await;
     Ok(spelaion_core::connection_draft_tls_warning(&config, &draft).map(TlsWarningItem::from))
-}
-
-/// Stops a running connection or network profile test: the running step is dropped and
-/// whatever it opened is closed. Nothing is retried.
-#[command]
-fn stop_connection_test(test: u32, state: State<'_, AppState>) {
-    state.tests.stop(test);
 }
 
 /// Saves a new connection file (and, for `keychain`, its password) and reloads the
@@ -1675,7 +1631,7 @@ async fn tunnel_draft(
 
 /// Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
 /// again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
-/// are used when none is typed. Steps go through `on_step`; `stop_connection_test(test)`
+/// are used when none is typed. Steps go through `on_step`, its ticket to `job`; `cancel_job`
 /// stops it.
 #[command]
 #[allow(clippy::too_many_arguments)]
@@ -1683,7 +1639,7 @@ async fn test_tunnel(
     draft: TunnelDraftItem,
     passwords: Vec<Option<String>>,
     proxy_password: Option<String>,
-    test: u32,
+    job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1699,7 +1655,11 @@ async fn test_tunnel(
             other => other,
         }
     };
-    let stop = state.tests.start(test);
+    let running = jobs::start(&state, jobs::JobKind::ConnectionTest, &job);
+    let stop = {
+        let cancel = running.cancel().clone();
+        async move { cancel.cancelled().await }
+    };
     let observer = |steps: &[spelaion_core::TestStep]| {
         let _ = on_step.send(steps.iter().map(TestStepItem::from).collect());
     };
@@ -1712,7 +1672,7 @@ async fn test_tunnel(
         stop,
     )
     .await;
-    state.tests.end(test);
+    drop(running);
     Ok(TunnelTestOutcome::Tested {
         report: report.into(),
     })
@@ -1935,10 +1895,9 @@ async fn connect(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectOutcome> {
-    let workspace_version = state.workspace_version.load(Ordering::Acquire);
-    if !workspace_version.is_multiple_of(2) {
+    let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
-    }
+    };
     let id = parse_id(&connection);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let (resolved, history_workspace, definition) = {
@@ -2030,7 +1989,7 @@ async fn connect(
             .await;
     }
     let mut sessions = state.sessions.lock().await;
-    if workspace_version != state.workspace_version.load(Ordering::Acquire) {
+    if !state.folder.still(folder) {
         drop(sessions);
         open.close().await;
         return Err("the folder changed while connecting; select a connection again".into());
@@ -2075,10 +2034,9 @@ async fn connect_from_session(
     if source == session {
         return Err("the source and target sessions must differ".into());
     }
-    let workspace_version = state.workspace_version.load(Ordering::Acquire);
-    if !workspace_version.is_multiple_of(2) {
+    let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
-    }
+    };
     let (source_open, typed, history_workspace, opened) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -2153,7 +2111,7 @@ async fn connect_from_session(
             .await;
     }
     let mut sessions = state.sessions.lock().await;
-    if workspace_version != state.workspace_version.load(Ordering::Acquire)
+    if !state.folder.still(folder)
         || !sessions
             .get(&source)
             .is_some_and(|s| Arc::ptr_eq(&s.open, &source_open))
@@ -2190,6 +2148,7 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
             .close_when_idle(std::time::Duration::from_secs(seconds.into()));
     }
     forward_transaction(app, session.clone(), open);
+    forward_run(app, session.clone(), open);
     let mut health = open.session.health();
     let watched = Arc::downgrade(open);
     let app = app.clone();
@@ -2216,7 +2175,7 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
             return;
         };
         // The last state read before the loss (ADR-031).
-        let open_transaction = idle.is_none() && watched.session.transaction_status().is_open();
+        let open_transaction = idle.is_none() && watched.session.transaction_lifecycle().is_open();
         let state = app.state::<AppState>();
         let mut sessions = state.sessions.lock().await;
         let current = sessions
@@ -2250,7 +2209,7 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
 /// Tells the UI every change of an editor tab's transaction (ADR-031), while that session is
 /// still the tab's.
 fn forward_transaction(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
-    if !open.session.transaction_status().supported {
+    if !open.session.transaction_lifecycle().is_followed() {
         return;
     }
     let mut changes = open.session.transaction();
@@ -2280,6 +2239,37 @@ fn forward_transaction(app: &AppHandle, session: String, open: &Arc<OpenConnecti
     });
 }
 
+/// Tells the UI every change of an editor tab's run state (SDB-370): running a statement,
+/// paused after an error, cancelling, idle. The core sends it only when it changes, so this
+/// adds no re-render (SDB-110). Stops once the session is no longer the tab's.
+fn forward_run(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
+    let mut changes = open.session.run_state();
+    let watched = Arc::downgrade(open);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while changes.changed().await.is_ok() {
+            let state = *changes.borrow_and_update();
+            // Compared by address, without holding the session: `disconnect` must still be
+            // able to close it.
+            let still_the_tabs = app
+                .state::<AppState>()
+                .sessions
+                .lock()
+                .await
+                .get(&session)
+                .is_some_and(|s| std::ptr::eq(Arc::as_ptr(&s.open), watched.as_ptr()));
+            if !still_the_tabs {
+                return;
+            }
+            let _ = RunChanged {
+                session: session.clone(),
+                state: state.into(),
+            }
+            .emit(&app);
+        }
+    });
+}
+
 /// An editor tab's transaction, as the core last read it (ADR-031).
 #[command]
 async fn transaction_status(
@@ -2303,7 +2293,7 @@ async fn set_auto_commit(
         .set_auto_commit(on)
         .await
         .map(Into::into)
-        .map_err(|e| e.to_string())
+        .map_err(|e| open.session.transaction_refusal(&e))
 }
 
 #[command]
@@ -2316,7 +2306,7 @@ async fn commit_transaction(
         .commit()
         .await
         .map(Into::into)
-        .map_err(|e| e.to_string())
+        .map_err(|e| open.session.transaction_refusal(&e))
 }
 
 #[command]
@@ -2329,7 +2319,7 @@ async fn rollback_transaction(
         .rollback()
         .await
         .map(Into::into)
-        .map_err(|e| e.to_string())
+        .map_err(|e| open.session.transaction_refusal(&e))
 }
 
 /// Of these sessions, the ones whose closing must be confirmed: a transaction with work in it
@@ -2360,45 +2350,40 @@ async fn sessions_to_confirm(
 /// committed, applied or saved; the servers roll back open transactions.
 #[command]
 async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
-    state.quitting.store(true, Ordering::SeqCst);
+    state.quit.quit();
     app.exit(0);
     Ok(())
 }
-
-/// Nobody asked to close the window, or the UI answered the last request by going back.
-const CLOSE_IDLE: u8 = 0;
-/// `QuitRequested` was sent and the UI has not said it got it.
-const CLOSE_SENT: u8 = 1;
-/// The UI got the request and is checking its tabs or asking the user.
-const CLOSE_ASKING: u8 = 2;
 
 /// The UI got `QuitRequested` and is deciding: a later close request asks it again instead of
 /// quitting.
 #[command]
 async fn quit_asking(state: State<'_, AppState>) -> CmdResult<()> {
-    state.close_request.store(CLOSE_ASKING, Ordering::SeqCst);
+    state.quit.asking();
     Ok(())
 }
 
 /// The user went back from the quit question: the next close request asks again.
 #[command]
 async fn quit_cancelled(state: State<'_, AppState>) -> CmdResult<()> {
-    state.close_request.store(CLOSE_IDLE, Ordering::SeqCst);
+    state.quit.cancelled();
     Ok(())
 }
 
-/// The editor tabs with an open transaction, for the quit question: from what each session
-/// last read, with no round trip, so a server that does not answer cannot hold quitting.
+/// The editor tabs whose closing must ask, for the quit question: from what each session
+/// last read, with no round trip, so a server that does not answer cannot hold quitting. A lost
+/// session is left out: its server already rolled its transaction back (SDB-372).
 #[command]
 async fn quit_open_transactions(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     Ok(open_transactions(&*state.sessions.lock().await))
 }
 
-/// The editor tabs with an open transaction, from what each session last read.
+/// The editor tabs whose closing must ask, from what each session last read
+/// (`Session::closing_asks_from_last_state`, the core's one rule).
 fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> {
     let mut open: Vec<String> = sessions
         .iter()
-        .filter(|(_, s)| s.open.session.transaction_status().is_open())
+        .filter(|(_, s)| s.open.session.closing_asks_from_last_state())
         .map(|(key, _)| key.clone())
         .collect();
     open.sort();
@@ -2414,18 +2399,20 @@ fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> 
 /// UI never said it got it (it is frozen), the next close request quits.
 fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     let state = window.state::<AppState>();
-    if state.quitting.load(Ordering::SeqCst) {
+    if state.quit.phase() == app_lifecycle::QuitPhase::Quitting {
         return;
     }
-    // A command holding the sessions means there are some: the UI decides.
+    // A command holding the sessions means there are some: the UI decides. A lost session
+    // counts here too: its tab may hold row edits not applied, which only the UI knows, and the
+    // UI asks about those (its transaction is gone with its connection: `open_transactions`).
     let no_sessions = state
         .sessions
         .try_lock()
         .map(|sessions| sessions.is_empty())
         .unwrap_or(false);
-    if no_sessions || state.close_request.swap(CLOSE_SENT, Ordering::SeqCst) == CLOSE_SENT {
-        state.quitting.store(true, Ordering::SeqCst);
-        return;
+    match state.quit.close_requested(no_sessions) {
+        app_lifecycle::CloseDecision::Close => return,
+        app_lifecycle::CloseDecision::AskTheUi => {}
     }
     api.prevent_close();
     let _ = QuitRequested {}.emit(window.app_handle());
@@ -2830,13 +2817,13 @@ async fn load_estimate(
 
 /// Loads keyset pages of a paged query (ADR-054) into `result`, which holds `offset` rows,
 /// until it holds `until` rows (every row without it) or the query has no more. The rows held
-/// go to `on_progress` after each page; `cancel_load_rows` with the same `load_id` stops it,
-/// keeping the pages loaded before.
+/// go to `on_progress` after each page; its ticket goes to `job` at once, and `cancel_job` with
+/// it stops the load, keeping the pages loaded before.
 #[allow(clippy::too_many_arguments)]
 #[command]
 async fn load_query_rows(
     session: String,
-    load_id: u32,
+    job: Channel<jobs::JobTicket>,
     result: u32,
     sql: String,
     offset: u32,
@@ -2846,49 +2833,37 @@ async fn load_query_rows(
     state: State<'_, AppState>,
 ) -> CmdResult<LoadedRowsItem> {
     let open = state.session(&session).await?;
+    let running = jobs::start(&state, jobs::JobKind::RowLoad, &job);
     let cancel = Arc::new(spelaion_core::LoadCancel::new());
-    state
-        .loads
-        .lock()
-        .expect("lock poisoned")
-        .insert(load_id, cancel.clone());
     let progress = move |rows: u64| {
         let _ = on_progress.send(u32::try_from(rows).unwrap_or(u32::MAX));
     };
-    let outcome = spelaion_core::load_query_rows(
+    let sort = sort_keys(sort);
+    let load = spelaion_core::load_query_rows(
         &open.session,
         ResultId(result.into()),
         &sql,
         offset.into(),
-        &sort_keys(sort),
+        &sort,
         until.map(u64::from),
         spelaion_core::LOAD_PAGE_ROWS,
         &cancel,
         &progress,
-    )
-    .await;
-    state.loads.lock().expect("lock poisoned").remove(&load_id);
-    Ok(outcome?.into())
-}
-
-/// Stops a load of query rows: the page being read and every page after it.
-#[command]
-async fn cancel_load_rows(
-    session: String,
-    load_id: u32,
-    state: State<'_, AppState>,
-) -> CmdResult<()> {
-    let cancel = state
-        .loads
-        .lock()
-        .expect("lock poisoned")
-        .get(&load_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        let open = state.session(&session).await?;
+    );
+    // A cancel of the job stops the load as the core does: no page after it, the one being
+    // read through the session (SDB-266). The load then ends as cancelled, with its pages.
+    let stop = async {
+        running.cancel().cancelled().await;
         cancel.cancel(&open.session).await;
-    }
-    Ok(())
+        std::future::pending::<()>().await
+    };
+    let outcome = tokio::select! {
+        biased;
+        outcome = load => outcome,
+        () = stop => unreachable!("the stop never ends"),
+    };
+    drop(running);
+    Ok(outcome?.into())
 }
 
 /// Every row of a table data tab's table that its filter keeps, in its pages' order: "Load
@@ -3152,8 +3127,8 @@ async fn copy_rows(
         let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
         let stored = state
             .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
+            .stored(ResultId(result.into()))
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
         // The rows chosen one by one, or the block (#315's selection).
@@ -3176,8 +3151,8 @@ async fn copy_rows(
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let options = ExportOptions {
         format: match format {
@@ -3273,8 +3248,8 @@ async fn copy_special(
         .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
     spelaion_core::copy_special(&stored, &rows, &columns, &options).map_err(|e| e.to_string())
@@ -3300,8 +3275,8 @@ async fn copy_updates(
             .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let columns: Vec<usize> = range.columns.iter().map(|&c| c as usize).collect();
     spelaion_core::copy_updates(&update, &stored, &rows, &columns).map_err(|e| e.to_string())
@@ -3330,14 +3305,21 @@ async fn export_result(
     let file_options = options.file_options()?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let summary = tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
             .map_err(|_| "result lock poisoned".to_string())?;
-        if !stored.is_complete() {
-            return Err("the result is still loading: export it when every row has arrived".into());
+        // A partial result exports the rows it has; the export dialog says they are partial
+        // (SDB-367).
+        match stored.end() {
+            spelaion_core::ResultEnd::Loading => {
+                return Err(
+                    "the result is still loading: export it when every row has arrived".into(),
+                );
+            }
+            spelaion_core::ResultEnd::Whole | spelaion_core::ResultEnd::Partial(_) => {}
         }
         let all = (0..stored.schema().columns.len()).collect::<Vec<_>>();
         let (rows, columns) = match range {
@@ -3452,14 +3434,21 @@ async fn export_file_name(
 }
 
 /// A new session for an export (ADR-034), opened like `connect_from_session` from the
-/// `source` session's resolved connection and in-memory password, and registered under
-/// `export_id` so `cancel_export` can stop it. Never the tab's own session.
+/// `source` session's resolved connection and in-memory password, for a job of `kind` whose
+/// ticket goes to `job` at once, so `cancel_job` can stop it while the session still opens.
+/// Never the tab's own session.
 async fn open_export_session(
     state: &AppState,
     app: &AppHandle,
     source: &str,
-    export_id: u32,
-) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<ExportCancel>)> {
+    kind: jobs::JobKind,
+    job: &Channel<jobs::JobTicket>,
+) -> CmdResult<(
+    Arc<OpenConnection>,
+    Arc<OpenConnection>,
+    Arc<JobCancel>,
+    jobs::Job,
+)> {
     let (source_open, password) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -3467,14 +3456,8 @@ async fn open_export_session(
             .ok_or("the connection of this export is closed")?;
         (source.open.clone(), source.password.clone())
     };
-    let cancel = Arc::new(ExportCancel::new());
-    {
-        let mut exports = state.exports.lock().expect("lock poisoned");
-        if exports.contains_key(&export_id) {
-            return Err("an export with this id is already running".into());
-        }
-        exports.insert(export_id, cancel.clone());
-    }
+    let running = jobs::start(state, kind, job);
+    let cancel = running.cancel().clone();
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
@@ -3491,28 +3474,14 @@ async fn open_export_session(
     )
     .await
     {
-        Ok(open) => {
-            cancel.attach(&open.session);
-            Ok((source_open, Arc::new(open), cancel))
-        }
-        Err(e) => {
-            state
-                .exports
-                .lock()
-                .expect("lock poisoned")
-                .remove(&export_id);
-            Err(e.to_string())
-        }
+        Ok(open) => Ok((source_open, Arc::new(open), cancel, running)),
+        Err(e) => Err(e.to_string()),
     }
 }
 
-/// Closes an export's session and forgets its cancel.
-async fn close_export_session(state: &AppState, export_id: u32, open: Arc<OpenConnection>) {
-    state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .remove(&export_id);
+/// Ends an export's job and closes its session.
+async fn close_export_session(running: jobs::Job, open: Arc<OpenConnection>) {
+    drop(running);
     if let Ok(open) = Arc::try_unwrap(open) {
         open.close().await;
     }
@@ -3537,7 +3506,7 @@ fn progress_sender(
 #[allow(clippy::too_many_arguments)]
 async fn export_query(
     source: String,
-    export_id: u32,
+    job: Channel<jobs::JobTicket>,
     sql: String,
     path: String,
     options: ExportFileOptions,
@@ -3555,7 +3524,8 @@ async fn export_query(
             return Ok(ExportOutcome::NotARead { message });
         }
     }
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::Export, &job).await?;
     // The tab is only asked where it finds unqualified names; it is not held during the export.
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     let safeguards = tab.resolved.safeguards();
@@ -3576,7 +3546,7 @@ async fn export_query(
             .await
         }
     };
-    close_export_session(&state, export_id, open).await;
+    close_export_session(running, open).await;
     Ok(outcome.into())
 }
 
@@ -3586,7 +3556,7 @@ async fn export_query(
 #[allow(clippy::too_many_arguments)]
 async fn export_table_data(
     source: String,
-    export_id: u32,
+    job: Channel<jobs::JobTicket>,
     view: TableExportItem,
     path: String,
     options: ExportFileOptions,
@@ -3595,7 +3565,8 @@ async fn export_table_data(
     state: State<'_, AppState>,
 ) -> CmdResult<ExportOutcome> {
     let settings = stream_export(&options, &view.name)?;
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::Export, &job).await?;
     drop(tab);
     let table = spelaion_core::TableSource {
         schema: view.schema,
@@ -3612,7 +3583,7 @@ async fn export_table_data(
         &progress_sender(on_progress, None),
     )
     .await;
-    close_export_session(&state, export_id, open).await;
+    close_export_session(running, open).await;
     Ok(outcome.into())
 }
 
@@ -3622,7 +3593,7 @@ async fn export_table_data(
 #[allow(clippy::too_many_arguments)]
 async fn export_tables(
     source: String,
-    export_id: u32,
+    job: Channel<jobs::JobTicket>,
     tables: Vec<RelationRefItem>,
     folder: String,
     names: FileNamePatternItem,
@@ -3634,7 +3605,8 @@ async fn export_tables(
     let names: spelaion_core::FileNamePattern = names.into();
     names.check()?;
     let settings = stream_export(&options, "")?;
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::Export, &job).await?;
     drop(tab);
     // `{database}` in the names: the export session's, which follows the tab's connection.
     let database = open
@@ -3663,46 +3635,12 @@ async fn export_tables(
         &progress,
     )
     .await;
-    close_export_session(&state, export_id, open).await;
-    let file = |f: spelaion_core::ExportedFile| ExportedFileItem {
-        schema: f.schema,
-        name: f.name,
-        path: f.path.display().to_string(),
-        summary: f.summary.into(),
-    };
-    Ok(match result {
-        Ok(files) => ExportTablesOutcome {
-            files: files.into_iter().map(file).collect(),
-            cancelled: false,
-            failed_table: None,
-            error: None,
-        },
-        Err(stopped) => {
-            let cancelled = matches!(*stopped.error, spelaion_core::ExportError::Cancelled);
-            ExportTablesOutcome {
-                files: stopped.done.into_iter().map(file).collect(),
-                cancelled,
-                failed_table: (!cancelled)
-                    .then(|| u32::try_from(stopped.table).unwrap_or(u32::MAX)),
-                error: (!cancelled).then(|| stopped.error.to_string()),
-            }
-        }
-    })
-}
-
-/// Stops a running streaming export: its statement and its writer; no file is left.
-#[command]
-async fn cancel_export(export_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .get(&export_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
+    close_export_session(running, open).await;
+    Ok(ExportTablesOutcome::from_end(
+        result.into(),
+        |files| files.into_iter().map(ExportedFileItem::from).collect(),
+        TablesStoppedItem::from,
+    ))
 }
 
 /// Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form.
@@ -3856,8 +3794,8 @@ async fn sort_result(
 ) -> CmdResult<()> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let keys = sort_keys(keys);
     tokio::task::spawn_blocking(move || {
         stored
@@ -3883,8 +3821,8 @@ async fn filter_columns(
     let mode = spelaion_core::FilterMode::from(mode.unwrap_or_default());
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let filters: Vec<spelaion_core::ColumnFilter> = filters.into_iter().map(Into::into).collect();
     tokio::task::spawn_blocking(move || {
         let mut stored = stored
@@ -3915,8 +3853,8 @@ async fn find_in_result(
 ) -> CmdResult<Option<FindOutcome>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let query = FindQuery {
         text,
         match_case,
@@ -3961,8 +3899,8 @@ async fn find_matches(
 ) -> CmdResult<Vec<FindMatchItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
     Ok(stored.find().map_or_else(Vec::new, |found| {
@@ -3989,8 +3927,8 @@ async fn find_step(
 ) -> CmdResult<Option<FindStepItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
     Ok(stored.find().and_then(|found| {
@@ -4028,8 +3966,8 @@ async fn selection_stats(
 ) -> CmdResult<Option<SelectionStatsItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let selected_rows = range
         .selected_rows
         .map(|rows| rows.into_iter().map(|row| row as usize).collect::<Vec<_>>());
@@ -4068,8 +4006,8 @@ async fn group_result(
 ) -> CmdResult<Option<GroupingItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let request = spelaion_core::GroupRequest {
         columns: columns.into_iter().map(|c| c as usize).collect(),
         duplicates_only,
@@ -4118,8 +4056,8 @@ async fn filter_to_group(
 ) -> CmdResult<GroupFilterOutcome> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let columns: Vec<usize> = columns.into_iter().map(|c| c as usize).collect();
     if !(first_row >= 0.0 && generation >= 0.0) {
         return Err("no such group".into());
@@ -4171,8 +4109,8 @@ async fn result_chart(
 ) -> CmdResult<Option<ChartPointsItem>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let request = spelaion_core::ChartRequest::from(request);
     tokio::task::spawn_blocking(move || {
         let read = stored
@@ -4218,13 +4156,13 @@ async fn save_chart_image(
 /// A table data tab column's statistics (the column header's "Column statistics"): counted by
 /// the server in a new session of the tab's connection, every statement a read inside the
 /// engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
-/// type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
-/// `stats_id` stops it.
+/// type come from the tab's page (`result`, `column`). Its ticket goes to `job`; `cancel_job`
+/// stops it.
 #[command]
 #[allow(clippy::too_many_arguments)]
 async fn column_stats(
     source: String,
-    stats_id: u32,
+    job: Channel<jobs::JobTicket>,
     table: ColumnStatsTarget,
     result: u32,
     column: u32,
@@ -4234,8 +4172,8 @@ async fn column_stats(
     let (name, logical) = {
         let stored = state
             .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
+            .stored(ResultId(result.into()))
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         let meta = stored
             .schema()
@@ -4260,33 +4198,34 @@ async fn column_stats(
         spelaion_core::column_stats_sql(tab.session.dialect().as_ref(), &request, false)
             .map_err(|e| e.to_string())?;
     }
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, stats_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::ColumnStats, &job).await?;
     // The tab's database (MySQL, SQL Server) or schema, as for exports.
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     drop(tab);
     let outcome = match context {
-        Err(message) => Err(message),
-        Ok(()) => match spelaion_core::column_stats(&open.session, &request, &cancel).await {
-            Ok(stats) => Ok(ColumnStatsOutcome::Done {
-                stats: Box::new(ColumnStatsItem::new(stats, request.sample_rows)),
-            }),
-            Err(spelaion_core::ColumnStatsError::Cancelled) => Ok(ColumnStatsOutcome::Cancelled),
-            Err(e) => Err(e.to_string()),
-        },
+        Err(message) => ColumnStatsOutcome::failed(message),
+        Ok(()) => ColumnStatsOutcome::from_end(
+            spelaion_core::column_stats(&open.session, &request, &cancel)
+                .await
+                .into(),
+            |stats| Box::new(ColumnStatsItem::new(stats, request.sample_rows)),
+            |()| (),
+        ),
     };
-    close_export_session(&state, stats_id, open).await;
-    outcome
+    close_export_session(running, open).await;
+    Ok(outcome)
 }
 
 /// A table data tab column's most frequent values, to pick a filter's value from: counted by
 /// the server like `column_stats` (a new session of the tab's connection, every statement a
 /// read), with the tab's filter. The core refuses a masked column before anything is read
-/// (ADR-051). `cancel_column_stats` with the same `stats_id` stops it.
+/// (ADR-051). Its ticket goes to `job`; `cancel_job` stops it.
 #[command]
 #[allow(clippy::too_many_arguments)]
 async fn column_top_values(
     source: String,
-    stats_id: u32,
+    job: Channel<jobs::JobTicket>,
     table: ColumnStatsTarget,
     result: u32,
     column: u32,
@@ -4296,8 +4235,8 @@ async fn column_top_values(
     let (name, logical) = {
         let stored = state
             .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
+            .stored(ResultId(result.into()))
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         let meta = stored
             .schema()
@@ -4329,7 +4268,8 @@ async fn column_top_values(
         spelaion_core::column_stats_sql(tab.session.dialect().as_ref(), &request, false)
             .map_err(|e| e.to_string())?;
     }
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, stats_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::ColumnStats, &job).await?;
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     drop(tab);
     let outcome = match context {
@@ -4352,7 +4292,7 @@ async fn column_top_values(
             Err(e) => Err(e.to_string()),
         },
     };
-    close_export_session(&state, stats_id, open).await;
+    close_export_session(running, open).await;
     outcome
 }
 
@@ -4491,16 +4431,16 @@ fn data_search_limits() -> DataSearchLimitsItem {
 /// Searches a value in the chosen tables of `source`'s connection (ADR-043): the core writes
 /// one read per table with the value bound as a parameter, in a new session opened for reads
 /// only, each table inside the engine's read-only transaction. Each table's start and end go to
-/// `on_event`; `cancel_data_search` with the same `search_id` stops it.
+/// `on_event`, its ticket to `job`; `cancel_job` stops it.
 #[command]
 async fn data_search(
     source: String,
-    search_id: u32,
+    job: Channel<jobs::JobTicket>,
     request: DataSearchRequestItem,
     on_event: Channel<DataSearchEventItem>,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CmdResult<DataSearchSummaryItem> {
+) -> CmdResult<DataSearchOutcome> {
     let request = spelaion_core::DataSearchRequest::from(request);
     // Checked before connecting: a request out of bounds never opens a session.
     request.check().map_err(|e| e.to_string())?;
@@ -4510,7 +4450,8 @@ async fn data_search(
             return Err(spelaion_core::DataSearchError::Unsupported.to_string());
         }
     }
-    let (tab, open, cancel) = open_export_session(&state, &app, &source, search_id).await?;
+    let (tab, open, cancel, running) =
+        open_export_session(&state, &app, &source, jobs::JobKind::DataSearch, &job).await?;
     let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
     drop(tab);
     let progress = move |event: spelaion_core::DataSearchEvent| {
@@ -4520,41 +4461,17 @@ async fn data_search(
         Err(message) => Err(message),
         Ok(()) => spelaion_core::data_search(&open.session, &request, &cancel, &progress)
             .await
-            .map(DataSearchSummaryItem::from)
+            .map(|summary| {
+                DataSearchOutcome::from_end(
+                    summary.into(),
+                    DataSearchSummaryItem::from,
+                    DataSearchSummaryItem::from,
+                )
+            })
             .map_err(|e| e.to_string()),
     };
-    close_export_session(&state, search_id, open).await;
+    close_export_session(running, open).await;
     outcome
-}
-
-/// Stops a data search: the running statement and every table after it.
-#[command]
-async fn cancel_data_search(search_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .get(&search_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
-}
-
-/// Stops a column's statistics while they are counted: the running statement and the rest.
-#[command]
-async fn cancel_column_stats(stats_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .exports
-        .lock()
-        .expect("lock poisoned")
-        .get(&stats_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
 }
 
 /// A table data tab's filter with a condition the core wrote (one of the column statistics'
@@ -4588,8 +4505,8 @@ async fn table_filter_condition(
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let (name, logical, typed) = {
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         let meta = stored
@@ -4623,8 +4540,8 @@ async fn copy_column_names(
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let columns: Vec<usize> = columns.into_iter().map(|c| c as usize).collect();
     spelaion_core::column_names(
@@ -4649,8 +4566,8 @@ async fn copy_column_in_list(
     let dialect = dialect_for(&state, &session).await;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
@@ -4671,8 +4588,8 @@ async fn row_values(
 ) -> CmdResult<Vec<Option<String>>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let batch = stored
         .window(row as usize, 1)
@@ -4703,8 +4620,8 @@ async fn filter_result(
 ) -> CmdResult<FilterOutcome> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let mut stored = stored
             .write()
@@ -4731,8 +4648,8 @@ async fn cell_value(
 ) -> CmdResult<Option<String>> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let column = column as usize;
     let meta = stored
@@ -4766,8 +4683,8 @@ async fn view_cell(
 ) -> CmdResult<CellViewItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
@@ -4791,8 +4708,8 @@ async fn reveal_cell(
 ) -> CmdResult<RevealedCellItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     stored
         .reveal(row as usize, column as usize)
@@ -4812,8 +4729,8 @@ async fn save_cell_value(
 ) -> CmdResult<f64> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
@@ -5391,8 +5308,8 @@ async fn follow_key(
     .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     spelaion_core::follow(open.session.dialect().as_ref(), &stored, row as usize, &key)
         .map(KeyTargetItem::from)
@@ -5420,8 +5337,8 @@ async fn row_references(
     let targets = {
         let stored = state
             .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
+            .stored(ResultId(result.into()))
+            .map_err(|e| e.to_string())?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
         spelaion_core::reference_targets(
             open.session.dialect().as_ref(),
@@ -6027,8 +5944,8 @@ async fn editable_source(
 async fn pending_edits(result: u32, state: State<'_, AppState>) -> CmdResult<PendingEditsItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     Ok(PendingEditsItem::new(
         stored.pending(),
@@ -6047,8 +5964,8 @@ async fn edit_pending(
 ) -> CmdResult<PendingEditsItem> {
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let mut stored = stored.write().map_err(|_| "result lock poisoned")?;
     let outcome = stored
         .edit_pending(edit.into())
@@ -6124,8 +6041,8 @@ async fn table_edit_statements(
         .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let changes = stored.pending().changes();
     spelaion_core::edit_statements(&target, &table, &stored, &changes).map_err(|e| e.to_string())
@@ -6206,8 +6123,8 @@ async fn load_file_statements(
         .map_err(|e| e.to_string())?;
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
+        .stored(ResultId(result.into()))
+        .map_err(|e| e.to_string())?;
     // Written only through this session, for rows it read in its current database (SDB-137).
     let target = open
         .session
@@ -6247,23 +6164,33 @@ async fn answer_interaction(
 ///
 /// It is the only command outside `tauri-specta`, which does not type binary responses; its
 /// TS wrapper is in `src/api.ts`.
+///
+/// Its error is a [`WindowErrorItem`] (SDB-367): the grid tells a freed result, which it shows
+/// with Run again, from a window that could not be read.
 #[tauri::command]
 fn fetch_window(
     result: u32,
     start: u32,
     len: u32,
     state: State<'_, AppState>,
-) -> Result<Response, String> {
+) -> Result<Response, WindowErrorItem> {
+    let failed = |message: String| WindowErrorItem::Failed { message };
     let stored = state
         .results
-        .get(ResultId(result.into()))
-        .ok_or("result freed")?;
-    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        .stored(ResultId(result.into()))
+        .map_err(WindowErrorItem::from)?;
+    let stored = stored
+        .read()
+        .map_err(|_| failed("result lock poisoned".into()))?;
     // Each cell as the database prints it and, where the user's display settings show it
     // otherwise, as they show it (SDB-385): the core writes both.
-    let display = state.display.read().map_err(|_| "lock poisoned")?.clone();
+    let display = state
+        .display
+        .read()
+        .map_err(|_| failed("lock poisoned".into()))?
+        .clone();
     let out = spelaion_core::window_ipc(&stored, start as usize, len as usize, &display)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| failed(e.to_string()))?;
     Ok(Response::new(out))
 }
 
@@ -6311,7 +6238,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             import::import_preview,
             import::import_plan,
             import::run_import,
-            import::cancel_import,
+            jobs::cancel_job,
             backup::backup_preferences,
             backup::set_backup_preferences,
             backup::backup_tools,
@@ -6319,7 +6246,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             backup::run_backup,
             backup::preview_restore,
             backup::run_restore,
-            backup::cancel_backup,
             backup::preview_embedded_backup,
             backup::run_embedded_backup,
             backup::run_duckdb_import,
@@ -6368,13 +6294,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             notify_run_finished,
             update::update_check,
             update::update_install,
+            update::update_status,
             update::update_open_releases_page,
             plugins::plugins_overview,
             diagnostics::diagnostic_info,
             diagnostics::open_issue_page,
             plugins::plugins_refresh_catalogue,
             plugins::plugins_install,
-            plugins::plugins_cancel_install,
             plugins::plugins_install_file,
             plugins::plugins_remove,
             plugins::plugin_processes,
@@ -6383,7 +6309,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             keychain_available,
             list_tunnels,
             test_connection,
-            stop_connection_test,
             add_connection,
             connection_editor_access,
             connection_draft,
@@ -6430,11 +6355,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             record_table_filter,
             forget_table_filter,
             set_table_default_filter,
-            cancel_column_stats,
             list_columns,
             data_search_limits,
             data_search,
-            cancel_data_search,
             add_table_condition,
             table_filter_condition,
             table_keys,
@@ -6449,7 +6372,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             export_query,
             export_table_data,
             export_tables,
-            cancel_export,
             cell_value,
             view_cell,
             reveal_cell,
@@ -6569,7 +6491,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_session_read_only,
             load_estimate,
             load_query_rows,
-            cancel_load_rows,
             table_rows_sql,
             last_table_page,
             cancel,
@@ -6608,15 +6529,18 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             quit_cancelled,
             quit_app,
         ])
+        .typ::<WindowErrorItem>()
         .events(tauri_specta::collect_events![
             InteractionRequest,
             InteractionClosed,
             SessionLost,
             TransactionChanged,
+            RunChanged,
             QuitRequested,
-            plugins::PluginInstallProgress,
+            plugins::PluginInstallChanged,
             plugins::PluginsChanged,
-            launch::LaunchRequested
+            launch::LaunchRequested,
+            update_state::UpdateChanged
         ])
 }
 
@@ -6655,6 +6579,14 @@ fn open_main_window(
     let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
     #[cfg(target_os = "linux")]
     let window = window.enable_clipboard_access();
+    // The smoke test's WebView2 switches (its debugging port), only in a build with the `e2e`
+    // feature and only from an allowlist; without the variable wry keeps its own
+    // (`webview_args.rs`).
+    #[cfg(feature = "e2e")]
+    let window = match webview_args::from_env()? {
+        Some(arguments) => window.additional_browser_args(&arguments),
+        None => window,
+    };
     let offscreen = std::env::var_os(OFFSCREEN_SWITCH).is_some();
     // Without the switch the builder keeps the configuration's visibility and focus.
     let window = if offscreen {
@@ -6850,7 +6782,7 @@ pub fn run() {
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
-        workspace_version: AtomicU64::new(0),
+        folder: app_lifecycle::Folder::default(),
         config: RwLock::new(config),
         engines: std::sync::RwLock::new(engines),
         plugins: plugins::PluginOps::default(),
@@ -6865,13 +6797,8 @@ pub fn run() {
         history,
         tabs,
         pending: Pending::default(),
-        quitting: AtomicBool::new(false),
-        close_request: AtomicU8::new(CLOSE_IDLE),
-        tests: ConnectionTests::default(),
-        exports: std::sync::Mutex::new(HashMap::new()),
-        loads: std::sync::Mutex::new(HashMap::new()),
-        imports: std::sync::Mutex::new(HashMap::new()),
-        backups: std::sync::Mutex::new(HashMap::new()),
+        quit: app_lifecycle::Quit::default(),
+        jobs: jobs::Jobs::new(),
         diagrams: std::sync::Mutex::new(HashMap::new()),
     };
 

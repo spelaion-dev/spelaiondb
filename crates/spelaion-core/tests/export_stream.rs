@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
 use spelaion_core::{
-    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportFormat,
-    ExportProgress, FileNamePattern, ResultStore, Session, StreamExport, TableSource, TextEncoding,
+    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, ExportError, ExportFormat, ExportProgress,
+    FileNamePattern, JobCancel, ResultStore, Session, StreamExport, TableSource, TextEncoding,
     export_query, export_table, export_tables, rerun_check,
 };
 use spelaion_driver_api::{ConnectParams, Driver, ExecOptions, Secret, TlsMode, Value};
@@ -173,7 +173,7 @@ async fn exercise(engine: Engine) {
             false,
             &path,
             &csv(true),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &progress,
         )
         .await
@@ -213,7 +213,7 @@ async fn exercise(engine: Engine) {
             false,
             &path,
             &small,
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &progress,
         )
         .await
@@ -252,7 +252,7 @@ async fn exercise(engine: Engine) {
             batch_size: DEFAULT_BATCH_ROWS,
         };
         let path = dir.join("tab.tsv");
-        let summary = export_table(&session, &tab, &path, &tsv, &ExportCancel::new(), &nothing)
+        let summary = export_table(&session, &tab, &path, &tsv, &JobCancel::new(), &nothing)
             .await
             .unwrap_or_else(|e| panic!("{label}: {e}"));
         assert_eq!(summary.rows, 100, "{label}");
@@ -269,15 +269,7 @@ async fn exercise(engine: Engine) {
         };
         let path = dir.join("sneaky.tsv");
         assert!(matches!(
-            export_table(
-                &session,
-                &sneaky,
-                &path,
-                &tsv,
-                &ExportCancel::new(),
-                &nothing
-            )
-            .await,
+            export_table(&session, &sneaky, &path, &tsv, &JobCancel::new(), &nothing).await,
             Err(ExportError::Table(_))
         ));
         assert!(!path.exists());
@@ -289,16 +281,9 @@ async fn exercise(engine: Engine) {
             },
             ..csv(false)
         };
-        export_table(
-            &session,
-            &tab,
-            &path,
-            &inserts,
-            &ExportCancel::new(),
-            &nothing,
-        )
-        .await
-        .unwrap_or_else(|e| panic!("{label}: {e}"));
+        export_table(&session, &tab, &path, &inserts, &JobCancel::new(), &nothing)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
         let sql = std::fs::read_to_string(&path).unwrap();
         assert_eq!(sql.lines().count(), 100, "{label}");
         assert!(sql.starts_with("INSERT INTO "), "{label}");
@@ -316,7 +301,7 @@ async fn exercise(engine: Engine) {
             &FileNamePattern::default(),
             None,
             &csv(true),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &|_, _| {},
         )
         .await
@@ -345,7 +330,7 @@ async fn exercise(engine: Engine) {
                     false,
                     &path,
                     &csv(true),
-                    &ExportCancel::new(),
+                    &JobCancel::new(),
                     &nothing
                 )
                 .await,
@@ -361,7 +346,7 @@ async fn exercise(engine: Engine) {
             true,
             &path,
             &csv(true),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &nothing,
         )
         .await
@@ -387,7 +372,7 @@ async fn exercise(engine: Engine) {
                 true,
                 &path,
                 &csv(true),
-                &ExportCancel::new(),
+                &JobCancel::new(),
                 &nothing,
             )
             .await;
@@ -410,7 +395,7 @@ async fn exercise(engine: Engine) {
                 true,
                 &path,
                 &csv(true),
-                &ExportCancel::new(),
+                &JobCancel::new(),
                 &nothing,
             )
             .await;
@@ -424,8 +409,7 @@ async fn exercise(engine: Engine) {
 
         // 6. Cancel half way: no file and no temporary file are left, and it stops quickly.
         let path = dir.join("endless.csv");
-        let cancel = ExportCancel::new();
-        cancel.attach(&session);
+        let cancel = JobCancel::new();
         let seen = AtomicU64::new(0);
         let progress = |p: ExportProgress| seen.store(p.rows, Ordering::Relaxed);
         let canceller = async {
@@ -460,7 +444,7 @@ async fn exercise(engine: Engine) {
         );
         assert!(!path.exists() && !part(&path).exists(), "{label}");
         // A cancel before the export starts stops it before anything is sent.
-        let early = ExportCancel::new();
+        let early = JobCancel::new();
         early.cancel().await;
         let export = csv(true);
         let result = export_query(
@@ -925,7 +909,7 @@ async fn postgres_warns_that_an_open_transaction_is_not_exported() {
             false,
             &path,
             &csv(false),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &nothing,
         )
         .await
@@ -993,7 +977,7 @@ async fn the_export_session_follows_the_tabs_schema() {
             false,
             &path,
             &csv(false),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &nothing,
         )
         .await

@@ -1,5 +1,7 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::{is_white_space_at, trimmed};
+
 /// DuckDB dialect. Its parser comes from PostgreSQL's, and so do the lexical rules the splitter
 /// follows: quotes, `E'…'`, nested block comments and `$tag$` bodies.
 pub struct DuckdbDialect;
@@ -157,14 +159,14 @@ fn split(script: &str) -> Vec<StatementSpan> {
             },
             b';' => {
                 if has_code {
-                    spans.push(trimmed(script, start, i));
+                    spans.extend(trimmed(script, start, i));
                 }
                 i += 1;
                 start = i;
                 has_code = false;
             }
-            c => {
-                if !c.is_ascii_whitespace() {
+            _ => {
+                if !is_white_space_at(script, i) {
                     has_code = true;
                 }
                 i += 1;
@@ -172,7 +174,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
         }
     }
     if has_code {
-        spans.push(trimmed(script, start, b.len()));
+        spans.extend(trimmed(script, start, b.len()));
     }
     spans
 }
@@ -260,16 +262,6 @@ fn dollar_tag(b: &[u8], i: usize) -> Option<usize> {
         j += 1;
     }
     (b.get(j) == Some(&b'$')).then_some(j)
-}
-
-fn trimmed(script: &str, start: usize, end: usize) -> StatementSpan {
-    let text = &script[start..end];
-    let lead = text.len() - text.trim_start().len();
-    let trail = text.len() - text.trim_end().len();
-    StatementSpan {
-        start: start + lead,
-        end: end - trail,
-    }
 }
 
 #[cfg(test)]

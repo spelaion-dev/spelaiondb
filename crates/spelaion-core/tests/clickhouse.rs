@@ -17,7 +17,7 @@ use spelaion_config::{
     ConnectionId, Resolver, Safeguards, Source, SystemBackend, TrustStore, load,
 };
 use spelaion_core::{
-    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportCancel, ExportError, ExportFormat,
+    CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportError, ExportFormat, JobCancel,
     OpenConnection, OpenOptions, ReadError, ReadLimits, ResultStore, Session, StreamExport,
     TextEncoding, TunnelPool, WriteError, WriteLimits, export_query, open_connection,
 };
@@ -118,6 +118,64 @@ fn rejected<T: std::fmt::Debug>(result: Result<T, ReadError>, sql: &str) {
         matches!(result, Err(ReadError::Rejected(_))),
         "{sql}: {result:?}"
     );
+}
+
+/// SDB-435: a backslash escapes a quote in ClickHouse's strings. A value bound to a placeholder
+/// that ends in `\`, or that holds a quote and a statement of its own, stays inside its
+/// literal: the script runs the statements it was written with, and the value reads back as
+/// it was typed.
+#[tokio::test]
+async fn a_bound_value_with_a_backslash_stays_inside_its_literal() {
+    let Some(session) = session_as("spelaion", "spelaion").await else {
+        return;
+    };
+    let Some(cleanup) = session_as("spelaion", "spelaion").await else {
+        return;
+    };
+    let t = format!("bound_backslash_{}", std::process::id());
+    let drops = [format!("drop table if exists {t}")];
+    let body = async {
+        must(&session, &format!("drop table if exists {t}")).await;
+        must(
+            &session,
+            &format!("create table {t} (n UInt8, v String) engine = MergeTree order by n"),
+        )
+        .await;
+        let template =
+            format!("insert into {t} values (1, :v);\ninsert into {t} values (2, 'second')");
+        let dialect = session.dialect();
+        for typed in ["C:\\", "x'); insert into t values (3, 'injected'); --\\"] {
+            must(&session, &format!("truncate table {t}")).await;
+            let values = std::collections::HashMap::from([("v".to_string(), typed.to_string())]);
+            let script = spelaion_core::bind_params(dialect.as_ref(), &template, &values).unwrap();
+            assert_eq!(dialect.split_statements(&script).len(), 2, "{script}");
+            let events: Vec<CoreEvent> = session.run_script(&script).collect().await;
+            assert!(
+                matches!(
+                    events.last(),
+                    Some(CoreEvent::ScriptFinished {
+                        executed: 2,
+                        failed: false,
+                        ..
+                    })
+                ),
+                "{script}: {events:#?}"
+            );
+            assert_eq!(
+                value(&session, &format!("select count() from {t}")).await,
+                "2"
+            );
+            assert_eq!(
+                value(&session, &format!("select v from {t} where n = 1")).await,
+                typed,
+                "{script}"
+            );
+        }
+    };
+    cleaning_up(body, |panicked| {
+        run_cleanup("clickhouse", &cleanup, &drops, panicked)
+    })
+    .await;
 }
 
 /// ClickHouse has no transactions: its barrier is the session's `readonly` setting (ADR-020),
@@ -418,7 +476,7 @@ async fn exports_stream_rows_from_a_read_only_session() {
         false,
         &path,
         &csv(),
-        &ExportCancel::new(),
+        &JobCancel::new(),
         &|_| {},
     )
     .await
@@ -448,7 +506,7 @@ async fn exports_stream_rows_from_a_read_only_session() {
             false,
             &dir.join("refused.csv"),
             &csv(),
-            &ExportCancel::new(),
+            &JobCancel::new(),
             &|_| {},
         )
         .await;

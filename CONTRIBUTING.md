@@ -50,6 +50,15 @@ default workspace tests, follow the isolated warehouse phase in
 [the test environment](testing/docker/README.md#ci-memory-budget); the workspace pass alone
 does not test these engines.
 
+- Property tests (SDB-156) generate the inputs of the splitters, the placeholder scanner, the
+  barriers and the readers of untrusted files: `crates/spelaion-dialect/tests/split_properties.rs`,
+  `crates/spelaion-core/tests/properties.rs` and `crates/spelaion-config/tests/reader_properties.rs`.
+  In `cargo test` they run a bounded number of cases with a fixed seed, so CI is the same every
+  time and a failure prints its smallest input. For a long run on your machine, set
+  `SPELAION_FUZZ_CASES` (a random seed each run; `PROPTEST_RNG_SEED` fixes one), for example
+  `SPELAION_FUZZ_CASES=100000 cargo test -p spelaion-dialect --test split_properties`. A long run
+  never goes in a pull request's job. What one finds becomes a regression test, `#[ignore]`d
+  with its reason until its own fix.
 - If dependencies change: `cargo deny check`.
 - If the desktop app changes: `npm run build` in `apps/desktop` with no type errors and, if the
   UI changes, the smoke test (`node e2e/smoke.mjs` on Windows, `node e2e/smoke-linux.mjs` on
@@ -78,11 +87,20 @@ systemd-run --user --scope -p MemoryMax=8G -p MemorySwapMax=0 cargo clippy --wor
 
 ### Release build: the app and the CLI
 The smoke test needs both the app and the `spelaiondb` CLI. Build them **in one command**, from
-`apps/desktop`:
+`apps/desktop`. For the Windows smoke test, build with the `e2e` feature:
 
 ```bash
-CARGO_BUILD_JOBS=3 npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli -p spelaion-plugin-fetch
+CARGO_BUILD_JOBS=3 npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli -p spelaion-plugin-fetch --features spelaion-desktop/e2e
 ```
+
+(`npm run tauri build -- --no-bundle -- -p spelaion-desktop -p spelaion-cli -p spelaion-plugin-fetch --features spelaion-desktop/e2e`
+is the same through npm.)
+
+- The `e2e` feature lets the app pass WebView2 the test's switches, among them the debugging port
+  the test drives the page through (`src-tauri/src/webview_args.rs`). Without it, the Windows
+  smoke test stops at its start, saying the app did not open the port.
+- Never ship or install a build made with the feature. Installers and releases never use it.
+- The Linux pass does not need the feature: drop `--features spelaion-desktop/e2e`.
 
 The app ends up in `target/release/spelaion-desktop` and the CLI in `target/release/spelaiondb`.
 
@@ -115,11 +133,17 @@ every run, since the run changes that database) and the Docker services up
   (the test sets `SPELAION_E2E_OFFSCREEN`, which only the main window's placement reads), so your
   mouse and keyboard cannot reach it. A real pointer crossing the window used to cancel hover
   delays and clicks mid-run. The test keeps the hidden window drawing with Chromium's occlusion
-  flags, and tells the page it has the focus. Set `SPELAION_E2E_SHOW_WINDOW=1` to open the window
+  flags, and tells the page it has the focus. The port and those flags reach WebView2 through
+  `SPELAION_E2E_WEBVIEW2_ARGUMENTS`. A build with the `e2e` feature passes them on itself, and
+  only the switches the test uses. WebView2's own `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` is not
+  used, because GitHub's Windows runners ignore it. Set `SPELAION_E2E_SHOW_WINDOW=1` to open the window
   on screen and watch a run. Like the Linux pass, it replaces your clipboard while it runs. Its
   first start meets a local store the app cannot open, and answers the startup error dialog with
   `SPELAION_E2E_STARTUP_CHOICE=start-over` instead of a click, so that dialog never appears on
-  your screen either (SDB-283).
+  your screen either (SDB-283). A failing step prints its name (`FAILED at step "…"`) and leaves
+  `e2e/screenshots/failure.png`. `SPELAION_E2E_UNTIL=<the start of a step's text>` ends the run
+  as a pass after that step. CI's Windows job uses it to stop before the steps that need
+  `testing/docker` (`.github/workflows/smoke-windows.yml`), so run the rest yourself.
 - **Linux**: `node e2e/smoke-linux.mjs` (from `apps/desktop`). WebKitGTK has no debugging port,
   so this pass speaks WebDriver to `tauri-driver` (which it starts itself), in front of
   WebKitWebDriver. It is shorter: start, repository trust, a query on SQLite, DuckDB, PostgreSQL,
@@ -157,6 +181,9 @@ every run, since the run changes that database) and the Docker services up
 - CI runs on every pull request and is the code reviewer: a pull request is merged when it is
   green and agrees with the rules above. One that changes a security file (listed in
   [`.github/CODEOWNERS`](.github/CODEOWNERS)) also needs a maintainer's approval.
+- Merging goes through `dev`'s merge queue: CI runs again on your change on top of the current
+  `dev` and of the pull requests queued before it, and the change is merged only if that is
+  green too. If it fails there, rebase on `dev`, fix it and it can be queued again.
 
 ## Reporting problems
 - **Bugs and ideas:** [open an issue](https://github.com/spelaion-dev/spelaiondb/issues/new/choose).

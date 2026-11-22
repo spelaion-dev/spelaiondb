@@ -10,12 +10,13 @@ import {
   type CellRange,
   type CopySpecialItem,
   type UpdateSourceItem,
+  type WindowErrorItem,
   type ColumnItem,
   type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
   type ConnectionTypeDraft_Deserialize,
   type ConnectionTypeItem_Serialize,
-  type TransactionStatusItem_Serialize,
+  type TransactionStatusItem as GeneratedTransactionStatusItem,
   type EngineItem_Serialize,
   type EngineChangeItem_Serialize,
   type NamePatternPreview_Serialize,
@@ -74,7 +75,7 @@ import {
   type SearchHitItem_Deserialize,
   type SearchTableItem,
   type TableStatusItem_Deserialize,
-  type ColumnStatsOutcome_Serialize,
+  type JobOutcome,
   type ColumnStatsTarget,
   type TopValueItem_Serialize,
   type StatStateItem,
@@ -93,6 +94,7 @@ import {
   type CellInputItem,
   type UpdateMethod,
   type UpdateStatus_Serialize,
+  type InstallStatus_Serialize,
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
   type FilterOpItem,
@@ -145,9 +147,12 @@ export type PluginRemoval = PluginRemoval_Serialize;
 export type DataSearchEventItem = DataSearchEventItem_Deserialize;
 export type SearchHitItem = SearchHitItem_Deserialize;
 export type TableStatusItem = TableStatusItem_Deserialize;
-export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, SchemaColumnItem, SearchTableItem };
+export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, JobOutcome, SchemaColumnItem, SearchTableItem };
+/** How a data search ended (ADR-060): whichever way, with what it read. */
+export type DataSearchOutcome = JobOutcome<DataSearchSummaryItem, DataSearchSummaryItem>;
 export type { ImportReport, KubernetesDraftItem, SsmDraftItem };
 export type { BlockItem, BulkActionItem, CellInputItem };
+export type { WindowErrorItem };
 export type { CopySpecialItem, UpdateSourceItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
@@ -160,7 +165,7 @@ export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
 export type ConnectionTypeItem = ConnectionTypeItem_Serialize;
-export type TransactionStatusItem = TransactionStatusItem_Serialize;
+export type TransactionStatusItem = GeneratedTransactionStatusItem;
 export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
 export type ImportItem = ImportItem_Serialize;
 export type KubePort = KubePortItem_Serialize;
@@ -196,7 +201,7 @@ export type ChartPointsItem = ChartPointsItem_Serialize;
 export type { ChartAggregateItem, ChartKindItem, ChartLabelItem };
 export type ColumnStatsItem = ColumnStatsItem_Serialize;
 export type RevealedCellItem = RevealedCellItem_Serialize;
-export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize;
+export type ColumnStatsOutcome = JobOutcome<ColumnStatsItem_Serialize, null>;
 export type TopValueItem = TopValueItem_Serialize;
 export type { ColumnStatsTarget, StatStateItem };
 export type IndexDetails = TableDetails["indexes"][number];
@@ -208,6 +213,7 @@ export type { McpInstallPlanItem, McpSettingsItem, ToolOutputItem };
 export type AuditEventItem = AuditEventItem_Serialize;
 export type { AuditSessionItem, AuditStatusItem };
 export type UpdateStatus = UpdateStatus_Serialize;
+export type InstallStatus = InstallStatus_Serialize;
 /** How this copy of the app gets a new version: only `inApp` may offer "Install and restart". */
 export type { UpdateMethod };
 /** What `connect` returns. */
@@ -234,6 +240,16 @@ export async function call<T>(promise: Promise<Typed<T>>): Promise<T> {
 }
 
 /** Rows [start, start + len) of a result, already converted to text by the core. */
+/** A `fetch_window` failure as the core typed it (SDB-367); anything else (a panic caught by the
+ *  invoke handler) is a failure with its text. */
+export function windowError(error: unknown): WindowErrorItem {
+  if (typeof error === "object" && error !== null && "kind" in error && "message" in error) {
+    const { kind, message } = error as { kind: unknown; message: unknown };
+    if ((kind === "freed" || kind === "failed") && typeof message === "string") return { kind, message };
+  }
+  return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+}
+
 export async function fetchWindow(result: number, start: number, len: number): Promise<Table> {
   const buffer = await invoke<ArrayBuffer>("fetch_window", { result, start, len });
   return tableFromIPC(new Uint8Array(buffer));

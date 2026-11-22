@@ -120,6 +120,7 @@ async fn read_processes(session: &Session, sql: &str) -> Result<Vec<Process>, St
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
+            | CoreEvent::ResultEnded { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }

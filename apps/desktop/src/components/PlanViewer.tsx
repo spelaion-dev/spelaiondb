@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
+import { startJob, type Job } from "../jobs";
 import type { PlanSummary_Serialize as PlanSummary, PlanPage_Serialize as PlanPage, PlanNode_Serialize as PlanNode, PlanView, PlanSort, PlanStatKind, PlanStatsPage_Serialize as PlanStatsPage, RawWindow } from "../bindings";
 import { chooseSavePath } from "../dialogs";
 import { openSavedPlan } from "../planFiles";
@@ -11,7 +12,6 @@ import { Icon } from "./Icons";
 const PAGE_SIZE = 50;
 const defaultView = (): PlanView => ({ sort: "tree", descending: false, collapsed: [], findingsOnly: false });
 const reason = (e: unknown) => e instanceof Error ? e.message : String(e);
-let exportSequence = 3_000_000;
 
 type Metric = { key: PlanSort; label: string; value(node: PlanNode): number | null };
 const METRICS: Metric[] = [
@@ -72,8 +72,8 @@ export function PlanViewer({ summary, controls, onBack }: { summary: PlanSummary
   const [rawOffsets, setRawOffsets] = useState([0]);
   const [raw, setRaw] = useState<RawWindow | null>(null);
   const [rawBusy, setRawBusy] = useState(false);
-  const [exportId, setExportId] = useState<number | null>(null);
-  const exportRef = useRef<number | null>(null);
+  const [exportJob, setExportJob] = useState<Job | null>(null);
+  const exportRef = useRef<Job | null>(null);
   const generation = useRef(0);
 
   useEffect(() => { if (pendingSelection === null) { setOffset(0); setSelected(null); } }, [view, summary.id]);
@@ -88,7 +88,7 @@ export function PlanViewer({ summary, controls, onBack }: { summary: PlanSummary
     return () => { generation.current += 1; };
   }, [summary.id, view, offset, refresh, t]);
   useEffect(() => () => {
-    if (exportRef.current !== null) void call(commands.cancelExport(exportRef.current)).catch(() => undefined);
+    exportRef.current?.cancel();
     void commands.releasePlan(summary.id).catch(() => undefined);
   }, [summary.id]);
   useEffect(() => {
@@ -112,18 +112,18 @@ export function PlanViewer({ summary, controls, onBack }: { summary: PlanSummary
       const raw = summary.rawFormat === "text" ? { file: "execution-plan.txt", name: "plan.textFiles", extension: "txt" } : summary.rawFormat === "xml" ? { file: "execution-plan.sqlplan", name: "plan.xmlFiles", extension: "sqlplan" } : { file: "execution-plan.json", name: "plan.jsonFiles", extension: "json" };
       const path = await chooseSavePath({ title: t(csv ? "plan.exportCsv" : "plan.saveRaw"), defaultPath: csv ? "execution-plan.csv" : raw.file, filters: [{ name: t(csv ? "plan.csvFiles" : raw.name), extensions: [csv ? "csv" : raw.extension] }] });
       if (!path) return;
-      const id = ++exportSequence; exportRef.current = id; setExportId(id);
-      await call(commands.exportPlan(id, summary.id, view, path, csv));
-      if (exportRef.current === id) setNotice(t("plan.saved", { path }));
+      const job = startJob(); exportRef.current = job; setExportJob(job);
+      await call(commands.exportPlan(job.channel, summary.id, view, path, csv));
+      if (exportRef.current === job) setNotice(t("plan.saved", { path }));
     } catch (e) { setError(t("plan.saveFailed", { reason: reason(e) })); }
-    finally { exportRef.current = null; setExportId(null); }
+    finally { exportRef.current = null; setExportJob(null); }
   }
   const paging = <div className="plan-paging"><button disabled={!page || offset === 0} onClick={() => setOffset(o => Math.max(0, o - PAGE_SIZE))}>{t("history.previous")}</button><span className="muted small" role="status">{page ? t("plan.range", { from: page.total ? page.offset + 1 : 0, to: page.offset + page.nodes.length, total: page.total }) : t("plan.loading")}</span><button disabled={!page || page.nextOffset === null} onClick={() => { if (page?.nextOffset !== null && page?.nextOffset !== undefined) setOffset(page.nextOffset); }}>{t("history.next")}</button></div>;
   return <section className="plan-viewer" aria-label={t("plan.title")}>
     <header className="plan-heading"><div><h2>{t("plan.title")}</h2><span className="muted small">{summary.name} · {t(summary.analyzed ? "plan.measured" : "plan.estimated")}</span></div><div className="spacer" />
       {onBack && <button className="ghost" onClick={onBack}>{t("plan.back")}</button>}
       <button className="ghost" onClick={() => void openSavedPlan()}>{t("plan.open")}</button>
-      {exportId === null ? <><button onClick={() => void save(false)}>{t("plan.saveRaw")}</button><button onClick={() => void save(true)}>{t("plan.exportCsv")}</button></> : <button onClick={() => void call(commands.cancelExport(exportId))}>{t("export.cancel")}</button>}
+      {exportJob === null ? <><button onClick={() => void save(false)}>{t("plan.saveRaw")}</button><button onClick={() => void save(true)}>{t("plan.exportCsv")}</button></> : <button onClick={() => exportJob.cancel()}>{t("export.cancel")}</button>}
     </header>
     {controls}
     <nav className="plan-tabs" aria-label={t("plan.viewsLabel")}>{(["overview", "tree", "graph", "raw"] as const).map(tab => <button key={tab} className={mode === tab ? "active" : ""} aria-pressed={mode === tab} onClick={() => setMode(tab)}>{t(`plan.views.${tab}`)}</button>)}</nav>

@@ -4,8 +4,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ObjectChangeItem } from "../api";
+import type { ObjectChangePreview } from "../bindings";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
+import { scriptText } from "../dialogState";
 import { useApp } from "../store";
+import { usePreviewThenApply } from "../useDialogState";
 
 export function ObjectChangeDialog({
   session,
@@ -41,10 +44,6 @@ export function ObjectChangeDialog({
   const [cascading, setCascading] = useState(false);
   /** "Cascade" is offered only where the core says the engine has it. */
   const [canCascade, setCanCascade] = useState(false);
-  const [sql, setSql] = useState<string | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const nameBox = useRef<HTMLInputElement>(null);
   const latest = useRef(change);
   latest.current = change;
@@ -53,40 +52,24 @@ export function ObjectChangeDialog({
     nameBox.current?.select();
   }, []);
 
-  // The SQL follows what is typed; an answer to an older name is ignored.
+  // The SQL follows what is typed; an answer to an older name is ignored. The last answer stays
+  // shown while the next one is asked for.
+  const flow = usePreviewThenApply<ObjectChangePreview>(session, JSON.stringify({ newName, cascade: cascading }), 120, (asked) =>
+    call(commands.previewObjectChange(session, latest.current(JSON.parse(asked) as { newName: string; cascade: boolean }))));
+  const shown = flow.last;
+  const sql = shown.kind === "ready" ? shown.value.sql : null;
+  const { busy } = flow;
+  const error = flow.apply.kind === "failed" ? flow.apply.message : null;
+  // What the core said the engine offers stays until it answers again.
   useEffect(() => {
-    let current = true;
-    const timer = window.setTimeout(() => {
-      call(commands.previewObjectChange(session, latest.current({ newName, cascade: cascading })))
-        .then((preview) => {
-          if (!current) return;
-          setSql(preview.sql);
-          setCanCascade(preview.cascade);
-          setPreviewError(null);
-        })
-        .catch((e: unknown) => {
-          if (!current) return;
-          setSql(null);
-          setPreviewError(e instanceof Error ? e.message : String(e));
-        });
-    }, 120);
-    return () => {
-      current = false;
-      window.clearTimeout(timer);
-    };
-  }, [session, newName, cascading]);
+    if (shown.kind === "ready") setCanCascade(shown.value.cascade);
+  }, [shown]);
 
   async function run() {
-    setBusy(true);
-    setError(null);
-    try {
+    await flow.run(async () => {
       await call(commands.applyObjectChange(session, change({ newName, cascade: cascading }), true));
       onDone();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   function openInEditor() {
@@ -143,7 +126,7 @@ export function ObjectChangeDialog({
         )}
         <span className="muted small">{t("objectChange.sql")}</span>
         <pre className="object-change-sql mono" aria-label={t("objectChange.sql")}>
-          {sql ?? previewError ?? "…"}
+          {scriptText(shown)}
         </pre>
         {production && <p className="warn small">{t("objectChange.production")}</p>}
         {readOnly && <p className="warn small">{t("objectChange.readOnly")}</p>}

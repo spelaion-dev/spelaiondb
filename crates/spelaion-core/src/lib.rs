@@ -3,6 +3,7 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+pub mod agent_state;
 mod app_log;
 pub mod audit;
 pub mod backup;
@@ -36,6 +37,7 @@ mod health;
 mod history;
 mod import;
 pub mod instance;
+mod job;
 pub mod kube;
 pub mod launch;
 mod load_rows;
@@ -56,8 +58,13 @@ mod progress;
 mod query_page;
 mod readonly;
 mod references;
+#[cfg(test)]
+mod result_end_tests;
 mod result_tabs;
 mod results;
+mod run_state;
+#[cfg(test)]
+mod run_state_tests;
 mod save_name;
 mod script;
 mod selection_stats;
@@ -86,6 +93,7 @@ mod value_view;
 mod variables;
 mod write;
 
+pub use agent_state::{AgentFailure, FailureCode, access_code, all_agents_read_only};
 pub use app_log::{AppLog, MAX_LOG_BYTES};
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use chart::{
@@ -146,7 +154,7 @@ pub use export::{
 };
 pub use export_defaults::{ExportDefaults, ExportFileFormat, MAX_EXPORT_NULL_TEXT};
 pub use export_stream::{
-    DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, FileNamePattern,
+    DEFAULT_BATCH_ROWS, ExportError, ExportProgress, ExportedFile, FileNamePattern,
     MAX_NAME_PATTERN, NameParts, RerunCheck, StreamExport, TableSource, TablesError, export_query,
     export_table, export_tables, file_name, follow_session_context, rerun_check,
 };
@@ -170,12 +178,13 @@ pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, HistoryScope, QueryHistory};
 pub use import::{
     ColumnKind, ColumnMapping, DEFAULT_COMMIT_EVERY, DEFAULT_SAMPLE_ROWS, IMPORT_BATCH_ROWS,
-    IMPORT_PREVIEW_CHARS, IMPORT_PREVIEW_ROWS, IfExists, ImportCancel, ImportError, ImportFormat,
-    ImportPlan, ImportPreview, ImportProgress, ImportRequest, ImportSource, ImportSummary,
-    ImportTarget, MAX_COLUMNS, MAX_RECORD_BYTES, MAX_SAMPLE_ROWS, MAX_WHOLE_FILE, ParseOptions,
-    PreviewColumn, SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import,
-    preview, run_import, suggested_table, text_format,
+    IMPORT_PREVIEW_CHARS, IMPORT_PREVIEW_ROWS, IfExists, ImportError, ImportFormat, ImportPlan,
+    ImportPreview, ImportProgress, ImportRequest, ImportSource, ImportSummary, ImportTarget,
+    MAX_COLUMNS, MAX_RECORD_BYTES, MAX_SAMPLE_ROWS, MAX_WHOLE_FILE, ParseOptions, PreviewColumn,
+    SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import, preview,
+    run_import, suggested_table, text_format,
 };
+pub use job::{CancelRefused, JobCancel, JobEnd, JobHandle, JobRegistry, Refusal, TablesStopped};
 pub use load_rows::{
     LOAD_PAGE_ROWS, LoadCancel, LoadEstimate, LoadOutcome, LoadedRows, MAX_LOADED_ROWS,
     estimate_query_load, estimate_table_load, load_query_rows,
@@ -202,7 +211,7 @@ pub use objects::{
     duplicate_plan, maintenance_kinds, maintenance_plan, maintenance_statement,
 };
 pub use open::{
-    Engines, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
+    Engines, Liveness, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
     create_file_database, dialect_of, open_connection, open_route, test_tunnel,
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
@@ -227,7 +236,10 @@ pub use result_tabs::{
     DEFAULT_RESULT_TABS, MAX_RESULT_NAME, MAX_RESULT_TABS, Placed, Placement, ResultTab,
     ResultTabs, ResultTabsError, RunResults, statement_title,
 };
-pub use results::{ResultId, ResultSource, ResultStore, RevealError, RevealedCell, StoredResult};
+pub use results::{
+    PartialReason, ResultEnd, ResultFreed, ResultId, ResultSource, ResultStore, RevealError,
+    RevealedCell, StoredResult,
+};
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
@@ -235,8 +247,8 @@ pub use selection_stats::{
 pub use server_family::ServerFamily;
 pub use server_settings::{ServerSetting, SettingKind, server_settings};
 pub use session::{
-    AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
-    ScriptSummary, Session, StatementError,
+    AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, RunState, ScriptOptions, ScriptStop,
+    ScriptSummary, Session, StatementEnd, StatementError,
 };
 pub use session_read_only::{SessionReadOnlyError, set_session_read_only};
 pub use session_setup::{
@@ -246,14 +258,14 @@ pub use session_setup::{
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};
 pub use spelaion_store::{
     AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
-    HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
+    HistoryOutcome, HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
 };
 pub use spelaion_store::{
-    BackupPreferences, Bookmark, DEFAULT_EDITOR_ZOOM, DEFAULT_INTERFACE_SIZE, EDITOR_ZOOMS,
-    EditorPreferences, EditorSnippet, ExplorerFilter, ExplorerPreferences, FilterKind,
-    FilteredTable, GridPreferences, INTERFACE_SIZES, MapPreferences, RecentFile, SavedFile,
-    SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX,
-    TILE_URL_MAX, TileServerError, check_tile_server,
+    BackupPreferences, Bookmark, BookmarkKind, DEFAULT_EDITOR_ZOOM, DEFAULT_INTERFACE_SIZE,
+    EDITOR_ZOOMS, EditorPreferences, EditorSnippet, ExplorerFilter, ExplorerPreferences,
+    FilterKind, FilteredTable, GridPreferences, INTERFACE_SIZES, MapPreferences, RecentFile,
+    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX,
+    TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
@@ -272,7 +284,10 @@ pub use tls_warning::{
     TlsRisk, TlsRoute, TlsWarning, connection_draft_tls_warning, connection_tls_warning,
     draft_tls_warning, file_tls_warning, is_local_host, tls_warning,
 };
-pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
+pub use transaction::{
+    CommitMode, TransactionError, TransactionLifecycle, TransactionOutcome, TransactionPhase,
+    TransactionState, TransactionStatus,
+};
 pub use transpose::{MAX_TRANSPOSED_ROWS, TransposeError, Transposed, transpose};
 pub use value_pick::{
     ChoicePicker, ChoiceSource, KEY_LABEL_CHARS, KEY_LABEL_COLUMNS, KEY_PAGE_ROWS, KeyPicker,

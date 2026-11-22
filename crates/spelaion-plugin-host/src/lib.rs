@@ -35,6 +35,9 @@ use process::Process;
 /// What a secret becomes in anything a plugin says.
 pub const REDACTED: &str = "***";
 
+/// Why a plugin stopped by [`Plugin::stop`] is dead.
+const STOPPED: &str = "the plugin was stopped";
+
 /// Where the lines a plugin writes to its standard error go, secrets already taken out.
 pub type LogSink = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -62,6 +65,64 @@ pub struct ProcessUsage {
     pub uptime: std::time::Duration,
 }
 
+/// Where a plugin's process is in its life. It is started on the first connection and again
+/// after it died or was stopped: never on its own, and nothing it ran is run again (ADR-028).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessState {
+    /// It has not been started yet.
+    NotStarted,
+    /// Its file is being checked, or it is being started and asked what it serves.
+    Starting,
+    Running,
+    /// It was asked to end, and has a few seconds to do so before it is killed.
+    Stopping,
+    /// It ended, could not be started, or was stopped: why.
+    Dead {
+        why: String,
+    },
+}
+
+/// What a plugin holds of its process. Changed only by [`Plugin::process`] and
+/// [`Plugin::stop`], one at a time; a process that dies on its own is read as dead at once
+/// ([`Plugin::state`]) and replaced on the next connection.
+enum Slot {
+    NotStarted,
+    Starting,
+    Running(Arc<Process>),
+    Stopping,
+    Dead { why: String },
+}
+
+/// A start or a stop on its way: if it is dropped before it ends (its caller stopped waiting),
+/// the slot is not left in its passing state.
+struct Passing<'a> {
+    slot: &'a std::sync::Mutex<Slot>,
+    otherwise: Option<Slot>,
+}
+
+impl<'a> Passing<'a> {
+    fn begin(slot: &'a std::sync::Mutex<Slot>, now: Slot, otherwise: Slot) -> Self {
+        *slot.lock().expect("lock poisoned") = now;
+        Self {
+            slot,
+            otherwise: Some(otherwise),
+        }
+    }
+
+    fn end(mut self, slot: Slot) {
+        self.otherwise = None;
+        *self.slot.lock().expect("lock poisoned") = slot;
+    }
+}
+
+impl Drop for Passing<'_> {
+    fn drop(&mut self) {
+        if let Some(otherwise) = self.otherwise.take() {
+            *self.slot.lock().expect("lock poisoned") = otherwise;
+        }
+    }
+}
+
 /// An engine plugin: a program that is started when it is first needed and serves every
 /// session of its engines until this value is dropped.
 #[derive(Clone)]
@@ -73,9 +134,11 @@ struct Inner {
     program: PathBuf,
     log: Option<LogSink>,
     check: Option<StartCheck>,
-    /// The running process, if any. The lock is held while one starts, so two connections
-    /// that arrive together start one process.
-    running: tokio::sync::Mutex<Option<Arc<Process>>>,
+    /// Its process. Never locked across an `.await`.
+    slot: std::sync::Mutex<Slot>,
+    /// Held while a process starts or stops, so two connections that arrive together start one
+    /// process and a stop waits for a start.
+    changing: tokio::sync::Mutex<()>,
     next_session: AtomicU64,
 }
 
@@ -87,7 +150,8 @@ impl Plugin {
                 program: program.into(),
                 log: None,
                 check: None,
-                running: tokio::sync::Mutex::new(None),
+                slot: std::sync::Mutex::new(Slot::NotStarted),
+                changing: tokio::sync::Mutex::new(()),
                 next_session: AtomicU64::new(1),
             }),
         }
@@ -140,39 +204,69 @@ impl Plugin {
         Ok(self.process().await?.info().clone())
     }
 
+    /// Where its process is now. A process that died on its own is dead from that moment,
+    /// with its reason, not only at the next connection.
+    pub fn state(&self) -> ProcessState {
+        match &*self.inner.slot.lock().expect("lock poisoned") {
+            Slot::NotStarted => ProcessState::NotStarted,
+            Slot::Starting => ProcessState::Starting,
+            Slot::Running(process) => match process.why_dead() {
+                None => ProcessState::Running,
+                Some(why) => ProcessState::Dead { why },
+            },
+            Slot::Stopping => ProcessState::Stopping,
+            Slot::Dead { why } => ProcessState::Dead { why: why.clone() },
+        }
+    }
+
     /// Whether its process is running now.
     pub async fn is_running(&self) -> bool {
-        self.inner
-            .running
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|p| !p.is_dead())
+        match self.state() {
+            ProcessState::Running => true,
+            ProcessState::NotStarted
+            | ProcessState::Starting
+            | ProcessState::Stopping
+            | ProcessState::Dead { .. } => false,
+        }
+    }
+
+    /// The process, while it runs.
+    fn running(&self) -> Option<Arc<Process>> {
+        match &*self.inner.slot.lock().expect("lock poisoned") {
+            Slot::Running(process) => (!process.is_dead()).then(|| process.clone()),
+            Slot::NotStarted | Slot::Starting | Slot::Stopping | Slot::Dead { .. } => None,
+        }
     }
 
     /// What its process uses now, if it runs: never starts it.
     pub async fn usage(&self) -> Option<ProcessUsage> {
-        let running = self.inner.running.lock().await;
-        running.as_ref().and_then(|process| process.usage())
+        self.running().and_then(|process| process.usage())
     }
 
     /// Stops the process, and returns once it has ended: its input closes, so it drops its
     /// sessions and closes what its engines keep open, and it is killed if it has not ended
     /// after a few seconds. Its sessions are lost; the next connection starts it again.
     pub async fn stop(&self) {
-        if let Some(process) = self.inner.running.lock().await.take() {
-            process.kill("the plugin was stopped").await;
-        }
+        let _changing = self.inner.changing.lock().await;
+        let Some(process) = self.running() else {
+            return;
+        };
+        let stopped = || Slot::Dead {
+            why: STOPPED.into(),
+        };
+        let stopping = Passing::begin(&self.inner.slot, Slot::Stopping, stopped());
+        process.kill(STOPPED).await;
+        stopping.end(stopped());
     }
 
-    /// The running process, started if there is none or it died.
+    /// The running process, started if there is none or it died. Its file is checked every
+    /// time a process is about to start (ADR-042).
     async fn process(&self) -> Result<Arc<Process>> {
-        let mut running = self.inner.running.lock().await;
-        if let Some(process) = running.as_ref()
-            && !process.is_dead()
-        {
-            return Ok(process.clone());
+        let _changing = self.inner.changing.lock().await;
+        if let Some(process) = self.running() {
+            return Ok(process);
         }
+        let starting = Passing::begin(&self.inner.slot, Slot::Starting, Slot::NotStarted);
         if let Some(check) = self.inner.check.clone() {
             // Reading a whole program to hash it is not for the runtime's own threads.
             let program = self.inner.program.clone();
@@ -180,16 +274,23 @@ impl Plugin {
                 .await
                 .unwrap_or_else(|e| Err(e.to_string()));
             if let Err(why) = checked {
-                *running = None;
-                return Err(DriverError::Connection(format!(
-                    "the plugin {} was not started: {why}",
-                    self.name()
-                )));
+                let why = format!("the plugin {} was not started: {why}", self.name());
+                starting.end(Slot::Dead { why: why.clone() });
+                return Err(DriverError::Connection(why));
             }
         }
-        let process = Process::start(&self.inner.program, self.inner.log.clone()).await?;
-        *running = Some(process.clone());
-        Ok(process)
+        match Process::start(&self.inner.program, self.inner.log.clone()).await {
+            Ok(process) => {
+                starting.end(Slot::Running(process.clone()));
+                Ok(process)
+            }
+            Err(error) => {
+                starting.end(Slot::Dead {
+                    why: error.to_string(),
+                });
+                Err(error)
+            }
+        }
     }
 
     fn name(&self) -> String {

@@ -8,8 +8,9 @@
 //! Rules this crate guarantees:
 //! - A shell is never requested from the server: only `direct-tcpip` channels.
 //! - A changed host key is a blocking error ([`SshError::HostKeyChanged`]).
-//! - Once down, a tunnel stays in [`TunnelState::Down`]; nothing is ever reopened or re-run
-//!   on its own.
+//! - A tunnel's [`TunnelState`] only moves forward: opening, up, then down (the first reason
+//!   wins) or closed. A part of the chain lost while a later one opens fails the opening with
+//!   its reason. Nothing is ever reopened or re-run on its own.
 
 mod auth;
 mod hostkeys;

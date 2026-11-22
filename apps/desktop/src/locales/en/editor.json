@@ -35,8 +35,33 @@
     "empty": "Write a query and press Ctrl+Enter.",
     "result": "Result {{number}}",
     "messages": "Messages",
-    "running": "Running…",
+    "running": "Running query…",
+    "paused": "Paused at statement {{index}}",
+    "cancelling": "Cancelling query…",
+    "elapsed": "{{seconds}} s",
+    "cancelQuery": "Cancel query",
+    "cancelFailed": "Could not cancel the query: {{detail}}",
     "loading": " (loading)",
+    "partial": {
+      "cancelled_one": "Partial: cancelled after {{formattedCount}} row",
+      "cancelled_other": "Partial: cancelled after {{formattedCount}} rows",
+      "failed_one": "Partial: failed after {{formattedCount}} row",
+      "failed_other": "Partial: failed after {{formattedCount}} rows",
+      "timedOut_one": "Partial: timed out after {{formattedCount}} row",
+      "timedOut_other": "Partial: timed out after {{formattedCount}} rows",
+      "connectionLost_one": "Partial: connection lost after {{formattedCount}} row",
+      "connectionLost_other": "Partial: connection lost after {{formattedCount}} rows",
+      "hint": "The statement stopped before its last row: only the rows that arrived are shown. Run it again for the whole result."
+    },
+    "partialCalc": "{{partial}}. These numbers cover only the rows that arrived.",
+    "partialChart": "{{partial}}. The chart shows only the rows that arrived.",
+    "partialExport": "{{partial}}. The loaded rows are only the ones that arrived.",
+    "rowsFailed": "Could not load rows: {{detail}}",
+    "freed": {
+      "title": "This result is no longer kept",
+      "body": "Its rows were freed. Run its query again to read them.",
+      "rerun": "Run again"
+    },
     "rows_one": "{{formattedCount}} row",
     "rows_other": "{{formattedCount}} rows",
     "duration": "{{duration}} ms",
@@ -239,7 +264,8 @@
       "cancelled": "Cancelled at statement {{index}}.",
       "transactionAborted": "Statement {{index}} aborted the transaction: the server will only roll it back, so the rest was not run. Roll back, then run the rest again.",
       "transactionRolledBack": "Statement {{index}} rolled back the transaction, so the rest was not run: it would have run without the statements before it.",
-      "closed": "The tab closed while statement {{index}}'s error waited for an answer."
+      "closed": "The session closed while statement {{index}}'s error waited for an answer.",
+      "sessionLost": "The connection was lost while statement {{index}}'s error waited for an answer."
     },
     "paused": "Statement {{index}} failed: waiting for your answer."
   },

@@ -220,6 +220,26 @@ fn an_agent_can_read_but_never_write() {
         json!({ "connection": "hidden", "sql": "select 1" }),
     );
     assert!(is_error && text.contains("is not exposed"), "{text}");
+    // On the wire, the refusal also carries its stable code (SDB-374), and the listing each
+    // connection's state.
+    let refused = agent.request(
+        "tools/call",
+        json!({ "name": "run_query", "arguments": { "connection": "hidden", "sql": "select 1" } }),
+    );
+    assert_eq!(
+        refused["structuredContent"],
+        json!({ "code": "not_exposed", "retry": false }),
+        "{refused}"
+    );
+    let listed = agent.request(
+        "tools/call",
+        json!({ "name": "list_connections", "arguments": {} }),
+    );
+    assert_eq!(
+        listed["structuredContent"]["connections"],
+        json!([{ "id": "shop", "engine": "sqlite", "access": "read_only", "read_only_because": "writes_denied" }]),
+        "{listed}"
+    );
 
     // A read with a row limit (max_rows = 2).
     let (text, is_error) = agent.call(
@@ -360,6 +380,32 @@ fn read_only_mode_and_toon_over_the_protocol() {
     );
     assert!(!is_error, "{text}");
     assert_eq!(count(), 4);
+    agent.stop();
+}
+
+/// SDB-434: a statement pasted with a no-break space after its `;` is one statement, for a read
+/// and for a write, and the server does not stop.
+#[test]
+fn a_no_break_space_after_the_semicolon_is_no_statement() {
+    let fx = Fixture::new("mcp-nbsp");
+    create_db(&fx.repo().join("shop.db"));
+    std::fs::write(
+        fx.repo().join(".spelaion/connections/shop.toml"),
+        "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
+    )
+    .unwrap();
+    fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
+    let mut agent = Agent::start(&fx);
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "update products set price = 10 where name = 'lamp';\u{a0}" }),
+    );
+    assert!(!is_error && text.contains("1 row(s) affected"), "{text}");
+    let (text, is_error) = agent.call(
+        "run_query",
+        json!({ "connection": "shop", "sql": "select price from products where name = 'lamp';\u{a0}\u{3000}" }),
+    );
+    assert!(!is_error && text.contains("10"), "{text}");
     agent.stop();
 }
 

@@ -10,6 +10,7 @@ import { runCommand } from "../commands";
 import type { ResultMeta } from "../store";
 import { CommandMenuItem } from "./CommandMenuItem";
 import { Icon } from "./Icons";
+import { ended } from "../resultEnd";
 
 /** The key that renames the focused result tab, as F2 renames a tab of the tab strip. */
 export const RESULT_RENAME_KEY = "F2";
@@ -72,7 +73,7 @@ export function ResultTabList({
               <span className="result-tab-name">{name}</span>
               {result.pinned && <span className="sr-only">{t("resultTabs.pinned")}</span>}
             </button>
-            {session && active && result.complete && (
+            {session && active && ended(result) && (
               <button
                 className="ghost result-tab-close"
                 aria-label={t("resultTabs.closeNamed", { name })}

@@ -17,9 +17,9 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    CoreEvent, DataSearchEvent, DataSearchOptions, DataSearchRequest, DataSearchSummary,
-    ExportCancel, ResultStore, SearchHit, SearchTable, Session, TableOutcome, TableStatus,
-    count_table_rows, data_search,
+    CoreEvent, DataSearchEvent, DataSearchOptions, DataSearchRequest, DataSearchSummary, JobCancel,
+    ResultStore, SearchHit, SearchTable, Session, TableOutcome, TableStatus, count_table_rows,
+    data_search,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
 
@@ -198,7 +198,7 @@ async fn search(
         tables,
         options,
     };
-    let summary = data_search(session, &request, &ExportCancel::new(), &progress)
+    let summary = data_search(session, &request, &JobCancel::new(), &progress)
         .await
         .unwrap_or_else(|e| panic!("{value}: {e}"));
     let outcomes = outcomes.lock().unwrap().clone();
@@ -457,8 +457,7 @@ async fn a_search_over_fifty_tables_stops_when_cancelled() {
         }
         run(label, &session, &create, false).await;
 
-        let cancel = Arc::new(ExportCancel::new());
-        cancel.attach(&session);
+        let cancel = Arc::new(JobCancel::new());
         let started = Arc::new(Mutex::new(0usize));
         let finished = Arc::new(Mutex::new(Vec::new()));
         let cancelling = Arc::new(Mutex::new(None));
@@ -553,8 +552,7 @@ async fn a_search_cancelled_at_any_point_reports_how_it_ended() {
                     "{label}: table {table}, {}",
                     if at_end { "end" } else { "start" }
                 );
-                let cancel = Arc::new(ExportCancel::new());
-                cancel.attach(&session);
+                let cancel = Arc::new(JobCancel::new());
                 let ended = Arc::new(Mutex::new(Vec::new()));
                 let progress = {
                     let (cancel, ended) = (cancel.clone(), ended.clone());
@@ -628,8 +626,7 @@ async fn cancel_stops_the_running_statement() {
         false,
     )
     .await;
-    let cancel = Arc::new(ExportCancel::new());
-    cancel.attach(&session);
+    let cancel = Arc::new(JobCancel::new());
     let later = cancel.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;

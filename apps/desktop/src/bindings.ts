@@ -40,7 +40,7 @@ export const commands = {
 	planStatistics: (plan: number, kind: PlanStatKind, offset: number, limit: number) => typedError<PlanStatsPage_Serialize, string>(__TAURI_INVOKE("plan_statistics", { plan, kind, offset, limit })),
 	planRawWindow: (plan: number, offset: number) => typedError<RawWindow_Serialize, string>(__TAURI_INVOKE("plan_raw_window", { plan, offset })),
 	releasePlan: (plan: number) => __TAURI_INVOKE<void>("release_plan", { plan }),
-	exportPlan: (exportId: number, plan: number, view: PlanView, path: string, csv: boolean) => typedError<number, string>(__TAURI_INVOKE("export_plan", { exportId, plan, view, path, csv })),
+	exportPlan: (job: Channel<JobTicket>, plan: number, view: PlanView, path: string, csv: boolean) => typedError<number, string>(__TAURI_INVOKE("export_plan", { job, plan, view, path, csv })),
 	workspaceInfo: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("workspace_info")),
 	/**  Every AI client: its file, whether our server is there, and its manual configuration. */
 	mcpClients: () => typedError<McpClientsItem_Serialize, string>(__TAURI_INVOKE("mcp_clients")),
@@ -83,9 +83,12 @@ export const commands = {
 	 *  read-only connection and an unconfirmed plan that needs a confirmation, and loads the rows
 	 *  in transactions, reporting progress on `on_progress`.
 	 */
-	runImport: (source: string, importId: number, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<ImportOutcome, string>(__TAURI_INVOKE("run_import", { source, importId, request, confirmed, onProgress })),
-	/**  Stops a running import: the batch it is in is rolled back; committed batches stay. */
-	cancelImport: (importId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_import", { importId })),
+	runImport: (source: string, job: Channel<JobTicket>, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<JobOutcome<ImportDoneItem, number | null>, string>(__TAURI_INVOKE("run_import", { source, job, request, confirmed, onProgress })),
+	/**
+	 *  Stops the running job `id`, which must be a `kind`: the ticket its command sent. A job that
+	 *  has ended is not an error; an id of another kind is refused and stops nothing.
+	 */
+	cancelJob: (id: number, kind: JobKind) => typedError<null, string>(__TAURI_INVOKE("cancel_job", { id, kind })),
 	backupPreferences: () => typedError<BackupPreferencesItem, string>(__TAURI_INVOKE("backup_preferences")),
 	setBackupPreferences: (preferences: BackupPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_backup_preferences", { preferences })),
 	/**  The client tools of the connection's engine, from `folder` (empty: found automatically). */
@@ -96,32 +99,30 @@ export const commands = {
 	 *  Backs up the connection's database with its vendor's tool, through its tunnel; the tool's
 	 *  output goes to `on_event` line by line.
 	 */
-	runBackup: (session: string, runId: number, request: BackupRequestItem_Deserialize, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<BackupOutcome, string>(__TAURI_INVOKE("run_backup", { session, runId, request, onEvent })),
+	runBackup: (session: string, job: Channel<JobTicket>, request: BackupRequestItem_Deserialize, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<BackupDoneItem, null>, string>(__TAURI_INVOKE("run_backup", { session, job, request, onEvent })),
 	/**  The tool a restore will run and what its confirmation must say. */
 	previewRestore: (session: string, request: RestoreRequestItem) => typedError<RestorePreviewItem, string>(__TAURI_INVOKE("preview_restore", { session, request })),
 	/**
 	 *  Restores a file into the connection's database with its vendor's tool, through its tunnel.
 	 *  The core refuses a read-only connection and an unconfirmed restore.
 	 */
-	runRestore: (session: string, runId: number, request: RestoreRequestItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<RestoreOutcome, string>(__TAURI_INVOKE("run_restore", { session, runId, request, confirmed, onEvent })),
-	/**  Stops a running backup or restore: the tool is killed and a partial backup removed. */
-	cancelBackup: (runId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_backup", { runId })),
+	runRestore: (session: string, job: Channel<JobTicket>, request: RestoreRequestItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<RestoreDoneItem, null>, string>(__TAURI_INVOKE("run_restore", { session, job, request, confirmed, onEvent })),
 	/**  The file (SQLite) or folder (DuckDB) a copy will be. */
 	previewEmbeddedBackup: (session: string, request: EmbeddedBackupItem) => typedError<string, string>(__TAURI_INVOKE("preview_embedded_backup", { session, request })),
 	/**  Copies a SQLite database with `VACUUM INTO`, or exports a DuckDB one, in a session of its own. */
-	runEmbeddedBackup: (session: string, runId: number, request: EmbeddedBackupItem, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<BackupOutcome, string>(__TAURI_INVOKE("run_embedded_backup", { session, runId, request, onEvent })),
+	runEmbeddedBackup: (session: string, job: Channel<JobTicket>, request: EmbeddedBackupItem, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<BackupDoneItem, null>, string>(__TAURI_INVOKE("run_embedded_backup", { session, job, request, onEvent })),
 	/**
 	 *  Loads a DuckDB export folder into the connection's database. The core refuses a read-only
 	 *  connection and an unconfirmed import.
 	 */
-	runDuckdbImport: (session: string, runId: number, folder: string, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<RestoreOutcome, string>(__TAURI_INVOKE("run_duckdb_import", { session, runId, folder, confirmed, onEvent })),
+	runDuckdbImport: (session: string, job: Channel<JobTicket>, folder: string, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<RestoreDoneItem, null>, string>(__TAURI_INVOKE("run_duckdb_import", { session, job, folder, confirmed, onEvent })),
 	/**  Reads an `.sql` file and counts its statements and what the guard would ask about. */
 	planSqlFile: (session: string, path: string) => typedError<FilePlanItem, string>(__TAURI_INVOKE("plan_sql_file", { session, path })),
 	/**
 	 *  Runs an `.sql` file in a session of its own, statement by statement. The core refuses a
 	 *  read-only connection and an unconfirmed run.
 	 */
-	runSqlFile: (session: string, runId: number, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<FileRunOutcome, string>(__TAURI_INVOKE("run_sql_file", { session, runId, path, onError, confirmed, onEvent })),
+	runSqlFile: (session: string, job: Channel<JobTicket>, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<FileRunDoneItem, null>, string>(__TAURI_INVOKE("run_sql_file", { session, job, path, onError, confirmed, onEvent })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -229,9 +230,12 @@ export const commands = {
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
 	 *  come back with their SQL, not executed (AGENTS.md). Refused for an install the app cannot
-	 *  replace (see `update_method`), whatever the web view asks.
+	 *  replace (see `update_method`), whatever the web view asks. The download's progress goes to
+	 *  the page (`UpdateChanged`); when it fails, the update stays to be installed again (SDB-377).
 	 */
 	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
+	/**  What the page shows about updates now (SDB-377). */
+	updateStatus: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_status")),
 	/**
 	 *  Opens the latest release's page in the system's browser, for an install that is updated by
 	 *  hand or by the package manager. Only that fixed address can be opened.
@@ -261,13 +265,11 @@ export const commands = {
 	pluginsRefreshCatalogue: () => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_refresh_catalogue")),
 	/**
 	 *  Installs the newest build the accepted catalogue offers of the plugin `name`: an install or
-	 *  an update, on the user's click. `install` is an id the page chooses, for
-	 *  `pluginsCancelInstall` and the `PluginInstallProgress` events. The next connection of its
-	 *  engines starts the new build; connections already open keep theirs.
+	 *  an update, on the user's click. Its job's ticket goes to `job` at once (`cancel_job` stops
+	 *  it), and its progress to every view through `PluginInstallChanged`. The next connection of
+	 *  its engines starts the new build; connections already open keep theirs.
 	 */
-	pluginsInstall: (install: number, name: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_install", { install, name })),
-	/**  Stops the install `install`, if it runs. Nothing of it is kept. */
-	pluginsCancelInstall: (install: number) => __TAURI_INVOKE<void>("plugins_cancel_install", { install }),
+	pluginsInstall: (job: Channel<JobTicket>, name: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_install", { job, name })),
 	/**
 	 *  Installs a file the user picked in the app's file dialog: a plugin's archive (installed only
 	 *  as the accepted catalogue's entry with its SHA-256) or, for a file whose name ends in
@@ -302,17 +304,12 @@ export const commands = {
 	listTunnels: () => typedError<TunnelItem_Serialize[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**
 	 *  Tests a connection that may not be saved yet, step by step (ADR-032): every change to its
-	 *  steps goes through `on_step`, and `stop_connection_test(test)` stops it. Nothing is
+	 *  steps goes through `on_step`, its ticket to `job`, and `cancel_job` stops it. Nothing is
 	 *  written: neither the file nor the keychain. `editing` is the connection being edited, if
 	 *  any: its stored password is used when none is typed. `network_only` stops before logging
 	 *  in. The steps, their errors and the diagnostics come from the core, redacted.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null, networkOnly: boolean, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, test, onStep })),
-	/**
-	 *  Stops a running connection or network profile test: the running step is dropped and
-	 *  whatever it opened is closed. Nothing is retried.
-	 */
-	stopConnectionTest: (test: number) => __TAURI_INVOKE<void>("stop_connection_test", { test }),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null, networkOnly: boolean, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, job, onStep })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
 	 *  configuration. Returns the new connection's identifier.
@@ -366,10 +363,10 @@ export const commands = {
 	/**
 	 *  Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
 	 *  again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
-	 *  are used when none is typed. Steps go through `on_step`; `stop_connection_test(test)`
+	 *  are used when none is typed. Steps go through `on_step`, its ticket to `job`; `cancel_job`
 	 *  stops it.
 	 */
-	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<TunnelTestOutcome_Serialize, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword, test, onStep })),
+	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<TunnelTestOutcome_Serialize, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword, job, onStep })),
 	/**  Saves a new tunnel (and its `keychain` passwords) and reloads the configuration. */
 	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelItem_Serialize, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords, proxyPassword })),
 	/**  Saves an edited tunnel (same file and name) and reloads the configuration. */
@@ -476,17 +473,17 @@ export const commands = {
 	 *  A table data tab column's statistics (the column header's "Column statistics"): counted by
 	 *  the server in a new session of the tab's connection, every statement a read inside the
 	 *  engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
-	 *  type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
-	 *  `stats_id` stops it.
+	 *  type come from the tab's page (`result`, `column`). Its ticket goes to `job`; `cancel_job`
+	 *  stops it.
 	 */
-	columnStats: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<ColumnStatsOutcome_Serialize, string>(__TAURI_INVOKE("column_stats", { source, statsId, table, result, column })),
+	columnStats: (source: string, job: Channel<JobTicket>, table: ColumnStatsTarget, result: number, column: number) => typedError<JobOutcome<ColumnStatsItem_Serialize, null>, string>(__TAURI_INVOKE("column_stats", { source, job, table, result, column })),
 	/**
 	 *  A table data tab column's most frequent values, to pick a filter's value from: counted by
 	 *  the server like `column_stats` (a new session of the tab's connection, every statement a
 	 *  read), with the tab's filter. The core refuses a masked column before anything is read
-	 *  (ADR-051). `cancel_column_stats` with the same `stats_id` stops it.
+	 *  (ADR-051). Its ticket goes to `job`; `cancel_job` stops it.
 	 */
-	columnTopValues: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<TopValuesOutcome_Serialize, string>(__TAURI_INVOKE("column_top_values", { source, statsId, table, result, column })),
+	columnTopValues: (source: string, job: Channel<JobTicket>, table: ColumnStatsTarget, result: number, column: number) => typedError<TopValuesOutcome_Serialize, string>(__TAURI_INVOKE("column_top_values", { source, job, table, result, column })),
 	/**
 	 *  What a table data tab remembers of its table's filters (SDB-381): the history, newest
 	 *  first, and the default the tab opens with. Local data; the core checks each filter again
@@ -500,8 +497,6 @@ export const commands = {
 	forgetTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, schema, name, filter })),
 	/**  Saves the filter a table's tab opens with (checked by the core), or drops it (`None`). */
 	setTableDefaultFilter: (connection: string, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, schema, name, filter })),
-	/**  Stops a column's statistics while they are counted: the running statement and the rest. */
-	cancelColumnStats: (statsId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_column_stats", { statsId })),
 	/**
 	 *  Every column of a schema's relations, read with one catalog query on the explorer's
 	 *  session: metadata search keeps them with the schema (ADR-043).
@@ -513,11 +508,9 @@ export const commands = {
 	 *  Searches a value in the chosen tables of `source`'s connection (ADR-043): the core writes
 	 *  one read per table with the value bound as a parameter, in a new session opened for reads
 	 *  only, each table inside the engine's read-only transaction. Each table's start and end go to
-	 *  `on_event`; `cancel_data_search` with the same `search_id` stops it.
+	 *  `on_event`, its ticket to `job`; `cancel_job` stops it.
 	 */
-	dataSearch: (source: string, searchId: number, request: DataSearchRequestItem, onEvent: Channel<DataSearchEventItem_Deserialize>) => typedError<DataSearchSummaryItem, string>(__TAURI_INVOKE("data_search", { source, searchId, request, onEvent })),
-	/**  Stops a data search: the running statement and every table after it. */
-	cancelDataSearch: (searchId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_data_search", { searchId })),
+	dataSearch: (source: string, job: Channel<JobTicket>, request: DataSearchRequestItem, onEvent: Channel<DataSearchEventItem_Deserialize>) => typedError<JobOutcome<DataSearchSummaryItem, DataSearchSummaryItem>, string>(__TAURI_INVOKE("data_search", { source, job, request, onEvent })),
 	/**
 	 *  A table data tab's filter with a condition the core wrote (one of the column statistics'
 	 *  most frequent values) added with AND. The page's SELECT is checked when it loads.
@@ -579,19 +572,17 @@ export const commands = {
 	 *  Runs a query again in a new session and streams every row to `path` (ADR-034). Only a single
 	 *  read is run; a connection type that confirms execution needs `confirmed`.
 	 */
-	exportQuery: (source: string, exportId: number, sql: string, path: string, options: ExportFileOptions_Deserialize, confirmed: boolean, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportOutcome, string>(__TAURI_INVOKE("export_query", { source, exportId, sql, path, options, confirmed, onProgress })),
+	exportQuery: (source: string, job: Channel<JobTicket>, sql: string, path: string, options: ExportFileOptions_Deserialize, confirmed: boolean, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportSummaryItem, null>, string>(__TAURI_INVOKE("export_query", { source, job, sql, path, options, confirmed, onProgress })),
 	/**
 	 *  Streams every row of a table data tab's view (its filter and order, not just the loaded
 	 *  page) to `path`, through the core's own SELECT.
 	 */
-	exportTableData: (source: string, exportId: number, view: TableExportItem, path: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportOutcome, string>(__TAURI_INVOKE("export_table_data", { source, exportId, view, path, options, onProgress })),
+	exportTableData: (source: string, job: Channel<JobTicket>, view: TableExportItem, path: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportSummaryItem, null>, string>(__TAURI_INVOKE("export_table_data", { source, job, view, path, options, onProgress })),
 	/**
 	 *  Streams explorer tables and views, one file each, into `folder`, never over an existing
 	 *  file. Stops at a cancel or an error; the files written before stay.
 	 */
-	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, names: FileNamePatternItem, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportTablesOutcome_Serialize, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, names, options, onProgress })),
-	/**  Stops a running streaming export: its statement and its writer; no file is left. */
-	cancelExport: (exportId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_export", { exportId })),
+	exportTables: (source: string, job: Channel<JobTicket>, tables: RelationRefItem[], folder: string, names: FileNamePatternItem, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<JobOutcome<ExportedFileItem[], TablesStoppedItem>, string>(__TAURI_INVOKE("export_tables", { source, job, tables, folder, names, options, onProgress })),
 	/**
 	 *  The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
 	 *  what fits, and the row may not be in its cache.
@@ -975,7 +966,7 @@ export const commands = {
 	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
 	historyDatabases: () => typedError<string[], string>(__TAURI_INVOKE("history_databases")),
 	pinHistory: (id: number, pinned: boolean) => typedError<boolean, string>(__TAURI_INVOKE("pin_history", { id, pinned })),
-	exportHistory: (exportId: number, filter: HistoryFilterItem_Deserialize, path: string) => typedError<number, string>(__TAURI_INVOKE("export_history", { exportId, filter, path })),
+	exportHistory: (job: Channel<JobTicket>, filter: HistoryFilterItem_Deserialize, path: string) => typedError<number, string>(__TAURI_INVOKE("export_history", { job, filter, path })),
 	snippetPage: (search: string, folder: number | null, unfiled: boolean, limit: number, offset: number) => typedError<SnippetItem_Serialize[], string>(__TAURI_INVOKE("snippet_page", { search, folder, unfiled, limit, offset })),
 	snippetFolders: () => typedError<SnippetFolderItem[], string>(__TAURI_INVOKE("snippet_folders")),
 	createSnippetFolder: (name: string) => typedError<number, string>(__TAURI_INVOKE("create_snippet_folder", { name })),
@@ -1055,12 +1046,10 @@ export const commands = {
 	/**
 	 *  Loads keyset pages of a paged query (ADR-054) into `result`, which holds `offset` rows,
 	 *  until it holds `until` rows (every row without it) or the query has no more. The rows held
-	 *  go to `on_progress` after each page; `cancel_load_rows` with the same `load_id` stops it,
-	 *  keeping the pages loaded before.
+	 *  go to `on_progress` after each page; its ticket goes to `job` at once, and `cancel_job` with
+	 *  it stops the load, keeping the pages loaded before.
 	 */
-	loadQueryRows: (session: string, loadId: number, result: number, sql: string, offset: number, sort: SortKeyItem[], until: number | null, onProgress: Channel<number>) => typedError<LoadedRowsItem, string>(__TAURI_INVOKE("load_query_rows", { session, loadId, result, sql, offset, sort, until, onProgress })),
-	/**  Stops a load of query rows: the page being read and every page after it. */
-	cancelLoadRows: (session: string, loadId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_load_rows", { session, loadId })),
+	loadQueryRows: (session: string, job: Channel<JobTicket>, result: number, sql: string, offset: number, sort: SortKeyItem[], until: number | null, onProgress: Channel<number>) => typedError<LoadedRowsItem, string>(__TAURI_INVOKE("load_query_rows", { session, job, result, sql, offset, sort, until, onProgress })),
 	/**
 	 *  Every row of a table data tab's table that its filter keeps, in its pages' order: "Load
 	 *  every row" (SDB-386). Written and checked by the core like a page.
@@ -1135,14 +1124,14 @@ export const commands = {
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
 	/**  An editor tab's transaction, as the core last read it (ADR-031). */
-	transactionStatus: (session: string) => typedError<TransactionStatusItem_Serialize, string>(__TAURI_INVOKE("transaction_status", { session })),
+	transactionStatus: (session: string) => typedError<TransactionStatusItem, string>(__TAURI_INVOKE("transaction_status", { session })),
 	/**
 	 *  Turns an editor tab's auto-commit on or off; the core refuses to turn it on while a
 	 *  transaction is open (ADR-031).
 	 */
-	setAutoCommit: (session: string, on: boolean) => typedError<TransactionStatusItem_Serialize, string>(__TAURI_INVOKE("set_auto_commit", { session, on })),
-	commitTransaction: (session: string) => typedError<TransactionOutcomeItem_Serialize, string>(__TAURI_INVOKE("commit_transaction", { session })),
-	rollbackTransaction: (session: string) => typedError<TransactionOutcomeItem_Serialize, string>(__TAURI_INVOKE("rollback_transaction", { session })),
+	setAutoCommit: (session: string, on: boolean) => typedError<TransactionStatusItem, string>(__TAURI_INVOKE("set_auto_commit", { session, on })),
+	commitTransaction: (session: string) => typedError<TransactionOutcomeItem, string>(__TAURI_INVOKE("commit_transaction", { session })),
+	rollbackTransaction: (session: string) => typedError<TransactionOutcomeItem, string>(__TAURI_INVOKE("rollback_transaction", { session })),
 	/**
 	 *  Of these sessions, the ones whose closing must be confirmed: a transaction with work in it
 	 *  is open (ADR-031). The UI asks before closing a tab, switching its connection or
@@ -1150,8 +1139,9 @@ export const commands = {
 	 */
 	sessionsToConfirm: (sessions: string[]) => typedError<string[], string>(__TAURI_INVOKE("sessions_to_confirm", { sessions })),
 	/**
-	 *  The editor tabs with an open transaction, for the quit question: from what each session
-	 *  last read, with no round trip, so a server that does not answer cannot hold quitting.
+	 *  The editor tabs whose closing must ask, for the quit question: from what each session
+	 *  last read, with no round trip, so a server that does not answer cannot hold quitting. A lost
+	 *  session is left out: its server already rolled its transaction back (SDB-372).
 	 */
 	quitOpenTransactions: () => typedError<string[], string>(__TAURI_INVOKE("quit_open_transactions")),
 	/**
@@ -1173,11 +1163,13 @@ export const events = {
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
 	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
-	pluginInstallProgress: makeEvent<PluginInstallProgress, PluginInstallProgress>("plugin-install-progress"),
+	pluginInstallChanged: makeEvent<PluginInstallChanged, PluginInstallChanged>("plugin-install-changed"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
+	runChanged: makeEvent<RunChanged, RunChanged>("run-changed"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
-	transactionChanged: makeEvent<TransactionChanged_Serialize, TransactionChanged_Deserialize>("transaction-changed"),
+	transactionChanged: makeEvent<TransactionChanged, TransactionChanged>("transaction-changed"),
+	updateChanged: makeEvent<UpdateChanged_Serialize, UpdateChanged_Deserialize>("update-changed"),
 };
 
 /* Types */
@@ -1274,7 +1266,16 @@ export type AuditSessionItem = {
 	failed: number,
 };
 
-export type AuditStatusItem = "ok" | "error" | "refused" | "cleared";
+export type AuditStatusItem = "ok" | "error" | "refused" | "cleared" | 
+/**  A record whose decision this build does not know (SDB-376). */
+"unknown";
+
+/**  A finished backup: where it is, its size and how long it took. */
+export type BackupDoneItem = {
+	path: string,
+	bytes: number | null,
+	millis: number | null,
+};
 
 /**  What a run reports as it goes. */
 export type BackupEventItem = BackupEventItem_Serialize | BackupEventItem_Deserialize;
@@ -1301,10 +1302,6 @@ export type BackupOptionsItem_Serialize = { kind: "postgres"; schemas: string[];
 compression: number | null; 
 /**  Empty: the database's. */
 encoding: string; content: DumpContentItem; inserts: boolean; noPrivileges: boolean; noOwner: boolean; clean: boolean; create: boolean } | { kind: "mysql"; databases: string[]; tables: string[]; consistency: MysqlConsistencyItem; addDrop: boolean; noCreate: boolean; noData: boolean; extendedInsert: boolean; routines: boolean; events: boolean; triggers: boolean; includeViews: boolean; stripDefiner: boolean; hexBlob: boolean; columnStatistics: ColumnStatisticsItem };
-
-export type BackupOutcome = { kind: "done"; path: string; bytes: number | null; millis: number | null } | 
-/**  The password must be asked first. */
-{ kind: "passwordRequired" } | { kind: "cancelled" } | { kind: "failed"; message: string };
 
 /**  The dialog's remembered choices. */
 export type BackupPreferencesItem = {
@@ -1383,11 +1380,16 @@ export type BookmarkItem = {
 	/**  The schema the object is in, or the schema itself (with an empty `name`). */
 	schema: string,
 	name: string,
-	/**  `table`, `view`… for a relation, `function`, `sequence`… for another object, `schema`. */
-	kind: string,
+	kind: BookmarkKindItem,
 	/**  A function's arguments…; empty if nothing tells it apart from others of its name. */
 	detail: string,
 };
+
+/**
+ *  What a bookmark points at: `schema`, a relation's kind or another object's, as the drivers
+ *  name them. Any other word is refused when the command is called (SDB-376).
+ */
+export type BookmarkKindItem = "schema" | "table" | "partitioned_table" | "view" | "materialized_view" | "foreign_table" | "collection" | "node_label" | "relationship_type" | "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
 
 /**  A rectangle in the geometry's own units. */
 export type Bounds = {
@@ -1783,21 +1785,21 @@ export type ColumnStatsItem_Serialize = {
 	masked: boolean,
 };
 
-/**  How asking for a column's statistics ended. */
-export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize | ColumnStatsOutcome_Deserialize;
-
-/**  How asking for a column's statistics ended. */
-export type ColumnStatsOutcome_Deserialize = { kind: "done"; stats: ColumnStatsItem_Deserialize } | { kind: "cancelled" };
-
-/**  How asking for a column's statistics ended. */
-export type ColumnStatsOutcome_Serialize = { kind: "done"; stats: ColumnStatsItem_Serialize } | { kind: "cancelled" };
-
 /**  A column of a table data tab, for its statistics: the tab's table and filter. */
 export type ColumnStatsTarget = {
 	schema: string,
 	name: string,
 	filter: string,
 };
+
+/**  How a followed tab commits. */
+export type CommitModeItem = 
+/**  Each statement commits as it runs. */
+"auto" | 
+/**  Changes wait for Commit, as the user or the connection type chose. */
+"manual" | 
+/**  Smart commit turned manual commit on: it ends with the transaction. */
+"smartSwitched";
 
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
 
@@ -2269,13 +2271,13 @@ export type DataSearchRequestItem = {
 	rowsPerTable: number,
 };
 
-/**  How a data search ended. */
+/**
+ *  What a data search read: the tables it read to the end and the hits it found. How it ended
+ *  (done, cancelled, or stopped at the most hits a search returns) is its [`DataSearchOutcome`].
+ */
 export type DataSearchSummaryItem = {
 	tables: number,
 	hits: number,
-	cancelled: boolean,
-	/**  It stopped at the most hits a search returns. */
-	stopped: boolean,
 };
 
 /**
@@ -2934,13 +2936,6 @@ export type ExportFileOptions_Serialize = {
 	json: JsonOptionsItem,
 };
 
-/**  How a streaming export ended. */
-export type ExportOutcome = { kind: "done"; summary: ExportSummaryItem } | { kind: "cancelled" } | 
-/**  The connection's type confirms execution: ask, then export again with `confirmed`. */
-{ kind: "needsConfirmation" } | 
-/**  Not a read: only the loaded rows can be exported. */
-{ kind: "notARead"; message: string } | { kind: "failed"; message: string };
-
 /**
  *  Rows and bytes written so far by a streaming export; `table` is the position of the table
  *  being written when several are exported.
@@ -2973,27 +2968,6 @@ export type ExportSummaryItem = {
 	bytes: number | null,
 	/**  Characters the encoding lacks, written as `?`. */
 	replaced: number | null,
-};
-
-/**  How exporting several tables ended: the files written, and where it stopped if it did. */
-export type ExportTablesOutcome = ExportTablesOutcome_Serialize | ExportTablesOutcome_Deserialize;
-
-/**  How exporting several tables ended: the files written, and where it stopped if it did. */
-export type ExportTablesOutcome_Deserialize = {
-	files: ExportedFileItem[],
-	cancelled: boolean,
-	/**  Position of the table that failed, with why. */
-	failedTable?: number | null,
-	error?: string | null,
-};
-
-/**  How exporting several tables ended: the files written, and where it stopped if it did. */
-export type ExportTablesOutcome_Serialize = {
-	files: ExportedFileItem[],
-	cancelled: boolean,
-	/**  Position of the table that failed, with why. */
-	failedTable: number | null,
-	error: string | null,
 };
 
 /**  A file written by `export_tables`. */
@@ -3063,7 +3037,13 @@ export type FileRiskItem = {
 	count: number | null,
 };
 
-export type FileRunOutcome = { kind: "done"; done: number | null; failed: number | null; total: number | null; millis: number | null } | { kind: "needsConfirmation" } | { kind: "cancelled" } | { kind: "failed"; message: string };
+/**  A file run that went to the end: statements run, failed and in the file, and how long. */
+export type FileRunDoneItem = {
+	done: number | null,
+	failed: number | null,
+	total: number | null,
+	millis: number | null,
+};
 
 /**  What "Hide" and "Show only" in the explorer do with one name. */
 export type FilterActionItem = "hide" | "showOnly";
@@ -3297,8 +3277,7 @@ export type HistoryItem_Deserialize = {
 	statement: string,
 	durationMs: number,
 	rows: number,
-	error?: string | null,
-	cancelled: boolean,
+	outcome: HistoryOutcomeItem,
 	database?: string | null,
 	pinned: boolean,
 };
@@ -3310,11 +3289,13 @@ export type HistoryItem_Serialize = {
 	statement: string,
 	durationMs: number,
 	rows: number,
-	error: string | null,
-	cancelled: boolean,
+	outcome: HistoryOutcomeItem,
 	database: string | null,
 	pinned: boolean,
 };
+
+/**  How a statement of the history ended (`spelaion_core::HistoryOutcome`). */
+export type HistoryOutcomeItem = { kind: "succeeded" } | { kind: "failed"; error: string } | { kind: "cancelled" };
 
 export type HistoryPageItem = HistoryPageItem_Serialize | HistoryPageItem_Deserialize;
 
@@ -3363,11 +3344,27 @@ export type HopDraftItem_Serialize = {
 
 export type IfExistsItem = "fail" | "append" | "replace";
 
+/**
+ *  What to do with a connection that already exists. Any other word is refused when the
+ *  command is called, never read as one of these (SDB-376).
+ */
+export type ImportAction = 
+/**  Import it as a copy when the name is taken. */
+"import" | "replace" | "skip";
+
 /**  One connection to import, and what to do if it already exists. */
 export type ImportChoice = {
 	id: string,
-	/**  `import` (as a copy when the name is taken), `replace` or `skip`. */
-	action: string,
+	action: ImportAction,
+};
+
+/**  What a finished import did. */
+export type ImportDoneItem = {
+	schema: string,
+	table: string,
+	rows: number | null,
+	createdTable: boolean,
+	millis: number | null,
 };
 
 export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown" | "xlsx";
@@ -3479,13 +3476,6 @@ export type ImportOptionsItem = {
 	/**  The sheet of a workbook (XLSX); empty: the first one. */
 	sheet: string,
 };
-
-/**  How an import ended. */
-export type ImportOutcome = { kind: "done"; schema: string; table: string; rows: number | null; createdTable: boolean; millis: number | null } | 
-/**  The plan needs a confirmation: ask, then run again with `confirmed`. */
-{ kind: "needsConfirmation" } | { kind: "cancelled"; committed: number | null } | { kind: "failed"; message: string; 
-/**  Rows committed before the failure (they stay). */
-committed: number | null };
 
 /**  What will run, written by the core, to show before it does. */
 export type ImportPlanItem = {
@@ -3630,6 +3620,27 @@ export type IndexDetails = {
 	definition: string,
 };
 
+/**  Where installing an update stands. */
+export type InstallStatus = InstallStatus_Serialize | InstallStatus_Deserialize;
+
+/**  Where installing an update stands. */
+export type InstallStatus_Deserialize = 
+/**  Not started: "Install and restart" downloads it. */
+{ kind: "ready" } | 
+/**  Downloading: bytes received, of the total when the server said it. */
+{ kind: "downloading"; received: number | null; total?: number | null } | 
+/**  The download or the install failed, and why; installing again retries it. */
+{ kind: "failed"; reason: string };
+
+/**  Where installing an update stands. */
+export type InstallStatus_Serialize = 
+/**  Not started: "Install and restart" downloads it. */
+{ kind: "ready" } | 
+/**  Downloading: bytes received, of the total when the server said it. */
+{ kind: "downloading"; received: number | null; total: number | null } | 
+/**  The download or the install failed, and why; installing again retries it. */
+{ kind: "failed"; reason: string };
+
 /**
  *  A dialog nobody waits for any more (the connection test that asked was stopped, or
  *  the answer took too long): the UI closes it.
@@ -3644,6 +3655,48 @@ export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; 
 export type InteractionRequest = {
 	id: number,
 	request: InteractionKind,
+};
+
+/**  A kind of work the desktop runs and can stop. */
+export type JobKind = 
+/**  A streaming export: of a query, of tables, of the history, of a plan, of a library. */
+"export" | "dataSearch" | 
+/**  A column's statistics or its top values. */
+"columnStats" | "import" | 
+/**  A backup, with its vendor's tool or the engine's own. */
+"backup" | 
+/**  A restore, or an import of a DuckDB export. */
+"restore" | 
+/**  "Run SQL file…". */
+"fileRun" | "connectionTest" | 
+/**  "Load every row", a page or a row jump of a query's result. */
+"rowLoad" | "pluginInstall";
+
+/**
+ *  How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
+ *  export, an import, a backup, a restore, a file run, a data search, a column's statistics),
+ *  read from `spelaion_core::JobEnd`. Generic over what the job returns (`T`) and what it
+ *  leaves behind when it stops early (`K`: the rows an import committed, the files an export
+ *  of several tables wrote, the tables a search read, or nothing).
+ */
+export type JobOutcome<T, K> = { kind: "done"; result: T } | 
+/**  It stopped at a limit it was given, with what it found until then. */
+{ kind: "stoppedAtLimit"; result: T } | 
+/**  What was already committed or written stays. */
+{ kind: "cancelled"; kept: K } | 
+/**  What was already committed or written stays. */
+{ kind: "failed"; message: string; kept: K } | 
+/**  The connection's type asks before it runs: ask, then run it again with `confirmed`. */
+{ kind: "needsConfirmation" } | 
+/**  The connection's password must be asked first. */
+{ kind: "passwordRequired" } | 
+/**  Only a single read may run there (an export runs the query again). */
+{ kind: "notARead"; message: string };
+
+/**  What the page holds of a running job: its id and kind, to give back to `cancel_job`. */
+export type JobTicket = {
+	id: number,
+	kind: JobKind,
 };
 
 /**  How JSON and NDJSON write values (SDB-391). */
@@ -4512,6 +4565,9 @@ export type OutlineItem = {
 	total: number,
 };
 
+/**  Why a result was cut short. */
+export type PartialReasonItem = "cancelled" | "failed" | "timedOut" | "connectionLost";
+
 export type PartitionItem = PartitionItem_Serialize | PartitionItem_Deserialize;
 
 export type PartitionItem_Deserialize = {
@@ -4987,6 +5043,20 @@ export type PlanView = {
 	findingsOnly: boolean,
 };
 
+/**
+ *  What a plugin's engines get on this machine: the core's one answer
+ *  (`PluginState::availability`).
+ */
+export type PluginAvailability = 
+/**  A build is started: its engines use it. */
+"inUse" | 
+/**  Builds are here and none may be started (`message` says why). */
+"refused" | 
+/**  The pinned build should be next to the app and is not (`message` says which file). */
+"missing" | 
+/**  Nothing of it is here: it needs installing. */
+"notInstalled";
+
 /**  The build of a plugin that its engines start. */
 export type PluginInUse = {
 	version: string,
@@ -4995,13 +5065,27 @@ export type PluginInUse = {
 	engines: string[],
 };
 
-/**  How far an install's download is. Sent a few times a second at most. */
-export type PluginInstallProgress = {
-	/**  The id the page gave `pluginsInstall`. */
-	install: number,
-	received: number | null,
-	/**  The archive's size, from the catalogue. */
-	total: number | null,
+/**  A plugin's install, as every view shows it (SDB-373). */
+export type PluginInstall = 
+/**  No install of it is running, and the last one did not fail. */
+{ kind: "idle" } | 
+/**
+ *  Its archive is downloading: bytes received of the total the catalogue gives (0 when it
+ *  gives none). `install` is its job's id: `cancelJob(install, "pluginInstall")` stops it.
+ */
+{ kind: "downloading"; install: number; received: number | null; total: number | null } | 
+/**  The last install failed or was stopped, in the core's words. */
+{ kind: "failed"; why: string };
+
+/**
+ *  A plugin's install changed: it started, more of it arrived (a few times a second at most),
+ *  it failed or was stopped, or it ended (idle again; the overview has changed then). Every
+ *  view that shows the plugin reads it, wherever the install was started (SDB-373).
+ */
+export type PluginInstallChanged = {
+	/**  The plugin's name. */
+	name: string,
+	install: PluginInstall,
 };
 
 /**  One plugin of ours, as this machine has it. */
@@ -5013,6 +5097,10 @@ export type PluginItem_Deserialize = {
 	name: string,
 	/**  Every engine anything here says it serves. */
 	engines: string[],
+	/**  What its engines get: the core's one answer. */
+	availability: PluginAvailability,
+	/**  Its install, wherever it was started from. */
+	install: PluginInstall,
 	/**  The build started for its engines, if any. */
 	inUse?: PluginInUse | null,
 	/**  The builds on this machine that are not started, newest first. */
@@ -5037,6 +5125,10 @@ export type PluginItem_Serialize = {
 	name: string,
 	/**  Every engine anything here says it serves. */
 	engines: string[],
+	/**  What its engines get: the core's one answer. */
+	availability: PluginAvailability,
+	/**  Its install, wherever it was started from. */
+	install: PluginInstall,
 	/**  The build started for its engines, if any. */
 	inUse: PluginInUse | null,
 	/**  The builds on this machine that are not started, newest first. */
@@ -5448,6 +5540,12 @@ export type RerunCheckItem_Serialize = {
 	openTransaction: boolean,
 };
 
+/**  A finished restore: the bytes of the file fed to the tool and how long it took. */
+export type RestoreDoneItem = {
+	bytes: number | null,
+	millis: number | null,
+};
+
 export type RestoreFormatItem = "auto" | "plain" | "custom" | "directory" | "tar";
 
 /**  Why a restored tab is not exactly as it was kept. */
@@ -5456,8 +5554,6 @@ export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } 
 export type RestoreOptionsItem = { kind: "postgres"; clean: boolean; noOwner: boolean; create: boolean } | { kind: "mysql"; 
 /**  Empty: the connection's. */
 database: string; disableForeignKeys: boolean };
-
-export type RestoreOutcome = { kind: "done"; bytes: number | null; millis: number | null } | { kind: "needsConfirmation" } | { kind: "passwordRequired" } | { kind: "cancelled" } | { kind: "failed"; message: string };
 
 export type RestorePreviewItem = {
 	tool: string,
@@ -5510,6 +5606,18 @@ export type RestoredTabsItem_Serialize = {
 	/**  The personal "reconnect at startup" setting: connect only, never run. */
 	reconnect: boolean,
 };
+
+/**
+ *  How far a stored result got (SDB-367), as the core says it: the page shows it and never
+ *  works it out from the statement's messages.
+ */
+export type ResultEndItem = 
+/**  Rows may still arrive. */
+{ kind: "loading" } | 
+/**  Every row of the statement. */
+{ kind: "whole" } | 
+/**  The statement stopped before its last row: the rows shown are not the whole answer. */
+{ kind: "partial"; reason: PartialReasonItem };
 
 /**  Where a run's results go (SDB-378). */
 export type ResultPlacementItem = 
@@ -5621,6 +5729,12 @@ export type RowReferenceItem_Serialize = {
 	error: string | null,
 };
 
+/**  An editor tab's run state changed (SDB-370): sent only when it changes. */
+export type RunChanged = {
+	session: string,
+	state: RunStateItem,
+};
+
 /**
  *  What the editor's Run will send: the statement under the cursor, the selection, or the
  *  whole script (a tab with no connection).
@@ -5643,6 +5757,18 @@ export type RunOptionsItem_Serialize = {
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds: number | null,
 };
+
+/**
+ *  What an editor tab's session runs (SDB-370), as the core publishes it: the tab shows it and
+ *  never works it out from the run's events. Statements are counted from 0.
+ */
+export type RunStateItem = { kind: "idle" } | 
+/**  The statement runs, or is the next to. */
+{ kind: "running"; statement: number } | 
+/**  The statement failed and the run waits for `answer_script_error` with this ticket. */
+{ kind: "paused"; statement: number; ticket: number; remaining: number } | 
+/**  A cancel was asked for; the run has not ended yet. */
+{ kind: "cancelling"; statement: number };
 
 /**  What Run will send and the statements in it, as the core reads them. */
 export type RunTargetItem = RunTargetItem_Serialize | RunTargetItem_Deserialize;
@@ -5775,17 +5901,24 @@ export type ScriptEvent_Deserialize =
  */
 { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name?: string | null; 
 /**  `name` is the one the user gave the tab it replaces (SDB-407). */
-renamed: boolean; pinned: boolean; replaces?: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
+renamed: boolean; pinned: boolean; replaces?: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | 
+/**
+ *  No more rows arrive for this result (SDB-367): whole, or cut short and why. Comes
+ *  before its statement's end.
+ */
+{ kind: "resultEnded"; index: number; result: number; end: ResultEndItem } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */
 fetchMs: number | null } | { kind: "statementFailed"; index: number; message: string; code?: string | null; detail?: string | null; hint?: string | null; 
 /**  Error position in bytes within the script, to underline it. */
-scriptOffset?: number | null; cancelled: boolean; 
-/**  It ran longer than the run's statement timeout. */
-timedOut: boolean } | 
+scriptOffset?: number | null; 
+/**  How it ended: failed, cancelled or timed out (SDB-370). */
+end: StatementEndItem } | 
 /**  The run waits for `answer_script_error` with this ticket (ADR-035). */
-{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
+{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | 
+/**  The run ended; its summary says how. */
+{ kind: "scriptFinished"; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
 
 export type ScriptEvent_Serialize = 
 /**
@@ -5802,17 +5935,24 @@ export type ScriptEvent_Serialize =
  */
 { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[]; name: string | null; 
 /**  `name` is the one the user gave the tab it replaces (SDB-407). */
-renamed: boolean; pinned: boolean; replaces: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
+renamed: boolean; pinned: boolean; replaces: number | null; closed: number[] } | { kind: "rows"; index: number; result: number; totalRows: number } | 
+/**
+ *  No more rows arrive for this result (SDB-367): whole, or cut short and why. Comes
+ *  before its statement's end.
+ */
+{ kind: "resultEnded"; index: number; result: number; end: ResultEndItem } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
 /**  Until the engine's first answer. */
 executionMs: number | null; 
 /**  Reading the rows after it. */
 fetchMs: number | null } | { kind: "statementFailed"; index: number; message: string; code: string | null; detail: string | null; hint: string | null; 
 /**  Error position in bytes within the script, to underline it. */
-scriptOffset: number | null; cancelled: boolean; 
-/**  It ran longer than the run's statement timeout. */
-timedOut: boolean } | 
+scriptOffset: number | null; 
+/**  How it ended: failed, cancelled or timed out (SDB-370). */
+end: StatementEndItem } | 
 /**  The run waits for `answer_script_error` with this ticket (ADR-035). */
-{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string };
+{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | 
+/**  The run ended; its summary says how. */
+{ kind: "scriptFinished"; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string };
 
 /**  How scripts run from the editor, shared by every workspace. */
 export type ScriptPreferencesItem = {
@@ -5823,14 +5963,18 @@ export type ScriptPreferencesItem = {
 	confirmDelaySeconds: number,
 };
 
-/**  Why a run stopped with statements left. */
+/**  Why a run stopped before going through every statement its mode let it run. */
 export type ScriptStopItem = {
 	kind: ScriptStopKind,
 	/**  The statement it stopped at. */
 	index: number,
 };
 
-export type ScriptStopKind = "failed" | "cancelled" | "transactionAborted" | "transactionRolledBack" | "closed";
+export type ScriptStopKind = "failed" | "cancelled" | "transactionAborted" | "transactionRolledBack" | 
+/**  The session closed while the run waited for an answer. */
+"closed" | 
+/**  The connection was lost while the run waited for an answer. */
+"sessionLost";
 
 /**  "N statements: X ok, Y failed", and where the time went (ADR-035). */
 export type ScriptSummaryItem = ScriptSummaryItem_Serialize | ScriptSummaryItem_Deserialize;
@@ -6154,6 +6298,11 @@ export type StatStateItem = { kind: "done" } |
 /**  The engine refused it: its message. */
 { kind: "failed"; message: string };
 
+/**  How a statement that did not run to its end ended (SDB-370), as the core says it. */
+export type StatementEndItem = "failed" | "cancelled" | 
+/**  It ran longer than the run's statement timeout. */
+"timedOut";
+
 /**
  *  What Ctrl+Enter runs: the text the core wrote for the statement under the cursor, and that
  *  statement's own place in the script (flashed in the editor).
@@ -6331,6 +6480,15 @@ export type TableStructureItem_Serialize = {
 	comments: boolean,
 	transactional: boolean,
 	rebuilds: boolean,
+};
+
+/**
+ *  Where exporting several tables stopped: the files finished before, which stay, and the
+ *  position of the table it stopped at.
+ */
+export type TablesStoppedItem = {
+	files: ExportedFileItem[],
+	table: number,
 };
 
 export type TemporalKindItem = "date" | "time" | "timestamp" | 
@@ -6531,76 +6689,42 @@ sampled: boolean; sampleRows: number | null } | { kind: "cancelled" } | { kind: 
  *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
  *  auto-commit toggle (ADR-031).
  */
-export type TransactionChanged = TransactionChanged_Serialize | TransactionChanged_Deserialize;
-
-/**
- *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
- *  auto-commit toggle (ADR-031).
- */
-export type TransactionChanged_Deserialize = {
+export type TransactionChanged = {
 	session: string,
-	status: TransactionStatusItem_Deserialize,
-};
-
-/**
- *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
- *  auto-commit toggle (ADR-031).
- */
-export type TransactionChanged_Serialize = {
-	session: string,
-	status: TransactionStatusItem_Serialize,
+	status: TransactionStatusItem,
 };
 
 /**  What a Commit or Rollback said. */
-export type TransactionOutcomeItem = TransactionOutcomeItem_Serialize | TransactionOutcomeItem_Deserialize;
-
-/**  What a Commit or Rollback said. */
-export type TransactionOutcomeItem_Deserialize = {
-	status: TransactionStatusItem_Deserialize,
+export type TransactionOutcomeItem = {
+	status: TransactionStatusItem,
 	notices: NoticeItem[],
 };
 
-/**  What a Commit or Rollback said. */
-export type TransactionOutcomeItem_Serialize = {
-	status: TransactionStatusItem_Serialize,
-	notices: NoticeItem[],
-};
-
-/**  What the core last read about a transaction (ADR-031). */
-export type TransactionStateItem = "idle" | "open" | 
+/**  Whether a transaction is open, as the driver last said. */
+export type TransactionPhaseItem = { kind: "idle" } | 
+/**  Open with work a Commit would keep; `statements` run in it. */
+{ kind: "open"; statements: number } | 
 /**  Open, but the engine will only roll it back. */
-"failed";
+{ kind: "failed"; statements: number };
 
-/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
-export type TransactionStatusItem = TransactionStatusItem_Serialize | TransactionStatusItem_Deserialize;
-
-/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
-export type TransactionStatusItem_Deserialize = {
-	/**  The tab follows its transaction (an editor tab on an engine that can tell). */
-	supported: boolean,
-	autoCommit: boolean,
-	/**  The connection type's smart commit. */
-	smartCommit: boolean,
-	/**  Manual commit came from smart commit: it ends with the transaction. */
-	smartSwitched: boolean,
-	state?: TransactionStateItem | null,
-	/**  Statements run in the open transaction. */
-	statements: number,
-};
-
-/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
-export type TransactionStatusItem_Serialize = {
-	/**  The tab follows its transaction (an editor tab on an engine that can tell). */
-	supported: boolean,
-	autoCommit: boolean,
-	/**  The connection type's smart commit. */
-	smartCommit: boolean,
-	/**  Manual commit came from smart commit: it ends with the transaction. */
-	smartSwitched: boolean,
-	state: TransactionStateItem | null,
-	/**  Statements run in the open transaction. */
-	statements: number,
-};
+/**
+ *  An editor tab's transaction, as the core keeps it (ADR-031, ADR-060): its state, and the
+ *  core's answers to what the controls ask. The UI only shows it and derives nothing.
+ */
+export type TransactionStatusItem = 
+/**
+ *  The tab does not follow its transaction (not an editor tab, or an engine that cannot
+ *  tell): it only runs in auto-commit.
+ */
+{ kind: "notFollowed" } | { kind: "followed"; commit: CommitModeItem; transaction: TransactionPhaseItem; 
+/**  The connection type's smart commit. */
+smartCommit: boolean; 
+/**  Commit and Rollback apply: a transaction is open, also one that failed. */
+inTransaction: boolean; 
+/**  Auto-commit cannot be turned on now: commit or roll back first. */
+autoCommitLocked: boolean; 
+/**  Commit and Rollback are shown: in manual commit, or while a transaction is open. */
+endActionsShown: boolean };
 
 /**  The transposed view of rows of a result (SDB-386): a result of its own in the core. */
 export type TransposedItem = {
@@ -6691,6 +6815,28 @@ export type TunnelTestOutcome_Serialize = { kind: "tested"; report: TestReportIt
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
 
+/**
+ *  The update's state changed outside a command's answer: a download started, moved, or
+ *  failed. Sent a few times a second at most.
+ */
+export type UpdateChanged = UpdateChanged_Serialize | UpdateChanged_Deserialize;
+
+/**
+ *  The update's state changed outside a command's answer: a download started, moved, or
+ *  failed. Sent a few times a second at most.
+ */
+export type UpdateChanged_Deserialize = {
+	status: UpdateStatus_Deserialize,
+};
+
+/**
+ *  The update's state changed outside a command's answer: a download started, moved, or
+ *  failed. Sent a few times a second at most.
+ */
+export type UpdateChanged_Serialize = {
+	status: UpdateStatus_Serialize,
+};
+
 /**  How this copy of the app gets a new version. */
 export type UpdateMethod = 
 /**
@@ -6711,15 +6857,30 @@ export type UpdateMethod =
  */
 export type UpdateSourceItem = { kind: "table"; schema: string; name: string } | { kind: "query"; sql: string };
 
+/**  What the page shows about updates. */
 export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
 
+/**  What the page shows about updates. */
 export type UpdateStatus_Deserialize = 
+/**  Not checked yet in this run. */
+{ kind: "unknown" } | 
 /**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
-{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null; method: UpdateMethod };
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null; 
+/**  How this copy gets it; only `inApp` is installed by the app. */
+method: UpdateMethod; 
+/**  Where installing it stands; always `ready` unless `method` is `inApp`. */
+install: InstallStatus_Deserialize };
 
+/**  What the page shows about updates. */
 export type UpdateStatus_Serialize = 
+/**  Not checked yet in this run. */
+{ kind: "unknown" } | 
 /**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
-{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null; method: UpdateMethod };
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null; 
+/**  How this copy gets it; only `inApp` is installed by the app. */
+method: UpdateMethod; 
+/**  Where installing it stands; always `ready` unless `method` is `inApp`. */
+install: InstallStatus_Serialize };
 
 /**
  *  What a pasted connection URL fills in the form. The password goes only to the form's
@@ -6797,6 +6958,13 @@ export type VariableItem = {
 	name: string,
 	value: string,
 };
+
+/**  Why a window of rows could not be read (`fetch_window`, SDB-367). */
+export type WindowErrorItem = 
+/**  The result is no longer kept: its query must run again. */
+{ kind: "freed"; message: string } | 
+/**  Anything else, as the core said it. */
+{ kind: "failed"; message: string };
 
 export type WorkspaceInfo = WorkspaceInfo_Serialize | WorkspaceInfo_Deserialize;
 

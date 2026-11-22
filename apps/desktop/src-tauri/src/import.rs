@@ -9,16 +9,17 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_core::{
-    ColumnKind, ColumnMapping, IfExists, ImportCancel, ImportError, ImportFormat, ImportRequest,
-    ImportSource, ImportTarget, OpenConnection, OpenOptions, ParseOptions, SourceEncoding,
+    ColumnKind, ColumnMapping, IfExists, ImportError, ImportFormat, ImportRequest, ImportSource,
+    ImportTarget, JobCancel, OpenConnection, OpenOptions, ParseOptions, SourceEncoding,
     open_connection,
 };
 use spelaion_ssh::KnownHosts;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
-use crate::dto::RiskKind;
+use crate::dto::{JobOutcome, RiskKind};
 use crate::interaction::AppInteraction;
+use crate::jobs::{self, JobKind, JobTicket};
 use crate::{AppState, CmdResult};
 
 /// Where the rows come from.
@@ -362,32 +363,19 @@ pub struct ImportProgressItem {
     pub committed: f64,
 }
 
-/// How an import ended.
+/// What a finished import did.
 #[derive(Debug, Clone, Serialize, Type)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ImportOutcome {
-    Done {
-        schema: String,
-        table: String,
-        rows: f64,
-        created_table: bool,
-        millis: f64,
-    },
-    /// The plan needs a confirmation: ask, then run again with `confirmed`.
-    NeedsConfirmation,
-    Cancelled {
-        committed: f64,
-    },
-    Failed {
-        message: String,
-        /// Rows committed before the failure (they stay).
-        committed: f64,
-    },
+#[serde(rename_all = "camelCase")]
+pub struct ImportDoneItem {
+    pub schema: String,
+    pub table: String,
+    pub rows: f64,
+    pub created_table: bool,
+    pub millis: f64,
 }
+
+/// How an import ended. When it stops early, it kept the rows committed before (they stay).
+pub type ImportOutcome = JobOutcome<ImportDoneItem, f64>;
 
 /// Reads the start of the source and detects its columns' types for the engine of `session`.
 /// `options: None` guesses them from the source.
@@ -472,14 +460,19 @@ pub async fn import_plan(
 }
 
 /// A new session for an import, opened from the `source` session's resolved connection and
-/// in-memory password, and registered under `import_id` so `cancel_import` can stop it. Never a
-/// tab's own session (ADR-031).
+/// in-memory password, for an import job whose ticket goes to `job` at once, so `cancel_job`
+/// can stop it while the session still opens. Never a tab's own session (ADR-031).
 async fn open_import_session(
     state: &AppState,
     app: &AppHandle,
     source: &str,
-    import_id: u32,
-) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<ImportCancel>)> {
+    job: &Channel<JobTicket>,
+) -> CmdResult<(
+    Arc<OpenConnection>,
+    Arc<OpenConnection>,
+    Arc<JobCancel>,
+    jobs::Job,
+)> {
     let (source_open, password) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -487,14 +480,8 @@ async fn open_import_session(
             .ok_or("the connection of this import is closed")?;
         (source.open.clone(), source.password.clone())
     };
-    let cancel = Arc::new(ImportCancel::new());
-    {
-        let mut imports = state.imports.lock().expect("lock poisoned");
-        if imports.contains_key(&import_id) {
-            return Err("an import with this id is already running".into());
-        }
-        imports.insert(import_id, cancel.clone());
-    }
+    let running = jobs::start(state, JobKind::Import, job);
+    let cancel = running.cancel().clone();
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
@@ -510,18 +497,8 @@ async fn open_import_session(
     )
     .await
     {
-        Ok(open) => {
-            cancel.attach(&open.session);
-            Ok((source_open, Arc::new(open), cancel))
-        }
-        Err(e) => {
-            state
-                .imports
-                .lock()
-                .expect("lock poisoned")
-                .remove(&import_id);
-            Err(e.to_string())
-        }
+        Ok(open) => Ok((source_open, Arc::new(open), cancel, running)),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -531,7 +508,7 @@ async fn open_import_session(
 #[command]
 pub async fn run_import(
     source: String,
-    import_id: u32,
+    job: Channel<JobTicket>,
     request: ImportRequestItem,
     confirmed: bool,
     on_progress: Channel<ImportProgressItem>,
@@ -539,7 +516,8 @@ pub async fn run_import(
     state: State<'_, AppState>,
 ) -> CmdResult<ImportOutcome> {
     let request: ImportRequest = request.try_into()?;
-    let (source_open, open, cancel) = open_import_session(&state, &app, &source, import_id).await?;
+    let (source_open, open, cancel, running) =
+        open_import_session(&state, &app, &source, &job).await?;
     // The new session finds names where the explorer's does (its database or schema).
     let context = spelaion_core::follow_session_context(&source_open.session, &open.session).await;
     let safeguards = source_open.resolved.safeguards();
@@ -566,56 +544,19 @@ pub async fn run_import(
             .await
         }
     };
-    state
-        .imports
-        .lock()
-        .expect("lock poisoned")
-        .remove(&import_id);
+    drop(running);
     if let Ok(open) = Arc::try_unwrap(open) {
         open.close().await;
     }
-    Ok(match outcome {
-        Ok(summary) => ImportOutcome::Done {
+    Ok(ImportOutcome::from_end(
+        outcome.into(),
+        |summary| ImportDoneItem {
             schema: summary.schema,
             table: summary.table,
             rows: summary.rows as f64,
             created_table: summary.created_table,
             millis: summary.elapsed.as_millis() as f64,
         },
-        Err(ImportError::NeedsConfirmation) => ImportOutcome::NeedsConfirmation,
-        Err(ImportError::Cancelled { committed }) => ImportOutcome::Cancelled {
-            committed: committed as f64,
-        },
-        Err(e @ ImportError::Failed { committed, .. }) => ImportOutcome::Failed {
-            message: e.to_string(),
-            committed: committed as f64,
-        },
-        Err(
-            e @ (ImportError::Io { .. }
-            | ImportError::Source(_)
-            | ImportError::Invalid(_)
-            | ImportError::TableExists(_)
-            | ImportError::ReadOnly
-            | ImportError::Database(_)
-            | ImportError::Statement { .. }),
-        ) => ImportOutcome::Failed {
-            message: e.to_string(),
-            committed: 0.0,
-        },
-    })
-}
-
-/// Stops a running import: the batch it is in is rolled back; committed batches stay.
-#[command]
-pub async fn cancel_import(import_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let cancel = state
-        .imports
-        .lock()
-        .expect("lock poisoned")
-        .get(&import_id)
-        .cloned();
-    if let Some(cancel) = cancel {
-        cancel.cancel().await;
-    }
-    Ok(())
+        |committed| committed as f64,
+    ))
 }

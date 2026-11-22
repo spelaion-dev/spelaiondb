@@ -48,5 +48,8 @@ apple-native-keyring-store = { version = "1", features = ["keychain"] }
 # crypto-rust: the secret travels encrypted over D-Bus without depending on OpenSSL.
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

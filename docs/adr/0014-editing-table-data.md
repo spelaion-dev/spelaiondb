@@ -11,7 +11,8 @@ too. Results may come from any query (joins, expressions, `SHOW`), and only some
 identify the rows of one table.
 
 ## Decision
-- **Only table data tabs are editable**, and only for tables with a **primary key**. Their
+- *(The restriction to table data tabs is superseded by [ADR-061](0061-editing-query-results.md).)*
+  **Only table data tabs are editable**, and only for tables with a **primary key**. Their
   rows come from the SELECT that the core writes and checks (`table_data.rs`: one plain
   SELECT of that table), so every row maps to one row of the table. Query results and
   tables without a primary key stay read-only: guessing a row from all its columns can
@@ -50,4 +51,5 @@ identify the rows of one table.
 - Pending changes in the core: no gain while they are only user input.
 
 ## Revisit if
-Users need to edit query results (joins, views with keys) or keyless tables.
+Users need to edit results of joins or views with keys, or to edit keyless tables. The rules for
+editing plain single-table query results are in [ADR-061](0061-editing-query-results.md).

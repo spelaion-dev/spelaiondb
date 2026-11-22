@@ -9,10 +9,23 @@
   store again (`Snapshot` in `lib.rs`): a change the user makes applies at the next call of a
   running server, never in the middle of one; a configuration with any problem exposes nothing;
   a cached session is reused only while its connection is exposed and its `Definition` (what it
-  is resolved from, secrets aside) is unchanged, and only while it is not lost (`Cached::usable`:
-  its health, its connection, its tunnel); the call that meets a lost session fails and is never
+  is resolved from, secrets aside) is unchanged, and only while it is not lost (the core's
+  `Liveness`, `open.rs`: its health, its tunnel, its connection, asked by both `Cached::usable`
+  and a call that fails); the call that meets a lost session fails and is never
   retried, and the next call opens a new one. Query rows go out as JSON or TOON (`format.rs`); any change there
   keeps every cell quoted so data cannot add rows or fields.
+  Every refusal and failure answers its sentence unchanged (clients may match on it) and, as
+  `structuredContent`, `{"code", "retry"}` (SDB-374). The code and `retry` are decided in the
+  core (`agent_state.rs`, `AgentFailure`) from the core's error types, never from text; the
+  code enum is `spelaion_store::FailureCode`, kept by the audit (`audit.code`, a migration
+  and an insert trigger listing the codes). A new code goes in `FailureCode::WRITTEN`, the
+  trigger (in a new migration), `failure_codes!` in `lib.rs` (every tool's description; a test
+  checks it) and `docs/guide/mcp.md`. A failed write never says `retry: true` unless its
+  transaction is known to be rolled back. `not_exposed` covers a connection that does not
+  exist too, so a code never reveals a hidden one. A missing or refused plugin's engine has a
+  driver that only says why (its error is a `DriverError::Connection`), so `plugin_missing` is
+  told from `Engines::plugin_unavailable`, not from the error. "Every agent is read-only" is
+  `spelaion_core::all_agents_read_only`, asked by the server and by the app's MCP page.
   `spelaion-config::mcp_clients` finds each AI client's file and writes our entry there for the
   app's MCP page (ADR-033): only our entry changes, JSON edited as text at the spans it finds,
   Codex's TOML with `toml_edit`, a backup first, and only the change the user saw (its

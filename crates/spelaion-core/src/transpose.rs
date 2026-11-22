@@ -12,7 +12,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use spelaion_driver_api::{ColumnMeta, LogicalType, ResultSchema, Value};
 
-use crate::{ResultId, ResultStore};
+use crate::{ResultFreed, ResultId, ResultStore};
 
 /// Most rows shown as columns at once.
 pub const MAX_TRANSPOSED_ROWS: usize = 1000;
@@ -25,8 +25,8 @@ pub enum TransposeError {
     TooManyRows,
     #[error("row {0} is not in the result")]
     NoSuchRow(u64),
-    #[error("the result was freed")]
-    Freed,
+    #[error(transparent)]
+    Freed(#[from] ResultFreed),
 }
 
 /// What the transposed view shows, in the store.
@@ -71,8 +71,8 @@ pub fn transpose(
     if rows.len() > MAX_TRANSPOSED_ROWS {
         return Err(TransposeError::TooManyRows);
     }
-    let stored = store.get(source).ok_or(TransposeError::Freed)?;
-    let stored = stored.read().map_err(|_| TransposeError::Freed)?;
+    let stored = store.stored(source)?;
+    let stored = stored.read().map_err(|_| ResultFreed)?;
     if let Some(&row) = rows.iter().find(|&&row| row >= stored.rows()) {
         return Err(TransposeError::NoSuchRow(first_number + row as u64));
     }
@@ -117,6 +117,7 @@ pub fn transpose(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ResultEnd;
     use crate::masking::MaskPolicy;
     use arrow::array::{BinaryArray, Int64Array};
 
@@ -187,14 +188,7 @@ mod tests {
                 vec![s("photo"), s("bytea"), s("\\x01"), None],
             ]
         );
-        assert!(
-            store
-                .get(transposed.result)
-                .unwrap()
-                .read()
-                .unwrap()
-                .is_complete()
-        );
+        assert!(store.get(transposed.result).unwrap().read().unwrap().end() == ResultEnd::Whole);
         // On a table data page that starts at row 501, rows are numbered from there.
         let paged = transpose(&store, id, &[1], 501, "Column", "Type").unwrap();
         assert_eq!(paged.columns[2].name, "502");
@@ -272,7 +266,7 @@ mod tests {
         );
         assert_eq!(
             transpose(&store, ResultId(999), &[0], 1, "C", "T").unwrap_err(),
-            TransposeError::Freed
+            TransposeError::Freed(ResultFreed)
         );
     }
 }

@@ -35,9 +35,15 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   outside `src-tauri` and `bindings.ts`), CI's two Rust jobs pass without running; the push to
   `dev` after the merge runs them. `.github/workflows/needs-rust.sh` has the list: if Rust
   starts reading a new place outside its crates, name it there in the same pull request.
-- **Pull requests target `dev`** (see `CONTRIBUTING.md`). Merge one when CI is green and it
-  follows these rules, with "Rebase and merge" (one commit per change, as written), and delete
-  its branch. GitHub's auto-merge can merge it as soon as CI passes.
+- **Pull requests target `dev`** (see `CONTRIBUTING.md`) and **merge through `dev`'s merge
+  queue**, never straight: CI on a pull request only proves it against the `dev` it was opened
+  on. Once it is green and follows these rules, put it in the queue: `gh pr merge --auto <N>`
+  (it waits for the required checks, then queues; no merge method is given, the queue's is
+  "Rebase and merge", one commit per change, as written). The queue runs CI again on top of the
+  current `dev` and of the pull requests queued before it (`merge_group`) and merges only if
+  that run is green too; one that fails there leaves the queue unmerged: rebase on `origin/dev`,
+  fix it and queue it again. Delete its branch once it has landed. `gh pr merge --admin`
+  bypasses the queue: only a maintainer, and only for what cannot wait for it.
 - **Security files need a person:** a pull request that touches a file listed in
   `.github/CODEOWNERS` (execution and import barriers, secrets and redaction, trust and
   connection safeguards, SSH and remote SQLite boundaries, MCP client configuration, patched
@@ -88,10 +94,16 @@ outside the team.
 - No `unsafe` except justified FFI with a comment.
 - Errors with `thiserror` in libraries and `anyhow` only in binaries.
 - Exhaustive `match` over our own enums: no `_ =>` that hides new variants.
+- A lifecycle is one enum owned by the core, with its transitions in one place: no flags or
+  `Option`s that together mean a state, no status as text; jobs share one cancel and one ending
+  (ADR-060).
 
 ## Frontend style
 - React + strict TypeScript. Types that cross from Rust are generated, not handwritten.
 - Result data never goes into React state: it lives in the core and is requested in windows.
+- A state the core has is read as its generated type, never rebuilt from events or flags; one
+  that exists only in the page is a discriminated union whose `switch` ends in a `never` check
+  (ADR-060).
 - Read `docs/ui-guidelines.md` before any UI change: use its tokens (never literal colors,
   sizes, radii or shadows), its components, its places for actions and its shortcut map (a new
   shortcut goes into it), its wording for dialogs and errors, and its verification steps.
@@ -121,8 +133,15 @@ outside the team.
   the first workspace pass alone does not count as testing these engines.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
-  the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),
+  the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP; build
+  it with `--features spelaion-desktop/e2e`, see `CONTRIBUTING.md`),
   `node e2e/smoke-linux.mjs` on Linux (a shorter pass through WebDriver, see `CONTRIBUTING.md`).
+  CI runs both on every pull request and push to `dev`, but neither is a required check.
+  `smoke-windows.yml` runs `smoke.mjs` only up to the "SQL files" step, because GitHub's Windows
+  runners have no `testing/docker`. That covers start, trust, SQLite, the grid, the editor, tabs,
+  the explorer, table data, charts and SQL files. Every step from "direct PostgreSQL" to the end
+  still has to be run by hand on Windows with `testing/docker` up: the server engines, tunnels,
+  imports, DuckDB, the large results, restarts, the MCP page and quitting.
 - If something could not be tested (for example Pageant or WebKitGTK), say so explicitly.
 
 ## Development environment

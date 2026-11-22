@@ -61,7 +61,7 @@ fn every_engine_comes_with_its_address_and_user() {
             assert_eq!(c.port, port, "{name}");
             assert_eq!(c.database, db, "{name}");
             assert_eq!(c.user, user, "{name}");
-            assert!(c.password.is_none(), "{name}");
+            assert!(c.password.secret().is_none(), "{name}");
             assert!(c.folder.is_empty() && c.description.is_empty(), "{name}");
             assert!(!c.read_only, "{name}");
         };
@@ -202,14 +202,14 @@ fn a_password_in_datagrips_keepass_is_not_read_and_the_preview_says_so() {
     // keychain elsewhere.
     let orders = named(&all, "Orders PG");
     if cfg!(target_os = "macos") {
-        let item = orders.stored_password.clone().unwrap();
+        let item = orders.password.keychain_item().cloned().unwrap();
         assert_eq!(
             item.service,
             "IntelliJ Platform DB — e2d2bd51-007a-4680-865b-0a13f2bdddc8"
         );
         assert_eq!(item.account, "spelaion");
     } else {
-        assert!(orders.stored_password.is_none());
+        assert!(orders.password.keychain_item().is_none());
         assert!(
             orders.unmapped.iter().any(|u| u.starts_with("Password: ")),
             "{:?}",
@@ -222,7 +222,7 @@ fn a_password_in_datagrips_keepass_is_not_read_and_the_preview_says_so() {
     // "Never" saves nothing, and files have no password at all.
     for name in ["Reports MSSQL", "Local file", "Analytics"] {
         let c = named(&all, name);
-        assert!(c.stored_password.is_none(), "{name}");
+        assert!(c.password.keychain_item().is_none(), "{name}");
         assert!(
             !c.unmapped.iter().any(|u| u.starts_with("Password: ")),
             "{name}: {:?}",

@@ -1,7 +1,6 @@
 //! Execution-plan commands: typed projections over the core, never engine parsing in Tauri.
 use spelaion_desktop_macros::command;
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::{
     AppState, CmdResult,
@@ -181,21 +180,15 @@ pub fn release_plan(plan: u32, state: State<'_, AppState>) {
 
 #[command]
 pub async fn export_plan(
-    export_id: u32,
+    job: tauri::ipc::Channel<crate::jobs::JobTicket>,
     plan: u32,
     view: PlanView,
     path: String,
     csv: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
-    let cancel = Arc::new(spelaion_core::ExportCancel::new());
-    {
-        let mut exports = state.exports.lock().expect("exports lock poisoned");
-        if exports.contains_key(&export_id) {
-            return Err("an export with this identifier is already running".into());
-        }
-        exports.insert(export_id, cancel.clone());
-    }
+    let running = crate::jobs::start(&state, crate::jobs::JobKind::Export, &job);
+    let cancel = running.cancel().clone();
     let plans = state.plans.clone();
     let result = tokio::task::spawn_blocking(move || {
         if csv {
@@ -205,11 +198,7 @@ pub async fn export_plan(
         }
     })
     .await;
-    state
-        .exports
-        .lock()
-        .expect("exports lock poisoned")
-        .remove(&export_id);
+    drop(running);
     result
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())

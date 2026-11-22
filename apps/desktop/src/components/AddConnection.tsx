@@ -21,6 +21,7 @@ import { tlsWarningText } from "../tlsWarning";
 import type { TlsWarningItem } from "../bindings";
 import { Icon } from "./Icons";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
+import { DISCONNECTED, questionOpen } from "../tabState";
 import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./ConnectionTypePicker";
 import { EngineIcon } from "./EngineIcon";
 import { TagInput } from "./TagInput";
@@ -36,7 +37,7 @@ import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./Connect
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
-import { openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
+import { installText, openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -103,8 +104,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
     });
     const onKey = (e: KeyboardEvent) => {
       // Dialogs opened on top (trust, SSH fingerprint…) handle their own Escape.
-      const dialogs = useDialogs.getState();
-      if (e.key === "Escape" && !dialogs.trust && !dialogs.password && dialogs.interactions.length === 0) close();
+      if (e.key === "Escape" && !questionOpen(useDialogs.getState())) close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -301,6 +301,7 @@ function EnginePicker({
   onImport(client: ImportClientId): void;
 }) {
   const { t } = useTranslation("connections");
+  const { t: settings, i18n } = useTranslation("settings");
   const [search, setSearch] = useState("");
   const [url, setUrl] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
@@ -372,6 +373,8 @@ function EnginePicker({
               <div className="engine-grid">
                 {items.map((e) => {
                   const needed = e.available ? pluginNeeded(plugins, e.engine ?? e.id) : null;
+                  // Its plugin's download, when one runs, wherever it was started.
+                  const downloading = needed?.install.kind === "downloading" ? installText(needed, settings, i18n.language) : null;
                   return (
                     <button
                       key={e.id}
@@ -383,15 +386,16 @@ function EnginePicker({
                         !e.available
                           ? t("comingSoonHint", { engine: e.name })
                           : needed
-                            ? t("needsPluginHint", { engine: e.name, plugin: needed.name })
+                            ? [t("needsPluginHint", { engine: e.name, plugin: needed.name }), downloading].filter(Boolean).join(" ")
                             : e.name
                       }
                       data-needs-plugin={needed ? needed.name : undefined}
+                      data-plugin-install={needed ? needed.install.kind : undefined}
                     >
                       <EngineBadge engine={e} />
                       <span className="engine-card-name">{e.name}</span>
                       {!e.available && <span className="engine-card-soon">{t("comingSoon")}</span>}
-                      {needed && <span className="engine-card-soon">{t("needsPlugin")}</span>}
+                      {needed && <span className="engine-card-soon">{downloading ? t("pluginDownloading") : t("needsPlugin")}</span>}
                     </button>
                   );
                 })}
@@ -810,7 +814,7 @@ function ConnectionForm(props: {
     setTestError(null);
     try {
       const attempt = () =>
-        test.run((id, onStep) => call(commands.testConnection(request, typedPassword || null, editing ?? null, networkOnly, id, onStep)));
+        test.run((job, onStep) => call(commands.testConnection(request, typedPassword || null, editing ?? null, networkOnly, job, onStep)));
       let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
@@ -871,7 +875,7 @@ function ConnectionForm(props: {
         await Promise.all(
           [...tabs.map((tab) => tab.id), `meta:${editing}`].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
         );
-        for (const tab of tabs) app.updateTab(tab.id, { status: "disconnected", serverVersion: null });
+        for (const tab of tabs) app.setConnection(tab.id, DISCONNECTED);
       }
       await refreshConnections();
       props.onSaved();

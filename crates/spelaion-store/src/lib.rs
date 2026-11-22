@@ -16,6 +16,8 @@ mod library;
 mod map;
 mod table_filters;
 mod tabs;
+#[cfg(test)]
+mod typed_values_tests;
 pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
 pub use editor_snippets::{EditorSnippet, is_snippet_name};
@@ -23,7 +25,9 @@ pub use export::{
     EXPORT_ENCODINGS, EXPORT_FORMATS, EXPORT_KEYWORD_CASES, EXPORT_MAX_ROWS_PER_INSERT,
     EXPORT_NAME_CASES, EXPORT_NULL_TEXT_MAX, EXPORT_PATTERN_MAX, ExportPreferences,
 };
-pub use library::{HistoryFilter, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder};
+pub use library::{
+    HistoryFilter, HistoryOutcome, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder,
+};
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,
     check_tile_server,
@@ -233,6 +237,32 @@ const MIGRATIONS: &[&str] = &["create table audit (
         connection text not null,
         primary key (workspace, connection)
     );",
+    // Values kept as text are checked where they come in (SDB-376): an audit record's
+    // decision, the update check, and one active tab per workspace. Rows that earlier builds
+    // wrote stay as they are, and what this build does not know is read as unknown.
+    "create trigger audit_decision_insert before insert on audit
+        when new.decision not in ('executed', 'rejected', 'failed', 'cleared')
+        begin select raise(abort, 'unknown audit decision'); end;
+    create trigger personal_settings_update_check_insert before insert on personal_settings
+        when new.key = 'update_check' and new.value not in ('on', 'off')
+        begin select raise(abort, 'unsupported update check setting'); end;
+    create trigger personal_settings_update_check_update before update on personal_settings
+        when new.key = 'update_check' and new.value not in ('on', 'off')
+        begin select raise(abort, 'unsupported update check setting'); end;
+    create trigger open_tabs_one_active before insert on open_tabs
+        when new.active = 1 and exists
+            (select 1 from open_tabs where workspace = new.workspace and active = 1)
+        begin select raise(abort, 'a workspace has one active tab'); end;",
+    // Why an agent's call was refused or failed, as a stable code (SDB-374). Rows written
+    // before have none; a code this build does not know is refused when written and read as
+    // unknown.
+    "alter table audit add column code text;
+    create trigger audit_code_insert before insert on audit
+        when new.code is not null and new.code not in ('session_lost', 'connection_unavailable',
+            'not_exposed', 'not_trusted', 'read_only', 'refused_by_guard',
+            'engine_without_barrier', 'plugin_missing', 'cancelled', 'timed_out',
+            'statement_failed', 'invalid_arguments', 'internal')
+        begin select raise(abort, 'unknown audit code'); end;",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -319,26 +349,36 @@ pub enum Decision {
     Failed,
     /// The user cleared the log: this record says when and how many entries went.
     Cleared,
+    /// A record whose decision this build does not know (written by a newer one, or by hand):
+    /// read as unknown, never as one of the others (SDB-376). Never written.
+    Unknown,
 }
 
 impl Decision {
-    fn as_str(self) -> &'static str {
+    /// Every decision that is written, as its text in the store.
+    const WRITTEN: [(Decision, &'static str); 4] = [
+        (Decision::Executed, "executed"),
+        (Decision::Rejected, "rejected"),
+        (Decision::Failed, "failed"),
+        (Decision::Cleared, "cleared"),
+    ];
+
+    /// Its text in the store; `None` for [`Decision::Unknown`], which is never written.
+    fn as_str(self) -> Option<&'static str> {
         match self {
-            Decision::Executed => "executed",
-            Decision::Rejected => "rejected",
-            Decision::Failed => "failed",
-            Decision::Cleared => "cleared",
+            Decision::Executed => Some("executed"),
+            Decision::Rejected => Some("rejected"),
+            Decision::Failed => Some("failed"),
+            Decision::Cleared => Some("cleared"),
+            Decision::Unknown => None,
         }
     }
 
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "executed" => Some(Decision::Executed),
-            "rejected" => Some(Decision::Rejected),
-            "failed" => Some(Decision::Failed),
-            "cleared" => Some(Decision::Cleared),
-            _ => None,
-        }
+    fn parse(s: &str) -> Self {
+        Self::WRITTEN
+            .iter()
+            .find(|(_, text)| *text == s)
+            .map_or(Decision::Unknown, |(decision, _)| *decision)
     }
 }
 
@@ -359,6 +399,94 @@ pub struct AuditEntry {
     pub session: Option<String>,
     /// The MCP tool called (`run_query`, `execute_write`…); `None` before 0.7.
     pub tool: Option<String>,
+    /// Why a refused or failed call ended so (SDB-374); `None` when it was executed, and for
+    /// entries written before 0.13.
+    pub code: Option<FailureCode>,
+}
+
+/// Why an agent's call was refused or failed, as a stable code agents and the Activity tab can
+/// read without parsing English (ADR-060, SDB-374). The store keeps it beside the decision; the
+/// core decides which one applies and whether running the call again makes sense
+/// (`spelaion_core::agent_state`). A code carries no data: no secret, no SQL, no path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FailureCode {
+    /// The session was lost during the call (the server ended it, the network or its tunnel
+    /// went down). The next call opens a new one.
+    SessionLost,
+    /// The connection could not be opened.
+    ConnectionUnavailable,
+    /// The connection does not exist or is not exposed to agents, or nothing is exposed.
+    NotExposed,
+    /// A host key the user has not accepted, or one that changed.
+    NotTrusted,
+    /// Agents may only read this connection.
+    ReadOnly,
+    /// A barrier of SpelaionDB refused the statement before it was sent.
+    RefusedByGuard,
+    /// The engine or server has no barrier agents can rely on.
+    EngineWithoutBarrier,
+    /// The engine's plugin is not installed.
+    PluginMissing,
+    /// The statement was cancelled.
+    Cancelled,
+    /// The statement exceeded the time limit.
+    TimedOut,
+    /// The database refused or failed the statement.
+    StatementFailed,
+    /// The call's arguments do not go together (a plan page without a plan, for instance).
+    InvalidArguments,
+    /// Something went wrong inside SpelaionDB.
+    Internal,
+    /// A code this build does not know (written by a newer one): read as unknown, never as one
+    /// of the others (SDB-376). Never written.
+    Unknown,
+}
+
+impl FailureCode {
+    /// Every code that is written, as its text: the same words agents get.
+    pub const WRITTEN: [FailureCode; 13] = [
+        FailureCode::SessionLost,
+        FailureCode::ConnectionUnavailable,
+        FailureCode::NotExposed,
+        FailureCode::NotTrusted,
+        FailureCode::ReadOnly,
+        FailureCode::RefusedByGuard,
+        FailureCode::EngineWithoutBarrier,
+        FailureCode::PluginMissing,
+        FailureCode::Cancelled,
+        FailureCode::TimedOut,
+        FailureCode::StatementFailed,
+        FailureCode::InvalidArguments,
+        FailureCode::Internal,
+    ];
+
+    /// Its stable text; `None` for [`FailureCode::Unknown`], which is never written.
+    pub fn as_str(self) -> Option<&'static str> {
+        Some(match self {
+            FailureCode::SessionLost => "session_lost",
+            FailureCode::ConnectionUnavailable => "connection_unavailable",
+            FailureCode::NotExposed => "not_exposed",
+            FailureCode::NotTrusted => "not_trusted",
+            FailureCode::ReadOnly => "read_only",
+            FailureCode::RefusedByGuard => "refused_by_guard",
+            FailureCode::EngineWithoutBarrier => "engine_without_barrier",
+            FailureCode::PluginMissing => "plugin_missing",
+            FailureCode::Cancelled => "cancelled",
+            FailureCode::TimedOut => "timed_out",
+            FailureCode::StatementFailed => "statement_failed",
+            FailureCode::InvalidArguments => "invalid_arguments",
+            FailureCode::Internal => "internal",
+            FailureCode::Unknown => return None,
+        })
+    }
+
+    /// The code `s` names, or [`FailureCode::Unknown`].
+    pub fn parse(s: &str) -> Self {
+        Self::WRITTEN
+            .into_iter()
+            .find(|code| code.as_str() == Some(s))
+            .unwrap_or(FailureCode::Unknown)
+    }
 }
 
 impl AuditEntry {
@@ -374,6 +502,7 @@ impl AuditEntry {
             detail: None,
             session: None,
             tool: None,
+            code: None,
         }
     }
 }
@@ -425,8 +554,21 @@ fn audit_where(filter: &AuditFilter) -> (String, Vec<String>) {
         clauses.push(format!("tool = ?{}", params.len()));
     }
     if let Some(decision) = filter.decision {
-        params.push(decision.as_str().into());
-        clauses.push(format!("decision = ?{}", params.len()));
+        match decision.as_str() {
+            Some(text) => {
+                params.push(text.into());
+                clauses.push(format!("decision = ?{}", params.len()));
+            }
+            // Every record whose decision is none of the known ones.
+            None => {
+                let mut known = Vec::new();
+                for (_, text) in Decision::WRITTEN {
+                    params.push(text.into());
+                    known.push(format!("?{}", params.len()));
+                }
+                clauses.push(format!("decision not in ({})", known.join(", ")));
+            }
+        }
     }
     if let Some(session) = &filter.session {
         params.push(session.clone());
@@ -442,6 +584,7 @@ fn audit_where(filter: &AuditFilter) -> (String, Vec<String>) {
 
 fn audit_row(r: &rusqlite::Row) -> rusqlite::Result<AuditRecord> {
     let decision: String = r.get(5)?;
+    let code: Option<String> = r.get(11)?;
     Ok(AuditRecord {
         id: r.get(0)?,
         entry: AuditEntry {
@@ -449,12 +592,13 @@ fn audit_row(r: &rusqlite::Row) -> rusqlite::Result<AuditRecord> {
             client: r.get(2)?,
             connection: r.get(3)?,
             statement: r.get(4)?,
-            decision: Decision::parse(&decision).unwrap_or(Decision::Failed),
+            decision: Decision::parse(&decision),
             rows: r.get(6)?,
             duration_ms: r.get(7)?,
             detail: r.get(8)?,
             session: r.get(9)?,
             tool: r.get(10)?,
+            code: code.as_deref().map(FailureCode::parse),
         },
     })
 }
@@ -581,10 +725,88 @@ pub struct Bookmark {
     /// The schema the object is in, or the schema itself (with an empty `name`).
     pub schema: String,
     pub name: String,
-    /// `table`, `view`… for a relation, `function`, `sequence`… for another object, `schema`.
-    pub kind: String,
+    pub kind: BookmarkKind,
     /// What tells same-name objects apart (a function's arguments); empty if nothing.
     pub detail: String,
+}
+
+/// What a bookmark points at (SDB-376): a schema, a relation or another object of a schema,
+/// by the kinds the drivers give. Stored as its text; a row with a kind this build does not
+/// know is not read as a bookmark at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookmarkKind {
+    Schema,
+    Table,
+    PartitionedTable,
+    View,
+    MaterializedView,
+    ForeignTable,
+    Collection,
+    NodeLabel,
+    RelationshipType,
+    Function,
+    Procedure,
+    Aggregate,
+    Sequence,
+    Trigger,
+    Enum,
+    Domain,
+    Type,
+    Event,
+    Synonym,
+}
+
+impl BookmarkKind {
+    pub const ALL: [BookmarkKind; 19] = [
+        Self::Schema,
+        Self::Table,
+        Self::PartitionedTable,
+        Self::View,
+        Self::MaterializedView,
+        Self::ForeignTable,
+        Self::Collection,
+        Self::NodeLabel,
+        Self::RelationshipType,
+        Self::Function,
+        Self::Procedure,
+        Self::Aggregate,
+        Self::Sequence,
+        Self::Trigger,
+        Self::Enum,
+        Self::Domain,
+        Self::Type,
+        Self::Event,
+        Self::Synonym,
+    ];
+
+    /// Its text in the store: the kind's name as the drivers give it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Schema => "schema",
+            Self::Table => "table",
+            Self::PartitionedTable => "partitioned_table",
+            Self::View => "view",
+            Self::MaterializedView => "materialized_view",
+            Self::ForeignTable => "foreign_table",
+            Self::Collection => "collection",
+            Self::NodeLabel => "node_label",
+            Self::RelationshipType => "relationship_type",
+            Self::Function => "function",
+            Self::Procedure => "procedure",
+            Self::Aggregate => "aggregate",
+            Self::Sequence => "sequence",
+            Self::Trigger => "trigger",
+            Self::Enum => "enum",
+            Self::Domain => "domain",
+            Self::Type => "type",
+            Self::Event => "event",
+            Self::Synonym => "synonym",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text)
+    }
 }
 
 /// How the explorer shows its tree, shared by every workspace in this user directory.
@@ -936,20 +1158,32 @@ impl Store {
     }
 
     pub fn record(&self, entry: &AuditEntry) -> Result<(), StoreError> {
+        let Some(decision) = entry.decision.as_str() else {
+            return Err(StoreError::new(
+                "an audit record needs a known decision".into(),
+            ));
+        };
+        let code = match entry.code {
+            None => None,
+            Some(code) => Some(code.as_str().ok_or_else(|| {
+                StoreError::new("an audit record's code must be a known one".into())
+            })?),
+        };
         self.conn.execute(
-            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 entry.at_ms,
                 entry.client,
                 entry.connection,
                 entry.statement,
-                entry.decision.as_str(),
+                decision,
                 entry.rows,
                 entry.duration_ms,
                 entry.detail,
                 entry.session,
-                entry.tool
+                entry.tool,
+                code
             ],
         )?;
         Ok(())
@@ -975,7 +1209,7 @@ impl Store {
         params.push(limit.min(i64::MAX as usize).to_string());
         params.push(offset.min(i64::MAX as usize).to_string());
         let sql = format!(
-            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool
+            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code
              from audit {clause} order by id desc limit cast(?{} as integer) offset cast(?{} as integer)",
             params.len() - 1,
             params.len()
@@ -1009,11 +1243,14 @@ impl Store {
     pub fn audit_sessions(&self, limit: usize) -> Result<Vec<AuditSession>, StoreError> {
         let mut stmt = self.conn.prepare(
             "select session, min(client), min(at_ms), max(at_ms), count(*),
-                    sum(decision = 'rejected'), sum(decision = 'failed')
+                    sum(decision = ?2), sum(decision = ?3)
              from audit where session is not null
              group by session order by max(id) desc limit ?1",
         )?;
-        let rows = stmt.query_map([limit.min(i64::MAX as usize) as i64], |r| {
+        let limit = limit.min(i64::MAX as usize) as i64;
+        let rejected = Decision::Rejected.as_str();
+        let failed = Decision::Failed.as_str();
+        let rows = stmt.query_map(params![limit, rejected, failed], |r| {
             Ok(AuditSession {
                 session: r.get(0)?,
                 client: r.get(1)?,
@@ -1347,7 +1584,7 @@ impl Store {
                 bookmark.connection,
                 bookmark.schema,
                 bookmark.name,
-                bookmark.kind,
+                bookmark.kind.as_str(),
                 bookmark.detail,
                 now_ms()
             ],
@@ -1370,7 +1607,7 @@ impl Store {
                 bookmark.connection,
                 bookmark.schema,
                 bookmark.name,
-                bookmark.kind,
+                bookmark.kind.as_str(),
                 bookmark.detail
             ],
         )? > 0)
@@ -1383,15 +1620,26 @@ impl Store {
              where workspace = ?1 order by connection, schema, name, kind, detail",
         )?;
         let rows = statement.query_map([workspace], |r| {
-            Ok(Bookmark {
+            let kind: String = r.get(3)?;
+            let Some(kind) = BookmarkKind::parse(&kind) else {
+                return Ok(None);
+            };
+            Ok(Some(Bookmark {
                 connection: r.get(0)?,
                 schema: r.get(1)?,
                 name: r.get(2)?,
-                kind: r.get(3)?,
+                kind,
                 detail: r.get(4)?,
-            })
+            }))
         })?;
-        Ok(rows.collect::<Result<_, _>>()?)
+        let mut bookmarks = Vec::new();
+        for row in rows {
+            // A kind this build does not know (a newer one wrote it) is left in the store.
+            if let Some(bookmark) = row? {
+                bookmarks.push(bookmark);
+            }
+        }
+        Ok(bookmarks)
     }
 
     pub fn get_language(&self) -> Result<String, StoreError> {
@@ -1491,7 +1739,8 @@ impl Store {
         self.set_personal_setting("interface_size", &size.to_string())
     }
 
-    /// Whether the app checks for updates when it starts (ADR-021). On unless turned off.
+    /// Whether the app checks for updates when it starts (ADR-021). On until turned off; a
+    /// value this build does not know is an error, never read as on or off (SDB-376).
     pub fn get_update_check(&self) -> Result<bool, StoreError> {
         let value = self
             .conn
@@ -1501,7 +1750,13 @@ impl Store {
                 |r| r.get::<_, String>(0),
             )
             .optional()?;
-        Ok(value.as_deref() != Some("off"))
+        match value.as_deref() {
+            None | Some("on") => Ok(true),
+            Some("off") => Ok(false),
+            Some(other) => Err(StoreError::new(format!(
+                "unsupported update check setting: {other}"
+            ))),
+        }
     }
 
     pub fn set_update_check(&self, enabled: bool) -> Result<(), StoreError> {
@@ -2115,6 +2370,55 @@ mod tests {
         // Reopening neither repeats migrations nor loses data.
         drop(store);
         assert_eq!(Store::open(&path).unwrap().recent(10).unwrap().len(), 2);
+    }
+
+    /// Every code an agent can get is kept and read back as itself (SDB-374); one the build
+    /// does not know is refused when written and read as unknown when a newer build wrote it.
+    #[test]
+    fn audit_codes_are_kept_and_unknown_ones_read_as_unknown() {
+        let path = temp("audit-codes");
+        let store = Store::open(&path).unwrap();
+        for code in FailureCode::WRITTEN {
+            let mut entry = AuditEntry::now("agent", "~/c", "select 1", Decision::Failed);
+            entry.code = Some(code);
+            store.record(&entry).unwrap();
+            assert_eq!(store.recent(1).unwrap()[0].code, Some(code));
+            assert_eq!(FailureCode::parse(code.as_str().unwrap()), code);
+        }
+        assert_eq!(FailureCode::parse("something_new"), FailureCode::Unknown);
+        let mut unknown = AuditEntry::now("agent", "~/c", "select 1", Decision::Failed);
+        unknown.code = Some(FailureCode::Unknown);
+        assert!(store.record(&unknown).is_err());
+        assert!(
+            store
+                .conn
+                .execute(
+                    "insert into audit (at_ms, client, connection, statement, decision, code)
+                     values (1, 'agent', '~/c', 'select 1', 'failed', 'Session Lost')",
+                    [],
+                )
+                .is_err()
+        );
+        // A row a newer build wrote, with a code this build does not know.
+        store
+            .conn
+            .execute_batch(
+                "drop trigger audit_code_insert;
+                 insert into audit (at_ms, client, connection, statement, decision, code)
+                 values (1, 'agent', '~/c', 'select 1', 'failed', 'something_new');",
+            )
+            .unwrap();
+        assert_eq!(store.recent(1).unwrap()[0].code, Some(FailureCode::Unknown));
+        // An executed call has no code.
+        store
+            .record(&AuditEntry::now(
+                "agent",
+                "~/c",
+                "select 1",
+                Decision::Executed,
+            ))
+            .unwrap();
+        assert_eq!(store.recent(1).unwrap()[0].code, None);
     }
 
     #[test]
@@ -3168,7 +3472,7 @@ mod tests {
             connection: connection.into(),
             schema: "public".into(),
             name: "orders".into(),
-            kind: "table".into(),
+            kind: BookmarkKind::Table,
             detail: String::new(),
         };
         let tabs = |connection: &str| SavedTabs {
@@ -3266,12 +3570,12 @@ mod tests {
             connection: "shop".into(),
             schema: "public".into(),
             name: "orders".into(),
-            kind: "table".into(),
+            kind: BookmarkKind::Table,
             detail: String::new(),
         };
         let total = Bookmark {
             name: "total".into(),
-            kind: "function".into(),
+            kind: BookmarkKind::Function,
             detail: "integer".into(),
             ..orders.clone()
         };

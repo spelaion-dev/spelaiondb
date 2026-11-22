@@ -1,7 +1,8 @@
 import { Fragment, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { manualUpdateKey, useUpdate } from "../update";
+import { isInstalling, manualUpdateKey, useUpdate } from "../update";
+import { UpdateInstallButton, UpdateProblem } from "./UpdateInstall";
 
 /** Render the small Markdown subset used in release notes as React text, never HTML.
  * Links are shown as text: release metadata cannot navigate the app or launch a URL. */
@@ -50,9 +51,7 @@ export function ReleaseNotesDialog() {
   const { t } = useTranslation("app");
   const status = useUpdate((s) => s.status);
   const open = useUpdate((s) => s.notesOpen);
-  const installing = useUpdate((s) => s.installing);
-  const error = useUpdate((s) => s.error);
-  const install = useUpdate((s) => s.install);
+  const installing = isInstalling(status);
   const dismiss = useUpdate((s) => s.dismiss);
   const hide = useUpdate((s) => s.hideNotes);
   const openReleasesPage = useUpdate((s) => s.openReleasesPage);
@@ -76,15 +75,13 @@ export function ReleaseNotesDialog() {
           }) : <p className="muted">{t("update.notesUnavailable")}</p>}
         </div>
         {manual && <p className="muted">{t(`update.${manual}`)}</p>}
-        {error && <p className="error" role="alert">{error}</p>}
+        <UpdateProblem namespace="app" group="update" className="error" />
         <div className="modal-actions">
           <button disabled={installing} onClick={() => { dismiss(); hide(); }}>{t("update.later")}</button>
           {manual ? (
             <button className="primary" onClick={() => void openReleasesPage()}>{t("update.openReleases")}</button>
           ) : (
-            <button className="primary" disabled={installing} onClick={() => void install()}>
-              {installing ? t("update.installing") : t("update.install")}
-            </button>
+            <UpdateInstallButton namespace="app" group="update" />
           )}
         </div>
       </section>

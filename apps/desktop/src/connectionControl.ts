@@ -9,12 +9,13 @@ import { call, commands } from "./api";
 import { runningOutsideTransactions } from "./closeQuestion";
 import { EXPLORER_SESSION_CLOSED_EVENT, tabName } from "./connect";
 import { useApp, useDialogs, type Tab } from "./store";
+import { DISCONNECTED, hasSession, hasUnsavedEdits, isRunning } from "./tabState";
 
 /** The editor tabs with a session, and the connections open in the explorer, but `keep`'s. */
 function targets(keep: string | null): { tabs: Tab[]; explorer: string[] } {
   const app = useApp.getState();
   return {
-    tabs: app.tabs.filter((tab) => tab.connectionId !== null && tab.connectionId !== keep && tab.status !== "disconnected"),
+    tabs: app.tabs.filter((tab) => tab.connectionId !== null && tab.connectionId !== keep && hasSession(tab)),
     explorer: app.explorerConnected.filter((id) => id !== keep),
   };
 }
@@ -38,27 +39,17 @@ export async function disconnectAll(keep: string | null): Promise<boolean> {
     open = [];
   }
   // A tab with an open transaction is asked about once, under it (SDB-253).
-  const running = runningOutsideTransactions(tabs.filter((tab) => tab.run?.running).map((tab) => tab.id), open);
-  const unsaved = tabs.filter((tab) => tab.pendingEdits || tab.savingEdits).map((tab) => tab.id);
+  const running = runningOutsideTransactions(tabs.filter(isRunning).map((tab) => tab.id), open);
+  const unsaved = tabs.filter(hasUnsavedEdits).map((tab) => tab.id);
   if (open.length > 0 || running.length > 0 || unsaved.length > 0) {
     const accepted = await useDialogs.getState().askOpenTransactions(open.map(tabName), "disconnect", running.map(tabName), unsaved.map(tabName));
     if (!accepted) return false;
   }
   const app = useApp.getState();
   // The runs the user agreed to cancel stop first, then the sessions close.
-  await Promise.all(tabs.filter((tab) => tab.run?.running).map((tab) => call(commands.cancel(tab.id)).catch(() => undefined)));
+  await Promise.all(tabs.filter(isRunning).map((tab) => call(commands.cancel(tab.id)).catch(() => undefined)));
   await Promise.all(ids.map((id) => call(commands.disconnect(id)).catch(() => undefined)));
-  for (const id of ids) {
-    app.updateTab(id, {
-      status: "disconnected",
-      serverVersion: null,
-      lost: undefined,
-      idleClosed: undefined,
-      lostTransaction: undefined,
-      transaction: undefined,
-      sessionReadOnly: undefined,
-    });
-  }
+  for (const id of ids) app.setConnection(id, DISCONNECTED);
   await Promise.all(explorer.map((id) => call(commands.disconnect(`meta:${id}`)).catch(() => undefined)));
   for (const id of explorer) {
     app.setExplorerConnected(id, false);

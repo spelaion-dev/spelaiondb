@@ -81,7 +81,10 @@ fn stored_estimate(
     target: ResultId,
     total: i64,
 ) -> Result<LoadEstimate, String> {
-    let stored = session.results().get(target).ok_or("result was freed")?;
+    let stored = session
+        .results()
+        .stored(target)
+        .map_err(|e| e.to_string())?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     Ok(estimate(&stored, u64::try_from(total).unwrap_or(0)))
 }

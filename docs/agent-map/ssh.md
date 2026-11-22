@@ -5,7 +5,14 @@
   (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Each hop
   asks its server for the key types pinned for it first (`hostkeys::pinned_algorithms`, as
   OpenSSH does), so a file that pins only an ECDSA or RSA key still verifies the server; the
-  check never changes. Dialogs go through the `Interaction` trait. Tests against the
+  check never changes. A tunnel's `TunnelState` is opening, up, down (with its reason) or
+  closed, changed only through its `open`, `lose` and `close` (the first reason wins; closing
+  keeps a lost tunnel's reason); SSH and Kubernetes tunnels share it, and every reader matches
+  it exhaustively. A hop or SSM session lost while a later hop opens fails the opening with
+  its own reason (`Lifecycle::unless_lost` in `tunnel.rs`). A hop's loss is reported when its
+  `HopHandler` is dropped (its session ended), since russh skips `disconnected` after a
+  connection reset. Dialogs go through the
+  `Interaction` trait. Tests against the
   Docker bastions with `SPELAION_TEST_SSH=127.0.0.1:2221`. A tunnel may go through a
   SOCKS5 or HTTP proxy (`proxy.rs`, ADR-027): its first hop, or the database itself with no
   hops; tests against `testing/docker/proxy` with `SPELAION_TEST_SOCKS=127.0.0.1:11080` and
@@ -21,4 +28,7 @@
   place, into the connection's `ResolvedKubernetes`):
   `spelaion-core::kube` runs `kubectl port-forward` and lists contexts, namespaces, names and
   ports for the form's Kubernetes tab; tests against a kind cluster with
-  `SPELAION_TEST_K8S=<kubeconfig>` (see `testing/k8s`).
+  `SPELAION_TEST_K8S=<kubeconfig>` (see `testing/k8s`). Its state rules (opening until the
+  first kubectl listens; one kubectl ending stops the others) are also tested with no cluster,
+  through the stand-in `crates/spelaion-core/tests/support/fake_kubectl.rs` (the
+  `spelaion-test-fake-kubectl` binary).

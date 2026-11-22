@@ -15,13 +15,20 @@
     its input closes: first its requests stop, its sessions are dropped and each driver's
     `Driver::shutdown` closes what it keeps open (DuckDB's shared files write what they hold),
     so a file is never left half written by a plugin that was only asked to end (SDB-360).
+    Each request runs in a task of its own, but a session's `execute` and `cancel` take turns
+    in the order they were read (`Turn` in `serve.rs`, SDB-428): an execute's driver future is
+    polled once (where the MySQL and PostgreSQL plugins number their statement) before a cancel
+    read after it reaches the driver, and a cancel is delivered before the next execute starts.
     Standard output is the protocol: a plugin never prints to it.
   - `crates/spelaion-plugin-host`: the core's side. `Plugin` is one process per program,
     started on the first connection and shared by every session of its engines. Its pipes are
     read and written on threads of their own with blocking calls, as the SDK's are (never
     `tokio::spawn` or tokio's own pipes there: the runtime that connected first may end before
     the others, and each read would be a trip through the runtime's blocking pool); `PluginDriver`
-    and its connection are the `Driver` and `Connection` the core already uses. A plugin that
+    and its connection are the `Driver` and `Connection` the core already uses. Its process has
+    one state, `Plugin::state()` (`ProcessState`: not started, starting, running, stopping, dead
+    with why), changed only by `Plugin::process` and `Plugin::stop`; a process that dies on its
+    own reads as dead at once (`tests/process_state.rs`). A plugin that
     stops loses its sessions (`is_closed`, ADR-028) and nothing is re-run. Stopping one
     (`Plugin::stop`, or the last of it dropped) closes its input and kills it only if it has
     not ended after `STOP_GRACE` (5 s): a plugin killed at once could leave a file half written. The password goes
@@ -62,7 +69,10 @@
   this app is not too old for and that was not withdrawn; when builds are here and none may be
   started, its engines say why and do not fall back; when the pinned build's program is not
   next to the app, an engine served only by its plugin says which file is missing (one whose
-  driver is compiled in is still served by it). The app and `spelaiondb mcp` take their
+  driver is compiled in is still served by it). `PluginState::availability` is the one answer
+  of what its engines get (in use, refused, missing, not installed: a build in use wins, then
+  the newest refused, then the missing pin), and `message` is written from it. The app and
+  `spelaiondb mcp` take their
   engines from `Engines::builtin_with(store)`; neither downloads. The installers carry the
   pinned builds as their release archives, never the programs (ADR-057: a signed macOS app and
   an AppImage change the programs inside): `builtin_with` first installs into the store each

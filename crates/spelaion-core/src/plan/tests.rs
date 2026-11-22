@@ -366,7 +366,7 @@ async fn plan_store_file_io_is_bounded_atomic_and_escapes_csv() {
     assert_eq!(raw.next_offset, None);
     let file = dir.join("raw.json");
     store
-        .save_raw(summary.id, &file, &crate::ExportCancel::new())
+        .save_raw(summary.id, &file, &crate::JobCancel::new())
         .unwrap();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), JOIN);
     assert_eq!(read_plan(&file).unwrap().nodes.len(), 5);
@@ -376,11 +376,11 @@ async fn plan_store_file_io_is_bounded_atomic_and_escapes_csv() {
             summary.id,
             &PlanView::default(),
             &csv,
-            &crate::ExportCancel::new(),
+            &crate::JobCancel::new(),
         )
         .unwrap();
     assert!(std::fs::read_to_string(&csv).unwrap().contains("'=1+2"));
-    let cancel = crate::ExportCancel::new();
+    let cancel = crate::JobCancel::new();
     cancel.cancel().await;
     std::fs::write(&file, "previous").unwrap();
     assert!(store.save_raw(summary.id, &file, &cancel).is_err());
@@ -389,7 +389,7 @@ async fn plan_store_file_io_is_bounded_atomic_and_escapes_csv() {
     std::fs::create_dir_all(&impossible).unwrap();
     assert!(
         store
-            .save_raw(summary.id, &impossible, &crate::ExportCancel::new())
+            .save_raw(summary.id, &impossible, &crate::JobCancel::new())
             .is_err()
     );
     assert!(!std::fs::read_dir(&dir).unwrap().any(|e| {
@@ -401,14 +401,14 @@ async fn plan_store_file_io_is_bounded_atomic_and_escapes_csv() {
     #[cfg(unix)]
     crate::test_files::assert_keeps_mode_and_links("plan", |path| {
         store
-            .save_raw(summary.id, path, &crate::ExportCancel::new())
+            .save_raw(summary.id, path, &crate::JobCancel::new())
             .unwrap();
         store
             .export_csv(
                 summary.id,
                 &PlanView::default(),
                 path,
-                &crate::ExportCancel::new(),
+                &crate::JobCancel::new(),
             )
             .unwrap();
     });

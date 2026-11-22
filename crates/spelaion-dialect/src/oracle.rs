@@ -1,5 +1,7 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::{is_white_space_at, trimmed};
+
 /// Oracle's dialect, as SQL*Plus and SQL Developer read a script (ADR-059):
 ///
 /// - `;` ends a SQL statement and is not sent (Oracle refuses it: ORA-00933, ORA-00911).
@@ -172,7 +174,8 @@ fn first_words(script: &str, start: usize, count: usize) -> Vec<String> {
             }
             break;
         }
-        if b[i].is_ascii_whitespace() {
+        // White space by the one rule of every splitter (SDB-434): never part of a word.
+        if is_white_space_at(script, i) {
             i += 1;
             continue;
         }
@@ -180,7 +183,10 @@ fn first_words(script: &str, start: usize, count: usize) -> Vec<String> {
             break;
         }
         let word_start = i;
-        while i < b.len() && is_ident_byte(b[i]) {
+        while i < b.len()
+            && is_ident_byte(b[i])
+            && !(script.is_char_boundary(i) && is_white_space_at(script, i))
+        {
             i += 1;
         }
         words.push(script[word_start..i].to_ascii_uppercase());
@@ -226,7 +232,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
     while i < b.len() {
         if let Some(end) = slash_line(b, i) {
             if has_code {
-                spans.push(trimmed(script, start, i));
+                spans.extend(trimmed(script, start, i));
             }
             i = end;
             start = i;
@@ -235,7 +241,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
             continue;
         }
         let comment = matches!(b[i], b'-' | b'/') && skip_non_code(script, i).is_some();
-        if !has_code && !comment && !b[i].is_ascii_whitespace() {
+        if !has_code && !comment && !is_white_space_at(script, i) {
             // The statement's first code: is it a PL/SQL unit?
             plsql = is_plsql(script, i);
         }
@@ -249,14 +255,14 @@ fn split(script: &str) -> Vec<StatementSpan> {
         match b[i] {
             b';' if !plsql => {
                 if has_code {
-                    spans.push(trimmed(script, start, i));
+                    spans.extend(trimmed(script, start, i));
                 }
                 i += 1;
                 start = i;
                 has_code = false;
             }
-            c => {
-                if !c.is_ascii_whitespace() {
+            _ => {
+                if !is_white_space_at(script, i) {
                     has_code = true;
                 }
                 i += 1;
@@ -264,20 +270,9 @@ fn split(script: &str) -> Vec<StatementSpan> {
         }
     }
     if has_code {
-        spans.push(trimmed(script, start, b.len()));
+        spans.extend(trimmed(script, start, b.len()));
     }
     spans
-}
-
-/// The span without the whitespace around it.
-fn trimmed(script: &str, start: usize, end: usize) -> StatementSpan {
-    let text = &script[start..end];
-    let leading = text.len() - text.trim_start().len();
-    let trailing = text.len() - text.trim_end().len();
-    StatementSpan {
-        start: start + leading,
-        end: end - trailing,
-    }
 }
 
 #[cfg(test)]

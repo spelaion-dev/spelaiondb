@@ -313,3 +313,65 @@ async fn cancel_then_run_at_once_never_cancels_the_new_run_on_mysql_mariadb_and_
         }
     }
 }
+
+/// SDB-428: a cancel that comes as a short statement starts or ends, at every moment around
+/// it, never stops the statement run next. The run sends a cancel again when one came after its
+/// last check, and only while that statement's stream is still open: before any of its events
+/// is read, so never after its end. Nothing else is sent before that cancel has returned.
+#[tokio::test]
+async fn a_cancel_as_a_short_statement_ends_never_reaches_the_next_on_mysql_mariadb_and_postgres() {
+    let engines: Vec<RealEngine> = vec![
+        (
+            "mysql",
+            "SPELAION_TEST_MYSQL",
+            engines::mysql(),
+            "select sleep(0.005)",
+            "select sleep(0.3)",
+        ),
+        (
+            "mariadb",
+            "SPELAION_TEST_MARIADB",
+            engines::mariadb(),
+            "select sleep(0.005)",
+            "select sleep(0.3)",
+        ),
+        (
+            "postgres",
+            "SPELAION_TEST_PG",
+            engines::postgres(),
+            "select pg_sleep(0.005)",
+            "select pg_sleep(0.3)",
+        ),
+    ];
+    for (label, var, driver, short, long) in engines {
+        let Some(session) = real(var, driver).await else {
+            continue;
+        };
+        let session = Arc::new(session);
+        for round in 0..40u64 {
+            let run = tokio::spawn(session.run_script(short).collect::<Vec<_>>());
+            // Before the statement is sent, while it runs, as it ends, and after.
+            tokio::time::sleep(Duration::from_millis(round % 12)).await;
+            session
+                .cancel()
+                .await
+                .unwrap_or_else(|e| panic!("{label}: cancel failed: {e}"));
+            tokio::time::timeout(Duration::from_secs(30), run)
+                .await
+                .expect("the short run ended")
+                .unwrap();
+            let next: Vec<CoreEvent> =
+                tokio::time::timeout(Duration::from_secs(30), session.run_script(long).collect())
+                    .await
+                    .expect("the next run ended");
+            let failed = next.iter().find_map(|e| match e {
+                CoreEvent::StatementFailed { error, .. } => Some(error.message.clone()),
+                _ => None,
+            });
+            assert_eq!(
+                failed, None,
+                "{label}, round {round}: a cancel reached the statement after it"
+            );
+        }
+    }
+}

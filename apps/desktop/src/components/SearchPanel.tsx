@@ -15,15 +15,15 @@ import {
   commands,
   type DataSearchEventItem,
   type DataSearchLimitsItem,
-  type DataSearchSummaryItem,
   type SearchHitItem,
-  type TableStatusItem,
 } from "../api";
 import { useCatalog, type CatalogSchema } from "../catalog";
 import { openTableData } from "../connect";
 import { type NameHit, schemasWithoutColumns, searchableTables, searchNames } from "../dbSearch";
-import { markCancelling } from "../searchRun";
+import { startJob, type Job } from "../jobs";
+import { ended, failed, markCancelling, searching, startedRun, withEvent, type SearchedTable, type SearchRun } from "../searchRun";
 import { useApp } from "../store";
+import { explorerSessionOpen } from "../tabState";
 import { openFound } from "./OpenObjectDialog";
 
 /** Fired on `window` by the "Search" command: the panel focuses its box. */
@@ -31,7 +31,6 @@ export const FOCUS_SEARCH_EVENT = "spelaion-focus-search";
 
 /** Ids of data searches: far from the export dialog's and column statistics', which share the
  *  core's cancel map. */
-let nextSearchId = 1_500_000_000;
 
 /** Name matches shown at most; the count says how many there are. */
 const NAME_LIMIT = 200;
@@ -214,23 +213,6 @@ function NameSearch({ query, hidden, openFirst }: { query: string; hidden: boole
   );
 }
 
-interface Outcome {
-  schema: string;
-  table: string;
-  status: TableStatusItem;
-}
-
-interface Run {
-  id: number;
-  connectionId: string;
-  running: boolean;
-  total: number;
-  current: { index: number; schema: string; table: string } | null;
-  outcomes: Outcome[];
-  summary: DataSearchSummaryItem | null;
-  error: string | null;
-  cancelling: boolean;
-}
 
 function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; start: React.MutableRefObject<(() => void) | null> }) {
   const { t } = useTranslation("shell");
@@ -246,8 +228,8 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   const [numbers, setNumbers] = useState(false);
   const [large, setLarge] = useState(false);
   const [rows, setRows] = useState(FALLBACK_LIMITS.defaultRowsPerTable);
-  const [run, setRun] = useState<Run | null>(null);
-  const current = useRef<number | null>(null);
+  const [run, setRun] = useState<SearchRun<Job> | null>(null);
+  const current = useRef<Job | null>(null);
 
   useEffect(() => {
     void commands.dataSearchLimits().then((l) => {
@@ -259,7 +241,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   const list = useMemo(() => Object.values(schemas), [schemas]);
   const choices = useMemo(
     // The data search writes a SELECT per table: only engines queried with SQL (ADR-056).
-    () => connections.filter((c) => c.sql && connected.includes(c.id) && list.some((s) => s.connectionId === c.id)),
+    () => connections.filter((c) => c.sql && explorerSessionOpen(connected, c.id) && list.some((s) => s.connectionId === c.id)),
     [connections, connected, list],
   );
   // The active tab's connection first, then the first one with tables loaded.
@@ -278,7 +260,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   // Tables no longer in the catalog are no longer chosen.
   const chosenTables = tables.filter((x) => chosen.has(tableKey(x.schema, x.table)));
 
-  const running = run?.running ?? false;
+  const running = searching(run);
   const blocked = !value.trim()
     ? t("search.needValue")
     : chosenTables.length === 0
@@ -289,21 +271,17 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
 
   async function search() {
     if (running || blocked) return;
-    const id = ++nextSearchId;
+    const id = startJob();
     current.current = id;
     const source = connectionId;
-    setRun({ id, connectionId: source, running: true, total: chosenTables.length, current: null, outcomes: [], summary: null, error: null, cancelling: false });
+    setRun(startedRun(id, source, chosenTables.length));
     const channel = new Channel<DataSearchEventItem>();
     channel.onmessage = (event) => {
       if (current.current !== id) return;
-      setRun((r) => {
-        if (!r || r.id !== id) return r;
-        if (event.kind === "started") return { ...r, total: event.total, current: { index: event.index, schema: event.schema, table: event.table } };
-        return { ...r, outcomes: [...r.outcomes, { schema: event.schema, table: event.table, status: event.status }] };
-      });
+      setRun((r) => withEvent(r, id, event));
     };
     try {
-      const summary = await call(commands.dataSearch(`meta:${source}`, id, {
+      const summary = await call(commands.dataSearch(`meta:${source}`, id.channel, {
         value,
         tables: chosenTables,
         caseSensitive,
@@ -311,19 +289,19 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
         large,
         rowsPerTable: Math.min(Math.max(1, Math.round(rows) || 1), limits.maxRowsPerTable),
       }, channel));
-      setRun((r) => (r && r.id === id ? { ...r, running: false, current: null, summary } : r));
+      setRun((r) => ended(r, id, summary));
     } catch (e) {
-      setRun((r) => (r && r.id === id ? { ...r, running: false, current: null, error: errorText(e) } : r));
+      setRun((r) => failed(r, id, errorText(e)));
     }
   }
   start.current = () => void search();
 
   function cancel() {
-    if (!run?.running) return;
+    if (!run || run.phase.kind !== "running") return;
     const id = run.id;
     // Applied to the run as it is by then: a search that ended since this render stays ended.
     setRun((r) => markCancelling(r, id));
-    void call(commands.cancelDataSearch(id)).catch(() => undefined);
+    id.cancel();
   }
 
   function toggle(schema: string, table: string) {
@@ -336,22 +314,46 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
     });
   }
 
-  const hits = run?.outcomes.reduce((n, o) => n + (o.status.kind === "searched" ? o.status.hits.length : 0), 0) ?? 0;
-  const noColumns = run?.outcomes.filter((o) => o.status.kind === "noColumns").length ?? 0;
+  const hits = run?.tables.reduce((n, o) => n + (o.status.kind === "searched" ? o.status.hits.length : 0), 0) ?? 0;
+  const noColumns = run?.tables.filter((o) => o.status.kind === "noColumns").length ?? 0;
 
   function status(): string | null {
     if (!run) return null;
-    if (run.error) return null;
-    if (run.running) {
-      if (run.cancelling) return t("search.cancelling");
-      if (!run.current) return t("search.starting");
-      return t("search.progress", { index: run.current.index + 1, total: run.total, table: `${run.current.schema}.${run.current.table}`, count: hits });
+    const phase = run.phase;
+    switch (phase.kind) {
+      case "failed":
+        return null;
+      case "cancelling":
+        return t("search.cancelling");
+      case "running":
+        if (!phase.current) return t("search.starting");
+        return t("search.progress", { index: phase.current.index + 1, total: run.total, table: `${phase.current.schema}.${phase.current.table}`, count: hits });
+      case "ended":
+        break;
+      default: {
+        const unexpected: never = phase;
+        return unexpected;
+      }
     }
-    const s = run.summary;
-    if (!s) return null;
-    if (s.cancelled) return t("search.cancelled", { tables: s.tables, total: run.total, count: s.hits });
-    if (s.stopped) return t("search.stopped", { count: s.hits });
-    return t("search.done", { count: s.hits, tables: s.tables });
+    const s = phase.outcome;
+    switch (s.kind) {
+      case "cancelled":
+        return t("search.cancelled", { tables: s.kept.tables, total: run.total, count: s.kept.hits });
+      case "stoppedAtLimit":
+        return t("search.stopped", { count: s.result.hits });
+      case "done":
+        return t("search.done", { count: s.result.hits, tables: s.result.tables });
+      // A search that ran always ends with what it read; one it refuses is an error.
+      case "failed":
+      case "needsConfirmation":
+      case "passwordRequired":
+      case "notARead":
+        return null;
+      default: {
+        const unexpected: never = s;
+        return unexpected;
+      }
+    }
   }
 
   return (
@@ -406,19 +408,19 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
           </details>
           <div className="search-actions">
             {running ? (
-              <button type="button" onClick={cancel} disabled={run?.cancelling}>{t("search.cancel")}</button>
+              <button type="button" onClick={cancel} disabled={run?.phase.kind === "cancelling"}>{t("search.cancel")}</button>
             ) : (
               <button type="button" className="primary" onClick={() => void search()} disabled={blocked !== null} title={blocked ?? undefined}>{t("search.searchData")}</button>
             )}
             {!running && blocked && <span className="muted small">{blocked}</span>}
           </div>
           <div className="muted small search-note">{t("search.readOnly")}</div>
-          {run?.error && <div className="row-note" role="alert">{t("search.failed", { detail: run.error })}</div>}
+          {run?.phase.kind === "failed" && <div className="row-note" role="alert">{t("search.failed", { detail: run.phase.message })}</div>}
           {status() && <div className="search-status" role="status">{status()}</div>}
-          {noColumns > 0 && !run?.running && <div className="muted small search-note">{t("search.noColumns", { count: noColumns })}</div>}
+          {noColumns > 0 && !running && <div className="muted small search-note">{t("search.noColumns", { count: noColumns })}</div>}
           {run && (
             <div className="search-results">
-              {run.outcomes.map((outcome) => <TableHits key={tableKey(outcome.schema, outcome.table)} connectionId={run.connectionId} outcome={outcome} />)}
+              {run.tables.map((outcome) => <TableHits key={tableKey(outcome.schema, outcome.table)} connectionId={run.connectionId} outcome={outcome} />)}
             </div>
           )}
         </>
@@ -427,7 +429,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   );
 }
 
-function TableHits({ connectionId, outcome }: { connectionId: string; outcome: Outcome }) {
+function TableHits({ connectionId, outcome }: { connectionId: string; outcome: SearchedTable }) {
   const { t } = useTranslation("shell");
   const name = `${outcome.schema}.${outcome.table}`;
   const { status } = outcome;

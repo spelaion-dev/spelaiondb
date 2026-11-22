@@ -273,6 +273,7 @@ async fn main() -> Result<()> {
                     Decision::Rejected => "REJECTED",
                     Decision::Failed => "failed",
                     Decision::Cleared => "log cleared",
+                    Decision::Unknown => "unknown",
                 };
                 let detail = e.detail.map(|d| format!(" — {d}")).unwrap_or_default();
                 println!(

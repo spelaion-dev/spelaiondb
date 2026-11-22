@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use crate::datagrip::shown;
-use crate::import::{ImportedConnection, ImportedSsh, ImportedTls};
+use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
 /// The largest export read: a few hundred bytes per server.
@@ -688,8 +688,7 @@ fn connection_of(id: &str, map: &Map<String, Value>, origin: Origin) -> Imported
         },
         database: server.text("MaintenanceDB"),
         user: server.text("Username"),
-        password: None,
-        stored_password: None,
+        password: ImportedPassword::None,
         env: String::new(),
         read_only: false,
         ssh: if importable { ssh } else { None },

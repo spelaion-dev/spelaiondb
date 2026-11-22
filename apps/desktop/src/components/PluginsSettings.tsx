@@ -7,11 +7,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, events, type EngineItem, type PluginItem } from "../api";
+import { call, commands, type EngineItem, type PluginItem } from "../api";
 import type { PluginProcessItem } from "../bindings";
 import { chooseOpenFile } from "../dialogs";
 import { engineCatalog } from "../engines";
-import { byteSize, usePlugins } from "../plugins";
+import { startJob } from "../jobs";
+import { byteSize, installable, installText, needsInstalling, usePlugins } from "../plugins";
 import { useApp } from "../store";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -24,14 +25,6 @@ type CatalogueState =
   | { kind: "read" }
   | { kind: "failed"; detail: string };
 
-/** An install running from this page, by plugin name. */
-interface Install {
-  id: number;
-  received: number;
-  total: number;
-}
-
-let nextInstall = 1;
 
 /** How often the running processes' numbers are read again while the page is open. */
 const PROCESS_REFRESH_MS = 2000;
@@ -42,7 +35,6 @@ export function PluginsSettings() {
   const setOverview = usePlugins((s) => s.set);
   const [catalogue, setCatalogue] = useState<CatalogueState>({ kind: "idle" });
   const [engines, setEngines] = useState<EngineItem[]>([]);
-  const [installs, setInstalls] = useState<Record<string, Install>>({});
   /** The last error of an action on a plugin, shown under its row. */
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [fileBusy, setFileBusy] = useState(false);
@@ -77,14 +69,6 @@ export function PluginsSettings() {
     mounted.current = true;
     void engineCatalog().then((all) => mounted.current && setEngines(all)).catch(() => undefined);
     void checkCatalogue();
-    const progress = events.pluginInstallProgress.listen((event) => {
-      const { install, received, total } = event.payload;
-      setInstalls((current) => {
-        const entry = Object.entries(current).find(([, running]) => running.id === install);
-        if (!entry) return current;
-        return { ...current, [entry[0]]: { id: install, received: received ?? 0, total: total ?? 0 } };
-      });
-    });
     // The running processes, read again while the page is open; nothing is started for it.
     const readProcesses = () =>
       void call(commands.pluginProcesses())
@@ -95,7 +79,6 @@ export function PluginsSettings() {
     return () => {
       mounted.current = false;
       window.clearInterval(timer);
-      void progress.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -110,21 +93,15 @@ export function PluginsSettings() {
     });
   }
 
+  /** Starts an install. Its progress and its end reach every view through the adapter
+   *  (`pluginInstallChanged`), so this page shows the install as the picker does. */
   async function install(plugin: PluginItem) {
-    const id = nextInstall++;
     rowError(plugin.name, null);
-    setInstalls((current) => ({ ...current, [plugin.name]: { id, received: 0, total: plugin.offered?.archiveSize ?? 0 } }));
     try {
-      const fresh = await call(commands.pluginsInstall(id, plugin.name));
-      setOverview(fresh);
-    } catch (e) {
-      rowError(plugin.name, t("plugins.installError", { detail: errorText(e) }));
-    } finally {
-      setInstalls((current) => {
-        const next = { ...current };
-        delete next[plugin.name];
-        return next;
-      });
+      setOverview(await call(commands.pluginsInstall(startJob().channel, plugin.name)));
+    } catch {
+      // The failure is the plugin's install state now: read it, in case its event was missed.
+      await usePlugins.getState().load();
     }
   }
 
@@ -225,10 +202,9 @@ export function PluginsSettings() {
               key={plugin.name}
               plugin={plugin}
               engineName={engineName}
-              install={installs[plugin.name] ?? null}
               error={rowErrors[plugin.name] ?? null}
               onInstall={() => void install(plugin)}
-              onCancel={(id) => void commands.pluginsCancelInstall(id)}
+              onCancel={(install) => void call(commands.cancelJob(install, "pluginInstall")).catch(() => undefined)}
               onRemove={(version) => void remove(plugin, version, false)}
               process={processes[plugin.name] ?? null}
               restarted={restarted[plugin.name] ?? false}
@@ -275,7 +251,6 @@ export function PluginsSettings() {
 function PluginRow({
   plugin,
   engineName,
-  install,
   error,
   onInstall,
   onCancel,
@@ -286,7 +261,6 @@ function PluginRow({
 }: {
   plugin: PluginItem;
   engineName(id: string): string;
-  install: Install | null;
   error: string | null;
   onInstall(): void;
   onCancel(id: number): void;
@@ -301,8 +275,10 @@ function PluginRow({
   const size = (bytes: number) => byteSize(bytes, i18n.language);
   const title = plugin.engines.map(engineName).join(", ") || plugin.name;
   const used = plugin.inUse;
-  // What clicking installs: the offered build, when it is new here or an update.
-  const installable = plugin.offered && (used === null || plugin.update !== null) ? plugin.offered : null;
+  const offer = installable(plugin);
+  // The download running, wherever it was started; its id stops it.
+  const downloading = plugin.install.kind === "downloading" ? plugin.install : null;
+  const installNote = installText(plugin, t, i18n.language);
   return (
     <li className="plugin-row" aria-label={title} data-plugin={plugin.name}>
       <div className="plugin-main">
@@ -318,7 +294,7 @@ function PluginRow({
         {plugin.update && plugin.offered && (
           <div className="small">{t("plugins.update", { version: plugin.update, size: size(plugin.offered.archiveSize ?? 0) })}</div>
         )}
-        {used === null && plugin.offered && (
+        {needsInstalling(plugin) && plugin.offered && (
           <div className="small">{t("plugins.offered", { version: plugin.offered.version, size: size(plugin.offered.archiveSize ?? 0) })}</div>
         )}
         {plugin.message ? (
@@ -345,11 +321,9 @@ function PluginRow({
           </div>
         )}
         {restarted && !process && <div className="small muted" role="status">{t("plugins.restarted")}</div>}
-        {install && (
+        {downloading && installNote && (
           <div className="small plugin-progress" role="status">
-            {install.total > 0
-              ? t("plugins.downloading", { received: size(install.received), total: size(install.total) })
-              : t("plugins.installing")}
+            {installNote}
           </div>
         )}
         {plugin.installed.length > 0 && (
@@ -357,12 +331,17 @@ function PluginRow({
             {plugin.installed.map((version) => (
               <li key={version} className="small">
                 <span>{t("plugins.installedVersion", { version })}</span>
-                <button className="ghost" onClick={() => onRemove(version)} disabled={install !== null}>
+                <button className="ghost" onClick={() => onRemove(version)} disabled={downloading !== null}>
                   {t("plugins.remove")}
                 </button>
               </li>
             ))}
           </ul>
+        )}
+        {plugin.install.kind === "failed" && installNote && (
+          <div className="error small" role="alert">
+            {installNote}
+          </div>
         )}
         {error && (
           <div className="error small" role="alert">
@@ -371,17 +350,17 @@ function PluginRow({
         )}
       </div>
       <div className="plugin-actions">
-        {process && !install && (
+        {process && !downloading && (
           <button onClick={onRestart} title={t("plugins.restartHint")}>
             {t("plugins.restart")}
           </button>
         )}
-        {install ? (
-          <button onClick={() => onCancel(install.id)}>{t("plugins.cancelInstall")}</button>
+        {downloading ? (
+          <button onClick={() => onCancel(downloading.install)}>{t("plugins.cancelInstall")}</button>
         ) : (
-          installable && (
-            <button onClick={onInstall} title={installable.address}>
-              {used ? t("plugins.updateTo", { version: installable.version }) : t("plugins.install")}
+          offer && (
+            <button onClick={onInstall} title={offer.address}>
+              {used ? t("plugins.updateTo", { version: offer.version }) : t("plugins.install")}
             </button>
           )
         )}

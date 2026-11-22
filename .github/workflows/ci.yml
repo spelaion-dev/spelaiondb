@@ -1,15 +1,21 @@
 # CI is the code reviewer (ADR-012): nothing gets into main without passing through here.
-# It runs on every push to `dev` and `main` and on every pull request (the repository is
-# public, so Actions minutes are free), and it can be started by hand on any branch. A push that
-# only touches documentation does not run it; a pull request always does, because its four jobs
-# are required to merge (branch protection) and a pull request without them would wait forever.
-# The job names are those required checks: renaming one means changing the branch protection.
+# It runs on every push to `dev` and `main`, on every pull request and on every entry of `dev`'s
+# merge queue (the repository is public, so Actions minutes are free), and it can be started by
+# hand on any branch. A push that only touches documentation does not run it; a pull request and
+# a queue entry always do, because its four jobs are required to merge (branch protection) and
+# one without them would wait forever. The job names are those required checks: renaming one
+# means changing the branch protection.
 #
-# A pull request that changes nothing the Rust checks read (only documentation, or only the
-# frontend: `needs-rust.sh` has the list) still starts the two Rust jobs, and they pass at once
-# without running anything: there is nothing for them to find, and the push to `dev` after the
-# merge runs them whole. Every step of those jobs after "Does this change need the Rust
-# checks?" carries its condition; a new step needs it too.
+# The merge queue (SDB-81): a pull request is green against the `dev` it was opened on, which may
+# have moved since. The queue tests it again on top of the current `dev` and of the pull requests
+# queued before it (`merge_group`), and merges it ("Rebase and merge") only if that run is green
+# too.
+#
+# A pull request or queue entry that changes nothing the Rust checks read (only documentation,
+# or only the frontend: `needs-rust.sh` has the list) still starts the two Rust jobs, and they
+# pass at once without running anything: there is nothing for them to find, and the push to
+# `dev` after the merge runs them whole. Every step of those jobs after "Does this change need
+# the Rust checks?" carries its condition; a new step needs it too.
 #
 # Speed: the Rust caches are saved only by pushes to `dev` and `main` (pull requests read
 # them): GitHub keeps 10 GB per repository, and one copy per pull request and release pushed
@@ -32,6 +38,9 @@ on:
       - "LICENSE"
       - ".github/ISSUE_TEMPLATE/**"
   pull_request:
+  # An entry of `dev`'s merge queue: the pull request on top of the current `dev` and of those
+  # queued before it. It never takes `paths-ignore`: the required checks must always report.
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -115,20 +124,26 @@ jobs:
           fetch-depth: 2
       - name: Test the release updater manifest check
         run: node --test scripts/check-updater-manifest.test.mjs
-      # On a pull request that changes nothing the Rust checks read, every step below is
-      # skipped and the job passes (see the top of this file). Anything but an explicit
+      # How the Linux jobs install and wait for their Ubuntu packages (SDB-427).
+      - name: Test the system packages script
+        run: bash .github/workflows/system-packages.test.sh
+      # Which changes skip the Rust checks, for pull requests and merge queue entries (SDB-81).
+      - name: Test the Rust scope script
+        run: bash .github/workflows/needs-rust.test.sh
+      # On a pull request or queue entry that changes nothing the Rust checks read, every step
+      # below is skipped and the job passes (see the top of this file). needs-rust.sh answers
+      # `true` for every other event and whenever it cannot tell; anything but an explicit
       # `false` runs them, and a failure here fails the job: never skipped by accident.
       - name: Does this change need the Rust checks?
         id: scope
         shell: bash
+        env:
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
-          rust=true
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            rust=$(git diff --no-renames --name-only HEAD^1 HEAD | bash .github/workflows/needs-rust.sh)
-          fi
+          rust=$(bash .github/workflows/needs-rust.sh --event "$GITHUB_EVENT_NAME" "$MERGE_GROUP_BASE")
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
           if [ "$rust" = false ]; then
-            message="This pull request changes nothing the Rust checks read (see .github/workflows/needs-rust.sh): they were not run here. The push to dev after the merge runs them."
+            message="This change touches nothing the Rust checks read (see .github/workflows/needs-rust.sh): they were not run here. The push to dev after the merge runs them."
             echo "::notice::$message"
             echo "$message" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -141,19 +156,10 @@ jobs:
       # libdbus: Linux keychain (Secret Service). WebKitGTK and friends: the Tauri app. Installing
       # them takes half a minute that setting up Rust and its cache needs anyway, so it runs in
       # the background: "Wait for the system libraries" below, before the first step that
-      # builds, shows its output and fails the job if it failed.
+      # builds, shows its output and fails the job if it failed (system-packages.sh).
       - name: Install the system libraries in the background
         if: steps.scope.outputs.rust != 'false'
-        run: |
-          (
-            status=failed
-            if sudo apt-get update \
-              && sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-            then
-              status=ready
-            fi
-            echo "$status" > "$RUNNER_TEMP/apt.status"
-          ) > "$RUNNER_TEMP/apt.log" 2>&1 &
+        run: bash .github/workflows/system-packages.sh install libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       # Only installs kind and kubectl: the cluster is created below, in the background. Its
       # name is given so the action deletes it when the job ends.
       - if: steps.scope.outputs.rust != 'false'
@@ -207,14 +213,11 @@ jobs:
           SSH_AUTH_SOCK=/tmp/ssh-agent.sock ssh-add testing/docker/keys/id_ed25519
       - if: steps.scope.outputs.rust != 'false'
         run: cargo fmt --all --check
+      # Twenty minutes: a slow Ubuntu mirror once took more than ten (SDB-427). It fails at
+      # once if apt fails, and says which of the two happened.
       - name: Wait for the system libraries
         if: steps.scope.outputs.rust != 'false'
-        run: |
-          timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/apt.status" ]; do sleep 1; done' || true
-          echo "::group::apt-get output"
-          cat "$RUNNER_TEMP/apt.log"
-          echo "::endgroup::"
-          test "$(cat "$RUNNER_TEMP/apt.status" 2> /dev/null)" = ready
+        run: bash .github/workflows/system-packages.sh wait 1200
       - if: steps.scope.outputs.rust != 'false'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Build the tests first: the services are only needed to run them.
@@ -309,20 +312,20 @@ jobs:
         with:
           # The merge commit and its parents: enough to list what a pull request changes.
           fetch-depth: 2
-      # On a pull request that changes nothing the Rust checks read, every step below is
-      # skipped and the job passes (see the top of this file). Anything but an explicit
+      # On a pull request or queue entry that changes nothing the Rust checks read, every step
+      # below is skipped and the job passes (see the top of this file). needs-rust.sh answers
+      # `true` for every other event and whenever it cannot tell; anything but an explicit
       # `false` runs them, and a failure here fails the job: never skipped by accident.
       - name: Does this change need the Rust checks?
         id: scope
         shell: bash
+        env:
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
-          rust=true
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            rust=$(git diff --no-renames --name-only HEAD^1 HEAD | bash .github/workflows/needs-rust.sh)
-          fi
+          rust=$(bash .github/workflows/needs-rust.sh --event "$GITHUB_EVENT_NAME" "$MERGE_GROUP_BASE")
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
           if [ "$rust" = false ]; then
-            message="This pull request changes nothing the Rust checks read (see .github/workflows/needs-rust.sh): they were not run here. The push to dev after the merge runs them."
+            message="This change touches nothing the Rust checks read (see .github/workflows/needs-rust.sh): they were not run here. The push to dev after the merge runs them."
             echo "::notice::$message"
             echo "$message" >> "$GITHUB_STEP_SUMMARY"
           fi

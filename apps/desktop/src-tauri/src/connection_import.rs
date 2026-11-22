@@ -370,8 +370,28 @@ pub async fn scan_connections(
 #[serde(rename_all = "camelCase")]
 pub struct ImportChoice {
     pub id: String,
-    /// `import` (as a copy when the name is taken), `replace` or `skip`.
-    pub action: String,
+    pub action: ImportAction,
+}
+
+/// What to do with a connection that already exists. Any other word is refused when the
+/// command is called, never read as one of these (SDB-376).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportAction {
+    /// Import it as a copy when the name is taken.
+    Import,
+    Replace,
+    Skip,
+}
+
+impl From<ImportAction> for DuplicateAction {
+    fn from(action: ImportAction) -> Self {
+        match action {
+            ImportAction::Import => Self::Import,
+            ImportAction::Replace => Self::Replace,
+            ImportAction::Skip => Self::Skip,
+        }
+    }
 }
 
 /// Where the connections go.
@@ -429,11 +449,7 @@ pub async fn import_connections(
         choices
             .iter()
             .find(|c| c.id == id)
-            .map(|c| match c.action.as_str() {
-                "replace" => DuplicateAction::Replace,
-                "skip" => DuplicateAction::Skip,
-                _ => DuplicateAction::Import,
-            })
+            .map(|c| DuplicateAction::from(c.action))
     };
     let save_passwords = target.save_passwords;
     let (_, found) = read_blocking(client, path, file_password).await?;
@@ -628,4 +644,34 @@ async fn import_one(
         }
     }
     Err("every name tried is taken".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn choice(action: &str) -> Result<ImportChoice, serde_json::Error> {
+        serde_json::from_str(&format!(r#"{{"id": "a", "action": "{action}"}}"#))
+    }
+
+    #[test]
+    fn each_action_reads_as_itself() {
+        for (text, action) in [
+            ("import", DuplicateAction::Import),
+            ("replace", DuplicateAction::Replace),
+            ("skip", DuplicateAction::Skip),
+        ] {
+            let read = choice(text).expect("a known action");
+            assert_eq!(DuplicateAction::from(read.action), action, "{text}");
+        }
+    }
+
+    /// An action this build does not know (a typo, a newer page) is refused, never taken for
+    /// "import".
+    #[test]
+    fn an_unknown_action_is_refused() {
+        for text in ["Replace", "overwrite", ""] {
+            assert!(choice(text).is_err(), "{text:?}");
+        }
+    }
 }

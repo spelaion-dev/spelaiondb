@@ -34,6 +34,10 @@ required-features = ["bindings"]
 [features]
 # Builds the `export-bindings` development tool (see above).
 bindings = []
+# Only for the smoke test's builds (`smoke-windows.yml`, CONTRIBUTING.md), never a release:
+# the app passes WebView2 the switches named in SPELAION_E2E_WEBVIEW2_ARGUMENTS, from an
+# allowlist, among them its debugging port (src/webview_args.rs).
+e2e = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
