@@ -87,6 +87,11 @@
   `spelaiondb` with its pinned hash). Its jobs only read the repository, never name a secret and
   build without update artifacts (`tauri.rehearsal.conf.json`); only the tagged jobs have
   `contents: write`. Pushing such a branch is a maintainer's step, never an agent's.
+- `docs/code-signing-policy.md` (ADR-063, SignPath Foundation's terms) lists what is signed,
+  who builds and approves, and every system the app contacts by itself. A change that makes
+  the app or `spelaiondb` contact a new host, or contact one at another moment, updates its
+  privacy section in the same pull request. `scripts/release-notes.sh` ends every release's
+  notes with a link to it; keep that line.
 - Lifecycles in the app (ADR-060): `src-tauri` hands on the core's state types, and the page
   reads them from `bindings.ts`; it does not rebuild a state from events or derive it from
   flags. A state that exists only in the page (a dialog's phase, a value being loaded) is a

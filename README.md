@@ -19,6 +19,7 @@
   <a href="https://github.com/spelaion-dev/spelaiondb/releases/latest"><b>Download</b></a> ·
   <a href="docs/guide/README.md">User guide</a> ·
   <a href="docs/releases/">Release notes</a> ·
+  <a href="docs/code-signing-policy.md">Code signing policy</a> ·
   <a href="https://ko-fi.com/spelaion">Support the project</a>
 </p>
 
@@ -63,7 +64,8 @@ Download the installer for your system from the
 - **Linux:** `.deb`, `.rpm` or AppImage.
 - **CLI and MCP server:** the `spelaiondb-<version>-<target>` archives hold the `spelaiondb` binary.
 
-The app tells you when a new version is out and installs it when you ask.
+The app tells you when a new version is out and installs it when you ask. What is signed, by
+whom, and what the app contacts are in the [code signing policy](#code-signing-policy).
 
 ## For AI agents (MCP)
 
@@ -119,6 +121,24 @@ development going:
 <a href="https://ko-fi.com/spelaion"><img src="https://ko-fi.com/img/githubbutton_sm.svg" height="36" alt="Support SpelaionDB on Ko-fi"></a>
 
 Starring the repository, reporting a bug or telling a colleague about it helps just as much.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org) (applied for: the Windows installers are not
+signed yet).
+
+- **Signed:** on Windows, the app, `spelaiondb.exe` and the installers, built only by the
+  release workflow on GitHub-hosted runners from tags on `main`.
+- **Committers and reviewers:** the [organization's members](https://github.com/orgs/spelaion-dev/people)
+  and the repository's collaborators. **Approvers:** the
+  [organization's owners](https://github.com/orgs/spelaion-dev/people?query=role%3Aowner), who
+  approve each release's signing by hand.
+- **Privacy:** SpelaionDB collects nothing about you. Besides the servers you connect to, it
+  contacts only GitHub, for the update check (a setting, on by default) and the downloads you
+  ask for, and a map tile server if you turn tiles on and name one.
+
+The whole policy, with the privacy statement: [docs/code-signing-policy.md](docs/code-signing-policy.md).
 
 ## License
 
