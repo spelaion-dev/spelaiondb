@@ -7842,7 +7842,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await tagBox.press("Enter");
   await tagBox.fill("DEMO");
   await tagBox.press("Enter");
-  assert.deepEqual(await wizard.locator(".tag-chip").allTextContents(), ["demo×", "Testing×"]);
+  assert.deepEqual(await wizard.locator(".tag-chip").allTextContents(), ["demo", "Testing"]);
   // Enter in the tag box added a tag: it did not submit the form.
   await wizard.getByRole("heading", { name: "New SQLite connection" }).waitFor();
   await wizard.getByRole("button", { name: "Test connection" }).click();

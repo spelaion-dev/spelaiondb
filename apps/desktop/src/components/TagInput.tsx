@@ -4,6 +4,7 @@
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MAX_TAG_LENGTH, MAX_TAGS, addTags, sameTag } from "../connectionInfo";
+import { Icon } from "./Icons";
 
 export function TagInput({
   label,
@@ -40,7 +41,7 @@ export function TagInput({
             title={t("fields.removeTag", { tag })}
             onClick={() => onChange(tags.filter((other) => other !== tag))}
           >
-            ×
+            <Icon name="x" />
           </button>
         </span>
       ))}

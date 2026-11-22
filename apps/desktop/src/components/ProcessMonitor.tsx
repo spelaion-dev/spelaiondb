@@ -7,6 +7,7 @@ import { openSession } from "../connect";
 import { useApp } from "../store";
 import { CONNECTING, DISCONNECTED, connectedWith, isConnected, isConnecting } from "../tabState";
 import { EngineIcon } from "./EngineIcon";
+import { Icon } from "./Icons";
 import { LockView, SettingsView, type ProcessActions } from "./ServerObservation";
 
 /** The monitor's views: its processes, their locks, and the server's settings. */
@@ -235,7 +236,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
           </select>
         </label>
         <span className="muted small process-status" role="status">{busy ? t("processMonitor.loading") : updated ? t("processMonitor.updated", { time: updated.toLocaleTimeString(i18n.language) }) : ""}</span>
-        <button onClick={() => void refresh()} disabled={busy || !session.current} title={t("processMonitor.refresh")}><span aria-hidden="true">↻</span> {t("processMonitor.refresh")}</button>
+        <button onClick={() => void refresh()} disabled={busy || !session.current} title={t("processMonitor.refresh")}><Icon name="refresh" /> {t("processMonitor.refresh")}</button>
       </div>
     </header>
     {view === "processes" && <div className="process-toolbar">
