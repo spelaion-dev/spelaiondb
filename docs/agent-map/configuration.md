@@ -35,6 +35,11 @@
   shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
   they reach, replace in place, target folder, what was not mapped, passwords read from another
   app's keychain only on import); a client is a reader that returns `ImportedConnection`s.
+  A client's startup SQL goes into `ImportedConnection::session` (SDB-104, ADR-037; TablePlus's
+  bootstrap commands first, a shell script never): the desktop's scan and import pass every
+  imported connection through the core's `vet_imported_setup` before it is shown or saved
+  (where the read-only barrier applies, what could write is taken out and listed in
+  `unmapped`), and the saved file goes through the form's own setup check.
   On Linux a reader's default search also looks in the client's Flatpak and Snap folders
   (`linux_dirs.rs`; native first, each package path citing the manifest it was checked against);
   HeidiSQL's registry only exists on Windows (`heidisql_has_registry`), elsewhere its import

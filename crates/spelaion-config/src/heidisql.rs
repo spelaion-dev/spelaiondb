@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use spelaion_driver_api::Secret;
 
+use crate::draft::SessionDraft;
 use crate::import::{ImportedConnection, ImportedSsh, ImportedTls, SavedSecrets};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
@@ -589,6 +590,7 @@ fn connection(path: String, fields: Fields) -> ImportedConnection {
         ssh,
         proxy: None,
         tls,
+        session: SessionDraft::default(),
         unmapped: warnings,
     }
 }

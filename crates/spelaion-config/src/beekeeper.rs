@@ -29,6 +29,7 @@ use sha2::{Digest, Sha256};
 use spelaion_driver_api::Secret;
 
 use crate::datagrip::shown;
+use crate::draft::SessionDraft;
 use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls, SavedSecrets};
 use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
@@ -646,6 +647,7 @@ fn connection_of(
             ssh: None,
             proxy: None,
             tls: None,
+            session: SessionDraft::default(),
             unmapped,
         };
     }
@@ -776,6 +778,7 @@ fn connection_of(
         ssh,
         proxy: None,
         tls,
+        session: SessionDraft::default(),
         unmapped,
     }
 }

@@ -14,6 +14,7 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
+use crate::draft::SessionDraft;
 use crate::import::{ImportedConnection, ImportedProxy, ImportedSsh, SavedSecrets};
 use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TunnelFile};
@@ -299,6 +300,7 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> ImportedC
         ssh: ssh_of(config, credentials),
         proxy: proxy_of(config, credentials),
         tls: None,
+        session: SessionDraft::default(),
         unmapped: unmapped_of(json, config),
     }
 }

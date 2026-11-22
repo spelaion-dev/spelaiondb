@@ -256,7 +256,7 @@ pub use session::{
 pub use session_read_only::{SessionReadOnlyError, set_session_read_only};
 pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
-    isolation_statement, read_only_statement, setup_is_restricted,
+    isolation_statement, read_only_statement, setup_is_restricted, vet_imported_setup,
 };
 pub use shortcuts::{MAX_SHORTCUT_LENGTH, MAX_SHORTCUT_OVERRIDES, ShortcutError, check_shortcut};
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};

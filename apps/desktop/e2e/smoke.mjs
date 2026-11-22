@@ -9826,6 +9826,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // Its production tag is our Production type; the password it exported comes along.
     await item("Orders PG").locator(".conn-import-detail").filter({ hasText: "TLS verify-ca · prod · password saved" }).waitFor();
     await item("PG via bastion").getByText("SSH spelaion@127.0.0.1:2221").waitFor();
+    // Its bootstrap commands are the connection's setup statements, shown before importing and
+    // checked by the core (SDB-104): this one only sets the search path, so it passes on
+    // Production.
+    // Shown open, verbatim, before anything is imported.
+    await item("Orders PG").getByText("Setup statements: run on every new session").waitFor();
+    await item("Orders PG").getByText("SET search_path TO app, public;", { exact: true }).waitFor();
     // The SSH key's contents are never kept: the preview says what to do instead.
     await item("PG via bastion").getByText("setting is not imported", { exact: false }).click();
     await item("PG via bastion").getByText("carries the private key itself", { exact: false }).waitFor();
@@ -9851,6 +9857,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.ok(orders, files.join(", "));
     const text = readFileSync(join(userDir, "connections", "tableplus", String(orders)), "utf8");
     assert.match(text, /env = "prod"/);
+    assert.match(text, /SET search_path TO app, public;/);
     for (const file of files) {
       assert.doesNotMatch(readFileSync(join(userDir, "connections", "tableplus", String(file)), "utf8"), /fake-password-123/);
     }

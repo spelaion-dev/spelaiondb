@@ -30,6 +30,7 @@ use sha1::Sha1;
 use sha2::Sha256;
 use spelaion_driver_api::Secret;
 
+use crate::draft::SessionDraft;
 use crate::import::{ImportedConnection, ImportedSsh, ImportedTls};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
@@ -524,13 +525,13 @@ fn connection_of(c: &Dictionary, id: String, folder: String, origin: Origin) -> 
     if engine.is_ok() && !file && origin == Origin::Storage {
         unmapped.push(PASSWORD_NOT_READ.into());
     }
-    let commands = text(c, "StartupCommands");
-    if !commands.is_empty() {
-        let lines = commands.lines().filter(|l| !l.trim().is_empty()).count();
-        unmapped.push(format!(
-            "Bootstrap commands: {lines} line(s) TablePlus runs after connecting (add them to the connection's session setup)"
-        ));
-    }
+    // Its bootstrap commands are SQL it runs after connecting: the connection's session setup
+    // (ADR-037, SDB-104), checked before it is shown or saved. Its bootstrap script is a shell
+    // script, never imported.
+    let session = SessionDraft {
+        setup: text(c, "StartupCommands").trim().to_string(),
+        ..SessionDraft::default()
+    };
     if !text(c, "StartupBashScript").is_empty() {
         unmapped.push("Bootstrap script: a shell script TablePlus runs (never run here)".into());
     }
@@ -584,6 +585,7 @@ fn connection_of(c: &Dictionary, id: String, folder: String, origin: Origin) -> 
         ssh,
         proxy: None,
         tls,
+        session,
         unmapped,
     }
 }

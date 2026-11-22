@@ -8,8 +8,8 @@ use crate::common;
 use common::{FakeBackend, Fixture, personal, team};
 use spelaion_config::{
     ConnectionDraft, Engine, ImportClient, ImportedConnection, ImportedPassword, ImportedProxy,
-    ImportedSsh, ImportedTls, KeychainItem, PasswordChoice, Source, TargetFolder, TlsModeConfig,
-    add_connection, connection_account, find_duplicate, import_names, import_plan,
+    ImportedSsh, ImportedTls, KeychainItem, PasswordChoice, SessionDraft, Source, TargetFolder,
+    TlsModeConfig, add_connection, connection_account, find_duplicate, import_names, import_plan,
     read_stored_passwords, replacement_draft, update_connection,
 };
 use spelaion_driver_api::Secret;
@@ -48,6 +48,7 @@ fn imported(name: &str) -> ImportedConnection {
         ssh: None,
         proxy: None,
         tls: None,
+        session: SessionDraft::default(),
         unmapped: Vec::new(),
     }
 }

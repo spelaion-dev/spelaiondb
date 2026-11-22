@@ -339,6 +339,14 @@ export function ConnectionImport(props: {
                       </select>
                     </div>
                   )}
+                  {c.setup && (
+                    // Open: every statement that will run on each new session is shown before
+                    // importing, also where the core did not have to check it (SDB-104).
+                    <details className="conn-import-unmapped" open>
+                      <summary className="small">{t("importer.setup")}</summary>
+                      <pre className="small mono">{c.setup}</pre>
+                    </details>
+                  )}
                   {c.unmapped.length > 0 && (
                     <details className="conn-import-unmapped">
                       <summary className="small">{t("importer.unmapped", { count: c.unmapped.length })}</summary>
