@@ -256,6 +256,7 @@
   "password": "Contraseña",
   "rememberPassword": "Recordar en el llavero del sistema",
   "cancel": "Cancelar",
+  "deleting": "Borrando…",
   "connect": "Conectar",
   "trustRepository": "¿Confiar en este repositorio?",
   "thisRepository": "Este repositorio",

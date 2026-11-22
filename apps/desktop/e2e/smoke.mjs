@@ -5689,9 +5689,15 @@ try {
   await page.getByRole("button", { name: "Saved queries", exact: true }).click();
   await markerEntry.getByText("Organize", { exact: true }).click();
   await markerEntry.getByRole("button", { name: "Delete", exact: true }).click();
-  const deleteSaved = page.getByRole("dialog", { name: "Delete “Marker query”?" });
+  // The shared delete confirmation (SDB-89): it names the target, Cancel has the focus, Escape
+  // cancels, and the danger button says what it does.
+  const deleteSaved = page.getByRole("dialog", { name: "Delete saved query?" });
+  await deleteSaved.getByText("Marker query will be removed from this computer.", { exact: false }).waitFor();
   assert.equal(await deleteSaved.getByRole("button", { name: "Cancel" }).evaluate((button) => button === document.activeElement), true);
-  await deleteSaved.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await deleteSaved.waitFor({ state: "detached" });
+  await markerEntry.getByRole("button", { name: "Delete", exact: true }).click();
+  await deleteSaved.getByRole("button", { name: "Delete saved query", exact: true }).click();
   await snippets.getByText("No saved queries yet.", { exact: false }).waitFor();
   await page.getByRole("button", { name: "Close saved queries" }).click();
 
@@ -9089,8 +9095,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await editTunnel.getByLabel("Give up after (unanswered)").inputValue(), "5");
   assert.equal(await editTunnel.getByLabel("Connect timeout (seconds)").inputValue(), "20");
   await editTunnel.getByRole("button", { name: "Delete profile" }).click();
-  await editTunnel.getByRole("button", { name: "Click again to delete" }).click();
-  await editTunnel.locator(".test-result", { hasText: "PG through wizard tunnel" }).waitFor();
+  // The confirmation lists the connections the core counts (SDB-89) and offers only Cancel.
+  const deleteUsedTunnel = page.getByRole("dialog", { name: "Delete network profile?" });
+  await deleteUsedTunnel.getByRole("listitem").filter({ hasText: "PG through wizard tunnel" }).waitFor();
+  assert.ok(await deleteUsedTunnel.getByRole("button", { name: "Delete profile" }).isDisabled());
+  await deleteUsedTunnel.getByRole("button", { name: "Cancel" }).click();
+  await deleteUsedTunnel.waitFor({ state: "detached" });
   await editTunnel.getByRole("button", { name: "Cancel" }).click();
   await editTunnel.waitFor({ state: "detached" });
   await wizard.getByRole("button", { name: "Cancel" }).click();
@@ -9176,7 +9186,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const editSpare = page.getByRole("dialog", { name: "Edit network profile spare-route" });
     assert.equal(await editSpare.getByLabel("Hop 1 Host").inputValue(), "spare.example");
     await editSpare.getByRole("button", { name: "Delete profile" }).click();
-    await editSpare.getByRole("button", { name: "Click again to delete" }).click();
+    const deleteSpare = page.getByRole("dialog", { name: "Delete network profile?" });
+    await deleteSpare.getByText("No connection uses it.").waitFor();
+    await deleteSpare.getByRole("button", { name: "Delete profile" }).click();
     await editSpare.waitFor({ state: "detached" });
     await row.waitFor({ state: "detached" });
 
@@ -9218,7 +9230,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const managedNode = await editAws.getByLabel("Managed node").elementHandle();
     await page.waitForFunction((input) => input.value === "i-0123456789abcdef0", managedNode);
     await editAws.getByRole("button", { name: "Delete profile" }).click();
-    await editAws.getByRole("button", { name: "Click again to delete" }).click();
+    const deleteAws = page.getByRole("dialog", { name: "Delete network profile?" });
+    await deleteAws.getByText("No connection uses it.").waitFor();
+    await deleteAws.getByRole("button", { name: "Delete profile" }).click();
     await editAws.waitFor({ state: "detached" });
     await awsRow.waitFor({ state: "detached" });
   });
