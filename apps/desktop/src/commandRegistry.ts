@@ -53,6 +53,8 @@ export interface CommandSpec {
   editorMenu?: EditorMenuPlace;
   /** One of the SQL editor's own key chords: its keymap binds the shortcut (`editorActions.ts`). */
   editorAction?: true;
+  /** Keys the editor itself handles (the clipboard): the user cannot change them (ADR-064). */
+  fixedKeys?: true;
   /** The palette's own entry: not listed in the palette. */
   hidden?: boolean;
 }
@@ -107,11 +109,11 @@ export const COMMANDS = [
   { id: "editor.variables", category: "editor", label: "editor:variables.command", editorMenu: { group: "run", submenu: "run" } },
   // The clipboard: the editor's own keys, written here so the menu and the palette have them;
   // the keymap leaves them to the editor itself.
-  { id: "editor.cut", category: "editor", label: "editor:actions.cut", shortcut: "Ctrl+X", scope: "editor", editorMenu: { group: "clipboard" } },
-  { id: "editor.copy", category: "editor", label: "editor:actions.copy", shortcut: "Ctrl+C", scope: "editor", editorMenu: { group: "clipboard" } },
-  { id: "editor.paste", category: "editor", label: "editor:actions.paste", shortcut: "Ctrl+V", scope: "editor", editorMenu: { group: "clipboard" } },
+  { id: "editor.cut", category: "editor", label: "editor:actions.cut", shortcut: "Ctrl+X", scope: "editor", fixedKeys: true, editorMenu: { group: "clipboard" } },
+  { id: "editor.copy", category: "editor", label: "editor:actions.copy", shortcut: "Ctrl+C", scope: "editor", fixedKeys: true, editorMenu: { group: "clipboard" } },
+  { id: "editor.paste", category: "editor", label: "editor:actions.paste", shortcut: "Ctrl+V", scope: "editor", fixedKeys: true, editorMenu: { group: "clipboard" } },
   { id: "editor.copyStatement", category: "editor", label: "editor:actions.copyStatement", shortcut: "Ctrl+Alt+C", scope: "editor", editorAction: true, editorMenu: { group: "clipboard" } },
-  { id: "editor.selectAll", category: "editor", label: "editor:actions.selectAll", shortcut: "Ctrl+A", scope: "editor", editorMenu: { group: "clipboard" } },
+  { id: "editor.selectAll", category: "editor", label: "editor:actions.selectAll", shortcut: "Ctrl+A", scope: "editor", fixedKeys: true, editorMenu: { group: "clipboard" } },
   { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor", editorMenu: { group: "edit" } },
   { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", editorAction: true, editorMenu: { group: "edit" } },
   { id: "editor.blockComment", category: "editor", label: "editor:actions.blockComment", shortcut: "Shift+Alt+A", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection" } },
@@ -229,6 +231,10 @@ export const KEYS = {
   findNextInBox: { shortcut: "Enter", where: "Result grid" },
   findPreviousInBox: { shortcut: "Shift+Enter", where: "Result grid" },
   findMatchCase: { shortcut: "Alt+C", where: "Result grid" },
+  followReference: { shortcut: "Ctrl+Enter", where: "Result grid" },
+  findInGrid: { shortcut: "Ctrl+F", where: "Result grid" },
+  jumpToColumn: { shortcut: "Ctrl+Shift+J", where: "Result grid" },
+  selectColumns: { shortcut: "Ctrl+Space", where: "Result grid" },
   sortThen: { shortcut: "Shift+click", where: "Result grid" },
   selectColumn: { shortcut: "Ctrl+click", where: "Result grid" },
   editCell: { shortcut: "F2", where: "Table data edits" },
@@ -237,11 +243,16 @@ export const KEYS = {
   deleteRows: { shortcut: "Delete", where: "Table data edits" },
   deleteSelectedRows: { shortcut: "Alt+Delete", where: "Table data edits" },
   setNull: { shortcut: "Ctrl+Alt+N", where: "Table data edits" },
+  fillDown: { shortcut: "Ctrl+D", where: "Table data edits" },
+  pasteCells: { shortcut: "Ctrl+V", where: "Table data edits" },
+  revertRows: { shortcut: "Ctrl+Alt+Z", where: "Table data edits" },
+  redoAlternative: { shortcut: "Ctrl+Shift+Z", where: "Table data edits" },
   saveEdits: { shortcut: "Ctrl+S", where: "Table data edits" },
   discardEdits: { shortcut: "Ctrl+R", where: "Table data edits" },
   openOverview: { shortcut: "Ctrl+Enter", where: "Explorer row" },
   pasteConnection: { shortcut: "Ctrl+V", where: "Explorer row" },
   openObjectByClick: { shortcut: "Ctrl+click", where: "SQL editor" },
+  selectNextOccurrence: { shortcut: "Ctrl+D", where: "SQL editor" },
   snippetNext: { shortcut: "Tab", where: "SQL editor" },
   snippetPrevious: { shortcut: "Shift+Tab", where: "SQL editor" },
 } as const satisfies Record<string, { shortcut: string; where: string }>;
@@ -331,8 +342,129 @@ export function matchesShortcut(press: KeyPress, shortcut: string): boolean {
     parsed.ctrl === (press.ctrlKey || press.metaKey) &&
     parsed.shift === press.shiftKey &&
     parsed.alt === press.altKey &&
-    parsed.key === press.key.toLowerCase()
+    parsed.key === pressedKey(press.key)
   );
+}
+
+/** A `KeyboardEvent.key` as a shortcut's key is compared: lower case, the space bar "space". */
+function pressedKey(key: string): string {
+  return key === " " ? "space" : key.toLowerCase();
+}
+
+/**
+ * The keys of a key press as the registry writes them ("Ctrl+Shift+Enter"), for the dialog
+ * that takes a command's new keys (SDB-447): `null` while only modifiers are held. Cmd counts as
+ * Ctrl, as the handlers take it; a letter is written in capitals and the space bar as "Space".
+ */
+export function pressedShortcut(press: KeyPress): string | null {
+  if (typeof press.key !== "string" || ["Control", "Shift", "Alt", "Meta", "AltGraph", "OS", "Dead", "Unidentified", ""].includes(press.key)) return null;
+  const key = press.key === " " ? "Space" : press.key.length === 1 ? press.key.toUpperCase() : press.key;
+  const modifiers = [press.ctrlKey || press.metaKey ? "Ctrl" : "", press.shiftKey ? "Shift" : "", press.altKey ? "Alt" : ""].filter(Boolean);
+  return [...modifiers, key].join("+");
+}
+
+// The user's changes to the shortcuts (SDB-447, ADR-064): a command's id with its keys, or
+// with none. Only the differences from the defaults above; set once read from the core and on
+// every change, by `shortcutPreferences.ts`.
+let overrides = new Map<string, string | null>();
+
+/** The user's changes as the core keeps them: a command's id and its keys, or none. */
+export interface ShortcutChange {
+  command: string;
+  keys: string | null;
+}
+
+/** Applies the user's changes to the shortcuts. An id that is no longer a command, and a
+ *  command whose keys are fixed, are left out: their commands keep their defaults. */
+export function setShortcutOverrides(changes: readonly ShortcutChange[]): void {
+  overrides = new Map(
+    changes
+      .filter((change) => {
+        const command = BY_ID.get(change.command);
+        return command !== undefined && !command.fixedKeys && (change.keys ?? undefined) !== command.shortcut;
+      })
+      .map((change) => [change.command, change.keys]),
+  );
+}
+
+/** The user's changes in effect, in the registry's order. */
+export function shortcutOverrides(): ShortcutChange[] {
+  return (COMMANDS as readonly CommandSpec[])
+    .filter((command) => overrides.has(command.id))
+    .map((command) => ({ command: command.id, keys: overrides.get(command.id) ?? null }));
+}
+
+/** The keys that run a command now: the user's, or the registry's default. */
+export function commandKeys(command: CommandSpec): string | undefined {
+  if (!overrides.has(command.id)) return command.shortcut;
+  return overrides.get(command.id) ?? undefined;
+}
+
+/** Whether the user changed a command's keys. */
+export function keysChanged(command: CommandSpec): boolean {
+  return overrides.has(command.id);
+}
+
+/** The changes with one command given `keys` (its default again drops its change). */
+export function withKeys(changes: readonly ShortcutChange[], command: CommandSpec, keys: string | null): ShortcutChange[] {
+  const rest = changes.filter((change) => change.command !== command.id);
+  return (keys ?? undefined) === command.shortcut ? rest : [...rest, { command: command.id, keys }];
+}
+
+/** Where a command acts when it has keys: its scope, or anywhere. */
+function commandScope(command: CommandSpec): ShortcutScope {
+  return command.scope ?? "global";
+}
+
+/** The place of a region's own keys (`KEYS`): only those of the places commands act in. */
+function keysPlace(where: string): ShortcutScope | null {
+  switch (where) {
+    case "Anywhere":
+      return "global";
+    case "SQL editor":
+      return "editor";
+    case "Result grid":
+    case "Table data edits":
+      return "grid";
+    default:
+      return null;
+  }
+}
+
+function sameKeys(a: string, b: string): boolean {
+  const x = parseShortcut(a);
+  const y = parseShortcut(b);
+  return x !== null && y !== null && x.ctrl === y.ctrl && x.shift === y.shift && x.alt === y.alt && x.key === y.key;
+}
+
+/** What already has some keys where a command would act (ADR-064): another command, which the
+ *  user may take them from, or keys that cannot move (a region's own, or fixed ones). */
+export type ShortcutClash =
+  | { kind: "command"; command: CommandSpec }
+  | { kind: "fixed"; command: CommandSpec }
+  | { kind: "region"; key: KeyId; place: ShortcutScope };
+
+/**
+ * What has `keys` where `command` would act, judged by place: two commands clash when they act
+ * in the same place, or one of them anywhere; a region's own keys clash with a command of its
+ * place, and those of anywhere with every command. A command's own default never clashes.
+ */
+export function shortcutClash(command: CommandSpec, keys: string): ShortcutClash | null {
+  const place = commandScope(command);
+  for (const other of COMMANDS as readonly CommandSpec[]) {
+    const otherKeys = commandKeys(other);
+    if (other.id === command.id || !otherKeys || !sameKeys(otherKeys, keys)) continue;
+    const otherPlace = commandScope(other);
+    if (otherPlace !== place && otherPlace !== "global" && place !== "global") continue;
+    return other.fixedKeys ? { kind: "fixed", command: other } : { kind: "command", command: other };
+  }
+  if (command.shortcut && sameKeys(command.shortcut, keys)) return null;
+  for (const [id, entry] of Object.entries(KEYS) as [KeyId, (typeof KEYS)[KeyId]][]) {
+    const where = keysPlace(entry.where);
+    if (!sameKeys(entry.shortcut, keys) || where === null) continue;
+    if (where === place || where === "global") return { kind: "region", key: id, place: where };
+  }
+  return null;
 }
 
 /** Where a command's keys act, as Settings › Keyboard shortcuts groups them (SDB-447); `none`
@@ -345,9 +477,9 @@ export const SHORTCUT_PLACES = ["global", "editor", "grid", "none"] as const sat
 /** The categories in the order Settings lists them within a place. */
 export const COMMAND_CATEGORIES = ["general", "tab", "file", "editor", "view", "data"] as const satisfies readonly CommandCategory[];
 
-/** Where a command's keys act; a shortcut with no scope is handled anywhere. */
+/** Where a command's keys act now; a shortcut with no scope is handled anywhere. */
 export function shortcutPlace(command: CommandSpec): ShortcutPlace {
-  return command.shortcut ? (command.scope ?? "global") : "none";
+  return commandKeys(command) ? commandScope(command) : "none";
 }
 
 /** Text as the shortcut search compares it: without case or spaces, so "ctrl + enter" finds
@@ -363,10 +495,16 @@ export function shortcutMatches(query: string, texts: readonly string[]): boolea
   return wanted === "" || texts.some((text) => searchable(text).includes(wanted));
 }
 
-/** The global command whose shortcut this key press is, if any. */
+/** The global command whose shortcut (the user's, or its default) this key press is, if any. */
 export function globalCommandFor(press: KeyPress): CommandSpec | null {
   for (const command of COMMANDS as readonly CommandSpec[]) {
-    if (command.scope === "global" && command.shortcut && matchesShortcut(press, command.shortcut)) return command;
+    const keys = commandKeys(command);
+    if (commandScope(command) === "global" && keys && matchesShortcut(press, keys)) return command;
   }
   return null;
+}
+
+/** The registry's command of an id, or `undefined` for one that is not a command. */
+export function findCommand(id: string): CommandSpec | undefined {
+  return BY_ID.get(id);
 }

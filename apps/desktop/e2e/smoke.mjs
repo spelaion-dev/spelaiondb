@@ -3474,6 +3474,50 @@ try {
     await search.fill("no command is called this");
     await settings.getByText("No command matches.").waitFor();
   });
+  {
+    // Run script gets other keys: they run it and the old ones stop, the palette shows them at
+    // once, and Reset gives it its default again. The other steps keep the defaults.
+    const resultTab = (name) => panel.locator(".result-tabs button", { hasText: name });
+    await withSettings("shortcuts", async (settings) => {
+      await settings.getByRole("searchbox", { name: "Search commands" }).fill("run script");
+      await settings.getByRole("button", { name: "Change the keys of Run script" }).click();
+      const dialog = page.getByRole("dialog", { name: "Keys for Run script" });
+      await dialog.waitFor();
+      await page.keyboard.press("Control+t");
+      await dialog.getByText("Ctrl+T already runs New query.").waitFor();
+      await page.keyboard.press("q");
+      await dialog.getByText("These keys type or edit text: add Ctrl or Alt").waitFor();
+      await page.keyboard.press("Control+Alt+F9");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await dialog.waitFor({ state: "detached" });
+      const row = settings.locator('tr[data-command="editor.runScript"]');
+      assert.equal(await row.locator(".shortcut-keys").innerText(), "Ctrl+Alt+F9");
+      await row.getByText("Changed").waitFor();
+      await shot("05f-shortcut-changed");
+    });
+    await replaceQuery(panel, "-- shortcut 447\nselect 447");
+    await page.keyboard.press("Control+Alt+F9");
+    await resultTab("shortcut 447").waitFor();
+    await replaceQuery(panel, "-- old keys\nselect 1");
+    await page.keyboard.press("Control+Shift+Enter");
+    await page.waitForTimeout(500);
+    assert.equal(await resultTab("old keys").count(), 0, "the old keys no longer run the script");
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("run script");
+    assert.equal(await palette.locator('[data-command="editor.runScript"] .menu-shortcut').innerText(), "Ctrl+Alt+F9");
+    await page.keyboard.press("Escape");
+    await palette.waitFor({ state: "detached" });
+    await withSettings("shortcuts", async (settings) => {
+      await settings.getByRole("searchbox", { name: "Search commands" }).fill("run script");
+      await settings.getByRole("button", { name: "Give Run script its default keys again" }).click();
+      await settings.locator('tr[data-command="editor.runScript"] .shortcut-keys', { hasText: "Ctrl+Shift+Enter" }).waitFor();
+    });
+    await sqlEditor.click();
+    await page.keyboard.press("Control+Shift+Enter");
+    await resultTab("old keys").waitFor();
+    await replaceQuery(panel, "select 'unterminated");
+  }
 
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");
   const queryTabCount = await page.locator(".tabbar .tab").count();

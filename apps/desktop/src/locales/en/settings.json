@@ -372,7 +372,7 @@
   },
   "shortcuts": {
     "title": "Keyboard shortcuts",
-    "hint": "Every command of the app and the keys that run it. Find one by its name or by its keys, such as {{example}}.",
+    "hint": "Every command of the app and the keys that run it. Find one by its name or by its keys, such as {{example}}, and give it the keys you prefer: a change is yours alone and is saved at once.",
     "search": "Search by name or keys",
     "searchLabel": "Search commands",
     "noMatch": "No command matches.",
@@ -381,6 +381,30 @@
       "editor": "SQL editor",
       "grid": "Result grid",
       "none": "Without a shortcut"
-    }
+    },
+    "resetAll": "Reset all",
+    "resetAllTitle": "Reset every shortcut?",
+    "resetAllBody_one": "Your change to 1 shortcut is dropped: every command gets the app's own keys again.",
+    "resetAllBody_other": "Your changes to {{count}} shortcuts are dropped: every command gets the app's own keys again.",
+    "cancel": "Cancel",
+    "loadError": "Your shortcuts could not be read, so the app's own keys are in effect: {{detail}}",
+    "changed": "Changed",
+    "fixed": "Kept by the editor",
+    "change": "Change…",
+    "changeFor": "Change the keys of {{name}}",
+    "remove": "Remove",
+    "removeFor": "Remove the shortcut of {{name}}",
+    "reset": "Reset",
+    "resetFor": "Give {{name}} its default keys again",
+    "dialogTitle": "Keys for {{name}}",
+    "press": "Press the new keys. {{cancel}} cancels.",
+    "pressedLabel": "The keys pressed",
+    "waiting": "Waiting for keys…",
+    "clash": "{{keys}} already runs {{other}}. Move them to {{name}}? {{other}} is left without a shortcut.",
+    "takenFixed": "These keys are {{name}}, which the editor keeps.",
+    "takenRegion": "These keys already act in {{where}}, where no command can take them.",
+    "move": "Move keys",
+    "save": "Save",
+    "saving": "Saving…"
   }
 }

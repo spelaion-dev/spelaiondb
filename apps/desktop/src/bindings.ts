@@ -146,6 +146,21 @@ export const commands = {
 	/**  The user's own editor snippets (SDB-384), by name. */
 	editorSnippets: () => typedError<EditorSnippetItem[], string>(__TAURI_INVOKE("editor_snippets")),
 	/**
+	 *  The user's changes to the keyboard shortcuts (SDB-447): only the differences from the
+	 *  registry's defaults.
+	 */
+	shortcutOverrides: () => typedError<ShortcutOverrideItem_Serialize[], string>(__TAURI_INVOKE("shortcut_overrides")),
+	/**
+	 *  Replaces the user's changes to the keyboard shortcuts, all of them or none. The core
+	 *  refuses keys a command may not take (ADR-064).
+	 */
+	setShortcutOverrides: (overrides: ShortcutOverrideItem_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("set_shortcut_overrides", { overrides })),
+	/**
+	 *  Why some keys cannot be a command's shortcut, or `None` when they can (ADR-064): the
+	 *  dialog that takes new keys says it as they are pressed.
+	 */
+	checkShortcut: (keys: string) => __TAURI_INVOKE<string | null>("check_shortcut", { keys }),
+	/**
 	 *  Saves an editor snippet, replacing the one of the same name. The core refuses one that is
 	 *  too long, holds hidden characters or has a name that is not an identifier.
 	 */
@@ -6224,6 +6239,30 @@ export type SessionLost_Serialize = {
 	 *  (ADR-031).
 	 */
 	openTransaction: boolean,
+};
+
+/**
+ *  One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
+ *  app's registry and the keys it now has, as the registry writes them, or none.
+ */
+export type ShortcutOverrideItem = ShortcutOverrideItem_Serialize | ShortcutOverrideItem_Deserialize;
+
+/**
+ *  One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
+ *  app's registry and the keys it now has, as the registry writes them, or none.
+ */
+export type ShortcutOverrideItem_Deserialize = {
+	command: string,
+	keys?: string | null,
+};
+
+/**
+ *  One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
+ *  app's registry and the keys it now has, as the registry writes them, or none.
+ */
+export type ShortcutOverrideItem_Serialize = {
+	command: string,
+	keys: string | null,
 };
 
 /**

@@ -7,19 +7,26 @@ import { resolve } from "node:path";
 import test from "node:test";
 import {
   COMMAND_CATEGORIES,
+  commandKeys,
   COMMANDS,
   EDITOR_MENU_GROUPS,
   editorMenu,
   editorMenuCommands,
   globalCommandFor,
+  keysChanged,
   KEYS,
   matchesShortcut,
   menuCommands,
   paletteCommands,
   parseShortcut,
+  pressedShortcut,
+  setShortcutOverrides,
+  shortcutClash,
+  shortcutOverrides,
   SHORTCUT_PLACES,
   shortcutMatches,
   shortcutPlace,
+  withKeys,
   shortcutLabel,
 } from "../src/commandRegistry.ts";
 
@@ -337,4 +344,90 @@ test("the shortcut search finds a command by its name or by its keys (SDB-447)",
   assert.ok(shortcutMatches("Ctrl + Enter", texts), "spaces around the + do not matter");
   assert.ok(!shortcutMatches("ctrl+shift+enter", texts), "other keys do not match");
   assert.ok(shortcutMatches("mayús", ["Format", "Shift+Alt+F", "Mayús+Alt+F"]), "by the keys as shown in the language");
+});
+
+const byId = (id) => COMMANDS.find((command) => command.id === id);
+const keyPress = (key, { ctrl = false, shift = false, alt = false, meta = false } = {}) => ({ key, ctrlKey: ctrl, shiftKey: shift, altKey: alt, metaKey: meta });
+
+test("the user's keys act in place of the defaults, and only the differences are kept (SDB-447)", () => {
+  try {
+    setShortcutOverrides([
+      { command: "tab.new", keys: "Ctrl+Alt+F9" },
+      { command: "editor.runScript", keys: null },
+      { command: "tab.close", keys: "Ctrl+W" }, // its default: not a change
+      { command: "no.such.command", keys: "Ctrl+Alt+F8" }, // an id that is no longer a command
+      { command: "editor.copy", keys: "Ctrl+Alt+F7" }, // keys the editor keeps
+    ]);
+    assert.deepEqual(shortcutOverrides(), [{ command: "tab.new", keys: "Ctrl+Alt+F9" }, { command: "editor.runScript", keys: null }]);
+    assert.equal(commandKeys(byId("tab.new")), "Ctrl+Alt+F9");
+    assert.equal(globalCommandFor(keyPress("F9", { ctrl: true, alt: true }))?.id, "tab.new", "the new keys run it");
+    assert.equal(globalCommandFor(keyPress("t", { ctrl: true })), null, "the old keys stop");
+    assert.equal(commandKeys(byId("editor.runScript")), undefined, "removed");
+    assert.equal(shortcutPlace(byId("editor.runScript")), "none");
+    assert.equal(commandKeys(byId("editor.copy")), "Ctrl+C", "fixed keys keep their default");
+    assert.ok(keysChanged(byId("tab.new")) && !keysChanged(byId("tab.close")));
+    const changes = shortcutOverrides();
+    assert.deepEqual(withKeys(changes, byId("tab.new"), "Ctrl+T"), [{ command: "editor.runScript", keys: null }], "its default again drops the change");
+    assert.deepEqual(withKeys(changes, byId("tab.rename"), null).at(-1), { command: "tab.rename", keys: null });
+  } finally {
+    setShortcutOverrides([]);
+  }
+  assert.equal(commandKeys(byId("tab.new")), "Ctrl+T");
+});
+
+test("a clash is judged by where the keys act (SDB-447)", () => {
+  for (const command of COMMANDS) {
+    if (command.shortcut) assert.equal(shortcutClash(command, command.shortcut), null, `${command.id}: its own default`);
+  }
+  assert.equal(shortcutClash(byId("tab.close"), "Ctrl+T")?.command?.id, "tab.new", "two commands anywhere");
+  assert.equal(shortcutClash(byId("editor.runScript"), "Ctrl+T")?.command?.id, "tab.new", "anywhere takes the editor's keys too");
+  assert.equal(shortcutClash(byId("tab.new"), "Ctrl+Enter")?.command?.id, "editor.run", "and the editor's keys anywhere");
+  assert.equal(shortcutClash(byId("edits.undo"), "Ctrl+Alt+Enter"), null, "the editor and the grid are focused apart");
+  assert.deepEqual(shortcutClash(byId("editor.format"), "Ctrl+C"), { kind: "fixed", command: byId("editor.copy") });
+  assert.deepEqual(shortcutClash(byId("editor.format"), "Ctrl+D"), { kind: "region", key: "selectNextOccurrence", place: "editor" });
+  assert.deepEqual(shortcutClash(byId("edits.undo"), "Ctrl+D"), { kind: "region", key: "fillDown", place: "grid" });
+  assert.equal(shortcutClash(byId("tab.new"), "Ctrl+D"), null, "a focused area's own keys do not stop a command anywhere");
+  assert.deepEqual(shortcutClash(byId("tab.new"), "Ctrl+Tab"), { kind: "region", key: "switchTabs", place: "global" });
+});
+
+test("the dialog writes pressed keys as the registry does (SDB-447)", () => {
+  assert.equal(pressedShortcut(keyPress("a", { ctrl: true })), "Ctrl+A");
+  assert.equal(pressedShortcut(keyPress("a", { meta: true })), "Ctrl+A", "Cmd counts as Ctrl");
+  assert.equal(pressedShortcut(keyPress("F", { shift: true, alt: true })), "Shift+Alt+F");
+  assert.equal(pressedShortcut(keyPress("Enter", { ctrl: true, shift: true })), "Ctrl+Shift+Enter");
+  assert.equal(pressedShortcut(keyPress(" ", { ctrl: true })), "Ctrl+Space");
+  for (const modifier of ["Control", "Shift", "Alt", "Meta", "AltGraph"]) assert.equal(pressedShortcut(keyPress(modifier, { ctrl: true })), null, modifier);
+  for (const keys of ["Ctrl+A", "Shift+Alt+F", "Ctrl+Space", "Ctrl+Shift+Enter"]) {
+    assert.ok(parseShortcut(keys), keys);
+  }
+  assert.ok(matchesShortcut(keyPress(" ", { ctrl: true }), "Ctrl+Space"), "the space bar matches Space");
+});
+
+test("no handler or keymap writes a registry command's keys by hand (SDB-447)", () => {
+  const defaults = new Set();
+  for (const command of COMMANDS) {
+    if (!command.shortcut || command.fixedKeys) continue;
+    defaults.add(command.shortcut.toLowerCase());
+    defaults.add(command.shortcut.split("+").map((part) => (part === "Ctrl" ? "Mod" : part)).join("-").toLowerCase());
+  }
+  for (const file of ["App.tsx", "components/SqlEditor.tsx", "components/ResultGrid.tsx", "components/Sidebar.tsx", "components/TabBar.tsx", "editorActions.ts"]) {
+    const code = read(file);
+    for (const [, literal] of code.matchAll(/["'`]((?:Ctrl|Mod|Shift|Alt)[+-][^"'`\s]+)["'`]/g)) {
+      assert.ok(!defaults.has(literal.toLowerCase()), `${file} writes ${literal}, a command's keys: read them from the registry`);
+    }
+  }
+  assert.match(read("components/SqlEditor.tsx"), /editorKeyBindings\(\)/, "the editor's keymap is the registry's");
+  assert.match(read("components/ResultGrid.tsx"), /commandKeys\(commandSpec\("edits\.undo"\)\)/, "the grid reads undo's keys now");
+  assert.doesNotMatch(read("components/ResultGrid.tsx"), /commandSpec\("[^"]+"\)\.shortcut \?\?/, "never a command's default alone");
+});
+
+test("no command's keys act while a dialog is open, whatever keys the user gave it (SDB-447)", () => {
+  const app = read("App.tsx");
+  const handler = app.slice(app.indexOf("const onKey = (e: KeyboardEvent) =>"));
+  const modal = handler.indexOf("const modal = topDialog();");
+  const run = handler.indexOf("runCommand(command.id");
+  assert.ok(modal > 0 && run > modal, "the global handler looks for an open dialog before it runs a command");
+  assert.match(handler.slice(modal, run), /if \(modal\) \{[\s\S]*return;\s*\}/, "and runs nothing while one is open");
+  const dialog = read("components/ShortcutSettings.tsx");
+  assert.match(dialog, /event\.stopPropagation\(\)/, "keys pressed in the shortcut dialog never reach the app behind it");
 });

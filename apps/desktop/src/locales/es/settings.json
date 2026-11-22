@@ -372,7 +372,7 @@
   },
   "shortcuts": {
     "title": "Atajos de teclado",
-    "hint": "Cada orden de la aplicación y las teclas que la ejecutan. Busca una por su nombre o por sus teclas, como {{example}}.",
+    "hint": "Cada orden de la aplicación y las teclas que la ejecutan. Busca una por su nombre o por sus teclas, como {{example}}, y dale las teclas que prefieras: el cambio es solo tuyo y se guarda al momento.",
     "search": "Buscar por nombre o teclas",
     "searchLabel": "Buscar órdenes",
     "noMatch": "Ninguna orden coincide.",
@@ -381,6 +381,30 @@
       "editor": "Editor SQL",
       "grid": "Cuadrícula de resultados",
       "none": "Sin atajo"
-    }
+    },
+    "resetAll": "Restablecer todos",
+    "resetAllTitle": "¿Restablecer todos los atajos?",
+    "resetAllBody_one": "Se descarta tu cambio en 1 atajo: cada orden vuelve a tener las teclas de la aplicación.",
+    "resetAllBody_other": "Se descartan tus cambios en {{count}} atajos: cada orden vuelve a tener las teclas de la aplicación.",
+    "cancel": "Cancelar",
+    "loadError": "No se pudieron leer tus atajos, así que rigen las teclas de la aplicación: {{detail}}",
+    "changed": "Cambiado",
+    "fixed": "Las gestiona el editor",
+    "change": "Cambiar…",
+    "changeFor": "Cambiar las teclas de {{name}}",
+    "remove": "Quitar",
+    "removeFor": "Quitar el atajo de {{name}}",
+    "reset": "Restablecer",
+    "resetFor": "Devolver a {{name}} sus teclas por defecto",
+    "dialogTitle": "Teclas para {{name}}",
+    "press": "Pulsa las teclas nuevas. {{cancel}} cancela.",
+    "pressedLabel": "Las teclas pulsadas",
+    "waiting": "Esperando teclas…",
+    "clash": "{{keys}} ya ejecuta {{other}}. ¿Pasarlas a {{name}}? {{other}} se queda sin atajo.",
+    "takenFixed": "Estas teclas son {{name}}, que gestiona el editor.",
+    "takenRegion": "Estas teclas ya actúan en {{where}}, donde ninguna orden puede tomarlas.",
+    "move": "Pasar las teclas",
+    "save": "Guardar",
+    "saving": "Guardando…"
   }
 }
