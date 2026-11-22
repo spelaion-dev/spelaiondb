@@ -178,8 +178,15 @@ pub async fn table_order_by(
 }
 
 /// [`table_page_sql`] with the page ordered by [`order_with_key`], the primary key read from
-/// the catalog now.
+/// the catalog now. The session records the statement with its table (SDB-440): a run of it
+/// binds its rows to that table, the only way a table data page's rows become editable.
 pub async fn table_page_sql_by_key(session: &Session, page: &TablePage) -> Result<String, String> {
+    let sql = page_sql_by_key(session, page).await?;
+    crate::edit::record_table_page(session, &page.schema, &page.name, &sql).await;
+    Ok(sql)
+}
+
+async fn page_sql_by_key(session: &Session, page: &TablePage) -> Result<String, String> {
     let key = session
         .connection()
         .describe_table(&page.schema, &page.name)
@@ -213,7 +220,11 @@ pub async fn table_rows_sql_by_key(
         .unwrap_or_default();
     let dialect = session.dialect();
     let order = order_with_key(dialect.as_ref(), order_by, &key);
-    table_export_sql(dialect.as_ref(), schema, name, filter, &order).map_err(|e| e.to_string())
+    let sql = table_export_sql(dialect.as_ref(), schema, name, filter, &order)
+        .map_err(|e| e.to_string())?;
+    // Bound to its table like a page (SDB-440).
+    crate::edit::record_table_page(session, schema, name, &sql).await;
+    Ok(sql)
 }
 
 /// The last page of a table data tab, from its rows counted now.

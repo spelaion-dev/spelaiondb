@@ -81,6 +81,7 @@ mod sql_mode;
 mod startup;
 mod table_data;
 mod table_filters;
+mod table_pages;
 mod table_stats;
 mod temporal;
 #[cfg(all(test, unix))]

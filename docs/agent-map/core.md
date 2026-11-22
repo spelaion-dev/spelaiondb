@@ -253,7 +253,10 @@
   An editable query result also keeps the table it was matched to (`ResultTable`, SDB-433,
   ADR-061): the desktop's edit commands get their target and table only from
   `result_edit_table`, which refuses another table's name and an identity (`table_identity`)
-  that changed since the result was found editable.
+  that changed since the result was found editable. A table data page is bound the same way
+  when it runs the SELECT the core wrote for it (`table_pages.rs`, SDB-440): the session
+  records each page statement it writes. `result_edit_table` refuses any result left unbound.
+  Edits to a result must never trust a table name that the page passes.
   `masking.rs` is column masking (ADR-051): the session compiles the connection's rules
   (`spelaion-config::masking` combines its `[masking]`, the user's `user.toml` and its type's
   `mask_columns`; required patterns only add up) and `ResultStore` masks every batch as it

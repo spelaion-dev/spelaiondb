@@ -273,6 +273,9 @@ pub struct Session {
     /// The server a PostgreSQL session reached (SDB-169), read by [`crate::open_connection`]
     /// when it opens; `None` for the other engines and for sessions built without it.
     server_family: Option<crate::ServerFamily>,
+    /// The table data page statements the core wrote on this session, with their tables: a
+    /// run that sends one binds its results to that table (SDB-440).
+    table_pages: Arc<crate::table_pages::TablePages>,
 }
 
 /// A session's cancel, owned ([`Session::canceller`]). It is the session's own: the run sees
@@ -380,7 +383,13 @@ impl Session {
             session_read_only: AtomicBool::new(false),
             server_family: None,
             transaction_pooled: false,
+            table_pages: Arc::default(),
         }
+    }
+
+    /// Records a table data page statement the core wrote, with the table it reads (SDB-440).
+    pub(crate) fn record_table_page(&self, sql: &str, table: crate::results::ResultTable) {
+        self.table_pages.record(sql, table);
     }
 
     /// The session reaches PostgreSQL through a pooler in transaction mode (SDB-396): each
@@ -925,6 +934,7 @@ impl Session {
             RunKind::Parsed | RunKind::Metadata => false,
         };
         let session_id = self.id;
+        let table_pages = self.table_pages.clone();
         let can_change = database_can_change(engine);
         let mut options = self.options.clone();
         // Masking matches each column's origin too (ADR-052): ask the driver for it.
@@ -1192,6 +1202,12 @@ impl Session {
                                             session: session_id,
                                             database: database.clone(),
                                         }));
+                                        // A table data page the core wrote reads its table
+                                        // (SDB-440): its rows are bound to it, and only then
+                                        // are they editable.
+                                        if let Some(table) = table_pages.table_of(text) {
+                                            results.bind_table_of(result, table);
+                                        }
                                     }
                                     created.push(result);
                                     current = Some(result);
