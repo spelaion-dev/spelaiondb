@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useShallow } from "zustand/react/shallow";
 import { ExportDialog } from "./components/ExportDialog";
 import { BackupDialog } from "./components/BackupDialog";
 import { ImportDialog } from "./components/ImportDialog";
@@ -49,7 +50,9 @@ const ACTIVITY_WIDTH = 48;
 export default function App() {
   useModalFocus();
   const { t } = useTranslation(["app", "shell", "settings", "editor"]);
-  const tabs = useApp((s) => s.tabs);
+  // Only the tabs' ids: a change inside one tab (its run, its connection) re-renders that tab's
+  // panel, never the whole window (SDB-110).
+  const tabIds = useApp(useShallow((s) => s.tabs.map((tab) => tab.id)));
   const activeTab = useApp((s) => s.activeTab);
   const historyOpen = useApp((s) => s.historyOpen);
   const snippetsOpen = useApp((s) => s.snippetsOpen);
@@ -75,7 +78,7 @@ export default function App() {
   // Opening or switching a query tab (from history, a shortcut…) leaves the MCP page.
   useEffect(() => {
     setSidebarSection((section) => (section === "mcp" ? "connections" : section));
-  }, [activeTab, tabs.length]);
+  }, [activeTab, tabIds.length]);
   const selectedProcessConnection = connections.find((connection) => connection.id === processConnection);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
@@ -229,7 +232,7 @@ export default function App() {
         <TabBar hidden={sidebarSection === "processes" || sidebarSection === "mcp"} />
         <div className="workspace-content">
           <div className="editor-workspace" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
-            {tabs.length === 0 ? (
+            {tabIds.length === 0 ? (
               <div className="welcome">
                 <p className="welcome-eyebrow">{t("welcomeEyebrow")}</p>
                 <h1>SpelaionDB</h1>
@@ -243,14 +246,8 @@ export default function App() {
                 <p className="welcome-shortcut">{t("commands.paletteHint", { shortcut: commandSpec("palette.show").shortcut })}</p>
               </div>
             ) : (
-              tabs.map((t) => (
-                // All mounted (the editor keeps its state); only the active one is visible.
-                <div key={t.id} className="tab-panel" hidden={t.id !== activeTab}>
-                  <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
-                    {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
-                  </ScreenBoundary>
-                </div>
-              ))
+              // All mounted (the editor keeps its state); only the active one is visible.
+              tabIds.map((id) => <TabPanel key={id} id={id} active={id === activeTab} />)
             )}
           </div>
           {sidebarSection === "processes" && (selectedProcessConnection
@@ -279,6 +276,20 @@ export default function App() {
     </div>
   );
 }
+
+/** One tab's panel. It reads its own tab, and is memoized on its id and visibility, so a change
+ *  to one tab (a run's progress, its connection) re-renders only that tab (SDB-110). */
+const TabPanel = memo(function TabPanel({ id, active }: { id: string; active: boolean }) {
+  const t = useApp((s) => s.tabs.find((tab) => tab.id === id));
+  if (!t) return null;
+  return (
+    <div className="tab-panel" hidden={!active}>
+      <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
+        {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
+      </ScreenBoundary>
+    </div>
+  );
+});
 
 /** A welcome screen action: a command of the registry, named as in the palette. */
 function WelcomeButton({ command, primary = false }: { command: CommandId; primary?: boolean }) {

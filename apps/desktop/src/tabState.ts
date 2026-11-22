@@ -214,7 +214,13 @@ export function connectionInUse(tabs: Tab[], connectionId: string): boolean {
 
 /** The connection is open, for the explorer: its own session, or a connected tab's. */
 export function connectionOpen(tabs: Tab[], explorerConnected: string[], connectionId: string): boolean {
-  return explorerConnected.includes(connectionId) || tabs.some((tab) => tab.connectionId === connectionId && isConnected(tab));
+  return explorerConnected.includes(connectionId) || connectedConnections(tabs).includes(connectionId);
+}
+
+/** The connections a connected tab uses, in tab order (repeated when several tabs share one):
+ *  what a list that marks open connections subscribes to, so a tab's run does not re-render it. */
+export function connectedConnections(tabs: Tab[]): string[] {
+  return tabs.flatMap((tab) => (tab.connectionId !== null && isConnected(tab) ? [tab.connectionId] : []));
 }
 
 /** The explorer's own session on the connection is open (what the data search and the

@@ -3593,6 +3593,45 @@ try {
     await shown.locator(".editor-pane").waitFor({ state: "hidden" });
     await shown.getByRole("button", { name: "Restore the editor (Ctrl+Alt+M)" }).click();
     await shown.locator(".editor-pane").waitFor({ state: "visible" });
+    // Each tab item reads its own tab (SDB-110): with the copy running, two new tabs open and the
+    // newest is dragged in front of the copy; the copy keeps its spinner, the moved tab its dot.
+    const tabNamed = (name) => tabs.filter({ has: page.locator(".tab-label").getByText(name, { exact: true }) });
+    const runningCopy = tabNamed("Orders report (copy)");
+    await replaceQuery(shown, "with recursive spin(i) as (select 1 union all select i + 1 from spin) select count(*) from spin;");
+    await run(shown);
+    await runningCopy.locator(".tab-running").waitFor();
+    const beforeNew = await tabs.count();
+    const newQuery = page.getByRole("button", { name: "New query (Ctrl+T)" });
+    await newQuery.click();
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 1, beforeNew);
+    const firstNew = await activeLabel();
+    await newQuery.click();
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 2, beforeNew);
+    const moved = await activeLabel();
+    const order = await labels();
+    const copyAt = order.indexOf("Orders report (copy)");
+    await dragTab(order.indexOf(moved), copyAt, "left", tabs.nth(copyAt).and(page.locator(".drop-before")));
+    await page.mouse.up();
+    await page.locator(".tabbar .tab.dragging").waitFor({ state: "detached" });
+    const reordered = await labels();
+    assert.equal(reordered.indexOf(moved), copyAt, reordered.join(" | "));
+    assert.equal(reordered.indexOf("Orders report (copy)"), copyAt + 1, reordered.join(" | "));
+    assert.equal(await activeLabel(), moved);
+    await runningCopy.locator(".tab-running").waitFor();
+    await tabNamed(moved).locator(".dot").waitFor();
+    assert.equal(await tabNamed(moved).locator(".tab-running").count(), 0);
+    await shot("sdb-110-tab-reorder-running");
+    // The two new tabs closed, the copy's run cancelled: as the steps below expect.
+    for (const name of [moved, firstNew]) {
+      await tabNamed(name).hover();
+      await tabNamed(name).locator("button.close").click();
+      await tabNamed(name).waitFor({ state: "detached" });
+    }
+    assert.equal(await tabs.count(), beforeNew);
+    await runningCopy.click();
+    await shown.getByRole("button", { name: "Cancel", exact: true }).click();
+    await runningCopy.locator(".tab-running").waitFor({ state: "detached" });
+    await runningCopy.locator(".dot-connected").waitFor();
     // Back as it was for the next steps: the copy closed, the original unpinned.
     await page.keyboard.press("Control+w");
     await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, beforeCopy);

@@ -105,6 +105,12 @@
   use", "open for the explorer", "a question is open"); `scripts/tab-state.test.mjs` fails the
   build when a file other than `tabState.ts` or `store.ts` reads the raw fields or writes a
   connection state by hand.
+  SDB-110: a run's progress changes its tab several times a second, so nothing that is always
+  mounted subscribes to `s.tabs` itself. `App` and `TabBar` take the tabs' ids
+  (`useShallow`), each `TabPanel` and `TabItem` reads its own tab (the item only the plain values
+  it shows), and the explorer reads `connectedConnections` and a string of the active tab. A run
+  update then re-renders only that tab's panel: measure a change here by counting renders with
+  several tabs open, as SDB-110's pull request did.
   An editor tab's run state reaches the page as the `runChanged` event (`RunStateItem`,
   forwarded by `forward_run` only while the session is the tab's, SDB-370) and is kept as the
   tab's `runState`: the status line says "Paused at statement 3" and "Cancelling…" from it
