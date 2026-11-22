@@ -1,10 +1,11 @@
 // Editor-local key chords derive their names and shortcuts from the central registry.
-import { COMMANDS, menuCommands } from "./commandRegistry.ts";
+import { COMMANDS, type CommandSpec } from "./commandRegistry.ts";
 import { BUILT_IN_SNIPPETS } from "./editorSnippets.ts";
 
-type EditorActionCommand = Extract<(typeof COMMANDS)[number], { menus: readonly ["editor"]; shortcut: string }>;
+type EditorActionCommand = Extract<(typeof COMMANDS)[number], { editorAction: true; shortcut: string }>;
 export type EditorActionId = EditorActionCommand["id"] extends `editor.${infer Action}` ? Action : never;
-export const EDITOR_ACTIONS = menuCommands("editor").filter((command) => command.shortcut !== undefined).map((command) => ({
+/** The editor's own key chords (`editorAction` in the registry), bound by its keymap. */
+export const EDITOR_ACTIONS = (COMMANDS as readonly CommandSpec[]).filter((command) => command.editorAction && command.shortcut !== undefined).map((command) => ({
   id: command.id.slice("editor.".length) as EditorActionId,
   shortcut: command.shortcut!,
   key: command.shortcut!.split("+").map((part, index, parts) => part === "Ctrl" ? "Mod" : index === parts.length - 1 && part.length === 1 ? part.toLowerCase() : part).join("-"),

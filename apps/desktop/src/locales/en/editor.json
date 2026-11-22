@@ -1,5 +1,13 @@
 {
   "connection": "Connection",
+  "editorMenu": {
+    "run": "Run",
+    "selection": "Selection",
+    "insert": "Insert",
+    "goTo": "Go to",
+    "view": "View",
+    "session": "Session"
+  },
   "database": "Database",
   "noDatabase": "— No database —",
   "loadingDatabases": "Loading databases…",
@@ -1002,6 +1010,10 @@
     "quotedList": "Lines to quoted list",
     "selectStatement": "Select current statement",
     "copyStatement": "Copy current statement",
+    "cut": "Cut",
+    "copy": "Copy",
+    "paste": "Paste",
+    "selectAll": "Select all",
     "selectOccurrences": "Select all occurrences",
     "openObject": "Go to table",
     "revealInExplorer": "Reveal in explorer",

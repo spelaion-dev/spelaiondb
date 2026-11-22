@@ -12,8 +12,24 @@
 // are not app commands: the palette reaches database objects with their own actions
 // (`PaletteObjectAction` in `commands.ts`).
 
-/** Where else a command appears, besides the palette. */
-export type CommandMenu = "tab" | "file" | "activity" | "welcome" | "editor" | "result";
+/** Where else a command appears, besides the palette. The SQL editor's menu has its own
+ *  place, with groups and submenus (`editorMenu`). */
+export type CommandMenu = "tab" | "file" | "activity" | "welcome" | "result";
+
+/** The SQL editor menu's groups, in order, divided by separators (SDB-438). */
+export const EDITOR_MENU_GROUPS = ["run", "clipboard", "edit", "navigate", "view"] as const;
+export type EditorMenuGroup = (typeof EDITOR_MENU_GROUPS)[number];
+
+/** The SQL editor menu's submenus; each one's name is `editor:editorMenu.<submenu>`. */
+export type EditorSubmenu = "run" | "selection" | "insert" | "goTo" | "view" | "session";
+
+/** Where a command sits in the SQL editor's menu. */
+export interface EditorMenuPlace {
+  group: EditorMenuGroup;
+  submenu?: EditorSubmenu;
+  /** It starts a new part of its submenu, after a separator. */
+  section?: true;
+}
 
 /**
  * Who handles the shortcut: `global` ones `App.tsx`'s handler (they do nothing while a modal is
@@ -33,6 +49,10 @@ export interface CommandSpec {
   shortcut?: string;
   scope?: ShortcutScope;
   menus?: readonly CommandMenu[];
+  /** Its place in the SQL editor's menu (the right click, the Menu key and the ☰ button). */
+  editorMenu?: EditorMenuPlace;
+  /** One of the SQL editor's own key chords: its keymap binds the shortcut (`editorActions.ts`). */
+  editorAction?: true;
   /** The palette's own entry: not listed in the palette. */
   hidden?: boolean;
 }
@@ -68,11 +88,15 @@ export const COMMANDS = [
   { id: "file.save", category: "file", label: "app:tabs.saveFile", shortcut: "Ctrl+S", scope: "global", menus: ["tab"] },
   { id: "file.saveAs", category: "file", label: "app:tabs.saveFileAs", shortcut: "Ctrl+Shift+S", scope: "global", menus: ["tab"] },
   { id: "file.reload", category: "file", label: "app:tabs.reloadFile", menus: ["tab"] },
-  { id: "editor.run", category: "editor", label: "editor:run", shortcut: "Ctrl+Enter", scope: "editor" },
-  { id: "editor.explain", category: "editor", label: "editor:plan.explain", menus: ["editor"] },
-  { id: "editor.runScript", category: "editor", label: "editor:runScript", shortcut: "Ctrl+Shift+Enter", scope: "editor" },
-  { id: "editor.runFromCursor", category: "editor", label: "editor:actions.runFromCursor", shortcut: "Ctrl+Alt+Enter", scope: "editor", menus: ["editor"] },
-  { id: "editor.runNewTab", category: "editor", label: "editor:actions.runNewTab", shortcut: "Alt+Enter", scope: "editor", menus: ["editor"] },
+  // The SQL editor's commands. `editorMenu` places one in the editor's menu (SDB-438): its group,
+  // the submenu it is in, and `section` where a submenu starts a new part. A group lists its own
+  // commands first and then its submenus, each in this order. `editorAction` ones are the
+  // editor's own key chords (its keymap binds them, `editorActions.ts`).
+  { id: "editor.run", category: "editor", label: "editor:run", shortcut: "Ctrl+Enter", scope: "editor", editorMenu: { group: "run" } },
+  { id: "editor.runScript", category: "editor", label: "editor:runScript", shortcut: "Ctrl+Shift+Enter", scope: "editor", editorMenu: { group: "run", submenu: "run" } },
+  { id: "editor.runFromCursor", category: "editor", label: "editor:actions.runFromCursor", shortcut: "Ctrl+Alt+Enter", scope: "editor", editorAction: true, editorMenu: { group: "run", submenu: "run" } },
+  { id: "editor.runNewTab", category: "editor", label: "editor:actions.runNewTab", shortcut: "Alt+Enter", scope: "editor", editorAction: true, editorMenu: { group: "run" } },
+  { id: "editor.explain", category: "editor", label: "editor:plan.explain", editorMenu: { group: "run" } },
   // A result tab's menu (SDB-378): they act on the tab's active result.
   { id: "results.rerun", category: "data", label: "editor:resultTabs.rerun", menus: ["result"] },
   { id: "results.pin", category: "data", label: "editor:resultTabs.pin", menus: ["result"] },
@@ -80,37 +104,43 @@ export const COMMANDS = [
   { id: "results.resetName", category: "data", label: "editor:resultTabs.resetName", menus: ["result"] },
   { id: "results.close", category: "data", label: "editor:resultTabs.close", menus: ["result"] },
   { id: "editor.cancel", category: "editor", label: "app:commands.cancelQuery" },
-  { id: "editor.variables", category: "editor", label: "editor:variables.command", menus: ["editor"] },
-  // The tab's own session (SDB-395): a new one on request, nothing re-run (ADR-028); and the
-  // barrier of a read-only connection for it alone (ADR-053).
-  { id: "editor.reconnect", category: "editor", label: "editor:session.reconnect", menus: ["editor"] },
-  { id: "editor.sessionReadOnly", category: "editor", label: "editor:session.readOnly", menus: ["editor"] },
-  { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor" },
-  { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", menus: ["editor"] },
-  { id: "editor.blockComment", category: "editor", label: "editor:actions.blockComment", shortcut: "Shift+Alt+A", scope: "editor", menus: ["editor"] },
-  { id: "editor.wordWrap", category: "editor", label: "editor:actions.wordWrap", shortcut: "Alt+Z", scope: "editor", menus: ["editor"] },
-  { id: "editor.fold", category: "editor", label: "editor:actions.fold", shortcut: "Ctrl+Shift+[", scope: "editor", menus: ["editor"] },
-  { id: "editor.unfold", category: "editor", label: "editor:actions.unfold", shortcut: "Ctrl+Shift+]", scope: "editor", menus: ["editor"] },
-  { id: "editor.matchingBracket", category: "editor", label: "editor:actions.matchingBracket", shortcut: "Ctrl+Shift+\\", scope: "editor", menus: ["editor"] },
-  { id: "editor.upperCase", category: "editor", label: "editor:actions.upperCase", shortcut: "Ctrl+Shift+Alt+U", scope: "editor", menus: ["editor"] },
-  { id: "editor.lowerCase", category: "editor", label: "editor:actions.lowerCase", shortcut: "Ctrl+Shift+Alt+L", scope: "editor", menus: ["editor"] },
-  { id: "editor.quotedList", category: "editor", label: "editor:actions.quotedList", shortcut: "Ctrl+Alt+Q", scope: "editor", menus: ["editor"] },
-  { id: "editor.selectStatement", category: "editor", label: "editor:actions.selectStatement", shortcut: "Ctrl+Alt+S", scope: "editor", menus: ["editor"] },
-  { id: "editor.copyStatement", category: "editor", label: "editor:actions.copyStatement", shortcut: "Ctrl+Alt+C", scope: "editor", menus: ["editor"] },
-  { id: "editor.selectOccurrences", category: "editor", label: "editor:actions.selectOccurrences", shortcut: "Ctrl+Shift+L", scope: "editor", menus: ["editor"] },
-  { id: "editor.openObject", category: "editor", label: "editor:actions.openObject", shortcut: "F12", scope: "editor", menus: ["editor"] },
-  { id: "editor.revealInExplorer", category: "editor", label: "editor:actions.revealInExplorer", shortcut: "Shift+Alt+E", scope: "editor", menus: ["editor"] },
-  { id: "editor.nextStatement", category: "editor", label: "editor:actions.nextStatement", shortcut: "Alt+PageDown", scope: "editor", menus: ["editor"] },
-  { id: "editor.previousStatement", category: "editor", label: "editor:actions.previousStatement", shortcut: "Alt+PageUp", scope: "editor", menus: ["editor"] },
-  { id: "editor.outline", category: "editor", label: "editor:actions.outline", shortcut: "Ctrl+Shift+O", scope: "editor", menus: ["editor"] },
-  { id: "editor.insertSelect", category: "editor", label: "editor:actions.insertSelect", shortcut: "Ctrl+Alt+1", scope: "editor", menus: ["editor"] },
-  { id: "editor.insertInsert", category: "editor", label: "editor:actions.insertInsert", shortcut: "Ctrl+Alt+2", scope: "editor", menus: ["editor"] },
-  { id: "editor.insertUpdate", category: "editor", label: "editor:actions.insertUpdate", shortcut: "Ctrl+Alt+3", scope: "editor", menus: ["editor"] },
+  { id: "editor.variables", category: "editor", label: "editor:variables.command", editorMenu: { group: "run", submenu: "run" } },
+  // The clipboard: the editor's own keys, written here so the menu and the palette have them;
+  // the keymap leaves them to the editor itself.
+  { id: "editor.cut", category: "editor", label: "editor:actions.cut", shortcut: "Ctrl+X", scope: "editor", editorMenu: { group: "clipboard" } },
+  { id: "editor.copy", category: "editor", label: "editor:actions.copy", shortcut: "Ctrl+C", scope: "editor", editorMenu: { group: "clipboard" } },
+  { id: "editor.paste", category: "editor", label: "editor:actions.paste", shortcut: "Ctrl+V", scope: "editor", editorMenu: { group: "clipboard" } },
+  { id: "editor.copyStatement", category: "editor", label: "editor:actions.copyStatement", shortcut: "Ctrl+Alt+C", scope: "editor", editorAction: true, editorMenu: { group: "clipboard" } },
+  { id: "editor.selectAll", category: "editor", label: "editor:actions.selectAll", shortcut: "Ctrl+A", scope: "editor", editorMenu: { group: "clipboard" } },
+  { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor", editorMenu: { group: "edit" } },
+  { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", editorAction: true, editorMenu: { group: "edit" } },
+  { id: "editor.blockComment", category: "editor", label: "editor:actions.blockComment", shortcut: "Shift+Alt+A", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection" } },
+  { id: "editor.upperCase", category: "editor", label: "editor:actions.upperCase", shortcut: "Ctrl+Shift+Alt+U", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection" } },
+  { id: "editor.lowerCase", category: "editor", label: "editor:actions.lowerCase", shortcut: "Ctrl+Shift+Alt+L", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection" } },
+  { id: "editor.quotedList", category: "editor", label: "editor:actions.quotedList", shortcut: "Ctrl+Alt+Q", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection" } },
+  { id: "editor.selectStatement", category: "editor", label: "editor:actions.selectStatement", shortcut: "Ctrl+Alt+S", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection", section: true } },
+  { id: "editor.selectOccurrences", category: "editor", label: "editor:actions.selectOccurrences", shortcut: "Ctrl+Shift+L", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection" } },
+  { id: "editor.fold", category: "editor", label: "editor:actions.fold", shortcut: "Ctrl+Shift+[", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection", section: true } },
+  { id: "editor.unfold", category: "editor", label: "editor:actions.unfold", shortcut: "Ctrl+Shift+]", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "selection" } },
+  { id: "editor.insertSelect", category: "editor", label: "editor:actions.insertSelect", shortcut: "Ctrl+Alt+1", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "insert" } },
+  { id: "editor.insertInsert", category: "editor", label: "editor:actions.insertInsert", shortcut: "Ctrl+Alt+2", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "insert" } },
+  { id: "editor.insertUpdate", category: "editor", label: "editor:actions.insertUpdate", shortcut: "Ctrl+Alt+3", scope: "editor", editorAction: true, editorMenu: { group: "edit", submenu: "insert" } },
+  { id: "editor.openObject", category: "editor", label: "editor:actions.openObject", shortcut: "F12", scope: "editor", editorAction: true, editorMenu: { group: "navigate" } },
+  { id: "editor.revealInExplorer", category: "editor", label: "editor:actions.revealInExplorer", shortcut: "Shift+Alt+E", scope: "editor", editorAction: true, editorMenu: { group: "navigate" } },
+  { id: "editor.nextStatement", category: "editor", label: "editor:actions.nextStatement", shortcut: "Alt+PageDown", scope: "editor", editorAction: true, editorMenu: { group: "navigate", submenu: "goTo" } },
+  { id: "editor.previousStatement", category: "editor", label: "editor:actions.previousStatement", shortcut: "Alt+PageUp", scope: "editor", editorAction: true, editorMenu: { group: "navigate", submenu: "goTo" } },
+  { id: "editor.matchingBracket", category: "editor", label: "editor:actions.matchingBracket", shortcut: "Ctrl+Shift+\\", scope: "editor", editorAction: true, editorMenu: { group: "navigate", submenu: "goTo" } },
+  { id: "editor.outline", category: "editor", label: "editor:actions.outline", shortcut: "Ctrl+Shift+O", scope: "editor", editorAction: true, editorMenu: { group: "navigate", submenu: "goTo" } },
+  { id: "editor.wordWrap", category: "editor", label: "editor:actions.wordWrap", shortcut: "Alt+Z", scope: "editor", editorAction: true, editorMenu: { group: "view", submenu: "view" } },
   // The editor's zoom (SDB-389), a personal preference: the editor also takes Ctrl++ for zoom in
   // (the + key, the keypad's, or Shift with =), and the webview's own zoom keys are off.
-  { id: "editor.zoomIn", category: "editor", label: "editor:actions.zoomIn", shortcut: "Ctrl+=", scope: "editor", menus: ["editor"] },
-  { id: "editor.zoomOut", category: "editor", label: "editor:actions.zoomOut", shortcut: "Ctrl+-", scope: "editor", menus: ["editor"] },
-  { id: "editor.zoomReset", category: "editor", label: "editor:actions.zoomReset", shortcut: "Ctrl+0", scope: "editor", menus: ["editor"] },
+  { id: "editor.zoomIn", category: "editor", label: "editor:actions.zoomIn", shortcut: "Ctrl+=", scope: "editor", editorAction: true, editorMenu: { group: "view", submenu: "view" } },
+  { id: "editor.zoomOut", category: "editor", label: "editor:actions.zoomOut", shortcut: "Ctrl+-", scope: "editor", editorAction: true, editorMenu: { group: "view", submenu: "view" } },
+  { id: "editor.zoomReset", category: "editor", label: "editor:actions.zoomReset", shortcut: "Ctrl+0", scope: "editor", editorAction: true, editorMenu: { group: "view", submenu: "view" } },
+  // The tab's own session (SDB-395): a new one on request, nothing re-run (ADR-028); and the
+  // barrier of a read-only connection for it alone (ADR-053).
+  { id: "editor.reconnect", category: "editor", label: "editor:session.reconnect", editorMenu: { group: "view", submenu: "session" } },
+  { id: "editor.sessionReadOnly", category: "editor", label: "editor:session.readOnly", editorMenu: { group: "view", submenu: "session" } },
   { id: "view.explorer", category: "view", label: "shell:connections", menus: ["activity"] },
   { id: "view.explorerFilter", category: "view", label: "app:commands.explorerFilter", shortcut: "Ctrl+Shift+F", scope: "global" },
   { id: "view.erDiagram", category: "view", label: "app:commands.erDiagram" },
@@ -144,6 +174,39 @@ export function paletteCommands(): CommandSpec[] {
 /** The commands a menu shows. */
 export function menuCommands(menu: CommandMenu): CommandSpec[] {
   return COMMANDS.filter((command: CommandSpec) => command.menus?.includes(menu) ?? false);
+}
+
+/** A row of the SQL editor's menu: a command, or a submenu with its commands. */
+export type EditorMenuEntry =
+  | { kind: "command"; id: CommandId }
+  | { kind: "submenu"; submenu: EditorSubmenu; items: { id: CommandId; section: boolean }[] };
+
+/**
+ * The SQL editor's menu, group by group (separators go between them): each group's own
+ * commands first, then its submenus, all in the registry's order (SDB-438).
+ */
+export function editorMenu(): EditorMenuEntry[][] {
+  const placed = (COMMANDS as readonly CommandSpec[]).filter((command) => command.editorMenu);
+  return EDITOR_MENU_GROUPS.map((group) => {
+    const inGroup = placed.filter((command) => command.editorMenu!.group === group);
+    const own: EditorMenuEntry[] = inGroup
+      .filter((command) => !command.editorMenu!.submenu)
+      .map((command) => ({ kind: "command", id: command.id as CommandId }));
+    const submenus: EditorMenuEntry[] = [];
+    for (const command of inGroup) {
+      const submenu = command.editorMenu!.submenu;
+      if (!submenu) continue;
+      let entry = submenus.find((item) => item.kind === "submenu" && item.submenu === submenu);
+      if (!entry) submenus.push((entry = { kind: "submenu", submenu, items: [] }));
+      if (entry.kind === "submenu") entry.items.push({ id: command.id as CommandId, section: command.editorMenu!.section === true });
+    }
+    return [...own, ...submenus];
+  });
+}
+
+/** Every command the SQL editor's menu reaches, submenus included. */
+export function editorMenuCommands(): CommandSpec[] {
+  return (COMMANDS as readonly CommandSpec[]).filter((command) => command.editorMenu);
 }
 
 /**
