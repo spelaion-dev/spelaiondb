@@ -57,8 +57,9 @@ Download the installer for your system from the
 
 - **Windows:** `SpelaionDB_<version>_x64-setup.exe` (current user, no admin rights) or the
   `.msi`. Not signed yet: SmartScreen may ask, "More info" → "Run anyway".
-- **macOS:** the `.dmg` for Apple Silicon (`aarch64`) or Intel (`x64`). Not notarized yet:
-  right-click → Open the first time.
+- **macOS:** the `.dmg` for Apple Silicon (`aarch64`) or Intel (`x64`). Not notarized yet: on
+  macOS 15 (Sequoia) and later, open it once, then System Settings → Privacy & Security →
+  "Open Anyway" and confirm; on earlier versions, right-click → Open the first time.
 - **Linux:** `.deb`, `.rpm` or AppImage.
 - **CLI and MCP server:** the `spelaiondb-<version>-<target>` archives hold the `spelaiondb` binary.
 
