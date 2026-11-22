@@ -303,6 +303,15 @@ export const EDITS_COMMAND_EVENT = "spelaion:edits-command";
  *  detail is `{ result, command }`. */
 export const GRID_COMMAND_EVENT = "spelaion:grid-command";
 
+/** What the palette asks of a result's grid: "Go to row", or an action on its selection
+ *  (SDB-441), done as the grid's own menu does it. */
+export type GridCommand =
+  | { kind: "goToRow" }
+  | { kind: "copy"; format: "tsv" | "csv" | "json" | "markdown" | "inList" | "html" | "sqlInsert"; header: boolean }
+  | { kind: "copySpecial" }
+  | { kind: "copyUpdates" }
+  | { kind: "exportSelection" };
+
 /** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
 export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;
 

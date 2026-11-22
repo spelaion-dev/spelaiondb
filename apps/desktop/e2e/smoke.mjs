@@ -1120,6 +1120,17 @@ try {
   await panel.getByRole("menuitem", { name: "Copy as SQL INSERT" }).click();
   const tuples = json.map((row) => `('${row.country.replaceAll("'", "''")}')`).join(",\n  ");
   assert.equal(await copied(6), `INSERT INTO table_name (country) VALUES ${tuples};\n`);
+  {
+    // The same copy from the command palette, on the selection still there (SDB-441).
+    await page.keyboard.press("Control+Shift+P");
+    const commandPalette = page.getByRole("dialog", { name: "Command palette" });
+    await commandPalette.getByRole("combobox").fill("selected cells as an in list");
+    const first = commandPalette.getByRole("listbox", { name: "Commands and objects" }).getByRole("option").first();
+    assert.equal(await first.locator(".palette-label").innerText(), "Table data: Copy the selected cells as an IN list");
+    await page.keyboard.press("Enter");
+    await commandPalette.waitFor({ state: "detached" });
+    assert.match(await copied(7), /^\('[^']+', '[^']+', '[^']+'\)$/);
+  }
 
   step("copy special: a custom delimiter, quote, row delimiter and row numbers, kept as the copy defaults (SDB-388)");
   {
@@ -1155,7 +1166,7 @@ try {
     }, themeBefore);
     await dialog.getByRole("button", { name: "Copy", exact: true }).click();
     await dialog.waitFor({ state: "detached" });
-    const lines = (await copied(7)).split("\r\n");
+    const lines = (await copied(8)).split("\r\n");
     assert.deepEqual(lines[0].split("~"), ["#", "country", "orders"]);
     assert.equal(lines.length, 4, lines.join("|"));
     assert.equal(lines[1].split("~")[0], "1");
@@ -1178,7 +1189,7 @@ try {
     await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
     await panel.getByRole("menuitem", { name: "Copy as SQL UPDATE" }).click();
     await panel.getByRole("status").filter({ hasText: "Could not copy as UPDATE: the result is not a plain SELECT of one table" }).waitFor();
-    assert.equal(await page.evaluate(() => window.__copied.length), 7);
+    assert.equal(await page.evaluate(() => window.__copied.length), 8);
   }
 
   step("export: the loaded result, every row run again with CSV options, and a selection");
@@ -4482,6 +4493,24 @@ try {
     await palette.waitFor({ state: "detached" });
     await ddl.getByRole("button", { name: "Close" }).click();
     await ddl.waitFor({ state: "detached" });
+  }
+  {
+    // A schema the explorer read is a palette object too, with its menu's actions (SDB-441).
+    await page.keyboard.press("Control+Shift+P");
+    await paletteBox.fill("main");
+    const schemaEntry = paletteResults.locator(".palette-item", { has: page.locator(".palette-detail", { hasText: /^Schema · Shop \(SQLite\)$/ }) });
+    await schemaEntry.waitFor();
+    await schemaEntry.click();
+    const schemaActions = await paletteLabels();
+    assert.equal(schemaActions[0], "New console");
+    for (const label of ["Copy name", "Copy qualified name"]) assert.ok(schemaActions.includes(label), `${label} in ${schemaActions.join(", ")}`);
+    assert.equal(schemaActions.at(-1), "Show in explorer");
+    await paletteBox.fill("copy name");
+    assert.equal((await paletteLabels())[0], "Copy name");
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Enter");
+    await palette.waitFor({ state: "detached" });
+    assert.equal(await copied(before + 1), "main");
   }
   {
     // Copy diagnostic info (SDB-398): the version and the engines in use are there; no

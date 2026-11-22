@@ -248,7 +248,10 @@
     "findCount_other": "{{total}} coincidencias",
     "findWhenComplete": "Se podrá buscar en el resultado cuando lleguen todas las filas",
     "summary": "{{ok}} OK, {{failed}} fallidas, {{notRun}} sin ejecutar",
-    "exportSelection": "Exportar selección…"
+    "exportSelection": "Exportar selección…",
+    "selectFirst": "Selecciona antes celdas en los resultados",
+    "noUpdateSource": "estas filas no son de una sola tabla",
+    "exportSelectionBlock": "Para exportarlas, selecciona un solo bloque de celdas y espera a que termine la consulta"
   },
   "messages": {
     "connectionLost": "Se perdió la conexión: {{detail}}. No se ejecutó nada. Reconecta y vuelve a ejecutarlo: nada se repite solo.",

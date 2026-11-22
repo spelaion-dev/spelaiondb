@@ -4,7 +4,7 @@
 // Everything here is UI: anything that reaches a database goes through the same core commands
 // as the buttons and menus it stands for.
 
-import { call, commands as core, type ConnectionItem, type ObjectItem, type SchemaObjectItem } from "./api";
+import { call, commands as core, type ConnectionItem, type NameFilter, type ObjectItem, type SchemaObjectItem } from "./api";
 import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./commandRegistry";
 import { closeQueryTab, connectTabFromExplorer, explorerDatabase, newQueryOnConnection } from "./connect";
 import { readClipboardText } from "./clipboardText";
@@ -15,7 +15,7 @@ import { openSavedPlan } from "./planFiles";
 import { openDiagram } from "./diagramTabs";
 import { usePreferences } from "./preferences";
 import { copyDiagnostics, openIssuePage } from "./diagnostics";
-import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, GRID_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type ResultMeta, type Tab } from "./store";
+import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, GRID_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type GridCommand, type ResultMeta, type Tab } from "./store";
 import {
   closable,
   closeAllTabs,
@@ -31,22 +31,38 @@ import { FOCUS_EXPLORER_FILTER_EVENT } from "./components/Sidebar";
 import { FOCUS_SEARCH_EVENT } from "./components/SearchPanel";
 import { openFound } from "./components/OpenObjectDialog";
 import {
+  canEditRoutineSource,
+  canGenerateCall,
   canRenameRelation,
+  canRunRoutine,
+  createInSchema,
   dropRelation,
+  dropSchema,
+  dropSchemaObject,
   duplicateTable,
+  editRoutineSource,
   editViewSource,
   explorerSession,
   exportRelations,
+  importIntoNewTable,
   importIntoTable,
   isBookmarked,
   isPlainTable,
   knownObjectActions,
+  openObjectDefinition,
   openRelationDdl,
   openRelationDiagram,
   openRelationSql,
+  openRoutineCall,
+  openSchemaDiagram,
   relationBookmark,
   relationTemplates,
   renameRelation,
+  schemaBookmark,
+  schemaCreateKinds,
+  schemaEditorTab,
+  schemaObjectBookmark,
+  setEditorSchema,
   toggleBookmark,
 } from "./explorerActions";
 import { useImport } from "./components/ImportDialog";
@@ -102,6 +118,26 @@ function editorCommand(command: EditorCommand): CommandBinding["run"] {
   return (context) => {
     const tab = editorTab(context);
     if (tab) window.dispatchEvent(new CustomEvent(EDITOR_COMMAND_EVENT, { detail: { tab: tab.id, command } }));
+  };
+}
+
+/** The result whose grid a tab shows now: a SQL editor's or a table data tab's. */
+function gridResult(context: CommandContext): ResultMeta | undefined {
+  const tab = tabOf(context);
+  if (!tab || tab.tableDetails || tab.plan || tab.diagram) return undefined;
+  return tab.run?.results.find((result) => result.id === tab.run?.activeResult);
+}
+
+/** A grid with rows, whose selection a grid command acts on. */
+function hasRows(context: CommandContext): boolean {
+  return (gridResult(context)?.rows ?? 0) > 0;
+}
+
+/** Sends a command to the grid of the tab's result, which acts on it as its menu does. */
+function gridCommand(command: GridCommand): CommandBinding["run"] {
+  return (context) => {
+    const result = gridResult(context);
+    if (result) window.dispatchEvent(new CustomEvent(GRID_COMMAND_EVENT, { detail: { result: result.id, command } }));
   };
 }
 
@@ -293,13 +329,20 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
   "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },
   // The active result's grid opens its "Go to row" (SDB-386).
-  "results.goToRow": {
-    enabled: (c) => (activeResult(c)?.rows ?? 0) > 0,
-    run: (c) => {
-      const result = activeResult(c);
-      if (result) window.dispatchEvent(new CustomEvent(GRID_COMMAND_EVENT, { detail: { result: result.id, command: "goToRow" } }));
-    },
-  },
+  "results.goToRow": { enabled: hasRows, run: gridCommand({ kind: "goToRow" }) },
+  // What the grid's menu does to its selection (SDB-441): the grid does it, with its selection;
+  // without one it says to select cells first. The core writes every copy, as from the menu.
+  "results.copySelection": { enabled: hasRows, run: gridCommand({ kind: "copy", format: "tsv", header: false }) },
+  "results.copyWithHeaders": { enabled: hasRows, run: gridCommand({ kind: "copy", format: "tsv", header: true }) },
+  "results.copyCsv": { enabled: hasRows, run: gridCommand({ kind: "copy", format: "csv", header: true }) },
+  "results.copyJson": { enabled: hasRows, run: gridCommand({ kind: "copy", format: "json", header: false }) },
+  "results.copyMarkdown": { enabled: hasRows, run: gridCommand({ kind: "copy", format: "markdown", header: true }) },
+  "results.copyInList": { enabled: hasRows, run: gridCommand({ kind: "copy", format: "inList", header: false }) },
+  "results.copyHtml": { enabled: hasRows, run: gridCommand({ kind: "copy", format: "html", header: true }) },
+  "results.copyInsert": { enabled: hasRows, run: gridCommand({ kind: "copy", format: "sqlInsert", header: false }) },
+  "results.copySpecial": { enabled: hasRows, run: gridCommand({ kind: "copySpecial" }) },
+  "results.copyUpdates": { enabled: hasRows, run: gridCommand({ kind: "copyUpdates" }) },
+  "results.exportSelection": { enabled: (c) => hasRows(c) && Boolean(ended(gridResult(c))), run: gridCommand({ kind: "exportSelection" }) },
   "editor.variables": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("variables") },
   "editor.reconnect": {
     enabled: (c) => Boolean(editorTab(c)?.connectionId) && idleEditorTab(c),
@@ -425,7 +468,9 @@ export function isCommandId(id: string): id is CommandId {
 export type PaletteObject =
   | { kind: "connection"; connection: ConnectionItem }
   | { kind: "relation"; connectionId: string; object: ObjectItem }
-  | { kind: "schemaObject"; connectionId: string; object: SchemaObjectItem };
+  | { kind: "schemaObject"; connectionId: string; object: SchemaObjectItem }
+  /** A schema the explorer has read, with the object filter it was read with (ADR-025). */
+  | { kind: "schema"; connectionId: string; schema: string; filter: NameFilter | null };
 
 export interface PaletteObjectAction {
   id: string;
@@ -525,6 +570,67 @@ function relationActions(connectionId: string, object: ObjectItem): PaletteObjec
   ];
 }
 
+/**
+ * What the palette offers for a routine, sequence, trigger or other schema object: its menu's
+ * actions in the explorer, run by the same functions (`explorerActions.ts`, SDB-441), and its own
+ * (new console, show in explorer). `scripts/commands.test.mjs` compares the two lists; "Hide" and
+ * "Show only" stay in the menu, since they change the connection's filter through its node.
+ */
+function schemaObjectActions(connectionId: string, object: SchemaObjectItem): PaletteObjectAction[] {
+  const session = explorerSession(connectionId);
+  const actions = knownObjectActions(session);
+  const bookmark = schemaObjectBookmark(connectionId, object);
+  return [
+    { id: "openDefinition", label: "app:palette.actions.openDefinition", run: () => openObjectDefinition(connectionId, session, object) },
+    ...(canEditRoutineSource(object, actions) ? [{ id: "editSource", label: "shell:editSource", run: () => editRoutineSource(connectionId, session, object) }] : []),
+    ...(canRunRoutine(object, actions) ? [{ id: "runRoutine", label: "shell:runRoutine", run: () => openRoutineCall(connectionId, session, object, true) }] : []),
+    ...(canGenerateCall(object, actions) ? [{ id: "generateCall", label: "shell:generateCall", run: () => openRoutineCall(connectionId, session, object) }] : []),
+    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, object.schema) },
+    { id: "copyName", label: "shell:copyName", run: () => copyName(object.name) },
+    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, object.schema, object.name) },
+    { id: "bookmark", label: isBookmarked(bookmark) ? "shell:removeBookmark" : "shell:addBookmark", run: () => toggleBookmark(bookmark) },
+    { id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropSchemaObject(connectionId, session, object) },
+    {
+      id: "showInExplorer",
+      label: "app:palette.actions.showInExplorer",
+      run: () => showInExplorer({ connectionId, schema: object.schema, name: object.name }),
+    },
+  ];
+}
+
+/**
+ * What the palette offers for a schema the explorer has read: its menu's actions (SDB-441), by
+ * the same functions, and its own (new console, show in explorer). Refreshing, the filter and
+ * the maintenance submenu stay in the menu: they act on the schema's row in the tree.
+ */
+function schemaActions(connectionId: string, schema: string, filter: NameFilter | null): PaletteObjectAction[] {
+  const session = explorerSession(connectionId);
+  const actions = knownObjectActions(session);
+  const sql = useApp.getState().connections.find((c) => c.id === connectionId)?.sql ?? true;
+  const bookmark = schemaBookmark(connectionId, schema);
+  const editor = actions?.activeSchema ? schemaEditorTab(connectionId) : null;
+  return [
+    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, schema) },
+    ...(editor ? [{ id: "setActiveSchema", label: "shell:setActiveSchema", run: () => setEditorSchema(editor, schema) }] : []),
+    ...(sql
+      ? [
+          { id: "importNewTable", label: "shell:importNewTable", run: () => importIntoNewTable(connectionId, session, schema) },
+          { id: "erDiagram", label: "shell:diagram.menuSchema", run: () => openSchemaDiagram(connectionId, session, schema, filter) },
+        ]
+      : []),
+    ...schemaCreateKinds(actions).map((kind) => ({
+      id: `create:${kind}`,
+      label: `shell:create.${kind}`,
+      run: () => createInSchema(connectionId, session, schema, kind),
+    })),
+    { id: "copyName", label: "shell:copyName", run: () => copyName(schema) },
+    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, "", schema) },
+    { id: "bookmark", label: isBookmarked(bookmark) ? "shell:removeBookmark" : "shell:addBookmark", run: () => toggleBookmark(bookmark) },
+    ...(actions?.dropSchemas ? [{ id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropSchema(connectionId, session, schema) }] : []),
+    { id: "showInExplorer", label: "app:palette.actions.showInExplorer", run: () => showInExplorer({ connectionId, schema }) },
+  ];
+}
+
 /** What the palette offers for an object; the first one is what Enter does. */
 export function objectActions(item: PaletteObject): PaletteObjectAction[] {
   switch (item.kind) {
@@ -546,19 +652,9 @@ export function objectActions(item: PaletteObject): PaletteObjectAction[] {
     }
     case "relation":
       return relationActions(item.connectionId, item.object);
-    case "schemaObject": {
-      const { connectionId, object } = item;
-      return [
-        { id: "openDefinition", label: "app:palette.actions.openDefinition", run: () => openFound(connectionId, { kind: "schemaObject", object }) },
-        { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, object.schema) },
-        { id: "copyName", label: "shell:copyName", run: () => copyName(object.name) },
-        { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, object.schema, object.name) },
-        {
-          id: "showInExplorer",
-          label: "app:palette.actions.showInExplorer",
-          run: () => showInExplorer({ connectionId, schema: object.schema, name: object.name }),
-        },
-      ];
-    }
+    case "schemaObject":
+      return schemaObjectActions(item.connectionId, item.object);
+    case "schema":
+      return schemaActions(item.connectionId, item.schema, item.filter);
   }
 }
