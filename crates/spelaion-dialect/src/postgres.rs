@@ -39,24 +39,29 @@ impl Dialect for PostgresDialect {
     }
 
     /// What lies outside strings, quoted names and comments, and outside the data of every
-    /// `COPY … FROM STDIN` (SDB-162): each piece between two data blocks is read on its own, so
-    /// a quote in the data never changes how the SQL after it is read.
+    /// `COPY … FROM STDIN` (SDB-162). The splitter's psql lines are read as it reads them: a
+    /// meta-command line is code as a whole, with no strings or comments in it (SDB-436), and
+    /// COPY data is no code at all. Each piece of SQL between them is read on its own, so a
+    /// quote in a psql line never changes how the SQL after it is read.
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        let (_, blocks) = split(script);
+        let (_, apart) = split(script);
         let mut ranges = Vec::new();
         let mut start = 0;
-        for block in blocks
-            .iter()
-            .map(|b| b.data.start..b.resume)
-            .chain(std::iter::once(script.len()..script.len()))
-        {
-            let piece = &script[start..block.start];
-            ranges.extend(
-                spelaion_driver_api::code_ranges(piece, skip_non_code)
-                    .into_iter()
-                    .map(|r| r.start + start..r.end + start),
-            );
-            start = block.end;
+        let pieces = apart.iter().map(|piece| match piece {
+            Apart::Meta(line) => (line.clone(), true),
+            Apart::Copy(block) => (block.data.start..block.resume, false),
+        });
+        // The end of the script closes the last piece of SQL.
+        for (skipped, code) in pieces.chain(std::iter::once((script.len()..script.len(), false))) {
+            for range in
+                spelaion_driver_api::code_ranges(&script[start..skipped.start], skip_non_code)
+            {
+                push_code(&mut ranges, range.start + start..range.end + start);
+            }
+            if code {
+                push_code(&mut ranges, skipped.clone());
+            }
+            start = skipped.end;
         }
         ranges
     }
@@ -214,6 +219,27 @@ struct CopyBlock {
     resume: usize,
 }
 
+/// What the splitter reads apart from SQL, in the script's order: psql's lines, not the
+/// server's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Apart {
+    /// A psql meta-command line, from its `\` to the end of its line (without the newline).
+    Meta(std::ops::Range<usize>),
+    /// The data of a `COPY … FROM STDIN`, with its terminating line.
+    Copy(CopyBlock),
+}
+
+/// Adds `range` to `ranges`, joined to the last one when they touch: code ranges never touch.
+fn push_code(ranges: &mut Vec<std::ops::Range<usize>>, range: std::ops::Range<usize>) {
+    if range.is_empty() {
+        return;
+    }
+    match ranges.last_mut() {
+        Some(last) if last.end >= range.start => last.end = last.end.max(range.end),
+        _ => ranges.push(range),
+    }
+}
+
 /// The data that follows a `COPY … FROM STDIN` whose `;` ends just before `after`. As `psql`
 /// reads it, it starts on the next line (the rest of the statement's line may only hold blanks
 /// or a `--` comment; anything else is data) and ends before a line that holds only `\.` (a
@@ -255,12 +281,12 @@ fn copy_block(script: &str, after: usize) -> CopyBlock {
 /// `PROCEDURE`, as `psql` does, an unquoted `BEGIN` or `CASE` opens a block and `END` closes
 /// one, and a `;` inside a block does not split: a `BEGIN ATOMIC` body stays whole, and its
 /// `END` (a synonym of `COMMIT` on its own) is never sent alone. Elsewhere `BEGIN;` and `END;`
-/// are statements of their own. The data after a `COPY … FROM STDIN` (SDB-162) is skipped and
-/// returned apart: it is not SQL.
-fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
+/// are statements of their own. The data after a `COPY … FROM STDIN` (SDB-162) and each psql
+/// meta-command line are returned apart too: they are not SQL.
+fn split(script: &str) -> (Vec<StatementSpan>, Vec<Apart>) {
     let b = script.as_bytes();
     let mut spans = Vec::new();
-    let mut blocks = Vec::new();
+    let mut apart = Vec::new();
     let mut start = 0;
     let mut has_code = false;
     // The first words of the current statement, lowercased, and its block depth.
@@ -283,6 +309,7 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
                 if !is_restrict(&script[i..end]) {
                     spans.extend(trimmed(script, i, end));
                 }
+                apart.push(Apart::Meta(i..end));
                 i = (end + 1).min(b.len());
                 start = i;
                 words.clear();
@@ -326,7 +353,7 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
                     {
                         let block = copy_block(script, i);
                         i = block.resume;
-                        blocks.push(block);
+                        apart.push(Apart::Copy(block));
                     }
                 }
                 start = i;
@@ -365,7 +392,7 @@ fn split(script: &str) -> (Vec<StatementSpan>, Vec<CopyBlock>) {
     if has_code {
         spans.extend(trimmed(script, start, b.len()));
     }
-    (spans, blocks)
+    (spans, apart)
 }
 
 /// A `COPY` whose data goes through the connection, apart from the statement.
@@ -829,5 +856,38 @@ mod tests {
             code.contains("COPY public.t (id, note) FROM stdin;"),
             "{code}"
         );
+    }
+
+    #[test]
+    fn meta_command_lines_are_code_without_strings_or_comments() {
+        let d = PostgresDialect;
+        let code = |script: &str| -> String {
+            d.code_ranges(script)
+                .into_iter()
+                .map(|r| &script[r])
+                .collect()
+        };
+        // The quote in a meta-command line opens no string: the next statement's placeholder
+        // stays code, as the splitter reads it (SDB-436).
+        let script = "\\echo it's\nselect :x";
+        assert_eq!(parts(script), ["\\echo it's", "select :x"]);
+        assert_eq!(code(script), script);
+        // Nor does a comment opener: the SQL after it stays code, and a real comment after it
+        // stays a comment.
+        let script = "\\echo /* x\nselect 1; -- c\n\\restrict k $$\nselect '$$'";
+        assert_eq!(parts(script), ["\\echo /* x", "select 1", "select '$$'"]);
+        assert_eq!(
+            code(script),
+            "\\echo /* x\nselect 1; \\restrict k $$\nselect "
+        );
+        // A backslash inside a statement is SQL, read as the splitter reads it.
+        let script = "select 1\n\\echo 'a;\n';";
+        assert_eq!(parts(script), ["select 1\n\\echo 'a;\n'"]);
+        assert_eq!(code(script), "select 1\n\\echo ;");
+        // Code ranges never touch, even around a meta-command line.
+        let script = "select 1;\n\\i x\n\\i y\nselect 2";
+        let ranges = d.code_ranges(script);
+        assert_eq!(ranges.len(), 1, "{ranges:?}");
+        assert_eq!((ranges[0].start, ranges[0].end), (0, script.len()));
     }
 }

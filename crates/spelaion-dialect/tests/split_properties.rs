@@ -826,9 +826,9 @@ fn a_psql_meta_command_has_no_copy_data() {
 /// meta-command line (`\echo it's`) as one statement of its own, which the session refuses,
 /// and the SQL after it as SQL. `code_ranges` reads that line as SQL: its `'` opens a string
 /// that hides the next statement's `:x` from the placeholder scanner (the statement is then
-/// sent with `:x` in it), and a comment's text can become code. Same family as SDB-135.
+/// sent with `:x` in it), and a comment's text can become code. Same family as SDB-135; fixed
+/// by SDB-436.
 #[test]
-#[ignore = "found by SDB-156's property tests: PostgreSQL code ranges read psql meta-command lines as SQL; its fix gets its own Plane item"]
 fn postgres_code_ranges_read_meta_command_lines_as_the_splitter_does() {
     let dialect = dialect("postgres");
     let script = "\\echo it's\nselect :x";
@@ -854,11 +854,6 @@ proptest! {
         for (label, dialect) in every_dialect() {
             check_shape(&label, dialect.as_ref(), &script)?;
             if dialect.reads_requests() {
-                continue;
-            }
-            // PostgreSQL's code ranges do not know psql's meta-command lines yet: see
-            // `postgres_code_ranges_read_meta_command_lines_as_the_splitter_does`.
-            if label == "postgres" && script.lines().any(|l| l.trim_start().starts_with('\\')) {
                 continue;
             }
             let lost = left_out(&label, dialect.as_ref(), &script);
