@@ -406,7 +406,9 @@ pub enum CopyStdio {
 
 /// Whether `sql` is a `COPY … FROM STDIN` or `COPY … TO STDOUT`: its first word is `COPY` and,
 /// outside quotes, comments, `$tag$` bodies and parentheses (a query or a column list),
-/// `FROM STDIN` or `TO STDOUT` follow. `COPY … FROM` / `TO` a file or a `PROGRAM` is neither.
+/// `FROM STDIN` or `TO STDOUT` follow. `COPY … FROM` / `TO` a file or a `PROGRAM` is neither,
+/// and nor is psql's `\copy` (SDB-437): a meta-command, which the session refuses before
+/// anything is sent, never a `COPY` with data of its own.
 pub fn copy_stdio(sql: &str) -> Option<CopyStdio> {
     let b = sql.as_bytes();
     let mut words: Vec<String> = Vec::new();
@@ -414,6 +416,7 @@ pub fn copy_stdio(sql: &str) -> Option<CopyStdio> {
     let mut i = 0;
     while i < b.len() {
         match b[i] {
+            b'\\' if words.is_empty() => return None,
             b'\'' => {
                 let escapes =
                     i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]));
@@ -722,8 +725,28 @@ mod tests {
             "-- copy t from stdin\nselect 1",
             "do $$ begin copy t from stdin; end $$",
             "with x as (select 1) select * from x",
+            // psql's meta-command, not SQL (SDB-437).
+            "\\copy t from stdin",
+            "\\copy t to stdout",
+            "-- rows\n\\copy t from stdin",
         ] {
             assert_eq!(copy_stdio(sql), None, "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_psql_copy_line_has_no_data_and_is_refused() {
+        let d = PostgresDialect;
+        // Followed by a `;` on the next line, as `COPY … FROM STDIN;` would be (SDB-437): the
+        // text after it is SQL of its own, not the meta-command's data.
+        for script in [
+            "\\copy t from stdin;\n;\nselect 1",
+            "\\copy t from stdin\n;1\t2\n\\.\n",
+        ] {
+            let spans = d.split_statements(script);
+            assert!(spans[0].text(script).starts_with("\\copy"), "{script:?}");
+            assert_eq!(d.copy_data(script, &spans[0]), None, "{script:?}");
+            assert!(d.refuse_statement(spans[0].text(script)).is_some());
         }
     }
 

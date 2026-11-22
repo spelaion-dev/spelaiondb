@@ -363,6 +363,24 @@ async fn in_the_users_transaction_and_on_a_read_only_session() {
         "{failed:?}"
     );
     assert_eq!(value(&writer, "select count(*) from small").await, "2");
+
+    // psql's `\copy` is a meta-command, not a COPY (SDB-437): it is refused before anything is
+    // sent, and the lines after it are never loaded as its data.
+    let events: Vec<CoreEvent> = writer
+        .run_script("\\copy small (id, v) from stdin;\n;\n6\tf\n\\.\n")
+        .collect()
+        .await;
+    let failed = events.iter().find_map(|e| match e {
+        CoreEvent::StatementFailed { index: 0, error } => Some(error.message.clone()),
+        _ => None,
+    });
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("psql command")),
+        "{events:?}"
+    );
+    assert_eq!(value(&writer, "select count(*) from small").await, "2");
     drop((writer, reader));
     drop_database(&server, &database).await;
 }
