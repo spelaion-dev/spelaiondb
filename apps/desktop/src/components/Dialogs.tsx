@@ -548,22 +548,28 @@ function InteractionDialog() {
   const label = r.label;
   let title: string;
   let prompt: string;
+  // The answering button says what it does (docs/ui-guidelines.md); what it sends is the same.
+  let action: string;
   switch (label.kind) {
     case "keyPassphrase":
       title = t("sshKeyPassphrase");
       prompt = label.retry ? t("wrongPassphrase", { path: label.path }) : label.path;
+      action = t("unlockKey");
       break;
     case "password":
       title = t("sshPassword");
       prompt = `${label.user}@${label.host}`;
+      action = t("signIn");
       break;
     case "proxyPassword":
       title = t("proxyPassword");
       prompt = `${label.user}@${label.host}`;
+      action = t("signInToProxy");
       break;
     case "challenge":
       title = label.instructions || t("verificationFor", { host: label.host });
       prompt = r.prompt;
+      action = t("sendCode");
       break;
   }
   return (
@@ -583,7 +589,7 @@ function InteractionDialog() {
       <div className="modal-actions">
         <button onClick={() => answer(false)}>{t("cancel")}</button>
         <button className="primary" onClick={() => answer(true)}>
-          {t("ok")}
+          {action}
         </button>
       </div>
     </Modal>

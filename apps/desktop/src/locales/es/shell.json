@@ -271,7 +271,10 @@
   "proxyPassword": "Contraseña del proxy",
   "sshPassword": "Contraseña SSH",
   "verificationFor": "Verificación de {{host}}",
-  "ok": "Aceptar",
+  "unlockKey": "Desbloquear clave",
+  "signIn": "Iniciar sesión",
+  "signInToProxy": "Iniciar sesión en el proxy",
+  "sendCode": "Enviar código",
   "risk": {
     "title": "¿Ejecutar estas sentencias?",
     "explanation": "Pueden borrar o cambiar datos en {{connection}}. Todavía no se ha ejecutado nada.",
@@ -376,7 +379,7 @@
     "production": "Es una conexión de producción.",
     "readOnly": "La conexión es de solo lectura: el SQL solo puede abrirse en el editor.",
     "dropMenu": "Borrar…",
-    "dropTitle": "Borrar {{name}}",
+    "dropTitle": "¿Borrar {{name}}?",
     "drop": "Borrar"
   },
   "accounts": {

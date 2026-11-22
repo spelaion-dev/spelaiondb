@@ -288,7 +288,7 @@
   "editTitle": "Edit {{name}}",
   "saveChanges": "Save changes",
   "deleteTitle": "Delete connection?",
-  "deleteConfirm": "Delete",
+  "deleteConfirm": "Delete connection",
   "deleting": "Deleting…",
   "deleteExplanation": "<strong>{{name}}</strong> will be removed: its file <code>{{file}}</code> is deleted, along with its password in the system keychain if one was saved.",
   "deleteProjectHint": "It is a project connection, shared through git: your team will lose it too when you commit the change.",
