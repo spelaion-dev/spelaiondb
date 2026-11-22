@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 import {
+  COMMAND_CATEGORIES,
   COMMANDS,
   EDITOR_MENU_GROUPS,
   editorMenu,
@@ -16,6 +17,9 @@ import {
   menuCommands,
   paletteCommands,
   parseShortcut,
+  SHORTCUT_PLACES,
+  shortcutMatches,
+  shortcutPlace,
   shortcutLabel,
 } from "../src/commandRegistry.ts";
 
@@ -310,4 +314,27 @@ test("the editor menu is the registry's groups and submenus; the keymap binds on
   assert.match(menu, /runCommand\(/);
   assert.doesNotMatch(menu, /role="menuitem"[^>]*>\s*\{?t\("/, "no item written by hand");
   assert.match(read("editorActions.ts"), /command\.editorAction/);
+});
+
+test("Settings lists every command in one place and one of its categories (SDB-447)", () => {
+  for (const command of COMMANDS) {
+    assert.ok(COMMAND_CATEGORIES.includes(command.category), `${command.id}: category ${command.category}`);
+    const place = shortcutPlace(command);
+    assert.ok(SHORTCUT_PLACES.includes(place), `${command.id}: place ${place}`);
+    assert.equal(place === "none", !command.shortcut, `${command.id}: listed without keys only when it has none`);
+  }
+  const page = read("components/ShortcutSettings.tsx");
+  assert.match(page, /COMMANDS/, "the page lists the registry's commands");
+  assert.match(page, /shortcutText\(/, "the page writes keys through shortcuts.ts");
+});
+
+test("the shortcut search finds a command by its name or by its keys (SDB-447)", () => {
+  const texts = ["Run script", "Ctrl+Enter", "Ctrl+Enter"];
+  assert.ok(shortcutMatches("", texts), "an empty search lists everything");
+  assert.ok(shortcutMatches("  ", texts), "spaces alone too");
+  assert.ok(shortcutMatches("run", texts), "by name, without case");
+  assert.ok(shortcutMatches("ctrl+enter", texts), "by keys as typed");
+  assert.ok(shortcutMatches("Ctrl + Enter", texts), "spaces around the + do not matter");
+  assert.ok(!shortcutMatches("ctrl+shift+enter", texts), "other keys do not match");
+  assert.ok(shortcutMatches("mayús", ["Format", "Shift+Alt+F", "Mayús+Alt+F"]), "by the keys as shown in the language");
 });

@@ -335,6 +335,34 @@ export function matchesShortcut(press: KeyPress, shortcut: string): boolean {
   );
 }
 
+/** Where a command's keys act, as Settings › Keyboard shortcuts groups them (SDB-447); `none`
+ *  for a command without keys. */
+export type ShortcutPlace = ShortcutScope | "none";
+
+/** The places in the order Settings lists them. */
+export const SHORTCUT_PLACES = ["global", "editor", "grid", "none"] as const satisfies readonly ShortcutPlace[];
+
+/** The categories in the order Settings lists them within a place. */
+export const COMMAND_CATEGORIES = ["general", "tab", "file", "editor", "view", "data"] as const satisfies readonly CommandCategory[];
+
+/** Where a command's keys act; a shortcut with no scope is handled anywhere. */
+export function shortcutPlace(command: CommandSpec): ShortcutPlace {
+  return command.shortcut ? (command.scope ?? "global") : "none";
+}
+
+/** Text as the shortcut search compares it: without case or spaces, so "ctrl + enter" finds
+ *  "Ctrl+Enter". */
+function searchable(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, "");
+}
+
+/** Whether a command matches what was typed in the shortcut search: any of `texts` (its name,
+ *  its keys as written, its keys as shown) holds it. An empty search matches every command. */
+export function shortcutMatches(query: string, texts: readonly string[]): boolean {
+  const wanted = searchable(query);
+  return wanted === "" || texts.some((text) => searchable(text).includes(wanted));
+}
+
 /** The global command whose shortcut this key press is, if any. */
 export function globalCommandFor(press: KeyPress): CommandSpec | null {
   for (const command of COMMANDS as readonly CommandSpec[]) {

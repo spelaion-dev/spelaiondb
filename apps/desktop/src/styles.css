@@ -2588,6 +2588,34 @@ select {
   margin-bottom: 8px;
   font-weight: 600;
 }
+/* Settings › Keyboard shortcuts (SDB-447): every command with its keys, by place and category. */
+.shortcut-search {
+  width: 100%;
+}
+.shortcut-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-md);
+  line-height: var(--leading-md);
+}
+.shortcut-table th {
+  padding: var(--space-md) 0 var(--space-xs);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: left;
+}
+.shortcut-table td {
+  padding: var(--space-xs) 0;
+  border-top: 1px solid var(--line);
+}
+.shortcut-table .shortcut-keys {
+  padding-left: var(--space-lg);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
 /* Settings › Snippets: the user's snippets, one per row, and the form that edits one. */
 .snippet-list {
   display: flex;

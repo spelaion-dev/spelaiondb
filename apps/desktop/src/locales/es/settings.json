@@ -369,5 +369,18 @@
     "attribution": "Atribución",
     "attributionHint": "El crédito que el servidor pide mostrar en los mapas. Se muestra en el mapa.",
     "remove": "Quitar el servidor de teselas"
+  },
+  "shortcuts": {
+    "title": "Atajos de teclado",
+    "hint": "Cada orden de la aplicación y las teclas que la ejecutan. Busca una por su nombre o por sus teclas, como {{example}}.",
+    "search": "Buscar por nombre o teclas",
+    "searchLabel": "Buscar órdenes",
+    "noMatch": "Ninguna orden coincide.",
+    "places": {
+      "global": "En cualquier sitio",
+      "editor": "Editor SQL",
+      "grid": "Cuadrícula de resultados",
+      "none": "Sin atajo"
+    }
   }
 }

@@ -485,7 +485,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14, shortcuts: 15 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -3458,6 +3458,22 @@ try {
     await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count, tabsWithSnippets);
     await replaceQuery(panel, "select 'unterminated");
   }
+
+  step("Settings › Keyboard shortcuts lists every command and finds one by its name or by its keys (SDB-447)");
+  await withSettings("shortcuts", async (settings) => {
+    const rows = settings.locator(".shortcut-table tr[data-command]");
+    assert.ok((await rows.count()) > 50, "every command is listed");
+    const search = settings.getByRole("searchbox", { name: "Search commands" });
+    await search.fill("ctrl + enter");
+    const run = settings.locator('tr[data-command="editor.run"]');
+    await run.waitFor();
+    assert.equal(await run.locator(".shortcut-keys").innerText(), "Ctrl+Enter");
+    assert.equal(await settings.locator('tr[data-command="tab.new"]').count(), 0, "other keys are hidden");
+    await search.fill("reopen closed");
+    assert.equal(await settings.locator('tr[data-command="tab.reopen"] .shortcut-keys').innerText(), "Ctrl+Shift+T");
+    await search.fill("no command is called this");
+    await settings.getByText("No command matches.").waitFor();
+  });
 
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");
   const queryTabCount = await page.locator(".tabbar .tab").count();
