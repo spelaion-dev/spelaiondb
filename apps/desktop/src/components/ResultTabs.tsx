@@ -20,6 +20,7 @@ export function ResultTabList({
   activeResult,
   session,
   messages,
+  messagesError,
   onSelect,
 }: {
   results: ResultMeta[];
@@ -29,6 +30,8 @@ export function ResultTabList({
   session: string | null;
   /** The label of the messages tab. */
   messages: string;
+  /** A message is an error: the tab shows a warning mark, and says so to assistive technology. */
+  messagesError: boolean;
   onSelect(id: number | null): void;
 }) {
   const { t, i18n } = useTranslation("editor");
@@ -86,8 +89,15 @@ export function ResultTabList({
           </span>
         );
       })}
-      <button className={activeResult === null || !results.some((r) => r.id === activeResult) ? "active" : ""} onClick={() => onSelect(null)}>
+      <button className={`messages-tab${activeResult === null || !results.some((r) => r.id === activeResult) ? " active" : ""}`} onClick={() => onSelect(null)}>
         {messages}
+        {messagesError && (
+          <>
+            {" "}
+            <Icon name="warning" />
+            <span className="sr-only">{t("results.messagesError")}</span>
+          </>
+        )}
       </button>
       {menu && session && (
         <ResultTabMenu

@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import type { OnErrorItem, RunOptionsItem } from "../api";
 import { usePreferences } from "../preferences";
 import { useApp, type Tab } from "../store";
+import { Icon } from "./Icons";
 
 /** What a run of `tab` sends: its own choices, or the personal default and the connection's
  *  timeout. */
@@ -74,12 +75,7 @@ export function RunOptionsButton({ tab, disabled }: { tab: Tab; disabled: boolea
           setOpen(open ? null : { top: rect.top, left: rect.right + 4 });
         }}
       >
-        <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-          <path d="M4 5h12M4 10h12M4 15h12" strokeLinecap="round" />
-          <circle cx="8" cy="5" r="1.8" fill="var(--bg)" />
-          <circle cx="13" cy="10" r="1.8" fill="var(--bg)" />
-          <circle cx="7" cy="15" r="1.8" fill="var(--bg)" />
-        </svg>
+        <Icon name="runOptions" />
       </button>
       {open && (
         <div className="grid-menu run-options-panel" role="dialog" aria-label={t("runOptions.title")} style={open}>
