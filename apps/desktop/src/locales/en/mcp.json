@@ -73,7 +73,7 @@
     "exportJson": "Export JSON",
     "exported_one": "{{count}} event exported to {{path}}.",
     "exported_other": "{{count}} events exported to {{path}}.",
-    "clear": "Clear",
+    "clear": "Clear log…",
     "clearTitle": "Clear the MCP activity?",
     "clearBody": "Every recorded call is deleted from this computer. A record that the log was cleared, and when, stays in it.",
     "clearConfirm": "Clear the log",
