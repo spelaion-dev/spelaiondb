@@ -73,6 +73,9 @@ const textPairs = [
   ...["success", "warning", "danger", "info"].map((name) => [`--${name}-fg`, `--${name}-soft`]),
   ["--accent-text", "--accent"],
   ["--danger-text", "--danger"],
+  // Solid connection-type and transaction badges (ADR-029).
+  ["--tone-neutral-text", "--tone-neutral"],
+  ...["green", "blue", "amber", "red"].map((tone) => ["--tone-text", `--tone-${tone}`]),
 ];
 
 const iconPairs = [

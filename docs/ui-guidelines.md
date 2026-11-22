@@ -109,17 +109,20 @@ Each role is defined for both themes:
 
 - Radius: `--radius-sm` 4px (badges, chips, checkboxes, the grid's selection), `--radius-md`
   6px (buttons, inputs, tabs, list and menu items) and `--radius-lg` 10px (menus, popovers,
-  dialogs, toasts); dots are round.
+  dialogs, toasts); dots and spinners are round (`--radius-round`). A control that sits flush in
+  a list or bar has no radius (`border-radius: initial`).
 - The workspace is flat. Only layers above it cast a shadow: `--shadow-popover` for menus,
   popovers, tooltips and autocompletion, and `--shadow-dialog` for dialogs, with `--backdrop`
-  behind modal ones. Panels, cards and buttons have no shadow.
+  behind modal ones. Panels, cards and buttons have no shadow. A selected sidebar row's 2px
+  accent edge is drawn as an inset shadow, `--shadow-selected-row`.
 - Heights: `--control-sm` 24px (icon buttons in toolbars, inline controls), `--control-md`
   28px (buttons, inputs and selects) and `--control-lg` 32px (welcome and empty-state
   actions). Rows in lists, trees and menus are `--row-h` (26px); result grid rows are 24px to
   display more data with 12px text. Bars (the tab strip and the editor's and the
   results' toolbars) are `--bar-h` (36px).
-- Stacking order, lowest first: `--z-sticky`, `--z-dropdown`, `--z-dialog`, `--z-popover` (a
-  menu opened from a dialog shows above it) and `--z-toast`.
+- Stacking order, lowest first: `--z-sticky`, `--z-resizer` (the sidebar's separator over the
+  editor's edge), `--z-dropdown`, `--z-submenu` (a menu opened from another menu), `--z-dialog`,
+  `--z-popover` (a menu opened from a dialog shows above it) and `--z-toast`.
 
 ### Icons
 
