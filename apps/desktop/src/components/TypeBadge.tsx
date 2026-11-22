@@ -1,5 +1,6 @@
-// A connection type's badge (ADR-029): its name, tinted with its tone from the fixed palette in
-// styles.css (`.tone-*`), which looks right in both themes. The type comes from the core.
+// A connection type's badge (ADR-029): its name, soft in its tone from the fixed palette in
+// styles.css (`.type-badge.tone-*`), which looks right in both themes; Production's is solid.
+// The type comes from the core.
 
 import { useTranslation } from "react-i18next";
 import type { ConnectionTypeItem } from "../api";

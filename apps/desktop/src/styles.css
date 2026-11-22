@@ -1467,23 +1467,33 @@ select {
   background: var(--danger);
   color: var(--danger-text);
 }
-/* A connection type's badge (ADR-029): colors and foregrounds from a fixed, legible palette. */
+/* A connection type's badge (ADR-029), soft (docs/ui-guidelines.md "Badges"): the tone's `-soft`
+   background and `-fg` text from the fixed palette, legible in both themes. Production's is the
+   only solid one. `--type-badge-color` lets a place that greys its text keep the badge's. */
 .type-badge {
+  --type-badge-color: var(--badge-fg);
   font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--tone-foreground);
-  background: var(--tone);
+  color: var(--type-badge-color);
+  background: var(--badge-soft);
   padding: var(--space-2xs) var(--space-sm);
   border-radius: var(--radius-sm);
-  letter-spacing: 0.04em;
   white-space: nowrap;
 }
+.type-badge.tone-neutral { --badge-soft: var(--tone-neutral-soft); --badge-fg: var(--tone-neutral-fg); }
+.type-badge.tone-green { --badge-soft: var(--tone-green-soft); --badge-fg: var(--tone-green-fg); }
+.type-badge.tone-blue { --badge-soft: var(--tone-blue-soft); --badge-fg: var(--tone-blue-fg); }
+.type-badge.tone-amber { --badge-soft: var(--tone-amber-soft); --badge-fg: var(--tone-amber-fg); }
+.type-badge.tone-red { --badge-soft: var(--tone-red-soft); --badge-fg: var(--tone-red-fg); }
+.type-badge.badge-prod {
+  --type-badge-color: var(--tone-foreground);
+  background: var(--tone);
+}
+/* The type's name as written (Production's own badge spells PRODUCTION, `.badge-prod`). */
 .type-badge-small {
-  font-size: var(--text-xs);
-  font-weight: 600;
   line-height: 14px;
   padding: 0 var(--space-xs);
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 /* What follows a connection's name in the explorer (its type badge, the SSH mark, its tags): the
    name keeps its whole width and the marks only take what is left, pushed to the end of the row.
@@ -1569,7 +1579,7 @@ select {
 }
 .type-editor legend { padding: 0 4px; font-weight: 600; }
 /* Beats `.form-row > span`, which would grey the badge's text. */
-.form-row > .type-badge { color: var(--tone-foreground); font-size: var(--text-xs); }
+.form-row > .type-badge { color: var(--type-badge-color); font-size: var(--text-xs); }
 .form-row > .type-badge-small { font-size: var(--text-xs); }
 
 .editor-body {
