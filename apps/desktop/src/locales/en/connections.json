@@ -441,6 +441,7 @@
     "replacedCount_one": "Replaced {{count}} connection.",
     "replacedCount_other": "Replaced {{count}} connections.",
     "replacedTag": "replaced",
+    "setupTag": "brings setup statements",
     "tunnels_one": "Created {{count}} network profile.",
     "tunnels_other": "Created {{count}} network profiles.",
     "passwordErrors": "Imported without their saved password (asked when connecting):",

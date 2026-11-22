@@ -343,6 +343,9 @@ pub struct ImportReport {
     pub skipped: Vec<ImportSkip>,
     /// Connections imported without the password the client kept in the keychain, and why.
     pub password_errors: Vec<ImportSkip>,
+    /// Imported or replaced connections that brought setup statements (SDB-99): SQL that runs on
+    /// every new session, which the user should know about.
+    pub with_setup: Vec<String>,
 }
 
 /// Imports the chosen connections (and their SSH tunnels) as SpelaionDB files. The client's
@@ -386,6 +389,7 @@ pub async fn import_connections(
         tunnels: Vec::new(),
         skipped: Vec::new(),
         password_errors: Vec::new(),
+        with_setup: Vec::new(),
     };
     if save_passwords {
         let (read, failed) = tokio::task::spawn_blocking(move || {
@@ -424,6 +428,7 @@ pub async fn import_connections(
             &tunnel_name,
             &folder,
         );
+        let brings_setup = !plan.connection.session.setup.is_empty();
         let outcome = import_one(
             &state,
             client,
@@ -440,6 +445,9 @@ pub async fn import_connections(
                 replaced,
                 created_tunnel,
             }) => {
+                if brings_setup {
+                    report.with_setup.push(name.clone());
+                }
                 if replaced {
                     report.replaced.push(name);
                 } else {

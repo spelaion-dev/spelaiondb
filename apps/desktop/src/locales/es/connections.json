@@ -441,6 +441,7 @@
     "replacedCount_one": "Sustituida {{count}} conexión.",
     "replacedCount_other": "Sustituidas {{count}} conexiones.",
     "replacedTag": "sustituida",
+    "setupTag": "trae sentencias de inicio",
     "tunnels_one": "Creado {{count}} perfil de red.",
     "tunnels_other": "Creados {{count}} perfiles de red.",
     "passwordErrors": "Importadas sin su contraseña guardada (se pide al conectar):",

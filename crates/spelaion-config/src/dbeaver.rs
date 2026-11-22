@@ -17,7 +17,7 @@ use spelaion_driver_api::Secret;
 use crate::draft::SessionDraft;
 use crate::import::{ImportedConnection, ImportedProxy, ImportedSsh, SavedSecrets};
 use crate::linux_dirs::{LinuxHome, first_found};
-use crate::model::{Engine, SshAuth, TunnelFile};
+use crate::model::{Engine, IsolationLevel, SshAuth, TunnelFile};
 
 /// The key DBeaver ships with to obscure `credentials-config.json`.
 const CREDENTIALS_KEY: [u8; 16] = [
@@ -269,6 +269,11 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> ImportedC
         .and_then(Json::as_str)
         .filter(|p| !p.is_empty())
         .map(Secret::new);
+    let mut unmapped = unmapped_of(json, config);
+    let session = match &engine {
+        Ok(engine) => session_of(config, *engine, &mut unmapped),
+        Err(_) => SessionDraft::default(),
+    };
     ImportedConnection {
         id: id.to_string(),
         name: text(json.get("name")),
@@ -300,14 +305,93 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> ImportedC
         ssh: ssh_of(config, credentials),
         proxy: proxy_of(config, credentials),
         tls: None,
-        session: SessionDraft::default(),
-        unmapped: unmapped_of(json, config),
+        session,
+        unmapped,
+    }
+}
+
+/// DBeaver's per-connection bootstrap (SDB-99) as the connection's session setup (ADR-037):
+/// its queries, one statement each, run on every new session ("ignore errors" as DBeaver's),
+/// its default schema (or, where a catalog is the database a session switches to, MySQL's
+/// and MariaDB's, its default catalog) and its isolation level where the engine has that one.
+/// The setup is checked by the core before it is shown or saved; what does not map is listed.
+fn session_of(config: &Json, engine: Engine, unmapped: &mut Vec<String>) -> SessionDraft {
+    let Some(bootstrap) = config.get("bootstrap") else {
+        return SessionDraft::default();
+    };
+    let queries: Vec<String> = bootstrap
+        .get("initQueries")
+        .and_then(Json::as_array)
+        .map(|queries| {
+            queries
+                .iter()
+                .filter_map(Json::as_str)
+                .map(|q| q.trim().trim_end_matches(';').trim().to_string())
+                .filter(|q| !q.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let setup = if queries.is_empty() {
+        String::new()
+    } else {
+        format!("{};", queries.join(";\n"))
+    };
+    let catalog = text(bootstrap.get("defaultCatalog"));
+    let mut schema = text(bootstrap.get("defaultSchema"));
+    if !catalog.is_empty() {
+        match engine {
+            // A MySQL or MariaDB "catalog" is a database, which is what `USE` switches to.
+            Engine::Mysql | Engine::Mariadb if schema.is_empty() => schema = catalog,
+            _ => unmapped.push(format!("Default catalog: {catalog}")),
+        }
+    }
+    // A JDBC level (`java.sql.Connection`'s constants; SQL Server's own for snapshot).
+    let level = bootstrap
+        .get("txnIsolation")
+        .or_else(|| bootstrap.get("defaultTransactionIsolation"))
+        .and_then(Json::as_i64);
+    let isolation = level.and_then(|level| {
+        let mapped = match level {
+            1 => Some(IsolationLevel::ReadUncommitted),
+            2 => Some(IsolationLevel::ReadCommitted),
+            4 => Some(IsolationLevel::RepeatableRead),
+            8 => Some(IsolationLevel::Serializable),
+            4096 => Some(IsolationLevel::Snapshot),
+            _ => None,
+        };
+        match mapped {
+            Some(isolation) if isolation.available_on(engine) => Some(isolation),
+            Some(isolation) => {
+                unmapped.push(format!(
+                    "Isolation level: {} ({} has no such session level)",
+                    isolation.sql(),
+                    engine.label()
+                ));
+                None
+            }
+            None => {
+                unmapped.push(format!("Isolation level: {level}"));
+                None
+            }
+        }
+    });
+    if bootstrap.get("autocommit").and_then(Json::as_bool) == Some(false) {
+        unmapped
+            .push("Auto-commit: off (a connection type with manual commit does that here)".into());
+    }
+    SessionDraft {
+        ignore_setup_errors: !setup.is_empty()
+            && bootstrap.get("ignoreErrors").and_then(Json::as_bool) == Some(true),
+        setup,
+        schema,
+        isolation,
     }
 }
 
 /// What a DBeaver connection sets that the import leaves out, for the preview: other network
-/// handlers (its SSL settings, HTTP tunnels…), driver properties, bootstrap queries and other
-/// ways to log in. A property that may hold a secret shows its name only.
+/// handlers (its SSL settings, HTTP tunnels…), driver properties and other ways to log in. A
+/// property that may hold a secret shows its name only. Its bootstrap is the session setup
+/// (`session_of`).
 fn unmapped_of(json: &Json, config: &Json) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(handlers) = config.get("handlers").and_then(Json::as_object) {
@@ -321,18 +405,6 @@ fn unmapped_of(json: &Json, config: &Json) -> Vec<String> {
     let auth = text(config.get("auth-model"));
     if !auth.is_empty() && !auth.starts_with("native") {
         out.push(format!("Authentication: {auth}"));
-    }
-    if let Some(bootstrap) = config.get("bootstrap") {
-        let queries = bootstrap
-            .get("initQueries")
-            .and_then(Json::as_array)
-            .map_or(0, Vec::len);
-        if queries > 0 {
-            out.push(format!("Bootstrap queries: {queries}"));
-        }
-        if let Some(schema) = bootstrap.get("defaultSchema").and_then(Json::as_str) {
-            out.push(format!("Default schema: {schema}"));
-        }
     }
     for key in ["provider-properties", "properties"] {
         if let Some(properties) = config.get(key).and_then(Json::as_object) {
@@ -440,6 +512,7 @@ mod tests {
     use super::*;
     use crate::draft::PasswordChoice;
     use crate::import::{TargetFolder, import_plan};
+    use crate::load::Config;
     use crate::load::Source;
     use crate::model::ProxyType;
     use cbc::Encryptor;
@@ -803,5 +876,106 @@ mod tests {
         assert_eq!(plan.connection.password, PasswordChoice::None);
         assert!(plan.connection.host.is_empty() && plan.tunnel.is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A DBeaver connection of `provider`/`driver` with this `bootstrap`.
+    fn bootstrapped(provider: &str, driver: &str, bootstrap: Json) -> ImportedConnection {
+        let source = serde_json::json!({
+            "provider": provider, "driver": driver, "name": "Orders",
+            "configuration": {"host": "db.internal", "port": "5432", "database": "orders",
+              "user": "app", "bootstrap": bootstrap}
+        });
+        connection_of("one", &source, None)
+    }
+
+    #[test]
+    fn bootstrap_queries_schema_and_isolation_are_the_session_setup() {
+        let orders = bootstrapped(
+            "postgresql",
+            "postgres-jdbc",
+            serde_json::json!({
+                "initQueries": ["SET search_path TO app, public", "  set role reader;  ", ""],
+                "ignoreErrors": true,
+                "defaultCatalog": "orders",
+                "defaultSchema": "app",
+                "txnIsolation": 2,
+                "autocommit": false
+            }),
+        );
+        assert_eq!(
+            orders.session,
+            SessionDraft {
+                setup: "SET search_path TO app, public;\nset role reader;".into(),
+                ignore_setup_errors: true,
+                schema: "app".into(),
+                isolation: Some(IsolationLevel::ReadCommitted),
+            }
+        );
+        // A PostgreSQL catalog is another database, and auto-commit is a type's matter here.
+        assert!(
+            orders
+                .unmapped
+                .contains(&"Default catalog: orders".to_string())
+        );
+        assert!(
+            orders
+                .unmapped
+                .iter()
+                .any(|u| u.starts_with("Auto-commit: off"))
+        );
+        assert!(!orders.unmapped.iter().any(|u| u.contains("Bootstrap")));
+        // The draft and the file it becomes carry the same values (the core checks the setup
+        // first, `spelaion_core::vet_imported_setup`).
+        let plan = import_plan(&orders, Engine::Postgres, Source::User, false, "t", &keep());
+        assert_eq!(plan.connection.session, orders.session);
+        let file = plan.connection.to_file(&Config::default()).unwrap();
+        assert_eq!(
+            file.session.setup.as_deref(),
+            Some("SET search_path TO app, public;\nset role reader;")
+        );
+        assert!(file.session.ignore_setup_errors);
+        assert_eq!(file.session.schema.as_deref(), Some("app"));
+        assert_eq!(file.session.isolation, Some(IsolationLevel::ReadCommitted));
+    }
+
+    #[test]
+    fn a_catalog_is_the_schema_where_it_is_a_database_and_levels_must_exist() {
+        // MySQL's catalog is the database `USE` switches to; snapshot is SQL Server's alone.
+        let shop = bootstrapped(
+            "mysql",
+            "mysql8",
+            serde_json::json!({"defaultCatalog": "shop", "txnIsolation": 4096}),
+        );
+        assert_eq!(shop.session.schema, "shop");
+        assert_eq!(shop.session.isolation, None);
+        assert!(
+            shop.unmapped
+                .contains(&"Isolation level: SNAPSHOT (MySQL has no such session level)".into())
+        );
+        let reports = bootstrapped(
+            "sqlserver",
+            "mssql_jdbc_ms_new",
+            serde_json::json!({"defaultCatalog": "reports", "defaultSchema": "dbo",
+              "txnIsolation": 4096}),
+        );
+        assert_eq!(reports.session.schema, "dbo");
+        assert_eq!(reports.session.isolation, Some(IsolationLevel::Snapshot));
+        assert!(
+            reports
+                .unmapped
+                .contains(&"Default catalog: reports".into())
+        );
+        // An unknown level is listed; "ignore errors" means nothing without queries.
+        let other = bootstrapped(
+            "postgresql",
+            "postgres-jdbc",
+            serde_json::json!({"txnIsolation": 3, "ignoreErrors": true}),
+        );
+        assert_eq!(other.session, SessionDraft::default());
+        assert!(other.unmapped.contains(&"Isolation level: 3".into()));
+        // No bootstrap: no session setup, nothing listed for it.
+        let plain = bootstrapped("postgresql", "postgres-jdbc", Json::Null);
+        assert_eq!(plain.session, SessionDraft::default());
+        assert!(plain.unmapped.is_empty(), "{:?}", plain.unmapped);
     }
 }

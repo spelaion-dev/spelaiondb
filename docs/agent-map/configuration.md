@@ -39,7 +39,11 @@
   bootstrap commands first, a shell script never): the desktop's scan and import pass every
   imported connection through the core's `vet_imported_setup` before it is shown or saved
   (where the read-only barrier applies, what could write is taken out and listed in
-  `unmapped`), and the saved file goes through the form's own setup check.
+  `unmapped`), and the saved file goes through the form's own setup check. DBeaver's bootstrap
+  (SDB-99, `dbeaver.rs`'s `session_of`): its queries and "ignore errors", its default schema
+  (its default catalog only on MySQL and MariaDB, where it is the database `USE` picks) and its
+  JDBC isolation level where `IsolationLevel::available_on` allows it; the rest is listed. The
+  import's report marks the connections that brought setup statements.
   On Linux a reader's default search also looks in the client's Flatpak and Snap folders
   (`linux_dirs.rs`; native first, each package path citing the manifest it was checked against);
   HeidiSQL's registry only exists on Windows (`heidisql_has_registry`), elsewhere its import
