@@ -1,7 +1,7 @@
 //! Sessions against a real MySQL. Needs `SPELAION_TEST_MYSQL=host:port`
 //! (see `crates/spelaion-driver-mysql/tests/mysql.rs`).
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -34,6 +34,7 @@ async fn session() -> Option<Session> {
 
 #[tokio::test]
 async fn processlist_filtered_by_command_without_a_where() {
+    let _turn = crate::serial::file_turn(module_path!());
     // A second, idle connection shows up as "Sleep".
     let (Some(session), Some(_idle)) = (session().await, session().await) else {
         return;
@@ -130,6 +131,7 @@ async fn processlist_filtered_by_command_without_a_where() {
 
 #[tokio::test]
 async fn process_monitor_lists_sessions_and_checks_targets_before_closing() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (Some(monitor), Some(target)) = (session().await, session().await) else {
         return;
     };
@@ -199,6 +201,7 @@ async fn process_monitor_lists_sessions_and_checks_targets_before_closing() {
 
 #[tokio::test]
 async fn process_monitor_cancels_a_query_without_closing_its_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (Some(monitor), Some(target)) = (session().await, session().await) else {
         return;
     };
@@ -281,6 +284,7 @@ async fn process_monitor_cancels_a_query_without_closing_its_session() {
 
 #[tokio::test]
 async fn table_pages_and_counts_run_on_mysql() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };
@@ -343,6 +347,7 @@ async fn table_pages_and_counts_run_on_mysql() {
 /// sends one `CREATE PROCEDURE`, not its body's pieces.
 #[tokio::test]
 async fn ctrl_enter_creates_a_procedure_written_under_another_delimiter() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };

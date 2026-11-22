@@ -9,8 +9,8 @@
 //! of an older protocol is not asked and fails nothing, its engine telling none of them (no
 //! partitions, dependencies it cannot tell, never an empty list in their place).
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -118,6 +118,7 @@ async fn run(label: &str, session: &Session, sql: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn details_are_read_or_said_unknown_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let pid = std::process::id();
     for case in cases().await {
         let label = case.label;

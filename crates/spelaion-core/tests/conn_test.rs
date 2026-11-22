@@ -4,7 +4,7 @@
 //! The local cases always run. The ones through the bastions need `SPELAION_TEST_SSH` (and
 //! `SPELAION_TEST_PG`, `SPELAION_TEST_SOCKS` where they say so; see `testing/docker`).
 
-mod engines;
+use crate::engines;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -221,6 +221,7 @@ fn postgres_connection(host: &str, port: u16, extra: &str) -> String {
 
 #[tokio::test]
 async fn a_local_file_is_read_and_opened() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("sqlite");
     let file = ws.base.join("data.sqlite");
     engines::create_database(spelaion_config::Engine::Sqlite, &file).await;
@@ -257,6 +258,7 @@ async fn a_local_file_is_read_and_opened() {
 
 #[tokio::test]
 async fn session_setup_failures_have_their_own_step_without_leaking_secrets() {
+    let _turn = crate::serial::file_turn(module_path!());
     use spelaion_config::Engine;
     let ws = Workspace::new("session-setup");
     let planted = "setup_secret_734991";
@@ -369,6 +371,7 @@ async fn session_setup_failures_have_their_own_step_without_leaking_secrets() {
 
 #[tokio::test]
 async fn production_test_refuses_setup_writes_even_when_errors_are_ignored() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("session-setup-production");
     let file = ws.base.join("data.sqlite");
     engines::create_database(spelaion_config::Engine::Sqlite, &file).await;
@@ -402,6 +405,7 @@ async fn production_test_refuses_setup_writes_even_when_errors_are_ignored() {
 
 #[tokio::test]
 async fn a_configuration_error_is_the_first_step() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("resolve");
     ws.write(
         ".spelaion/connections/bad.toml",
@@ -424,6 +428,7 @@ async fn a_configuration_error_is_the_first_step() {
 
 #[tokio::test]
 async fn a_stopped_server_fails_at_reaching_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("direct-closed");
     ws.write(
         ".spelaion/connections/db.toml",
@@ -445,6 +450,7 @@ async fn a_stopped_server_fails_at_reaching_it() {
 
 #[tokio::test]
 async fn the_connect_timeout_is_the_connections() {
+    let _turn = crate::serial::file_turn(module_path!());
     let silent = Silent::start().await;
     let ws = Workspace::new("db-timeout");
     ws.write(
@@ -474,6 +480,7 @@ async fn the_connect_timeout_is_the_connections() {
 
 #[tokio::test]
 async fn network_only_stops_before_logging_in() {
+    let _turn = crate::serial::file_turn(module_path!());
     let silent = Silent::start().await;
     let ws = Workspace::new("network-only");
     ws.write(
@@ -497,6 +504,7 @@ async fn network_only_stops_before_logging_in() {
 
 #[tokio::test]
 async fn stop_ends_the_running_step_and_closes_a_half_open_tunnel() {
+    let _turn = crate::serial::file_turn(module_path!());
     let silent = Silent::start().await;
     let ws = Workspace::new("stop");
     let identity = toml_path(&keys().join("id_ed25519"));
@@ -561,6 +569,7 @@ async fn stop_ends_the_running_step_and_closes_a_half_open_tunnel() {
 
 #[tokio::test]
 async fn stop_during_the_login_closes_its_connection() {
+    let _turn = crate::serial::file_turn(module_path!());
     let silent = Silent::start().await;
     let ws = Workspace::new("stop-login");
     ws.write(
@@ -651,6 +660,7 @@ impl Workspace {
 /// reaches the log or the diagnostics.
 #[tokio::test]
 async fn a_keychain_connection_with_nothing_stored_says_so() {
+    let _turn = crate::serial::file_turn(module_path!());
     let server = Silent::start().await;
     let ws = Workspace::new("keychain-empty");
     let connection = |secret: &str| {
@@ -737,6 +747,7 @@ fn assert_no_leak(report: &TestReport, seen: &Seen, secrets: &[&str]) {
 /// token. None may reach the log or the diagnostics.
 #[tokio::test]
 async fn secrets_in_error_output_are_redacted() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("leak-command");
     let noise = "hop-secret-1234 db-secret-5678 password=kv-secret-9 http://bob:url-secret-0@proxy.example:3128/ token=tok-secret-7";
     // Written into a TOML literal string ('…'): no single quotes in either shell's command.
@@ -845,6 +856,7 @@ async fn echoing_proxy() -> u16 {
 /// even when a hostile proxy repeats it back.
 #[tokio::test]
 async fn secrets_answered_in_dialogs_are_redacted() {
+    let _turn = crate::serial::file_turn(module_path!());
     let port = echoing_proxy().await;
     let ws = Workspace::new("leak-dialog");
     ws.write(
@@ -900,6 +912,7 @@ fn key_auth() -> String {
 
 #[tokio::test]
 async fn a_wrong_password_on_hop_2_is_hop_2s_ssh_authentication() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = bastion() else {
         return;
     };
@@ -954,6 +967,7 @@ async fn a_wrong_password_on_hop_2_is_hop_2s_ssh_authentication() {
 
 #[tokio::test]
 async fn a_stopped_bastion_is_its_hops_unreachable_host() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = bastion() else {
         return;
     };
@@ -995,6 +1009,7 @@ async fn a_stopped_bastion_is_its_hops_unreachable_host() {
 
 #[tokio::test]
 async fn a_wrong_database_name_fails_at_logging_in() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = bastion() else {
         return;
     };
@@ -1033,6 +1048,7 @@ async fn a_wrong_database_name_fails_at_logging_in() {
 
 #[tokio::test]
 async fn a_wrong_database_password_is_database_authentication() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = bastion() else {
         return;
     };
@@ -1063,6 +1079,7 @@ async fn a_wrong_database_password_is_database_authentication() {
 
 #[tokio::test]
 async fn every_step_succeeds_through_two_bastions() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = bastion() else {
         return;
     };
@@ -1104,6 +1121,7 @@ async fn every_step_succeeds_through_two_bastions() {
 
 #[tokio::test]
 async fn a_changed_host_key_blocks_and_is_never_asked_about() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = bastion() else {
         return;
     };
@@ -1152,6 +1170,7 @@ async fn a_changed_host_key_blocks_and_is_never_asked_about() {
 
 #[tokio::test]
 async fn a_wrong_proxy_password_is_the_proxys_authentication() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SOCKS") else {
         eprintln!("SPELAION_TEST_SOCKS not set: test skipped");
         return;
@@ -1187,6 +1206,7 @@ async fn a_wrong_proxy_password_is_the_proxys_authentication() {
 
 #[tokio::test]
 async fn a_certificate_the_client_cannot_verify_is_tls() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_PG") else {
         eprintln!("SPELAION_TEST_PG not set: test skipped");
         return;

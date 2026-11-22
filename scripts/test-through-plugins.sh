@@ -7,7 +7,7 @@
 # variables. Everything after the script's name goes to `cargo test`:
 #
 #   scripts/test-through-plugins.sh --workspace
-#   scripts/test-through-plugins.sh -p spelaion-core --test transactions
+#   scripts/test-through-plugins.sh -p spelaion-core transactions::
 #
 # The engines are the ones whose driver is still in this workspace. DuckDB's is not (it is a
 # plugin of its own repository): its tests always go through its plugin.

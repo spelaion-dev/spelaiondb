@@ -2,7 +2,7 @@
 //! always run, with nothing external. What a run replaces is the core's: a pinned result
 //! survives the next run with its rows, and closing it frees it.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -82,6 +82,7 @@ impl Editor {
 
 #[tokio::test]
 async fn a_pinned_result_survives_the_next_run_and_is_freed_when_closed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let editor = editor().await;
     editor
         .run(
@@ -124,6 +125,7 @@ async fn a_pinned_result_survives_the_next_run_and_is_freed_when_closed() {
 
 #[tokio::test]
 async fn a_run_into_a_new_tab_keeps_the_results_and_a_re_run_reads_again_in_place() {
+    let _turn = crate::serial::file_turn(module_path!());
     let editor = editor().await;
     editor
         .run(

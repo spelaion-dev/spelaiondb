@@ -7,7 +7,7 @@
 //! `spelaion`) and Redis's plugin (pinned, or `SPELAION_DEV_PLUGIN_REDIS`). Without them it is
 //! skipped, which does not count as tested.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -94,6 +94,7 @@ fn texts(results: &ResultStore, id: ResultId, name: &str) -> Vec<Option<String>>
 
 #[tokio::test]
 async fn a_script_of_command_lines_runs_each_as_its_arguments() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, results)) = session("5").await else {
         return;
     };
@@ -129,6 +130,7 @@ LRANGE spelaion:core:list 0 -1
 
 #[tokio::test]
 async fn what_the_core_will_not_send_is_refused_in_place() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, _results)) = session("5").await else {
         return;
     };
@@ -156,6 +158,7 @@ async fn what_the_core_will_not_send_is_refused_in_place() {
 
 #[tokio::test]
 async fn the_database_is_the_sessions() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, results)) = session("6").await else {
         return;
     };
@@ -175,6 +178,7 @@ async fn the_database_is_the_sessions() {
 
 #[test]
 fn the_guard_asks_before_what_redis_would_lose() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = spelaion_dialect::for_engine("redis").expect("Redis's language");
     let plain = Safeguards::default();
     let production = Safeguards {

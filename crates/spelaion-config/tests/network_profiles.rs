@@ -3,7 +3,7 @@
 //! both; repository profiles are pinned by trust like any tunnel file (ADR-022), so the tests
 //! below also try to get around that.
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture};
 use spelaion_config::{
@@ -53,6 +53,7 @@ fn message(result: Result<spelaion_config::ResolvedConnection, ResolveError>) ->
 
 #[test]
 fn connections_share_a_profile_and_add_what_it_leaves_out() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-merge");
     fx.write("repo/.spelaion/tunnels/cluster.toml", PROFILE);
     fx.write(
@@ -84,6 +85,7 @@ fn connections_share_a_profile_and_add_what_it_leaves_out() {
 
 #[test]
 fn a_profile_may_name_the_resource_and_connections_only_point_to_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-resource");
     fx.write(
         "user/tunnels/cluster.toml",
@@ -108,6 +110,7 @@ fn a_profile_may_name_the_resource_and_connections_only_point_to_it() {
 
 #[test]
 fn a_setting_is_never_taken_from_both_places() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-both");
     fx.write("user/tunnels/cluster.toml", PROFILE);
     let trust = fx.untrusted();
@@ -142,6 +145,7 @@ fn a_setting_is_never_taken_from_both_places() {
 
 #[test]
 fn the_resource_must_come_from_somewhere() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-no-resource");
     fx.write("user/tunnels/cluster.toml", PROFILE);
     fx.write("user/connections/none.toml", &connection(""));
@@ -158,6 +162,7 @@ fn the_resource_must_come_from_somewhere() {
 
 #[test]
 fn ssh_and_kubernetes_still_exclude_each_other() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-ssh");
     fx.write(
         "user/tunnels/cluster.toml",
@@ -206,6 +211,7 @@ fn ssh_and_kubernetes_still_exclude_each_other() {
 
 #[test]
 fn local_files_and_fixed_ports_do_not_go_through_kubernetes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-files");
     fx.write("user/tunnels/cluster.toml", PROFILE);
     fx.write(
@@ -248,6 +254,7 @@ fn resolve_loaded(
 /// points or which cluster it uses is reviewed before anything is resolved.
 #[test]
 fn a_changed_repository_profile_waits_for_review() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-trust");
     fx.write("repo/.spelaion/tunnels/cluster.toml", PROFILE);
     fx.write(
@@ -337,6 +344,7 @@ fn a_changed_repository_profile_waits_for_review() {
 /// The editors run `kubectl` to fill their lists: from a repository profile, only as trusted.
 #[test]
 fn editors_list_with_a_profile_only_as_trusted() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-editor");
     fx.write("repo/.spelaion/tunnels/cluster.toml", PROFILE);
     let trust = fx.trusted();
@@ -434,6 +442,7 @@ fn k8s_draft(source: Source) -> TunnelDraft {
 
 #[test]
 fn profiles_are_written_from_the_editor_and_edited_in_place() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-draft");
     let config = fx.config();
     let backend = FakeBackend::default();
@@ -511,6 +520,7 @@ fn profiles_are_written_from_the_editor_and_edited_in_place() {
 
 #[test]
 fn the_connection_form_keeps_the_profile_and_writes_only_its_own_fields() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("k8s-profile-form");
     fx.write("user/tunnels/cluster.toml", PROFILE);
     fx.write(
@@ -581,6 +591,7 @@ const SSM: &str = "schema_version = 1\n\n[ssm]\ntarget = \"i-0123456789abcdef0\"
 /// of it is a secret.
 #[test]
 fn ssm_profiles_resolve_alone_or_before_hops() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("ssm-profile");
     fx.write(
         "user/user.toml",
@@ -619,6 +630,7 @@ fn ssm_profiles_resolve_alone_or_before_hops() {
 
 #[test]
 fn ssm_profiles_refuse_what_cannot_go_with_them() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("ssm-invalid");
     for body in [
         // SSM and a proxy both before the first hop.
@@ -647,6 +659,7 @@ fn ssm_profiles_refuse_what_cannot_go_with_them() {
 /// node, account, region or program is used, or adds SSM to an SSH profile, is reviewed first.
 #[test]
 fn a_changed_repository_ssm_profile_waits_for_review() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("ssm-trust");
     fx.write(
         "user/user.toml",
@@ -702,6 +715,7 @@ fn a_changed_repository_ssm_profile_waits_for_review() {
 
 #[test]
 fn ssm_profiles_are_written_from_the_editor() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("ssm-draft");
     let backend = FakeBackend::default();
     let draft = TunnelDraft {

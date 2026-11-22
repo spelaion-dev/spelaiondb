@@ -14,8 +14,6 @@ use spelaion_core::{
 use spelaion_driver_api::Secret;
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
-mod engines;
-
 struct Workspace {
     base: PathBuf,
 }
@@ -90,6 +88,7 @@ fn lower(names: impl IntoIterator<Item = String>) -> Vec<String> {
 
 #[tokio::test]
 async fn mysql_and_mariadb_show_only_the_named_databases_as_schemas() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (var, engine) in [
         ("SPELAION_TEST_MYSQL", "mysql"),
         ("SPELAION_TEST_MARIADB", "mariadb"),
@@ -149,6 +148,7 @@ async fn mysql_and_mariadb_show_only_the_named_databases_as_schemas() {
 
 #[tokio::test]
 async fn sql_server_shows_only_the_named_databases_and_all_of_their_schemas() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = addr("SPELAION_TEST_MSSQL") else {
         eprintln!("SPELAION_TEST_MSSQL not set: test skipped");
         return;

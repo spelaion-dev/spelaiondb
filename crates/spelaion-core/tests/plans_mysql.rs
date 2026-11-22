@@ -136,6 +136,7 @@ async fn values(session: &Session) -> Vec<String> {
 
 #[tokio::test]
 async fn mysql_family_plans_run_on_the_tabs_own_session_estimated_and_analyzed() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (variable, engine) in SERVERS {
         let Some(open) = open(variable, engine, false).await else {
             continue;
@@ -219,6 +220,7 @@ async fn mysql_family_plans_run_on_the_tabs_own_session_estimated_and_analyzed()
 
 #[tokio::test]
 async fn mysql_family_analyzed_writes_need_confirmation_and_follow_smart_commit() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (variable, engine) in SERVERS {
         let Some(open) = open(variable, engine, false).await else {
             continue;
@@ -301,6 +303,7 @@ async fn mysql_family_analyzed_writes_need_confirmation_and_follow_smart_commit(
 
 #[tokio::test]
 async fn mysql_family_read_only_connections_get_estimated_read_plans_only() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (variable, engine) in SERVERS {
         let Some(open) = open(variable, engine, true).await else {
             continue;
@@ -359,6 +362,7 @@ async fn mysql_family_read_only_connections_get_estimated_read_plans_only() {
 /// wrong engine never runs the analyzed statement.
 #[tokio::test]
 async fn mysql_family_analyze_on_the_other_flavor_is_refused_before_running() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (Ok(_), Ok(_)) = (
         std::env::var("SPELAION_TEST_MYSQL"),
         std::env::var("SPELAION_TEST_MARIADB"),
@@ -409,6 +413,7 @@ async fn mysql_family_analyze_on_the_other_flavor_is_refused_before_running() {
 
 #[tokio::test]
 async fn mysql_family_agent_plans_are_estimated_reads_only() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (variable, engine) in SERVERS {
         let Some(open) = open(variable, engine, false).await else {
             continue;

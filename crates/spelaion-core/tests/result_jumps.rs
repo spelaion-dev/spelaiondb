@@ -8,8 +8,8 @@
 //!   order. A load stopped between pages, or cancelled before it starts, keeps exactly the
 //!   pages loaded before; the same result then loads the rest, every row once.
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -186,6 +186,7 @@ fn by_group_desc() -> Vec<u64> {
 
 #[tokio::test]
 async fn table_data_tabs_jump_to_page_n_and_to_the_last_page_exactly_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let table = "result_jumps_table";
     let mut tested = Vec::new();
     for (label, session, schema) in engines().await {
@@ -298,6 +299,7 @@ async fn table_data_tabs_jump_to_page_n_and_to_the_last_page_exactly_on_every_en
 
 #[tokio::test]
 async fn paged_queries_reach_a_row_and_load_every_row_with_cancel_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let table = "result_jumps_query";
     let mut tested = Vec::new();
     for (label, session, _schema) in engines().await {

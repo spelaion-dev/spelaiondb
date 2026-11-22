@@ -1,6 +1,6 @@
 //! Real SQLite and DuckDB plan runs (both compiled in: they always run), and SQLite on a
 //! server through `sqlite3 -safe` (ADR-018) with `SPELAION_TEST_SSH`.
-mod engines;
+use crate::engines;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -214,6 +214,7 @@ fn sqlite_join_plan(doc: &PlanDocument) {
 
 #[tokio::test]
 async fn sqlite_plans_are_estimated_trees_of_steps_on_the_tabs_own_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     let file = TempFile::new("sqlite", Engine::Sqlite).await;
     let open = open(Engine::Sqlite, &file.0, false).await;
     let session = &open.session;
@@ -309,6 +310,7 @@ async fn sqlite_plans_are_estimated_trees_of_steps_on_the_tabs_own_session() {
 
 #[tokio::test]
 async fn sqlite_read_only_and_agent_plans_are_estimated_reads() {
+    let _turn = crate::serial::file_turn(module_path!());
     let file = TempFile::new("sqlite-ro", Engine::Sqlite).await;
     {
         let writer = open(Engine::Sqlite, &file.0, false).await;
@@ -407,6 +409,7 @@ fn duckdb_join_plan(doc: &PlanDocument) {
 
 #[tokio::test]
 async fn duckdb_plans_run_estimated_and_analyzed_on_the_tabs_own_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     let file = TempFile::new("duckdb", Engine::Duckdb).await;
     let open = open(Engine::Duckdb, &file.0, false).await;
     let session = &open.session;
@@ -499,6 +502,7 @@ async fn duckdb_plans_run_estimated_and_analyzed_on_the_tabs_own_session() {
 
 #[tokio::test]
 async fn duckdb_analyzed_writes_execute_only_once_confirmed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let file = TempFile::new("duckdb-write", Engine::Duckdb).await;
     let open = open(Engine::Duckdb, &file.0, false).await;
     let session = &open.session;
@@ -556,6 +560,7 @@ async fn duckdb_analyzed_writes_execute_only_once_confirmed() {
 
 #[tokio::test]
 async fn duckdb_read_only_and_agent_plans_are_estimated_reads() {
+    let _turn = crate::serial::file_turn(module_path!());
     let file = TempFile::new("duckdb-ro", Engine::Duckdb).await;
     {
         let writer = open(Engine::Duckdb, &file.0, false).await;
@@ -716,6 +721,7 @@ const REMOTE_QUERY: &str = "SELECT a.name, b.price, \
 
 #[tokio::test]
 async fn sqlite_on_a_server_gets_the_same_plans_through_sqlite3() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: remote SQLite plans not tested");
         return;

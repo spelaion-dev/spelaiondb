@@ -9,7 +9,7 @@
 //! with a random seed (`PROPTEST_RNG_SEED` fixes it), for long runs on a machine or on a
 //! schedule, never in a pull request's job.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 
@@ -279,6 +279,7 @@ proptest! {
         sources in mutations(),
         credentials in prop::collection::vec(any::<u8>(), 0..96),
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let scratch = Scratch::new();
         let dir = scratch.0.join("General").join(".dbeaver");
         std::fs::create_dir_all(&dir).unwrap();
@@ -297,6 +298,7 @@ proptest! {
         ]),
         changes in mutations(),
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let scratch = Scratch::new();
         copy_dir(&fixtures().join("datagrip"), &scratch.0);
         mutate_file(&scratch.0, file, &changes);
@@ -317,6 +319,7 @@ proptest! {
         changes in mutations(),
         password in prop::option::of(prop_oneof![Just("fixture-export-pw".to_string()), any::<String>()]),
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let scratch = Scratch::new();
         copy_dir(&fixtures().join("tableplus"), &scratch.0);
         mutate_file(&scratch.0, file, &changes);
@@ -330,6 +333,7 @@ proptest! {
 
     #[test]
     fn workbench_reads_any_file_without_panicking(changes in mutations()) {
+        let _turn = crate::serial::file_turn(module_path!());
         let scratch = Scratch::new();
         copy_dir(&fixtures().join("workbench"), &scratch.0);
         mutate_file(&scratch.0, "Workbench/connections.xml", &changes);
@@ -340,6 +344,7 @@ proptest! {
 
     #[test]
     fn pgadmin_reads_any_export_without_panicking(changes in mutations()) {
+        let _turn = crate::serial::file_turn(module_path!());
         let scratch = Scratch::new();
         copy_dir(&fixtures().join("pgadmin"), &scratch.0);
         mutate_file(&scratch.0, "pgadmin-9.19-servers.json", &changes);
@@ -348,6 +353,7 @@ proptest! {
 
     #[test]
     fn heidisql_reads_any_export_without_panicking(changes in mutations()) {
+        let _turn = crate::serial::file_turn(module_path!());
         let scratch = Scratch::new();
         copy_dir(&fixtures().join("heidisql"), &scratch.0);
         mutate_file(&scratch.0, "heidisql-12.22.txt", &changes);
@@ -362,6 +368,7 @@ proptest! {
         key in prop_oneof![Just(None), mutations().prop_map(Some)],
         file_changes in prop::option::of(mutations()),
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let scratch = Scratch::new();
         let dir = scratch.0.join("beekeeper-studio");
         std::fs::create_dir_all(&dir).unwrap();
@@ -397,6 +404,7 @@ proptest! {
             any::<String>(),
         ],
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let fx = Fixture::new(&format!("paste-property-{}", Scratch::new().0.file_name().unwrap().to_string_lossy()));
         let backend = FakeBackend::default();
         let _ = paste_connection(&fx.config(), &text, &backend);

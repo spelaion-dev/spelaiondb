@@ -5,7 +5,7 @@
 //! connection refuses unless both are reads. The SQL the core writes means the same in the
 //! session's mode. Needs `SPELAION_TEST_MYSQL` and `SPELAION_TEST_MARIADB` (testing/docker).
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -116,6 +116,7 @@ const HIDDEN_CALL_DOUBLE: &str = r#"select "a\", load_file('/etc/passwd') -- ""#
 
 #[tokio::test]
 async fn the_editors_checks_read_a_statement_as_the_default_and_the_sessions_mode_do() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session) in servers().await {
         let base = server_mode(label, &session).await;
         for extra in MODES {
@@ -182,6 +183,7 @@ async fn the_editors_checks_read_a_statement_as_the_default_and_the_sessions_mod
 /// A column comment with a backslash is stored as typed, whatever the session's mode.
 #[tokio::test]
 async fn a_comment_the_core_writes_keeps_its_backslash_in_every_mode() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session) in servers().await {
         let base = server_mode(label, &session).await;
         for extra in MODES {
@@ -247,6 +249,7 @@ async fn a_comment_the_core_writes_keeps_its_backslash_in_every_mode() {
 /// read back, in every mode.
 #[tokio::test]
 async fn grants_for_an_account_named_with_a_quote_and_a_backslash_apply_in_every_mode() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session) in servers().await {
         let base = server_mode(label, &session).await;
         for extra in MODES {

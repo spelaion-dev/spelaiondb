@@ -10,7 +10,7 @@
 //! MariaDB, on the first session once `USE` moved it to the other database. Nothing is written
 //! anywhere until the first session, back in its database, applies the edit to its own table.
 
-mod engines;
+use crate::engines;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -253,6 +253,7 @@ async fn refused(
 
 #[tokio::test]
 async fn edits_are_written_only_where_the_rows_were_read() {
+    let _turn = crate::serial::file_turn(module_path!());
     let loaded = scratch("loaded.txt");
     std::fs::write(&loaded, "from a file").unwrap();
     for pair in pairs("source").await {
@@ -368,6 +369,7 @@ async fn edits_are_written_only_where_the_rows_were_read() {
 /// rows without a known database: they are never editable.
 #[tokio::test]
 async fn rows_read_across_a_use_are_not_editable() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
         return;
     };
@@ -423,6 +425,7 @@ async fn rows_read_across_a_use_are_not_editable() {
 /// engine of `pairs`, on its first database.
 #[tokio::test]
 async fn edits_follow_the_table_the_rows_were_read_from() {
+    let _turn = crate::serial::file_turn(module_path!());
     const IDENTITY_QUERY: &str = "select id, name from edit_identity";
     for pair in pairs("identity").await {
         let label = pair.label;
@@ -548,6 +551,7 @@ async fn edits_follow_the_table_the_rows_were_read_from() {
 
 #[tokio::test]
 async fn mysql_keeps_the_database_context_after_writes_with_backslashes() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, var, driver) in [
         ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
         ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),

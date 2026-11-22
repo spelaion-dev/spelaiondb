@@ -16,8 +16,8 @@ use spelaion_core::{
 };
 use spelaion_driver_api::{ConnectParams, Driver, ExecEvent, ExecOptions, Secret, TlsMode};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
 
 /// Two sessions on the same database: `a` is the editor tab, `b` looks from outside.
@@ -290,6 +290,7 @@ enum Mode {
 
 #[tokio::test]
 async fn an_error_in_statement_3_of_5_in_every_mode_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         engine.a.follow_transactions(&Safeguards::default()).await;
@@ -387,6 +388,7 @@ async fn an_error_in_statement_3_of_5_in_every_mode_on_every_engine() {
 
 #[tokio::test]
 async fn skip_all_does_not_ask_again() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         let table = unique("runs_all");
@@ -452,6 +454,7 @@ async fn summary_of(
 
 #[tokio::test]
 async fn a_paused_run_takes_only_its_ticket_and_stops_when_cancelled_or_closed() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         let table = unique("runs_pause");
@@ -551,6 +554,7 @@ async fn a_paused_run_takes_only_its_ticket_and_stops_when_cancelled_or_closed()
 
 #[tokio::test]
 async fn a_cancelled_run_stops_in_every_mode() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         let slow = slow_statement(name);
@@ -597,6 +601,7 @@ async fn a_cancelled_run_stops_in_every_mode() {
 
 #[tokio::test]
 async fn continue_after_a_failed_write_under_smart_commit() {
+    let _turn = crate::serial::file_turn(module_path!());
     const SMART: Safeguards = Safeguards {
         confirm_execution: false,
         confirm_data_changes: true,
@@ -669,6 +674,7 @@ async fn continue_after_a_failed_write_under_smart_commit() {
 
 #[tokio::test]
 async fn an_error_that_rolls_back_the_transaction_stops_continue() {
+    let _turn = crate::serial::file_turn(module_path!());
     // SQL Server with XACT_ABORT rolls the whole transaction back on any error.
     for engine in engines().await {
         if engine.name != "sqlserver" {
@@ -748,6 +754,7 @@ fn slow_statement(engine: &str) -> &'static str {
 
 #[tokio::test]
 async fn a_statement_that_runs_too_long_times_out_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         let script = format!("{};\nselect 1", slow_statement(name));

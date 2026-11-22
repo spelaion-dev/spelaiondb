@@ -5,7 +5,7 @@
 //! named pipe one SpelaionDB cannot open. Passwords are read only from the macOS keychain, on
 //! import; Workbench's Windows vault and Linux keychain items are never read.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 
@@ -42,6 +42,7 @@ const VAULT: &str = "Password: if Workbench saved one, it is in its vault (workb
 
 #[test]
 fn every_connection_comes_with_its_address_user_and_default_schema() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let names: Vec<&str> = all.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(
@@ -91,6 +92,7 @@ fn every_connection_comes_with_its_address_user_and_default_schema() {
 
 #[test]
 fn a_named_pipe_connection_is_listed_but_cannot_be_imported() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let pipe = named(&all, "Local pipe");
     let reason = pipe.engine.clone().unwrap_err();
@@ -104,6 +106,7 @@ fn a_named_pipe_connection_is_listed_but_cannot_be_imported() {
 
 #[test]
 fn groups_become_folders() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     assert_eq!(named(&all, "Shop MariaDB TLS").folder, "Prod");
     assert_eq!(named(&all, "Orders via bastion").folder, "Prod");
@@ -113,6 +116,7 @@ fn groups_become_folders() {
 
 #[test]
 fn tls_comes_with_its_mode_and_certificate_files() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let tls = named(&all, "Shop MariaDB TLS").tls.clone().unwrap();
     assert_eq!(tls.mode, TlsModeConfig::VerifyCa);
@@ -126,6 +130,7 @@ fn tls_comes_with_its_mode_and_certificate_files() {
 
 #[test]
 fn standard_tcp_ip_over_ssh_becomes_a_one_hop_tunnel_with_its_key_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let bastion = named(&all, "Orders via bastion");
     let ssh = bastion.ssh.clone().unwrap();
@@ -141,6 +146,7 @@ fn standard_tcp_ip_over_ssh_becomes_a_one_hop_tunnel_with_its_key_file() {
 
 #[test]
 fn what_is_not_imported_is_listed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     assert_eq!(
         named(&all, "Shop MariaDB TLS").unmapped,
@@ -159,6 +165,7 @@ fn what_is_not_imported_is_listed() {
 
 #[test]
 fn on_windows_the_vault_is_never_read_and_the_preview_says_so() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("workbench-vault");
     let dir = fx.base.join("Workbench");
     std::fs::create_dir_all(&dir).unwrap();
@@ -192,6 +199,7 @@ fn on_windows_the_vault_is_never_read_and_the_preview_says_so() {
 
 #[test]
 fn on_macos_passwords_come_from_the_keychain_only_when_importing_with_them() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut all = read_as(WorkbenchPasswords::Keychain);
     // Workbench's keychain items: its host identifier as the service, the user as the account.
     assert_eq!(
@@ -238,6 +246,7 @@ fn on_macos_passwords_come_from_the_keychain_only_when_importing_with_them() {
 
 #[test]
 fn on_linux_keychain_passwords_are_not_read_and_the_preview_says_so() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read_as(WorkbenchPasswords::SecretService);
     for name in ["Shop MySQL", "Shop MariaDB TLS", "Orders via bastion"] {
         let c = named(&all, name);
@@ -254,6 +263,7 @@ fn on_linux_keychain_passwords_are_not_read_and_the_preview_says_so() {
 
 #[test]
 fn every_connection_becomes_a_connection_file_and_the_bastion_a_network_profile() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("workbench-import");
     let backend = FakeBackend::default();
     let folder = TargetFolder {
@@ -334,6 +344,7 @@ fn read_text(fx: &Fixture, text: &str) -> Result<Vec<ImportedConnection>, Workbe
 
 #[test]
 fn a_server_workbench_saw_as_mariadb_is_imported_as_mariadb() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("workbench-mariadb");
     let all = read_text(
         &fx,
@@ -353,6 +364,7 @@ fn a_server_workbench_saw_as_mariadb_is_imported_as_mariadb() {
 
 #[test]
 fn secret_looking_options_show_their_name_only_and_passwords_in_the_file_are_secrets() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("workbench-secrets");
     let all = read_text(
         &fx,
@@ -404,6 +416,7 @@ fn secret_looking_options_show_their_name_only_and_passwords_in_the_file_are_sec
 
 #[test]
 fn unknown_methods_are_listed_and_broken_files_are_refused() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("workbench-broken");
     let all = read_text(
         &fx,

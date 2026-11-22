@@ -198,6 +198,7 @@ password = { secret = "prompt" }
 
 #[test]
 fn loads_both_layers_with_folders_and_ids() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("layers");
     fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
     fx.write(
@@ -233,6 +234,7 @@ fn loads_both_layers_with_folders_and_ids() {
 
 #[test]
 fn broken_files_are_reported_with_position_and_do_not_hide_others() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("broken");
     fx.write(
         "repo/.spelaion/connections/ok.toml",
@@ -283,6 +285,7 @@ fn broken_files_are_reported_with_position_and_do_not_hide_others() {
 
 #[test]
 fn workspace_connections_need_trust_but_personal_ones_do_not() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("trust");
     fx.write(
         "repo/.spelaion/connections/db.toml",
@@ -321,6 +324,7 @@ fn workspace_connections_need_trust_but_personal_ones_do_not() {
 
 #[test]
 fn resolves_variables_paths_tls_and_tunnels() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("resolve");
     fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
     fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
@@ -371,6 +375,7 @@ fn resolves_variables_paths_tls_and_tunnels() {
 
 #[test]
 fn missing_variables_say_what_to_add() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("missing-var");
     fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
     fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
@@ -402,6 +407,7 @@ fn with_password(fx: &Fixture, secret: &str) -> spelaion_config::Config {
 
 #[test]
 fn secrets_resolve_from_each_source() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("secrets");
     let backend = FakeBackend {
         env: BTreeMap::from([("PGPASS".into(), "from-env".into())]),
@@ -448,6 +454,7 @@ fn secrets_resolve_from_each_source() {
 
 #[test]
 fn keychain_asks_the_first_time_and_remembers() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("keychain");
     let backend = FakeBackend::default();
     let config = with_password(&fx, "keychain");
@@ -481,6 +488,7 @@ fn keychain_asks_the_first_time_and_remembers() {
 
 #[test]
 fn edits_keep_comments_and_layout() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("edit");
     let original = "# Orders database: do not touch on Fridays\nschema_version = 1\nengine = \"postgres\" # engine\nhost = \"old-host\" # change after the migration\ndatabase = \"orders\"\nuser = \"app\"\n";
     let file = fx.write("repo/.spelaion/connections/orders.toml", original);
@@ -516,6 +524,7 @@ fn edits_keep_comments_and_layout() {
 
 #[test]
 fn creates_new_connection_files() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("create");
     let dir = fx.repo().join(".spelaion/connections");
     let file = ConnectionFile {
@@ -572,6 +581,7 @@ fn creates_new_connection_files() {
 
 #[test]
 fn json_schemas_are_up_to_date() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema");
     let update = std::env::var("SPELAION_UPDATE_SCHEMA").is_ok();
     for (name, schema) in spelaion_config::json_schemas() {
@@ -600,6 +610,7 @@ fn json_schemas_are_up_to_date() {
 #[test]
 #[ignore]
 fn system_keychain_round_trip() {
+    let _turn = crate::serial::file_turn(module_path!());
     let account = format!("selftest/{}", std::process::id());
     SystemBackend
         .keychain_set(&account, "test-value")
@@ -616,6 +627,7 @@ fn system_keychain_round_trip() {
 /// A command with quotes (paths with spaces) must reach the shell intact.
 #[test]
 fn shell_commands_keep_their_quotes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let out = SystemBackend
         .run_shell(r#"echo "a b""#)
         .expect("running echo");
@@ -666,6 +678,7 @@ fn postgres_draft() -> ConnectionDraft {
 
 #[test]
 fn slugs_make_safe_file_names() {
+    let _turn = crate::serial::file_turn(module_path!());
     assert_eq!(slug("Orders (prod)"), "orders-prod");
     assert_eq!(slug("  Análisis  2026 "), "analisis-2026");
     assert_eq!(slug("Año Ñandú"), "ano-nandu");
@@ -676,6 +689,7 @@ fn slugs_make_safe_file_names() {
 
 #[test]
 fn new_connections_are_written_without_secrets_and_load_back() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-postgres");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
@@ -726,6 +740,7 @@ fn new_connections_are_written_without_secrets_and_load_back() {
 
 #[test]
 fn sqlite_drafts_keep_repository_paths_portable_and_drop_network_fields() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-sqlite");
     let config = load(Some(&fx.repo()), &fx.user());
     let draft = ConnectionDraft {
@@ -765,6 +780,7 @@ fn sqlite_drafts_keep_repository_paths_portable_and_drop_network_fields() {
 
 #[test]
 fn drafts_never_overwrite_and_undo_the_file_if_the_keychain_fails() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-conflict");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
@@ -801,6 +817,7 @@ fn drafts_never_overwrite_and_undo_the_file_if_the_keychain_fails() {
 
 #[test]
 fn invalid_drafts_explain_what_is_wrong() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-invalid");
     let config = load(Some(&fx.repo()), &fx.user());
     let error = |draft: ConnectionDraft| draft.to_file(&config).unwrap_err().message;
@@ -851,6 +868,7 @@ fn invalid_drafts_explain_what_is_wrong() {
 
 #[test]
 fn drafts_resolve_for_testing_with_the_same_trust_rules() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-resolve");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
@@ -889,6 +907,7 @@ const HAND_WRITTEN: &str = "# Orders database: owned by the data team\nschema_ve
 
 #[test]
 fn drafts_round_trip_existing_connections() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-roundtrip");
     fx.write("repo/.spelaion/connections/team/orders.toml", HAND_WRITTEN);
     fx.write(
@@ -912,6 +931,7 @@ fn drafts_round_trip_existing_connections() {
 
 #[test]
 fn editing_keeps_comments_and_settings_the_form_does_not_show() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-edit");
     let path = fx.write("repo/.spelaion/connections/team/orders.toml", HAND_WRITTEN);
     let config = load(Some(&fx.repo()), &fx.user());
@@ -968,6 +988,7 @@ fn editing_keeps_comments_and_settings_the_form_does_not_show() {
 
 #[test]
 fn descriptions_are_saved_edited_and_validated() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-description");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
@@ -1077,6 +1098,7 @@ fn tags(list: &[&str]) -> Vec<String> {
 
 #[test]
 fn tags_are_normalised_validated_and_edited() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-tags");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
@@ -1204,6 +1226,7 @@ fn tags_are_normalised_validated_and_edited() {
 
 #[test]
 fn the_form_lets_agents_write_or_only_read() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-mcp-writes");
     let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
     let id = ws("orders");
@@ -1259,6 +1282,7 @@ fn the_form_lets_agents_write_or_only_read() {
 
 #[test]
 fn editing_the_password_updates_or_forgets_the_keychain_entry() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-edit-password");
     let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
     let id = ws("orders");
@@ -1327,6 +1351,7 @@ fn editing_the_password_updates_or_forgets_the_keychain_entry() {
 
 #[test]
 fn invalid_edits_leave_the_file_untouched() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-edit-invalid");
     let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
     let config = load(Some(&fx.repo()), &fx.user());
@@ -1358,6 +1383,7 @@ fn invalid_edits_leave_the_file_untouched() {
 
 #[test]
 fn deleting_removes_the_file_its_password_and_empty_folders() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-delete");
     let path = fx.write(
         "repo/.spelaion/connections/prod/eu/orders.toml",
@@ -1398,6 +1424,7 @@ fn deleting_removes_the_file_its_password_and_empty_folders() {
 
 #[test]
 fn testing_an_edit_finds_the_stored_password_even_after_renaming() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("draft-edit-resolve");
     fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
     let config = load(Some(&fx.repo()), &fx.user());
@@ -1499,6 +1526,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
 
 #[test]
 fn kubernetes_connections_are_written_resolved_and_validated() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("conn-k8s");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
@@ -1578,6 +1606,7 @@ fn kubernetes_connections_are_written_resolved_and_validated() {
 
 #[test]
 fn kubernetes_and_an_ssh_tunnel_do_not_mix() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("conn-k8s-both");
     std::fs::create_dir_all(fx.repo().join(".spelaion/connections")).unwrap();
     std::fs::write(
@@ -1619,6 +1648,7 @@ user = \"ops\"
 
 #[test]
 fn new_tunnels_are_written_without_secrets_and_load_back() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tunnel-add");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
@@ -1675,6 +1705,7 @@ fn new_tunnels_are_written_without_secrets_and_load_back() {
 
 #[test]
 fn invalid_tunnels_explain_what_is_wrong() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tunnel-invalid");
     let config = load(Some(&fx.repo()), &fx.user());
     let error = |draft: TunnelDraft| draft.to_file(&config).unwrap_err().message;
@@ -1715,6 +1746,7 @@ const HAND_WRITTEN_TUNNEL: &str = "# Production bastions: ask the infra team bef
 
 #[test]
 fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsewhere() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tunnel-edit");
     let path = fx.write("repo/.spelaion/tunnels/prod.toml", HAND_WRITTEN_TUNNEL);
     let backend = FakeBackend::default();
@@ -1843,6 +1875,7 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
 
 #[test]
 fn tunnel_keepalives_are_edited_validated_and_resolved() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tunnel-keepalive");
     let path = fx.write("repo/.spelaion/tunnels/prod.toml", HAND_WRITTEN_TUNNEL);
     let backend = FakeBackend::default();
@@ -1976,6 +2009,7 @@ fn tunnel_keepalives_are_edited_validated_and_resolved() {
 
 #[test]
 fn local_ports_come_from_the_connection_or_the_personal_range() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("local-ports");
     let path = fx.write(
         "repo/.spelaion/connections/prod/orders.toml",
@@ -2104,6 +2138,7 @@ fn local_ports_come_from_the_connection_or_the_personal_range() {
 
 #[test]
 fn session_keepalives_are_written_resolved_and_refused_for_files() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("session-keepalive");
     let path = fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
     fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
@@ -2179,6 +2214,7 @@ fn session_keepalives_are_written_resolved_and_refused_for_files() {
 /// driver's parameters, refused for local files and out of range.
 #[test]
 fn connect_timeouts_are_written_resolved_and_validated() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("connect-timeout");
     let path = fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
     fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
@@ -2262,6 +2298,7 @@ fn connect_timeouts_are_written_resolved_and_validated() {
 
 #[test]
 fn statement_timeouts_are_written_resolved_and_validated() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("statement-timeout");
     let path = fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
     fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
@@ -2347,6 +2384,7 @@ statement_timeout = 86401
 
 #[test]
 fn the_personal_port_range_is_saved_next_to_the_variables() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("port-range");
     let path = fx.write("user/user.toml", "# mine\n[vars]\ndb_user = \"ana\"\n");
     spelaion_config::set_tunnel_ports(&fx.user(), Some((20000, 20100))).unwrap();
@@ -2382,6 +2420,7 @@ fn proxy_draft(host: &str) -> ProxyDraft {
 
 #[test]
 fn proxies_are_written_without_their_password_and_resolved() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tunnel-proxy");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
@@ -2504,6 +2543,7 @@ fn proxies_are_written_without_their_password_and_resolved() {
 
 #[test]
 fn invalid_proxies_explain_what_is_wrong() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tunnel-proxy-invalid");
     let config = load(Some(&fx.repo()), &fx.user());
     let error = |draft: TunnelDraft| draft.to_file(&config).unwrap_err().message;
@@ -2553,6 +2593,7 @@ fn invalid_proxies_explain_what_is_wrong() {
 
 #[test]
 fn tunnels_in_use_cannot_be_deleted() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tunnel-delete");
     let path = fx.write("repo/.spelaion/tunnels/prod.toml", HAND_WRITTEN_TUNNEL);
     fx.write(
@@ -2590,6 +2631,7 @@ fn tunnels_in_use_cannot_be_deleted() {
 
 #[test]
 fn shared_key_paths_work_on_every_machine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tunnel-paths");
     let config = load(Some(&fx.repo()), &fx.user());
     let home =
@@ -2638,6 +2680,7 @@ fn through(tunnel: &str) -> String {
 /// relative paths stay relative to its own folder, the connection's to the connection's.
 #[test]
 fn tunnel_paths_are_relative_to_the_tunnels_layer() {
+    let _turn = crate::serial::file_turn(module_path!());
     // A personal connection through a repository tunnel.
     let fx = Fixture::new("cross-layer-repo-tunnel");
     fx.write("repo/.spelaion/tunnels/shared.toml", KEYED_TUNNEL);
@@ -2693,6 +2736,7 @@ fn tunnel_paths_are_relative_to_the_tunnels_layer() {
 /// its own entries, named after its path (which its files cannot choose).
 #[test]
 fn projects_never_share_keychain_passwords() {
+    let _turn = crate::serial::file_turn(module_path!());
     let first = Fixture::new("keychain-project-a");
     let second = Fixture::new("keychain-project-b");
     let backend = FakeBackend::default();
@@ -2740,6 +2784,7 @@ fn projects_never_share_keychain_passwords() {
 
 #[test]
 fn personal_and_repository_entries_are_separate() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("keychain-layers");
     let config = load(Some(&fx.repo()), &fx.user());
     // Personal connections keep the names they always had.
@@ -2791,6 +2836,7 @@ fn personal_and_repository_entries_are_separate() {
 /// written. DuckDB may not have a tunnel, and `sqlite3` only goes with one.
 #[test]
 fn sqlite_files_on_a_server_go_through_a_tunnel() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("conn-sqlite-remote");
     std::fs::create_dir_all(fx.repo().join(".spelaion/connections")).unwrap();
     std::fs::create_dir_all(fx.repo().join(".spelaion/tunnels")).unwrap();
@@ -2839,6 +2885,7 @@ const PINNED_TUNNEL: &str = "schema_version = 1\n\n[[hops]]\nhost = \"bastion.in
 
 #[test]
 fn reviewed_changes_must_still_match_the_workspace_and_revision() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("reviewed-revision");
     let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     let mut trust = fx.trusted();
@@ -2875,6 +2922,7 @@ fn reviewed_changes_must_still_match_the_workspace_and_revision() {
 
 #[test]
 fn stale_connection_and_tunnel_edits_reject_unseen_file_changes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("stale-form-files");
     let connection_path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     let tunnel_path = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -2942,6 +2990,7 @@ fn stale_connection_and_tunnel_edits_reject_unseen_file_changes() {
 
 #[test]
 fn only_the_exact_written_revision_is_pinned() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("own-written-revision");
     let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     let tunnel_path = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -2974,6 +3023,7 @@ fn only_the_exact_written_revision_is_pinned() {
 
 #[test]
 fn stale_reviews_of_tunnels_and_server_keys_are_rejected() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("review-tunnel-keys");
     let tunnel = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
     let hosts = fx.write("repo/.spelaion/known_hosts", "server ssh-ed25519 key-one\n");
@@ -3018,6 +3068,7 @@ fn stale_reviews_of_tunnels_and_server_keys_are_rejected() {
 
 #[test]
 fn stale_initial_trust_prompt_does_not_accept_later_changes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("stale-trust-prompt");
     let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     let mut trust = fx.trusted();
@@ -3029,6 +3080,7 @@ fn stale_initial_trust_prompt_does_not_accept_later_changes() {
 
 #[test]
 fn edited_unreviewed_items_do_not_approve_unrelated_changes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("edit-unreviewed");
     let connection = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     let tunnel = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3103,6 +3155,7 @@ fn edited_unreviewed_items_do_not_approve_unrelated_changes() {
 
 #[test]
 fn edited_trusted_items_record_only_the_written_revision() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("edit-trusted");
     fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3163,6 +3216,7 @@ fn changed(result: Result<(), ResolveError>) -> spelaion_config::ItemChange {
 
 #[test]
 fn a_saved_kind_is_validated_and_included_in_the_trust_pin() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pinned-engine-kind");
     let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3201,6 +3255,7 @@ fn a_saved_kind_is_validated_and_included_in_the_trust_pin() {
 
 #[test]
 fn a_pull_that_changes_a_trusted_connection_is_asked_about_again() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pinned-change");
     let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3253,6 +3308,7 @@ fn a_pull_that_changes_a_trusted_connection_is_asked_about_again() {
 
 #[test]
 fn every_way_around_the_snapshot_is_caught() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pinned-ways");
     let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     let tunnel = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3356,6 +3412,7 @@ fn every_way_around_the_snapshot_is_caught() {
 
 #[test]
 fn drafts_are_the_users_but_the_tunnels_they_use_are_checked() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pinned-draft");
     fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     let tunnel = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3390,6 +3447,7 @@ fn drafts_are_the_users_but_the_tunnels_they_use_are_checked() {
 
 #[test]
 fn editor_access_checks_saved_provenance_before_using_commands() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("editor-access");
     let file = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3453,6 +3511,7 @@ fn editor_access_checks_saved_provenance_before_using_commands() {
 
 #[test]
 fn repositories_trusted_before_snapshots_are_adopted_as_they_are() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pinned-legacy");
     let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3496,6 +3555,7 @@ const TEAM_HOSTS: &str = "# Reviewed by the team\nbastion.internal ssh-ed25519 A
 
 #[test]
 fn the_teams_known_hosts_is_used_only_as_trusted() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("team-hosts");
     fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
     fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
@@ -3567,6 +3627,7 @@ fn the_teams_known_hosts_is_used_only_as_trusted() {
 
 #[test]
 fn client_certificates_come_in_pairs_and_keys_stay_out_of_the_repository() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("client-cert");
     let base = "schema_version = 1\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"ops\"\n";
     fx.write(
@@ -3644,6 +3705,7 @@ fn client_certificates_come_in_pairs_and_keys_stay_out_of_the_repository() {
 
 #[test]
 fn cloud_tokens_write_a_safe_command_and_come_back_to_the_form() {
+    let _turn = crate::serial::file_turn(module_path!());
     use spelaion_config::CloudToken;
     let fx = Fixture::new("cloud-token");
     let config = load(Some(&fx.repo()), &fx.user());
@@ -3744,6 +3806,7 @@ fn cloud_tokens_write_a_safe_command_and_come_back_to_the_form() {
 
 #[test]
 fn every_missing_personal_variable_is_reported_at_once_and_saved_in_place() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("user-vars");
     fx.write(
         "repo/.spelaion/connections/orders.toml",
@@ -3836,6 +3899,7 @@ fn every_missing_personal_variable_is_reported_at_once_and_saved_in_place() {
 
 #[test]
 fn the_old_personal_folder_is_copied_never_moved() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("migrate-user");
     let old = fx.base.join("spelunkdb");
     let new = fx.base.join("spelaion");
@@ -3883,6 +3947,7 @@ fn the_old_personal_folder_is_copied_never_moved() {
 
 #[test]
 fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("legacy-workspace");
     let repo = fx.base.join("legacy");
     std::fs::create_dir_all(repo.join(".spelunk/connections")).unwrap();
@@ -3949,6 +4014,7 @@ fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
 #[cfg(unix)]
 #[test]
 fn a_new_personal_folder_is_private() {
+    let _turn = crate::serial::file_turn(module_path!());
     use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new("private-new");
     let dir = f.base.join("nested/spelaion");
@@ -3960,6 +4026,7 @@ fn a_new_personal_folder_is_private() {
 #[cfg(unix)]
 #[test]
 fn an_existing_personal_folder_open_to_others_is_closed() {
+    let _turn = crate::serial::file_turn(module_path!());
     use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new("private-existing");
     let dir = f.user();
@@ -3977,6 +4044,7 @@ fn an_existing_personal_folder_open_to_others_is_closed() {
 #[cfg(unix)]
 #[test]
 fn a_private_personal_folder_is_left_alone() {
+    let _turn = crate::serial::file_turn(module_path!());
     use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new("private-kept");
     let dir = f.user();
@@ -3990,6 +4058,7 @@ fn a_private_personal_folder_is_left_alone() {
 
 #[test]
 fn without_a_keychain_the_password_is_asked_and_not_remembered() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("no-keychain");
     let backend = FakeBackend {
         no_keychain: true,
@@ -4013,6 +4082,7 @@ fn without_a_keychain_the_password_is_asked_and_not_remembered() {
 
 #[test]
 fn a_keychain_that_fails_is_still_an_error() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("locked-keychain");
     // There is a keychain, but reading it fails: that is reported, never turned into a prompt.
     let backend = FakeBackend {
@@ -4029,6 +4099,7 @@ fn a_keychain_that_fails_is_still_an_error() {
 
 #[test]
 fn without_a_keychain_deleting_a_connection_does_not_fail() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("no-keychain-delete");
     let config = with_password(&fx, "keychain");
     let file = fx.repo().join(".spelaion/connections/db.toml");
@@ -4051,6 +4122,7 @@ fn without_a_keychain_deleting_a_connection_does_not_fail() {
 
 #[test]
 fn without_a_keychain_saving_a_password_is_refused_and_undone() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("no-keychain-save");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend {
@@ -4093,6 +4165,7 @@ fn assert_not_kept(result: Result<impl std::fmt::Debug, ResolveError>, secret: &
 
 #[test]
 fn a_keychain_that_keeps_nothing_fails_every_save_and_leaves_nothing_half_saved() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("keychain-drops");
     let config = load(Some(&fx.repo()), &fx.user());
     let drops = FakeBackend {
@@ -4219,6 +4292,7 @@ fn a_keychain_that_keeps_nothing_fails_every_save_and_leaves_nothing_half_saved(
 
 #[test]
 fn the_editor_is_told_whether_a_password_is_stored_never_its_value() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("password-stored");
     let backend = FakeBackend::default();
     let config = with_password(&fx, "keychain");
@@ -4282,6 +4356,7 @@ fn the_editor_is_told_whether_a_password_is_stored_never_its_value() {
 #[test]
 #[ignore]
 fn system_keychain_keeps_a_password_saved_from_the_form() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("system-keychain-form");
     let config = load(Some(&fx.repo()), &fx.user());
     let draft = ConnectionDraft {

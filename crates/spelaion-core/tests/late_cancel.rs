@@ -5,7 +5,7 @@
 //! once. A fake connection makes the race certain; MySQL, MariaDB and PostgreSQL (with their
 //! `SPELAION_TEST_*` variables) run it for real.
 
-mod engines;
+use crate::engines;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -133,6 +133,7 @@ async fn eventually(condition: impl Fn() -> bool, within: Duration) -> bool {
 
 #[tokio::test]
 async fn a_cancel_still_on_its_way_never_stops_the_next_run() {
+    let _turn = crate::serial::file_turn(module_path!());
     let engine = Arc::new(Engine::default());
     let fake = Fake {
         engine: engine.clone(),
@@ -254,6 +255,7 @@ type RealEngine = (
 /// engine's late cancel must never stop the new run.
 #[tokio::test]
 async fn cancel_then_run_at_once_never_cancels_the_new_run_on_mysql_mariadb_and_postgres() {
+    let _turn = crate::serial::file_turn(module_path!());
     let engines: Vec<RealEngine> = vec![
         (
             "mysql",
@@ -320,6 +322,7 @@ async fn cancel_then_run_at_once_never_cancels_the_new_run_on_mysql_mariadb_and_
 /// is read, so never after its end. Nothing else is sent before that cancel has returned.
 #[tokio::test]
 async fn a_cancel_as_a_short_statement_ends_never_reaches_the_next_on_mysql_mariadb_and_postgres() {
+    let _turn = crate::serial::file_turn(module_path!());
     let engines: Vec<RealEngine> = vec![
         (
             "mysql",

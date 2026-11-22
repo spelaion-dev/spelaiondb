@@ -4,7 +4,7 @@
 //! `SPELAION_TEST_MARIADB` and `SPELAION_TEST_MSSQL` (skipped without them, which does not count
 //! as tested).
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -74,6 +74,7 @@ async fn run(session: &Session, sql: &str) -> (Vec<String>, Vec<usize>) {
 
 #[tokio::test]
 async fn server_messages_reach_the_run_on_every_engine_that_sends_them() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (name, session) in servers().await {
         let (script, expected): (&str, &[&str]) = match name {
             "postgres" => (
@@ -112,6 +113,7 @@ async fn server_messages_reach_the_run_on_every_engine_that_sends_them() {
 
 #[tokio::test]
 async fn sql_server_messages_before_an_error_are_kept() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (name, session) in servers().await {
         if name != "sqlserver" {
             continue;

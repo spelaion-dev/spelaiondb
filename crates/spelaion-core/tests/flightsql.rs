@@ -138,6 +138,7 @@ fn connection(engine: &str, host: &str, port: u16, tunnel: Option<&str>) -> Stri
 /// sent alone, results as Arrow straight from the server.
 #[tokio::test]
 async fn gizmosql_runs_scripts_and_browses_as_named_and_as_generic() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server() else { return };
     for engine in ["gizmosql", "flightsql"] {
         let ws = Workspace::new(&format!("{engine}-script"));
@@ -178,6 +179,7 @@ async fn gizmosql_runs_scripts_and_browses_as_named_and_as_generic() {
 /// end, whose far end is `gizmosql:31337`, a name only the bastions resolve.
 #[tokio::test]
 async fn gizmosql_through_two_bastions() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }

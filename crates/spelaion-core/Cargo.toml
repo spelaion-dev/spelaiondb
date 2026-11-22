@@ -5,6 +5,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# The integration tests are one binary (tests/main.rs, SDB-168), plus the files CI's later
+# phases run by name; see the [[test]] targets below.
+autotests = false
 
 [dependencies]
 # Remote programs for drivers (open.rs, ADR-018).
@@ -68,6 +71,37 @@ workspace = true
 # A stand-in for `kubectl port-forward`, for the Kubernetes tunnel tests that need no cluster
 # (ADR-015). Never shipped: releases build `spelaion-cli` and the desktop app, not this crate's
 # binaries.
+# Every file of tests/ in one binary, linked once; its files still run one after another
+# (tests/serial.rs). `cargo test -p spelaion-core <file name>` runs one file.
+[[test]]
+name = "core"
+path = "tests/main.rs"
+
+# Files run apart by name in CI's and AGENTS.md's later phases (`--test hive`).
+[[test]]
+name = "hive"
+path = "tests/hive.rs"
+
+[[test]]
+name = "trino"
+path = "tests/trino.rs"
+
+[[test]]
+name = "influxdb"
+path = "tests/influxdb.rs"
+
+[[test]]
+name = "mysql_family"
+path = "tests/mysql_family.rs"
+
+[[test]]
+name = "postgres_family"
+path = "tests/postgres_family.rs"
+
+[[test]]
+name = "search"
+path = "tests/search.rs"
+
 [[bin]]
 name = "spelaion-test-fake-kubectl"
 path = "tests/support/fake_kubectl.rs"

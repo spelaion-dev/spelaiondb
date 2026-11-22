@@ -143,6 +143,7 @@ fn assert_ends_as_an_internal_error(events: &[CoreEvent]) {
 
 #[tokio::test]
 async fn a_statement_whose_driver_stops_halfway_fails_and_the_session_is_lost() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session();
     let events = run(&session, "first; cut; third").await;
     assert_ends_as_an_internal_error(&events);
@@ -157,6 +158,7 @@ async fn a_statement_whose_driver_stops_halfway_fails_and_the_session_is_lost() 
 
 #[tokio::test]
 async fn a_run_that_panics_ends_with_an_error_and_the_session_is_lost() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session();
     let events = run(&session, "first; boom; third").await;
     assert_ends_as_an_internal_error(&events);

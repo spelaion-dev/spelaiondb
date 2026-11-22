@@ -8,7 +8,7 @@
 //! followed to the rows it leads to, and the filter the core writes is run as a page of the
 //! other table: it must keep exactly the rows the key relates.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -274,6 +274,7 @@ async fn follow_to(
 
 #[tokio::test]
 async fn foreign_keys_are_followed_both_ways_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         create_schema(label, &session).await;
         let conn = session.connection().as_ref();

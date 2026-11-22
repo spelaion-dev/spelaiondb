@@ -167,6 +167,7 @@ fn cell(open: &OpenConnection, result: ResultId, row: usize, column: usize) -> S
 /// nodes and relationships are JSON cells.
 #[tokio::test]
 async fn a_cypher_script_runs_statement_by_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("neo4j-script").await else {
         return;
     };
@@ -203,6 +204,7 @@ async fn a_cypher_script_runs_statement_by_statement() {
 /// The server's error stops the script at its statement, and the session goes on.
 #[tokio::test]
 async fn an_error_stops_at_its_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("neo4j-error").await else {
         return;
     };
@@ -220,6 +222,7 @@ async fn an_error_stops_at_its_statement() {
 /// one runs the dialect's bounded statement.
 #[tokio::test]
 async fn the_explorer_browses_labels_and_relationship_types() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("neo4j-explorer").await else {
         return;
     };
@@ -262,6 +265,7 @@ async fn the_explorer_browses_labels_and_relationship_types() {
 
 #[test]
 fn the_guard_asks_before_what_neo4j_would_lose() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = spelaion_dialect::for_engine("neo4j").expect("Cypher");
     let plain = Safeguards::default();
     let production = Safeguards {
@@ -291,6 +295,7 @@ fn the_guard_asks_before_what_neo4j_would_lose() {
 
 #[test]
 fn neo4j_has_no_read_only_mode_nor_agents_yet() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("neo4j-no-barrier");
     ws.write(
         ".spelaion/connections/ro.toml",
@@ -320,6 +325,7 @@ fn neo4j_has_no_read_only_mode_nor_agents_yet() {
 /// Through the two bastions of `testing/docker`: the plugin connects to the tunnel's local end.
 #[tokio::test]
 async fn neo4j_through_two_bastions() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }
@@ -350,6 +356,7 @@ async fn neo4j_through_two_bastions() {
 /// end; the plugin reads no proxy from the environment, so it never goes around it.
 #[tokio::test]
 async fn neo4j_through_a_socks_proxy() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }

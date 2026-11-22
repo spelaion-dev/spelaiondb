@@ -2,7 +2,7 @@
 //! PostgreSQL, MySQL, MariaDB and SQL Server with their `SPELAION_TEST_*` variables (without
 //! them they are skipped, which does not count as tested).
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -168,6 +168,7 @@ fn relation(schema: &str, name: &str, kind: ObjectKind) -> ObjectTarget {
 
 #[tokio::test]
 async fn rename_tables_views_and_columns() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let cleanup = [
             "DROP VIEW oa_rename_v",
@@ -242,6 +243,7 @@ async fn rename_tables_views_and_columns() {
 
 #[tokio::test]
 async fn changes_run_only_confirmed_and_never_on_read_only_connections() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session(
         &*engines::sqlite(),
         ConnectParams {
@@ -322,6 +324,7 @@ fn schema_object(label: &str) -> Option<(&'static [&'static str], &'static str, 
 
 #[tokio::test]
 async fn drop_what_the_explorer_lists() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let cleanup = [
             "DROP VIEW oa_drop_v",
@@ -569,6 +572,7 @@ async fn admin_session(label: &str, session: Session) -> Session {
 
 #[tokio::test]
 async fn schemas_drop_and_cascade_where_the_engine_can() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, _) in engines().await {
         if !object_actions(session.dialect().as_ref()).drop_schemas {
             continue;
@@ -628,6 +632,7 @@ async fn schemas_drop_and_cascade_where_the_engine_can() {
 
 #[tokio::test]
 async fn what_create_starts_runs_on_each_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let session = admin_session(label, session).await;
         let dialect = session.dialect().clone();
@@ -683,6 +688,7 @@ async fn what_create_starts_runs_on_each_engine() {
 
 #[tokio::test]
 async fn indexes_and_constraints_on_chosen_columns_run_on_each_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let dialect = session.dialect().clone();
         for kind in object_actions(dialect.as_ref()).new_index {
@@ -743,6 +749,7 @@ async fn indexes_and_constraints_on_chosen_columns_run_on_each_engine() {
 
 #[tokio::test]
 async fn new_table_elements_run_on_supported_engines() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let dialect = session.dialect().clone();
         let capabilities = object_actions(dialect.as_ref());
@@ -888,6 +895,7 @@ async fn new_table_elements_run_on_supported_engines() {
 
 #[tokio::test]
 async fn open_an_object_by_name_on_each_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let cleanup = [
             "DROP VIEW oa_find_order_view",
@@ -960,6 +968,7 @@ async fn open_an_object_by_name_on_each_engine() {
 
 #[tokio::test]
 async fn the_editors_schema_is_set_where_the_engine_has_one_per_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, default_schema) in engines().await {
         let session = admin_session(label, session).await;
         if !object_actions(session.dialect().as_ref()).active_schema {
@@ -1096,6 +1105,7 @@ async fn apply_form(label: &str, session: &Session, alteration: &TableAlteration
 
 #[tokio::test]
 async fn structure_forms_change_columns_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let cleanup = ["DROP TABLE oa_alter_t"];
         run(label, &session, &cleanup, true).await;
@@ -1285,6 +1295,7 @@ async fn structure_forms_change_columns_on_every_engine() {
 
 #[tokio::test]
 async fn mysql_restates_every_attribute_of_a_modified_column() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         if !matches!(label, "mysql" | "mariadb") {
             continue;
@@ -1351,6 +1362,7 @@ async fn mysql_restates_every_attribute_of_a_modified_column() {
 
 #[tokio::test]
 async fn constraints_drop_with_the_column_changes() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         if label == "duckdb" {
             continue;
@@ -1442,6 +1454,7 @@ async fn sqlite_memory() -> Session {
 
 #[tokio::test]
 async fn sqlite_rebuild_keeps_rows_indexes_triggers_views_and_keys() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = sqlite_memory().await;
     run(
         "sqlite",
@@ -1631,6 +1644,7 @@ async fn sqlite_rebuild_keeps_rows_indexes_triggers_views_and_keys() {
 
 #[tokio::test]
 async fn a_sqlite_rebuild_that_breaks_a_key_changes_nothing() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = sqlite_memory().await;
     run(
         "sqlite",
@@ -1687,6 +1701,7 @@ async fn a_sqlite_rebuild_that_breaks_a_key_changes_nothing() {
 
 #[tokio::test]
 async fn a_form_runs_only_the_script_it_showed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = sqlite_memory().await;
     run(
         "sqlite",
@@ -1754,6 +1769,7 @@ fn new_column(name: &str, ty: &str, nullable: bool) -> NewColumn {
 
 #[tokio::test]
 async fn the_create_table_form_runs_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let cleanup = ["DROP TABLE oa_new_line", "DROP TABLE oa_new_head"];
         run(label, &session, &cleanup, true).await;
@@ -1884,6 +1900,7 @@ async fn listed_object(session: &Session, schema: &str, name: &str) -> SchemaObj
 
 #[tokio::test]
 async fn routines_are_called_with_their_parameters_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let (create, cleanup): (&str, &str) = match label {
             "postgres" => (
@@ -1941,6 +1958,7 @@ async fn edit_and_run(label: &str, session: &Session, target: SourceTarget) -> S
 
 #[tokio::test]
 async fn edited_sources_replace_views_and_routines_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         let (function, procedure, cleanup): (Option<&str>, Option<&str>, &[&str]) = match label {
             "postgres" => (
@@ -2145,6 +2163,7 @@ fn maintenance_setup(label: &str, schema: &str, table: &str, child: &str) -> Vec
 
 #[tokio::test]
 async fn maintenance_actions_run_on_each_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut tested = Vec::new();
     for (label, session, schema) in engines().await {
         let table = "maint_orders";
@@ -2283,6 +2302,7 @@ async fn maintenance_actions_run_on_each_engine() {
 
 #[tokio::test]
 async fn maintenance_statements_are_refused_on_read_only_connections_on_each_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut tested = Vec::new();
     for (label, session, schema) in engines().await {
         let table = "maint_ro";
@@ -2382,6 +2402,7 @@ async fn shape(label: &str, session: &Session, schema: &str, table: &str) -> Sha
 
 #[tokio::test]
 async fn duplicate_tables_keep_what_each_engine_says_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut tested = Vec::new();
     for (label, session, schema) in engines().await {
         let source = "dup_src";

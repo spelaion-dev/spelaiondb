@@ -139,6 +139,7 @@ fn asks_cleartext(params: &ConnectParams) -> bool {
 
 #[tokio::test]
 async fn without_a_checked_certificate_the_driver_is_never_called() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("tls");
     // No [tls] table at all is `prefer`: encrypted if the server wants, checked never.
     ws.write(".spelaion/connections/default.toml", CLEAR);
@@ -165,6 +166,7 @@ async fn without_a_checked_certificate_the_driver_is_never_called() {
 
 #[tokio::test]
 async fn a_checked_certificate_lets_the_driver_answer_the_plugin() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("verified");
     for mode in ["verify-ca", "verify-full"] {
         ws.write(&format!(".spelaion/connections/{mode}.toml"), &tls(mode));
@@ -185,6 +187,7 @@ async fn a_checked_certificate_lets_the_driver_answer_the_plugin() {
 
 #[tokio::test]
 async fn a_proxy_ssm_or_kubernetes_route_is_not_a_tunnel_and_is_refused_before_it_starts() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("routes");
     // A tunnel file with no hops: the proxy (or SSM) reaches the database itself. Nothing is
     // listening on these addresses, so a refusal that came after starting them would be a
@@ -221,6 +224,7 @@ async fn a_proxy_ssm_or_kubernetes_route_is_not_a_tunnel_and_is_refused_before_i
 
 #[test]
 fn the_option_is_found_in_what_the_driver_receives_whatever_its_case_or_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("forged");
     ws.write(".spelaion/connections/clear.toml", &tls("require"));
     ws.write(
@@ -266,6 +270,7 @@ fn toml_path(path: &Path) -> String {
 /// tunnel's local end.
 #[tokio::test]
 async fn an_ssh_tunnel_lets_the_driver_answer_the_plugin() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
         eprintln!("SPELAION_TEST_SSH not set: test skipped");
         return;

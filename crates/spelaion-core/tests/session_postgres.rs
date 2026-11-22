@@ -1,7 +1,7 @@
 //! Sessions against a real PostgreSQL. Needs `SPELAION_TEST_PG=host:port`
 //! (see `crates/spelaion-driver-postgres/tests/postgres.rs`).
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -34,6 +34,7 @@ async fn session() -> Option<Session> {
 
 #[tokio::test]
 async fn process_monitor_cancels_and_ends_postgres_sessions() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (Some(monitor), Some(target)) = (session().await, session().await) else {
         return;
     };
@@ -154,6 +155,7 @@ async fn process_monitor_cancels_and_ends_postgres_sessions() {
 
 #[tokio::test]
 async fn runs_a_script_statement_by_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };
@@ -213,6 +215,7 @@ async fn runs_a_script_statement_by_statement() {
 
 #[tokio::test]
 async fn stops_at_the_first_error_and_points_to_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };
@@ -245,6 +248,7 @@ async fn stops_at_the_first_error_and_points_to_it() {
 
 #[tokio::test]
 async fn large_results_arrive_in_batches() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };
@@ -265,6 +269,7 @@ async fn large_results_arrive_in_batches() {
 
 #[tokio::test]
 async fn results_sort_by_typed_values_across_batches() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };
@@ -329,6 +334,7 @@ async fn results_sort_by_typed_values_across_batches() {
 
 #[tokio::test]
 async fn table_edits_write_typed_literals_on_postgres() {
+    let _turn = crate::serial::file_turn(module_path!());
     use spelaion_core::{CellInput, RowChange, TablePage};
     let Some(session) = session().await else {
         return;
@@ -434,6 +440,7 @@ async fn editable(session: &Session, sql: &str) -> Option<(String, String)> {
 
 #[tokio::test]
 async fn query_results_resolve_their_table_as_the_server_does() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };
@@ -526,6 +533,7 @@ async fn first_cells(session: &Session, script: &str) -> Vec<String> {
 /// its `END` never reaches the server alone (where it would mean `COMMIT`).
 #[tokio::test]
 async fn begin_atomic_routines_run_as_one_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session().await else {
         return;
     };

@@ -16,8 +16,8 @@ use spelaion_core::{
 use spelaion_driver_api::{Secret, Value};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
 
 fn unique(prefix: &str) -> String {
@@ -231,6 +231,7 @@ fn servers() -> Vec<Server> {
 
 #[tokio::test]
 async fn setup_and_default_schema_open_sessions_in_that_schema_on_every_engine_with_schemas() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new();
     let mut tested = 0;
     for server in servers() {
@@ -297,6 +298,7 @@ async fn setup_and_default_schema_open_sessions_in_that_schema_on_every_engine_w
 
 #[tokio::test]
 async fn duckdb_opens_in_its_default_schema_and_sqlite_runs_its_setup() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new();
     let duck = ws.file("setup.duckdb");
     engines::create_database(spelaion_config::Engine::Duckdb, std::path::Path::new(&duck)).await;
@@ -347,6 +349,7 @@ async fn duckdb_opens_in_its_default_schema_and_sqlite_runs_its_setup() {
 
 #[tokio::test]
 async fn a_setup_that_writes_is_refused_on_a_read_only_connection_and_nothing_of_it_runs() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new();
     let lite = ws.file("refuse.sqlite");
     std::fs::write(&lite, b"").unwrap();
@@ -414,6 +417,7 @@ async fn a_setup_that_writes_is_refused_on_a_read_only_connection_and_nothing_of
 
 #[tokio::test]
 async fn postgres_read_only_setup_takes_settings_and_refuses_writes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = servers().into_iter().find(|s| s.label == "postgres") else {
         return;
     };
@@ -488,6 +492,7 @@ async fn postgres_read_only_setup_takes_settings_and_refuses_writes() {
 
 #[tokio::test]
 async fn ignore_errors_skips_failing_statements_and_otherwise_the_session_is_refused() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new();
     let lite = ws.file("ignore.sqlite");
     std::fs::write(&lite, b"").unwrap();
@@ -533,6 +538,7 @@ async fn ignore_errors_skips_failing_statements_and_otherwise_the_session_is_ref
 
 #[tokio::test]
 async fn a_setup_that_leaves_a_transaction_open_refuses_the_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new();
     let lite = ws.file("tx.sqlite");
     std::fs::write(&lite, b"").unwrap();
@@ -548,6 +554,7 @@ async fn a_setup_that_leaves_a_transaction_open_refuses_the_session() {
 
 #[tokio::test]
 async fn a_default_schema_that_does_not_exist_refuses_the_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new();
     let mut tested = 0;
     for server in servers() {
@@ -571,6 +578,7 @@ async fn a_default_schema_that_does_not_exist_refuses_the_session() {
 
 #[tokio::test]
 async fn sql_server_sets_its_isolation_level_and_options() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_MSSQL") else {
         eprintln!("SPELAION_TEST_MSSQL not set: test skipped");
         return;

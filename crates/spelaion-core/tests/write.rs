@@ -9,8 +9,8 @@ use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultStore, Session, WriteError, WriteLimits};
 use spelaion_driver_api::{ConnectParams, Driver, Secret};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{cleaning_up, run_cleanup};
 
 async fn sqlite() -> Session {
@@ -88,6 +88,7 @@ async fn count(session: &Session, sql: &str) -> String {
 
 #[tokio::test]
 async fn destructive_ddl_is_rejected_before_reaching_sqlite_or_postgres() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut sessions = vec![("sqlite", sqlite().await)];
     if let Some(session) = pg().await {
         sessions.push(("postgres", session));
@@ -143,6 +144,7 @@ async fn destructive_ddl_is_rejected_before_reaching_sqlite_or_postgres() {
 
 #[tokio::test]
 async fn writes_commit_with_their_row_count() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = sqlite().await;
     run(
         &session,
@@ -174,6 +176,7 @@ async fn writes_commit_with_their_row_count() {
 
 #[tokio::test]
 async fn refused_writes_never_reach_the_database() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = sqlite().await;
     run(&session, "create table notes (id integer primary key, body text); insert into notes values (1, 'keep')").await;
     for sql in [
@@ -195,6 +198,7 @@ async fn refused_writes_never_reach_the_database() {
 
 #[tokio::test]
 async fn a_failed_write_leaves_nothing_behind() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = sqlite().await;
     run(
         &session,
@@ -222,6 +226,7 @@ async fn a_failed_write_leaves_nothing_behind() {
 
 #[tokio::test]
 async fn postgres_writes_commit_roll_back_and_time_out() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = pg().await else { return };
     // Its own name: another run on the shared server may be using the table at the same time.
     let t = format!("agent_notes_{}", std::process::id());

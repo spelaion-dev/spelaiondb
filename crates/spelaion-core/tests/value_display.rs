@@ -8,7 +8,7 @@
 //! written from each formatted cell (the core writes it from the stored value, never from
 //! the shown text) and must still keep exactly that row. A masked column is never formatted.
 
-mod engines;
+use crate::engines;
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -312,6 +312,7 @@ impl Window {
 
 #[tokio::test]
 async fn each_engines_dates_times_and_decimals_are_shown_in_the_display_format() {
+    let _turn = crate::serial::file_turn(module_path!());
     let display = madrid();
     for (label, session, _) in engines(&[]).await {
         let id = table(label, &session, "vd_types").await;
@@ -410,6 +411,7 @@ async fn each_engines_dates_times_and_decimals_are_shown_in_the_display_format()
 /// from the stored value, so it keeps exactly the row the cell is in.
 #[tokio::test]
 async fn a_filter_written_from_a_formatted_cell_still_matches_its_row() {
+    let _turn = crate::serial::file_turn(module_path!());
     let display = madrid();
     for (label, session, schema) in engines(&[]).await {
         let id = table(label, &session, "vd_filter").await;
@@ -459,6 +461,7 @@ async fn a_filter_written_from_a_formatted_cell_still_matches_its_row() {
 /// never formatted, in a window or in a copy as displayed.
 #[tokio::test]
 async fn a_masked_column_is_never_formatted() {
+    let _turn = crate::serial::file_turn(module_path!());
     let display = madrid();
     for (label, session, _) in engines(&["ts", "n"]).await {
         let id = table(label, &session, "vd_masked").await;

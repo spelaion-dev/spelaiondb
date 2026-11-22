@@ -1,6 +1,6 @@
 //! Sessions over in-memory SQLite: they always run, with nothing external.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -26,6 +26,7 @@ async fn session() -> Session {
 
 #[tokio::test]
 async fn trigger_bodies_run_as_one_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let script = "create table t (x int);
                   create table log (msg text);
@@ -69,6 +70,7 @@ async fn trigger_bodies_run_as_one_statement() {
 /// its last `;` runs its statements, and that white space is no statement of its own.
 #[tokio::test]
 async fn white_space_outside_ascii_after_the_last_statement_is_no_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     for space in ["\u{a0}", "\u{3000}\n", "\u{2028}", "\u{b}"] {
         let script = format!("create table if not exists t (x int);\nselect 1 as one;{space}");
@@ -89,6 +91,7 @@ async fn white_space_outside_ascii_after_the_last_statement_is_no_statement() {
 
 #[tokio::test]
 async fn syntax_errors_point_into_the_script() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let script = "select 1;\nselect * form t";
     let events: Vec<CoreEvent> = session.run_script(script).collect().await;
@@ -109,6 +112,7 @@ async fn syntax_errors_point_into_the_script() {
 
 #[tokio::test]
 async fn tables_and_views_are_counted_exactly_and_the_result_is_freed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let setup: Vec<CoreEvent> = session
         .run_script(
@@ -152,6 +156,7 @@ async fn first_result(session: &Session, sql: &str) -> spelaion_core::ResultId {
 
 #[tokio::test]
 async fn query_pages_append_atomically_and_count_all_matching_rows() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let _: Vec<CoreEvent> = session.run_script("create table t (id integer primary key, name text); insert into t values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e')").collect().await;
     let original = "select id, name from t where id > 1 order by id";
@@ -204,6 +209,7 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
 
 #[tokio::test]
 async fn a_paged_query_still_requires_execution_confirmation() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let _: Vec<CoreEvent> = session
         .run_script("create table orders (id integer primary key)")
@@ -249,6 +255,7 @@ async fn texts(session: &Session, sql: &str) -> Vec<String> {
 
 #[tokio::test]
 async fn table_edits_apply_in_one_transaction_by_primary_key() {
+    let _turn = crate::serial::file_turn(module_path!());
     use spelaion_core::{CellInput, EditError, RowChange, TablePage};
     let session = session().await;
     let _: Vec<CoreEvent> = session
@@ -390,6 +397,7 @@ async fn editable(session: &Session, sql: &str, read_only: bool) -> Option<(Stri
 
 #[tokio::test]
 async fn query_results_are_editable_only_as_the_table_they_came_from() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session().await;
     let _: Vec<CoreEvent> = session
         .run_script(

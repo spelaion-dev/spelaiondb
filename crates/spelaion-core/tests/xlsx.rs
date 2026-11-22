@@ -9,7 +9,7 @@
 //! holds one batch at a time and goes on in a second sheet past Excel's row limit; explorer
 //! tables become one workbook, a sheet each.
 
-mod engines;
+use crate::engines;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -317,6 +317,7 @@ fn rows(session: &Session, id: ResultId) -> Vec<Vec<String>> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_table_goes_through_excel_and_back_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let pid = std::process::id();
     for case in cases().await {
         let label = case.label;
@@ -456,6 +457,7 @@ async fn a_table_goes_through_excel_and_back_on_every_engine() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_million_rows_hold_one_batch_and_go_on_in_a_new_sheet() {
+    let _turn = crate::serial::file_turn(module_path!());
     const ROWS: u64 = 1_048_600;
     let path = scratch("million.sqlite");
     std::fs::write(&path, b"").unwrap();
@@ -526,6 +528,7 @@ async fn a_million_rows_hold_one_batch_and_go_on_in_a_new_sheet() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn explorer_tables_become_one_workbook() {
+    let _turn = crate::serial::file_turn(module_path!());
     let path = scratch("tables.sqlite");
     std::fs::write(&path, b"").unwrap();
     let case = Case {
@@ -602,6 +605,7 @@ async fn explorer_tables_become_one_workbook() {
 
 #[test]
 fn workbooks_are_recognised_and_old_ones_refused() {
+    let _turn = crate::serial::file_turn(module_path!());
     let book = scratch("guess.data");
     std::fs::write(&book, b"PK\x03\x04rest").unwrap();
     assert_eq!(

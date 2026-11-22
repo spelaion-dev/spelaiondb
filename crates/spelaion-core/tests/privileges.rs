@@ -4,7 +4,7 @@
 //! applied as shown, then tried by logging in as the account; what the account has is read back
 //! from the catalog, and each revoke takes the access away again.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -176,6 +176,7 @@ fn has(granted: &[GrantedPrivilege], scope: PrivilegeScope, name: &str, privileg
 
 #[tokio::test]
 async fn postgres_grants_on_a_database_a_schema_a_table_columns_a_role_and_later_objects() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_PG") else {
         return;
     };
@@ -445,6 +446,7 @@ async fn postgres_grants_on_a_database_a_schema_a_table_columns_a_role_and_later
 
 #[tokio::test]
 async fn mysql_and_mariadb_grants_globally_on_a_database_a_table_columns_and_a_role() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, var) in [
         ("mysql", "SPELAION_TEST_MYSQL"),
         ("mariadb", "SPELAION_TEST_MARIADB"),
@@ -634,6 +636,7 @@ async fn mysql_and_mariadb_grants_globally_on_a_database_a_table_columns_and_a_r
 
 #[tokio::test]
 async fn sql_server_grants_on_the_server_a_database_a_schema_an_object_columns_and_roles() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
         return;
     };

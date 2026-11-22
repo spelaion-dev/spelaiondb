@@ -1,7 +1,7 @@
 //! Changing a connection's engine keeping its settings (ADR-030), with temporary directories
 //! (the real keychain is never touched).
 
-mod common;
+use crate::common;
 
 use common::{BASTION, FakeBackend, Fixture, personal, team};
 use spelaion_config::{
@@ -36,6 +36,7 @@ fn server_text(engine: Engine) -> String {
 
 #[test]
 fn every_engine_pair_maps_to_a_connection_the_core_accepts() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("engine-pairs");
     fx.write("user/tunnels/bastion.toml", BASTION);
     for from in ENGINES {
@@ -149,6 +150,7 @@ fn every_engine_pair_maps_to_a_connection_the_core_accepts() {
 
 #[test]
 fn engine_changes_keep_a_port_of_its_own_and_drop_what_does_not_apply() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("engine-rules");
     fx.write("user/tunnels/bastion.toml", BASTION);
     let draft = draft_of(
@@ -230,6 +232,7 @@ fn engine_changes_keep_a_port_of_its_own_and_drop_what_does_not_apply() {
 
 #[test]
 fn saving_an_engine_change_rewrites_only_what_changed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("engine-save");
     let text = "#:schema https://spelaion.dev/schema/db/connection.schema.json\n\n\
                 # Reporting replica.\nschema_version = 1\nname = \"Reports\"\n\
@@ -296,6 +299,7 @@ fn saving_an_engine_change_rewrites_only_what_changed() {
 
 #[test]
 fn a_team_engine_change_goes_through_trust_like_any_edit() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("engine-team");
     fx.write(
         "repo/.spelaion/connections/db.toml",
@@ -332,6 +336,7 @@ fn a_team_engine_change_goes_through_trust_like_any_edit() {
 
 #[test]
 fn an_engine_change_keeps_the_pooler_cleartext_and_databases_only_where_they_apply() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("engine-sdb396");
     let pg = draft_of(
         &fx,

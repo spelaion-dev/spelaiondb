@@ -1,6 +1,6 @@
 //! History is tested against real SQLite sessions and the on-disk personal store.
 
-mod engines;
+use crate::engines;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -51,6 +51,7 @@ async fn entries(history: &QueryHistory) -> Vec<HistoryEntry> {
 
 #[tokio::test]
 async fn records_each_executed_statement_and_counts_returned_rows_once() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (history, path) = history("success");
     let session = session().await;
     let sql = "create table t (value text);\ninsert into t values ('uno'), ('dos'), ('tres'), ('ñ'), ('五');\nselect * from t order by value; -- only a comment\n;";
@@ -102,6 +103,7 @@ async fn records_each_executed_statement_and_counts_returned_rows_once() {
 
 #[tokio::test]
 async fn paged_queries_keep_the_original_sql_in_history() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (history, _path) = history("paged");
     let session = session().await;
     let _: Vec<_> = session
@@ -131,6 +133,7 @@ async fn paged_queries_keep_the_original_sql_in_history() {
 
 #[tokio::test]
 async fn records_errors_without_recording_the_unexecuted_remainder() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (history, _) = history("failure");
     let session = session().await;
     let sql = "select 'ñ';\nselect * from missing_table;\nselect 'not executed'";
@@ -166,6 +169,7 @@ async fn records_errors_without_recording_the_unexecuted_remainder() {
 
 #[tokio::test]
 async fn a_run_that_continues_records_the_statements_after_the_error() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (history, _) = history("continue");
     let session = session().await;
     let sql = "select 'ñ';
@@ -202,6 +206,7 @@ select 'after the error'";
 
 #[tokio::test]
 async fn an_error_message_cannot_turn_an_ordinary_failure_into_cancellation() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (history, _) = history("cancel-message");
     let session = session().await;
     let setup: Vec<_> = session
@@ -235,6 +240,7 @@ async fn an_error_message_cannot_turn_an_ordinary_failure_into_cancellation() {
 
 #[tokio::test]
 async fn toggles_cover_open_sessions_and_scripts_already_in_flight() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (history, path) = history("disabled");
     let session = session().await;
     history
@@ -312,6 +318,7 @@ async fn toggles_cover_open_sessions_and_scripts_already_in_flight() {
 
 #[tokio::test]
 async fn cancellation_saves_partial_row_count_and_error() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (history, _) = history("cancelled");
     let session = session().await;
     let sql = "with recursive n(x) as (select 1 union all select x + 1 from n where x < 100000000) select x from n";
@@ -351,6 +358,7 @@ async fn cancellation_saves_partial_row_count_and_error() {
 /// connection's saved variables and the tab's gave it, the tab's winning.
 #[tokio::test]
 async fn a_statement_with_variables_is_recorded_as_it_ran() {
+    let _turn = crate::serial::file_turn(module_path!());
     let (history, _path) = history("variables");
     let session = session().await;
     history
