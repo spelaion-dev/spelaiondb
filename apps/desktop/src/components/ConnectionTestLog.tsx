@@ -8,6 +8,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { type TestReportItem, type TestStepItem } from "../api";
 import type { JobTicket } from "../bindings";
 import { startJob, type Job } from "../jobs";
+import { Icon, type IconName } from "./Icons";
 
 /** A test running or finished, and how to start and stop one. */
 export function useConnectionTest() {
@@ -67,13 +68,13 @@ export function useConnectionTest() {
   return { steps, report, running, run, finish, stop, clear };
 }
 
-const ICONS: Record<TestStepItem["status"], string> = {
-  pending: "○",
-  running: "…",
-  ok: "✓",
-  failed: "✗",
-  skipped: "–",
-  stopped: "■",
+const ICONS: Record<TestStepItem["status"], IconName> = {
+  pending: "waiting",
+  running: "running",
+  ok: "check",
+  failed: "x",
+  skipped: "minus",
+  stopped: "stopped",
 };
 
 /** The step's line, translated from what the core says it is. */
@@ -165,8 +166,8 @@ export function ConnectionTestLog(props: {
           </button>
         )}
         {!props.running && (
-          <button type="button" className="icon" aria-label={t("testLog.close")} title={t("testLog.close")} onClick={props.onClose}>
-            ×
+          <button type="button" className="ghost" aria-label={t("testLog.close")} title={t("testLog.close")} onClick={props.onClose}>
+            <Icon name="x" />
           </button>
         )}
       </header>
@@ -174,7 +175,7 @@ export function ConnectionTestLog(props: {
         {props.steps.map((step, i) => (
           <li key={i} className={`step ${step.status}`} data-status={step.status}>
             <span className="icon" aria-label={t(`testLog.status.${step.status}`)} title={t(`testLog.status.${step.status}`)}>
-              {ICONS[step.status]}
+              <Icon name={ICONS[step.status]} />
             </span>
             <span className="title">{title(step)}</span>
             <span className="elapsed muted">{elapsed(step.elapsedMs)}</span>
