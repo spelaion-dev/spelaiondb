@@ -14,7 +14,7 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
-use crate::import::{ImportedConnection, ImportedProxy, ImportedSsh};
+use crate::import::{ImportedConnection, ImportedProxy, ImportedSsh, SavedSecrets};
 use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TunnelFile};
 
@@ -72,13 +72,25 @@ fn dbeaver_linux_workspaces(home: &LinuxHome) -> Vec<PathBuf> {
 /// Every connection under `dir`: a DBeaver workspace (all its projects), one project, or a
 /// `.dbeaver` folder.
 pub fn read_dbeaver(dir: &Path) -> Result<Vec<ImportedConnection>, DbeaverError> {
+    read_dbeaver_with(dir, SavedSecrets::Read)
+}
+
+/// [`read_dbeaver`], with or without the saved credentials (`credentials-config.json` is
+/// neither opened nor decrypted with [`SavedSecrets::Skip`]).
+pub fn read_dbeaver_with(
+    dir: &Path,
+    secrets: SavedSecrets,
+) -> Result<Vec<ImportedConnection>, DbeaverError> {
     let folders = dbeaver_folders(dir);
     if folders.is_empty() {
         return Err(DbeaverError::NotFound(dir.to_path_buf()));
     }
     let mut out = Vec::new();
     for folder in folders {
-        let credentials = read_credentials(&folder.join("credentials-config.json"))?;
+        let credentials = match secrets {
+            SavedSecrets::Read => read_credentials(&folder.join("credentials-config.json"))?,
+            SavedSecrets::Skip => HashMap::new(),
+        };
         let mut files: Vec<PathBuf> = std::fs::read_dir(&folder)
             .map_err(|e| unreadable(&folder, e))?
             .filter_map(Result::ok)

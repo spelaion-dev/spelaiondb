@@ -904,6 +904,12 @@ export const commands = {
 	 *  says so instead of failing.
 	 */
 	scanConnections: (client: string, path: string | null, filePassword: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword })),
+	/**
+	 *  What a client has on this computer, for the import's list (SDB-446): counted by the core
+	 *  without reading any saved password, keychain or encrypted export, off the UI thread. The page
+	 *  asks for every client at once and fills each row as it answers.
+	 */
+	clientImportSource: (client: string, path: string | null) => typedError<ClientSourceItem, string>(__TAURI_INVOKE("client_import_source", { client, path })),
 	/**  The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015). */
 	kubeContexts: (form: KubernetesDraftItem, editor: KubeEditor_Deserialize) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form, editor })),
 	/**  The namespaces of the chosen context. */
@@ -1613,6 +1619,22 @@ export type ChoicePickerItem = {
 };
 
 export type ChoiceSourceItem = "enum" | "set" | "check";
+
+/**
+ *  What the import's list shows for a client before it is picked (SDB-446), as the core decided
+ *  it (`ImportSourceState`). A folder or file the test chose stands for the client's own place.
+ */
+export type ClientSourceItem = 
+/**  Connections found where the client keeps them: how many, and where. */
+{ kind: "found"; place: string; count: number } | 
+/**  The client keeps nothing where it would on this computer. */
+{ kind: "notFound" } | 
+/**  Nothing this computer reads on its own: an export file is needed. */
+{ kind: "needsFile" } | 
+/**  An encrypted export: counted once opened with its password. */
+{ kind: "encrypted"; place: string } | 
+/**  Reading failed: why (the other clients are not held). */
+{ kind: "failed"; reason: string };
 
 /**  The clipboard form of a connection: no secrets, nothing that runs a program. */
 export type ClipboardConnectionItem = {

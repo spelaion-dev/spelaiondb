@@ -185,7 +185,7 @@ function stepTab(back: boolean) {
 const BINDINGS: Record<CommandId, CommandBinding> = {
   "palette.show": { run: () => useApp.getState().setPaletteOpen(true) },
   "object.openByName": { run: () => useApp.getState().setOpenObject({ connectionId: null }) },
-  "connection.import": { run: () => useApp.getState().setConnectionDialog({ kind: "add", openImportMenu: true }) },
+  "connection.import": { run: () => useApp.getState().setConnectionDialog({ kind: "add", imports: true }) },
   "connection.add": { run: () => useApp.getState().setConnectionDialog({ kind: "add" }) },
   "data.importClipboard": {
     enabled: (c) => importSession(c) !== null,

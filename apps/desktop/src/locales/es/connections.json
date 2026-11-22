@@ -1,5 +1,6 @@
 {
   "add": "Añadir conexión",
+  "moreWaysToAdd": "Otras formas de añadir conexiones",
   "title": "Añadir conexión",
   "formTitle": "Nueva conexión de {{engine}}",
   "close": "Cerrar",
@@ -383,6 +384,19 @@
   },
   "importer": {
     "open": "Importar conexiones de otro cliente…",
+    "sources": {
+      "title": "Importar conexiones",
+      "intro": "Lo que cada cliente guarda en este equipo. Las contraseñas no se leen hasta que importas.",
+      "list": "Clientes de los que importar",
+      "counting": "Buscando…",
+      "found_one": "{{formattedCount}} conexión encontrada",
+      "found_other": "{{formattedCount}} conexiones encontradas",
+      "notFound": "No está en este equipo",
+      "needsFile": "Elige un archivo exportado",
+      "encrypted": "Una exportación cifrada: ábrela para escribir su contraseña",
+      "failed": "No se pudo leer: {{reason}}",
+      "open": "Importar de {{client}}"
+    },
     "title": "Importar de {{client}}",
     "from": "Desde",
     "defaultFolder": "Las carpetas de {{client}}",

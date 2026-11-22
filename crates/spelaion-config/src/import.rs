@@ -56,6 +56,16 @@ impl ImportClient {
     }
 }
 
+/// Whether a reader reads the passwords a client saved in its own files (DBeaver's credentials,
+/// HeidiSQL's obfuscated passwords, Beekeeper Studio's encrypted ones). The list of sources only
+/// counts connections, so it never does (SDB-446); a password in the system keychain is never
+/// read by a reader either way (only [`read_stored_passwords`], on import, with consent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavedSecrets {
+    Read,
+    Skip,
+}
+
 /// One connection read from another client, as far as SpelaionDB can use it.
 #[derive(Debug, Clone)]
 pub struct ImportedConnection {

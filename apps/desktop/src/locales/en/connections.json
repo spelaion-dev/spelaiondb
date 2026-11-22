@@ -1,5 +1,6 @@
 {
   "add": "Add connection",
+  "moreWaysToAdd": "More ways to add connections",
   "title": "Add connection",
   "formTitle": "New {{engine}} connection",
   "close": "Close",
@@ -383,6 +384,19 @@
   },
   "importer": {
     "open": "Import connections from another client…",
+    "sources": {
+      "title": "Import connections",
+      "intro": "What each client keeps on this computer. Passwords are not read until you import.",
+      "list": "Clients to import from",
+      "counting": "Looking…",
+      "found_one": "{{formattedCount}} connection found",
+      "found_other": "{{formattedCount}} connections found",
+      "notFound": "Not found on this computer",
+      "needsFile": "Choose an export file",
+      "encrypted": "An encrypted export: open it to type its password",
+      "failed": "Could not read it: {{reason}}",
+      "open": "Import from {{client}}"
+    },
     "title": "Import from {{client}}",
     "from": "From",
     "defaultFolder": "{{client}}'s folders",

@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_config::{
-    Config, DuplicateAction, ImportClient, ImportedConnection, Source, SystemBackend,
-    TableplusError, TargetFolder,
+    Config, DuplicateAction, ImportClient, ImportPlaces, ImportRead, ImportReadError,
+    ImportSourceState, ImportedConnection, SavedSecrets, Source, SystemBackend, TargetFolder,
 };
 use spelaion_driver_api::Secret;
 use tauri::State;
@@ -34,185 +34,77 @@ fn client_named(name: &str) -> CmdResult<ImportClient> {
     }
 }
 
-/// Where JetBrains' configuration folders are: `SPELAION_JETBRAINS_DIR` when set (the smoke
-/// test points it at its own files, never the user's), otherwise the system's.
-fn jetbrains_dir() -> Option<PathBuf> {
-    std::env::var_os("SPELAION_JETBRAINS_DIR")
-        .map(PathBuf::from)
-        .or_else(spelaion_config::jetbrains_dir)
-}
-
-/// Where TablePlus keeps its connections: `SPELAION_TABLEPLUS_DIR` when set (the smoke test
-/// points it at the repository's fixtures, never the user's), otherwise the system's.
-fn tableplus_dir() -> Option<PathBuf> {
-    std::env::var_os("SPELAION_TABLEPLUS_DIR")
-        .map(PathBuf::from)
-        .or_else(spelaion_config::tableplus_dir)
-}
-
-/// Where MySQL Workbench keeps its connections: `SPELAION_WORKBENCH_DIR` when set (the smoke
-/// test points it at the repository's fixtures, never the user's), otherwise the system's.
-fn workbench_dir() -> Option<PathBuf> {
-    std::env::var_os("SPELAION_WORKBENCH_DIR")
-        .map(PathBuf::from)
-        .or_else(spelaion_config::workbench_dir)
-}
-
-/// Where pgAdmin keeps its servers (`pgadmin4.db`): `SPELAION_PGADMIN_DIR` when set (the smoke
-/// test points it at the repository's fixtures, never the user's), otherwise the system's.
-fn pgadmin_dir() -> Option<PathBuf> {
-    std::env::var_os("SPELAION_PGADMIN_DIR")
-        .map(PathBuf::from)
-        .or_else(spelaion_config::pgadmin_dir)
-}
-
-/// Where Beekeeper Studio keeps its connections (`app.db` and `.key`): `SPELAION_BEEKEEPER_DIR`
-/// when set (the smoke test points it at a copy of the repository's fixture, never the user's),
-/// otherwise the system's.
-fn beekeeper_dir() -> Option<PathBuf> {
-    std::env::var_os("SPELAION_BEEKEEPER_DIR")
-        .map(PathBuf::from)
-        .or_else(spelaion_config::beekeeper_dir)
-}
-
-/// Why a client's files could not be read.
-enum ReadError {
-    /// An encrypted export without its password (`wrong`: the one given does not open it).
-    Password {
-        wrong: bool,
-    },
-    /// Nothing was chosen and the client keeps nothing this system can read on its own
-    /// (HeidiSQL outside Windows, or a client whose folder is unknown here): the user must
-    /// choose a folder or a file first.
-    NoDefault,
-    Other(String),
-}
-
-impl From<ReadError> for String {
-    fn from(error: ReadError) -> Self {
-        match error {
-            ReadError::Password { wrong: false } => "the file needs its export password".into(),
-            ReadError::Password { wrong: true } => {
-                "the password does not open the export file".into()
-            }
-            ReadError::NoDefault => "choose a folder or file to import from".into(),
-            ReadError::Other(message) => message,
-        }
-    }
-}
-
-fn other(e: impl std::fmt::Display) -> ReadError {
-    ReadError::Other(e.to_string())
-}
-
-/// Whether the client keeps its connections somewhere this system can read without the user
-/// choosing a folder or file (HeidiSQL's registry only exists on Windows).
-fn has_default_source(client: ImportClient) -> bool {
-    match client {
-        ImportClient::Dbeaver => spelaion_config::dbeaver_workspace().is_some(),
-        ImportClient::Datagrip => jetbrains_dir().is_some(),
-        ImportClient::Tableplus => tableplus_dir().is_some(),
-        ImportClient::Heidisql => spelaion_config::heidisql_has_registry(),
-        ImportClient::Workbench => workbench_dir().is_some(),
-        ImportClient::Pgadmin => pgadmin_dir().is_some(),
-        ImportClient::Beekeeper => beekeeper_dir().is_some(),
-    }
-}
-
-/// Reads a client's connections from the folder or file chosen, or from where the client keeps
-/// them on this system. `password` opens an encrypted export.
-fn read(
-    client: ImportClient,
-    path: Option<String>,
-    password: Option<Secret>,
-) -> Result<(PathBuf, Vec<ImportedConnection>), ReadError> {
-    let chosen = path.filter(|p| !p.trim().is_empty()).map(PathBuf::from);
-    match client {
-        ImportClient::Dbeaver => {
-            let dir = match chosen {
-                Some(dir) => dir,
-                None => spelaion_config::dbeaver_workspace().ok_or(ReadError::NoDefault)?,
-            };
-            let found = spelaion_config::read_dbeaver(&dir).map_err(other)?;
-            Ok((dir, found))
-        }
-        ImportClient::Datagrip => {
-            let jetbrains = jetbrains_dir();
-            let config_dirs = jetbrains
-                .as_deref()
-                .map(spelaion_config::datagrip_dirs)
-                .unwrap_or_default();
-            let dir = match chosen {
-                Some(dir) => dir,
-                None => jetbrains.ok_or(ReadError::NoDefault)?,
-            };
-            let found = spelaion_config::read_datagrip(&dir, &config_dirs).map_err(other)?;
-            Ok((dir, found))
-        }
-        ImportClient::Heidisql => match chosen {
-            Some(file) => {
-                let found = spelaion_config::read_heidisql(&file).map_err(other)?;
-                Ok((file, found))
-            }
-            None if !spelaion_config::heidisql_has_registry() => Err(ReadError::NoDefault),
-            None => {
-                let found = spelaion_config::read_heidisql_registry().map_err(other)?;
-                Ok((PathBuf::from(r"HKCU\Software\HeidiSQL\Servers"), found))
-            }
-        },
-        ImportClient::Tableplus => {
-            let dir = match chosen {
-                Some(dir) => dir,
-                None => tableplus_dir().ok_or(ReadError::NoDefault)?,
-            };
-            let found =
-                spelaion_config::read_tableplus(&dir, password.as_ref()).map_err(|e| match e {
-                    TableplusError::NeedsPassword(_) => ReadError::Password { wrong: false },
-                    TableplusError::WrongPassword(_) => ReadError::Password { wrong: true },
-                    TableplusError::NotFound(_) | TableplusError::Unreadable { .. } => other(e),
-                })?;
-            Ok((dir, found))
-        }
-        ImportClient::Workbench => {
-            let dir = match chosen {
-                Some(dir) => dir,
-                None => workbench_dir().ok_or(ReadError::NoDefault)?,
-            };
-            let found = spelaion_config::read_workbench(
-                &dir,
-                spelaion_config::WorkbenchPasswords::this_system(),
-            )
-            .map_err(other)?;
-            Ok((dir, found))
-        }
-        ImportClient::Pgadmin => {
-            let path = match chosen {
-                Some(path) => path,
-                None => pgadmin_dir().ok_or(ReadError::NoDefault)?,
-            };
-            let found = spelaion_config::read_pgadmin(&path).map_err(other)?;
-            Ok((path, found))
-        }
-        ImportClient::Beekeeper => {
-            let path = match chosen {
-                Some(path) => path,
-                None => beekeeper_dir().ok_or(ReadError::NoDefault)?,
-            };
-            let found = spelaion_config::read_beekeeper(&path).map_err(other)?;
-            Ok((path, found))
-        }
-    }
-}
-
+/// Reads a client's connections off the UI thread, with the passwords it saved in its files
+/// (the scan shows whether one comes with each connection; the import stores them). The core
+/// decides where the client is read from (`spelaion-config`'s `import_sources.rs`).
 async fn read_blocking(
     client: ImportClient,
     path: Option<String>,
     password: Option<String>,
-) -> Result<(PathBuf, Vec<ImportedConnection>), ReadError> {
+) -> Result<ImportRead, ImportReadError> {
     let password = password.filter(|p| !p.is_empty()).map(Secret::new);
-    tokio::task::spawn_blocking(move || read(client, path, password))
-        .await
-        .map_err(other)?
+    let chosen = path.filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+    tokio::task::spawn_blocking(move || {
+        spelaion_config::read_import(
+            &ImportPlaces::this_system(),
+            client,
+            chosen.as_deref(),
+            password.as_ref(),
+            SavedSecrets::Read,
+        )
+    })
+    .await
+    .map_err(|e| ImportReadError::Other(e.to_string()))?
+}
+
+/// What the import's list shows for a client before it is picked (SDB-446), as the core decided
+/// it (`ImportSourceState`). A folder or file the test chose stands for the client's own place.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ClientSourceItem {
+    /// Connections found where the client keeps them: how many, and where.
+    Found { place: String, count: u32 },
+    /// The client keeps nothing where it would on this computer.
+    NotFound,
+    /// Nothing this computer reads on its own: an export file is needed.
+    NeedsFile,
+    /// An encrypted export: counted once opened with its password.
+    Encrypted { place: String },
+    /// Reading failed: why (the other clients are not held).
+    Failed { reason: String },
+}
+
+impl From<ImportSourceState> for ClientSourceItem {
+    fn from(state: ImportSourceState) -> Self {
+        match state {
+            ImportSourceState::Found { place, count } => Self::Found {
+                place,
+                count: u32::try_from(count).unwrap_or(u32::MAX),
+            },
+            ImportSourceState::NotFound => Self::NotFound,
+            ImportSourceState::NeedsFile => Self::NeedsFile,
+            ImportSourceState::Encrypted { place } => Self::Encrypted { place },
+            ImportSourceState::Failed { reason } => Self::Failed { reason },
+        }
+    }
+}
+
+/// What a client has on this computer, for the import's list (SDB-446): counted by the core
+/// without reading any saved password, keychain or encrypted export, off the UI thread. The page
+/// asks for every client at once and fills each row as it answers.
+#[command]
+pub async fn client_import_source(
+    client: String,
+    path: Option<String>,
+) -> CmdResult<ClientSourceItem> {
+    let client = client_named(&client)?;
+    let chosen = path.filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+    let state = tokio::task::spawn_blocking(move || {
+        spelaion_config::import_source(&ImportPlaces::this_system(), client, chosen.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(state.into())
 }
 
 /// A connection that already exists, by name.
@@ -334,7 +226,7 @@ pub async fn scan_connections(
     state: State<'_, AppState>,
 ) -> CmdResult<ImportScan> {
     let client = client_named(&client)?;
-    let default_source = has_default_source(client);
+    let default_source = ImportPlaces::this_system().has_default(client);
     let shown = path.clone().unwrap_or_default();
     let unread = |needs_password: bool, wrong_password: bool, needs_choice: bool| ImportScan {
         dir: shown.clone(),
@@ -345,15 +237,21 @@ pub async fn scan_connections(
         can_save_passwords: false,
         default_source,
     };
-    let (dir, found) = match read_blocking(client, path, file_password).await {
+    let ImportRead {
+        place,
+        connections: found,
+    } = match read_blocking(client, path, file_password).await {
         Ok(read) => read,
-        Err(ReadError::Password { wrong }) => return Ok(unread(true, wrong, false)),
-        Err(ReadError::NoDefault) => return Ok(unread(false, false, true)),
-        Err(e) => return Err(e.into()),
+        Err(ImportReadError::NeedsPassword) => return Ok(unread(true, false, false)),
+        Err(ImportReadError::WrongPassword) => return Ok(unread(true, true, false)),
+        Err(ImportReadError::NoDefault) => return Ok(unread(false, false, true)),
+        Err(e @ (ImportReadError::NotFound(_) | ImportReadError::Other(_))) => {
+            return Err(e.to_string());
+        }
     };
     let config = state.config.read().await;
     Ok(ImportScan {
-        dir: dir.display().to_string(),
+        dir: place,
         connections: found.iter().map(|c| item(&config, c)).collect(),
         needs_password: false,
         wrong_password: false,
@@ -452,7 +350,10 @@ pub async fn import_connections(
             .map(|c| DuplicateAction::from(c.action))
     };
     let save_passwords = target.save_passwords;
-    let (_, found) = read_blocking(client, path, file_password).await?;
+    let found = read_blocking(client, path, file_password)
+        .await
+        .map_err(|e| e.to_string())?
+        .connections;
     let mut chosen: Vec<ImportedConnection> = found
         .into_iter()
         .filter(|c| action_of(&c.id).is_some_and(|a| a != DuplicateAction::Skip))

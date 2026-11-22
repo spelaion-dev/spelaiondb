@@ -55,12 +55,19 @@ type Scan =
 /** Importing the chosen connections. */
 type Importing = { kind: "idle" } | { kind: "importing" } | { kind: "failed"; message: string };
 
-export function ConnectionImport(props: { client: ImportClientId; onBack(): void; onDone(): void }) {
+export function ConnectionImport(props: {
+  client: ImportClientId;
+  /** A folder or export file chosen on the client's row of the list (SDB-446); else where the
+   *  client keeps its connections. */
+  initialDir?: string | null;
+  onBack(): void;
+  onDone(): void;
+}) {
   const { t } = useTranslation("connections");
   const clientInfo = IMPORT_CLIENTS.find((c) => c.id === props.client);
   const client = clientInfo?.label ?? props.client;
   const hasWorkspace = useApp((s) => Boolean(s.workspace?.workspace));
-  const [dir, setDir] = useState<string | null>(window.__spelaionImportDirs?.[props.client] ?? null);
+  const [dir, setDir] = useState<string | null>(props.initialDir ?? window.__spelaionImportDirs?.[props.client] ?? null);
   const [scan, setScan] = useState<Scan>({ kind: "reading" });
   const found = scan.kind === "found" ? scan : null;
   const locked = scan.kind === "locked" ? scan : null;
