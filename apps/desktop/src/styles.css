@@ -28,6 +28,12 @@
   --grid-stripe: #f8f9fb;
   --grid-line: #eceef2;
   --grid-header: #f3f4f7;
+  /* The grid's highlights, laid over its rows (SDB-75): an edited cell, the cells a search
+     found and the one it is on, and a row to delete. Each keeps the cell's text at 4.5:1. */
+  --grid-edited: rgba(250, 204, 21, 0.28);
+  --grid-found: rgba(234, 179, 8, 0.16);
+  --grid-found-current: rgba(253, 224, 71, 0.48);
+  --grid-deleted: rgba(239, 68, 68, 0.09);
   --prod: #d0342c;
   --tone-neutral: #6b7280;
   --tone-green: #2e7d32;
@@ -200,6 +206,10 @@
   --grid-stripe: #22252b;
   --grid-line: #2a2e35;
   --grid-header: #25292f;
+  --grid-edited: rgba(250, 204, 21, 0.18);
+  --grid-found: rgba(234, 179, 8, 0.18);
+  --grid-found-current: rgba(234, 88, 12, 0.34);
+  --grid-deleted: rgba(239, 68, 68, 0.3);
   --prod: #ff6b61;
   --tone-neutral: #6e7681;
   --tone-green: #2ea043;
@@ -4241,7 +4251,9 @@ button.value-picker-row.selected { background: var(--accent-soft); }
   padding: 0 7px;
   border: 2px solid var(--accent);
   border-radius: initial;
-  font: 400 12px "Segoe UI", system-ui, sans-serif;
+  /* The grid's values: its family here, the user's size inline (SDB-385). */
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
   background: var(--grid-bg);
   color: var(--fg);
 }
