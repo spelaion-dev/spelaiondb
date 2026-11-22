@@ -399,6 +399,41 @@ async fn editor_snippets(state: State<'_, AppState>) -> CmdResult<Vec<EditorSnip
         .map_err(|e| e.to_string())
 }
 
+/// The user's changes to the keyboard shortcuts (SDB-447): only the differences from the
+/// registry's defaults.
+#[command]
+async fn shortcut_overrides(state: State<'_, AppState>) -> CmdResult<Vec<ShortcutOverrideItem>> {
+    state
+        .history
+        .shortcut_overrides()
+        .await
+        .map(|overrides| overrides.into_iter().map(Into::into).collect())
+        .map_err(|e| e.to_string())
+}
+
+/// Replaces the user's changes to the keyboard shortcuts, all of them or none. The core
+/// refuses keys a command may not take (ADR-064).
+#[command]
+async fn set_shortcut_overrides(
+    overrides: Vec<ShortcutOverrideItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_shortcut_overrides(overrides.into_iter().map(Into::into).collect())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Why some keys cannot be a command's shortcut, or `None` when they can (ADR-064): the
+/// dialog that takes new keys says it as they are pressed.
+#[command]
+fn check_shortcut(keys: String) -> Option<String> {
+    spelaion_core::check_shortcut(&keys)
+        .err()
+        .map(|e| e.to_string())
+}
+
 /// Saves an editor snippet, replacing the one of the same name. The core refuses one that is
 /// too long, holds hidden characters or has a name that is not an identifier.
 #[command]
@@ -6251,6 +6286,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             get_editor_preferences,
             set_editor_preferences,
             editor_snippets,
+            shortcut_overrides,
+            set_shortcut_overrides,
+            check_shortcut,
             save_editor_snippet,
             delete_editor_snippet,
             new_script_template,

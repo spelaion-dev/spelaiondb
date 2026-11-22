@@ -7,7 +7,7 @@
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Compartment, countColumn, EditorSelection, EditorState, findColumn, Prec, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, lineNumbers } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, type KeyBinding, lineNumbers } from "@codemirror/view";
 import { sql } from "@codemirror/lang-sql";
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, foldCode, unfoldCode, indentUnit } from "@codemirror/language";
 import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess, selectAll } from "@codemirror/commands";
@@ -16,7 +16,9 @@ import { closeLintPanel, lintKeymap, openLintPanel, setDiagnostics } from "@code
 import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen } from "@codemirror/search";
 import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, snippetCompletion, nextSnippetField, prevSnippetField, acceptCompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { occurrenceOrigin, selectAllOccurrences, selectNextOccurrence } from "../editorOccurrences";
-import { EDITOR_ACTIONS, SNIPPET_COMMANDS, quotedLines, type EditorActionId } from "../editorActions";
+import { editorKey, editorKeyBindings, SNIPPET_COMMANDS, quotedLines, type EditorActionId } from "../editorActions";
+import { commandKeys, commandSpec, KEYS } from "../commandRegistry";
+import { useShortcuts } from "../shortcutPreferences";
 import { allSnippets, lowerKeywords, snippetBefore, snippetsStarting, type EditorSnippet } from "../editorSnippets";
 import { useSnippets } from "../snippetStore";
 import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
@@ -340,6 +342,9 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const locale = useRef(new Compartment());
+  // The registry's commands' keys, rebuilt when the user changes one (SDB-447).
+  const commandKeymap = useRef(new Compartment());
+  const shortcutsRevision = useShortcuts((s) => s.revision);
   const callbacks = useRef({ onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t });
   callbacks.current = { onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t };
   const failed = (e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e));
@@ -560,6 +565,26 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       case "insertSelect": case "insertInsert": case "insertUpdate": return insertNamed(v, SNIPPET_COMMANDS[id]);
     }
   };
+  /** The registry's editor commands as a keymap, with their keys now (SDB-447). */
+  const registryKeymap = () => {
+    const bindings: KeyBinding[] = editorKeyBindings().map(({ key, target }) => ({
+      key,
+      run: (v: EditorView) => {
+        switch (target.kind) {
+          case "action": return action(v, target.id);
+          case "run": return run(v);
+          case "runScript": return runAll(v);
+          case "format": return format(v);
+          default: { const never: never = target; return never; }
+        }
+      },
+    }));
+    // Zoom in also from the + key (its own on some layouts, the keypad's, Shift+=), while it
+    // keeps its default keys.
+    const zoomIn = commandSpec("editor.zoomIn");
+    if (commandKeys(zoomIn) === zoomIn.shortcut) bindings.push({ key: "Mod-+", run: (v) => action(v, "zoomIn") });
+    return keymap.of(bindings);
+  };
   const tab = (v: EditorView) => {
     if (nextSnippetField(v)) return true;
     const range = v.state.selection.main;
@@ -611,18 +636,15 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
         // A new script that starts with the user's template: typing goes on after it.
         selection: cursorAtEnd ? { anchor: value.length } : undefined,
         extensions: [
+          // The registry's commands first, with the user's keys (SDB-447), then the editor's
+          // own keys (`KEYS`), which no command can take.
+          Prec.highest(commandKeymap.current.of(registryKeymap())),
           Prec.highest(
             keymap.of([
-              { key: "Mod-d", run: selectNextOccurrence },
-              { key: "Mod-Shift-Enter", run: runAll },
-              { key: "Mod-Enter", run: (v) => run(v) },
-              { key: "Shift-Alt-f", run: format },
-              ...EDITOR_ACTIONS.map(({ id, key }) => ({ key, run: (v: EditorView) => action(v, id) })),
-              // Zoom in also from the + key (its own on some layouts, the keypad's, Shift+=).
-              { key: "Mod-+", run: (v) => action(v, "zoomIn") },
+              { key: editorKey(KEYS.selectNextOccurrence.shortcut), run: selectNextOccurrence },
               { key: "Enter", run: acceptCompletion },
-              { key: "Tab", run: tab },
-              { key: "Shift-Tab", run: (v) => prevSnippetField(v) || indentLess(v) },
+              { key: editorKey(KEYS.snippetNext.shortcut), run: tab },
+              { key: editorKey(KEYS.snippetPrevious.shortcut), run: (v) => prevSnippetField(v) || indentLess(v) },
             ]),
           ),
           settings.current.of(editorPreferences(preferences)),
@@ -702,6 +724,13 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   useEffect(() => {
     view.current?.dispatch({ effects: settings.current.reconfigure(editorPreferences(preferences)) });
   }, [preferences]);
+
+  // The user changed a shortcut (SDB-447): the keymap is the registry's keys again, so the new
+  // keys act at once and the old ones stop.
+  useEffect(() => {
+    view.current?.dispatch({ effects: commandKeymap.current.reconfigure(registryKeymap()) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shortcutsRevision]);
 
   // Text replaced from outside the editor (a file reloaded from disk, ADR-036): a new
   // `revision` makes the editor show `value`. Only then: a render that arrives late while the

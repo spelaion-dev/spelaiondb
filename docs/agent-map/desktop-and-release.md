@@ -19,7 +19,12 @@
   registered once in `src/commandRegistry.ts` and run through `src/commands.ts`: the tab and
   file menus, the activity bar, the global shortcuts and the command palette
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
-  menus against it. The palette's objects are only what the explorer already read (`catalog.ts`).
+  menus against it. The user can change a command's keys (SDB-447, ADR-064): read a command's
+  keys with `commandKeys` (the user's or the default), never its `shortcut` alone, and bind the
+  SQL editor's keys through `editorKeyBindings` (`editorActions.ts`). The user's changes come
+  from the core (`shortcutPreferences.ts`), which checks the keys; the registry judges clashes
+  by place (`shortcutClash`). The palette's objects are only what the explorer already read
+  (`catalog.ts`).
   A table's or a view's actions live in `src/explorerActions.ts` (SDB-92): its explorer menu
   (`ObjectNode` in `Sidebar.tsx`, each item marked with `data-action`) and the palette's
   `relationActions` call the same functions, Rename…, Drop…, Duplicate table… and generated SQL

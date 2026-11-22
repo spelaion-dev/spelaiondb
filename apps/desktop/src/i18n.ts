@@ -15,6 +15,10 @@ import esMcp from "./locales/es/mcp.json";
 
 export type LanguagePreference = "system" | "en" | "es";
 
+/** Emitted on `i18n` when the user's shortcuts change (SDB-447): bound like a change of
+ *  language, so whatever shows a shortcut renders again. */
+export const SHORTCUTS_CHANGED = "shortcutsChanged";
+
 /** Select the first supported system locale and fall back to English. */
 export function systemLanguage(): string {
   const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
@@ -41,6 +45,9 @@ void i18n.use(initReactI18next).init({
   defaultNS: "app",
   initAsync: false,
   interpolation: { escapeValue: false }, // React escapes interpolated text when rendering.
+  // Shortcuts are put in words while rendering (`shortcuts.ts`): a change to the user's keys
+  // (SDB-447) re-renders what shows them, as a change of language does.
+  react: { bindI18n: `languageChanged ${SHORTCUTS_CHANGED}` },
 });
 document.documentElement.lang = i18n.language ?? "en";
 

@@ -3,9 +3,11 @@
 // interface's names for the keys ("Mayús", "Intro") and ⌘ ⌥ ⇧ on macOS. Translated strings
 // never write a shortcut: they interpolate what these return, and a tooltip appends it.
 //
-// Call them while rendering, so a change of language writes the keys again.
+// Call them while rendering, so a change of language writes the keys again. A change to the
+// user's shortcuts (SDB-447) re-renders the same way: `shortcutPreferences.ts` emits
+// `shortcutsChanged`, which `i18n.ts` binds as it binds a change of language.
 
-import { commandSpec, KEYS, shortcutLabel, type CommandId, type KeyId } from "./commandRegistry";
+import { commandKeys, commandSpec, KEYS, shortcutLabel, type CommandId, type KeyId } from "./commandRegistry";
 import i18n from "./i18n";
 
 /** macOS, where the handlers take Cmd for Ctrl. */
@@ -24,9 +26,9 @@ export function shortcutText(shortcut: string): string {
   return shortcutLabel(shortcut, { mac: isMac(), keyName });
 }
 
-/** A command's shortcut in words, or "" when it has none. */
+/** A command's shortcut in words (the user's keys, or its default), or "" when it has none. */
 export function commandShortcut(id: CommandId): string {
-  const shortcut = commandSpec(id).shortcut;
+  const shortcut = commandKeys(commandSpec(id));
   return shortcut ? shortcutText(shortcut) : "";
 }
 

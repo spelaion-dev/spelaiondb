@@ -18,8 +18,8 @@ import { printableGridKey } from "../gridTyping";
 import { formatsValues, useDisplayFormat } from "../displayFormat";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
 import { GRID_COMMAND_EVENT, useDialogs, type FilterMode, type ResultMeta, type SortState } from "../store";
-import { commandSpec, matchesShortcut, type KeyId } from "../commandRegistry";
-import { keyText, shortcutText, withShortcut } from "../shortcuts";
+import { commandKeys, commandSpec, KEYS, matchesShortcut, type KeyId } from "../commandRegistry";
+import { commandShortcut, keyText, shortcutText, withShortcut } from "../shortcuts";
 import { useExport } from "./ExportDialog";
 import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
 import { Icon, PATHS } from "./Icons";
@@ -155,7 +155,7 @@ const CHECK = 12;
 const KEY_ICON = 12;
 const KEY_GAP = 4;
 /** The grid's own key for following a foreign key (Ctrl+click does it too). */
-const FOLLOW_SHORTCUT = "Ctrl+Enter";
+const FOLLOW_SHORTCUT = KEYS.followReference.shortcut;
 /** A column's sort direction in its header: Lucide's arrow at this size, then its place among
  *  several sort keys. */
 const SORT_ICON = 12;
@@ -284,14 +284,14 @@ export interface GridEditing {
 }
 
 /** The grid's own keys for pending edits (undo and redo are app commands, `commandRegistry.ts`). */
-const UNDO_SHORTCUT = commandSpec("edits.undo").shortcut ?? "";
-const REDO_SHORTCUT = commandSpec("edits.redo").shortcut ?? "";
-const FILL_DOWN_SHORTCUT = "Ctrl+D";
-const PASTE_SHORTCUT = "Ctrl+V";
-const SET_NULL_SHORTCUT = "Ctrl+Alt+N";
-const REVERT_SHORTCUT = "Ctrl+Alt+Z";
+const undoKeys = () => commandKeys(commandSpec("edits.undo")) ?? "";
+const redoKeys = () => commandKeys(commandSpec("edits.redo")) ?? "";
+const FILL_DOWN_SHORTCUT = KEYS.fillDown.shortcut;
+const PASTE_SHORTCUT = KEYS.pasteCells.shortcut;
+const SET_NULL_SHORTCUT = KEYS.setNull.shortcut;
+const REVERT_SHORTCUT = KEYS.revertRows.shortcut;
 /** "Go to row" (SDB-386): an app command the grid handles, as undo and redo. */
-const GO_TO_ROW_SHORTCUT = commandSpec("results.goToRow").shortcut ?? "";
+const goToRowKeys = () => commandKeys(commandSpec("results.goToRow")) ?? "";
 
 /** Ways of copying column names, in menu order (qualified only with a known table). */
 const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
@@ -1977,7 +1977,7 @@ export function ResultGrid({
       setJump("");
       return;
     }
-    if (matchesShortcut(e, GO_TO_ROW_SHORTCUT) && result.rows > 0) {
+    if (matchesShortcut(e, goToRowKeys()) && result.rows > 0) {
       e.preventDefault();
       setRowJump(true);
       return;
@@ -2212,11 +2212,11 @@ export function ResultGrid({
       e.preventDefault();
       e.stopPropagation();
       if (selection) editing.onDelete(selectedRows());
-    } else if (matchesShortcut(e, UNDO_SHORTCUT)) {
+    } else if (matchesShortcut(e, undoKeys())) {
       e.preventDefault();
       e.stopPropagation();
       editing.onUndo();
-    } else if (matchesShortcut(e, REDO_SHORTCUT) || (mod && e.shiftKey && !e.altKey && key === "z")) {
+    } else if (matchesShortcut(e, redoKeys()) || (redoKeys() === commandSpec("edits.redo").shortcut && mod && e.shiftKey && !e.altKey && key === "z")) {
       e.preventDefault();
       e.stopPropagation();
       editing.onRedo();
@@ -2559,7 +2559,7 @@ export function ResultGrid({
                   editing.onUndo();
                 }}
               >
-                <span>{t("edit.undo")}</span><span className="menu-shortcut">{shortcutText(UNDO_SHORTCUT)}</span>
+                <span>{t("edit.undo")}</span><span className="menu-shortcut">{shortcutText(undoKeys())}</span>
               </button>
               <button
                 role="menuitem"
@@ -2569,7 +2569,7 @@ export function ResultGrid({
                   editing.onRedo();
                 }}
               >
-                <span>{t("edit.redo")}</span><span className="menu-shortcut">{shortcutText(REDO_SHORTCUT)}</span>
+                <span>{t("edit.redo")}</span><span className="menu-shortcut">{shortcutText(redoKeys())}</span>
               </button>
               <button
                 role="menuitem"
@@ -2955,8 +2955,8 @@ export function ResultGrid({
               <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><Icon name="revert" /><span>{t("edit.revertAction")}</span></button>
             </div>
             <div className="result-commit-actions" role="group" aria-label={t("edit.pendingActions")}>
-              <button className="ghost" title={`${t("edit.undo")} (${UNDO_SHORTCUT})`} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><Icon name="undo" /></button>
-              <button className="ghost" title={`${t("edit.redo")} (${REDO_SHORTCUT})`} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><Icon name="redo" /></button>
+              <button className="ghost" title={withShortcut(t("edit.undo"), commandShortcut("edits.undo"))} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><Icon name="undo" /></button>
+              <button className="ghost" title={withShortcut(t("edit.redo"), commandShortcut("edits.redo"))} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><Icon name="redo" /></button>
               <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave", { shortcut: keyText("saveEdits") })} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><Icon name="save" /><span>{t("edit.saveChanges")}</span></button>
               <button className="ghost" title={t("edit.shortcutDiscard", { shortcut: keyText("discardEdits") })} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><Icon name="discard" /><span>{t("edit.discard")}</span></button>
             </div>

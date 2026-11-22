@@ -2589,8 +2589,39 @@ select {
   font-weight: 600;
 }
 /* Settings › Keyboard shortcuts (SDB-447): every command with its keys, by place and category. */
+.shortcut-toolbar {
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+}
 .shortcut-search {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+}
+.shortcut-table .shortcut-changed {
+  margin-left: var(--space-sm);
+}
+.shortcut-table .shortcut-actions {
+  padding-left: var(--space-md);
+  text-align: right;
+  white-space: nowrap;
+}
+.shortcut-dialog {
+  width: min(440px, calc(100vw - var(--space-3xl)));
+}
+.shortcut-pressed {
+  margin: var(--space-md) 0;
+  padding: var(--space-lg);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  font-size: var(--text-lg);
+  line-height: var(--leading-lg);
+  text-align: center;
+}
+.shortcut-pressed:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .shortcut-table {
   width: 100%;

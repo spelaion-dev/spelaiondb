@@ -74,6 +74,7 @@ mod session;
 mod session_read_only;
 mod session_setup;
 pub mod session_source;
+mod shortcuts;
 mod shown;
 mod sort;
 mod sql_file;
@@ -257,7 +258,9 @@ pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
     isolation_statement, read_only_statement, setup_is_restricted,
 };
+pub use shortcuts::{MAX_SHORTCUT_LENGTH, MAX_SHORTCUT_OVERRIDES, ShortcutError, check_shortcut};
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};
+pub use spelaion_store::ShortcutOverride;
 pub use spelaion_store::{
     AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
     HistoryOutcome, HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,

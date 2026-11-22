@@ -3,6 +3,7 @@ import App from "./App";
 import { ScreenBoundary } from "./components/ScreenBoundary";
 import "./i18n";
 import { usePreferences } from "./preferences";
+import { useShortcuts } from "./shortcutPreferences";
 import { useSnippets } from "./snippetStore";
 import "./styles.css";
 import { useUpdate } from "./update";
@@ -22,9 +23,9 @@ const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 // Theme and language are applied before the first render so the window never flashes the
 // wrong ones; a failure is shown in the app instead of blocking it.
-void usePreferences
-  .getState()
-  .load()
+// The user's shortcuts too (SDB-447): the first render already shows and takes their keys; a
+// failure leaves the defaults.
+void Promise.all([usePreferences.getState().load(), useShortcuts.getState().load()])
   .finally(() => {
     // A screen that fails shows its own panel (SDB-398); this one catches whatever is left.
     createRoot(root).render(<ScreenBoundary screen="app" className="screen-failed-app"><App /></ScreenBoundary>);
