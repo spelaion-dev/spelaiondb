@@ -8,7 +8,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RecentFileItem } from "../api";
 import { useCatalog } from "../catalog";
-import { commandSpec, paletteCommands, type CommandId } from "../commandRegistry";
+import { paletteCommands, type CommandId } from "../commandRegistry";
+import { commandShortcut, keyText } from "../shortcuts";
 import {
   activeContext,
   commandEnabled,
@@ -111,7 +112,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
             id,
             text: `${category}: ${t(commandLabel(id, context))}`,
             prefix: category.length + 2,
-            shortcut: commandSpec(id).shortcut,
+            shortcut: commandShortcut(id) || undefined,
           };
         }),
     [context, t],
@@ -333,8 +334,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
                 ? t("palette.noActions")
                 : t("palette.nothing")
               : chosen
-                ? t("palette.actionHint")
-                : t("palette.hint")}
+                ? t("palette.actionHint", { enter: keyText("submit"), escape: keyText("close") })
+                : t("palette.hint", { enter: keyText("submit") })}
         </p>
       </div>
     </div>

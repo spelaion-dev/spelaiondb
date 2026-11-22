@@ -38,6 +38,7 @@ import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 import { installText, openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
+import { keyText } from "../shortcuts";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -1416,7 +1417,7 @@ function ConnectionForm(props: {
                 onChange={(tags) => update({ tags })}
               />
             </div>
-            <p className="muted small">{t("fields.tagsHint")}</p>
+            <p className="muted small">{t("fields.tagsHint", { enter: keyText("submit") })}</p>
           </fieldset>
           <fieldset>
             <legend>{t("sections.organization")}</legend>

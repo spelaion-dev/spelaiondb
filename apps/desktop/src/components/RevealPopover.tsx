@@ -6,6 +6,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type RevealedCellItem } from "../api";
+import { keyText } from "../shortcuts";
 import { Icon } from "./Icons";
 
 const MARGIN = 8;
@@ -76,7 +77,7 @@ export function RevealPopover(props: {
           <strong title={title}>{title}</strong>
           {cell && <span className="muted small">{cell.nativeType}</span>}
         </div>
-        <button className="ghost cell-viewer-close" aria-label={t("masking.close")} title={t("masking.close")} onClick={onClose}>
+        <button className="ghost cell-viewer-close" aria-label={t("masking.close", { shortcut: keyText("close") })} title={t("masking.close", { shortcut: keyText("close") })} onClick={onClose}>
           <Icon name="x" />
         </button>
       </header>

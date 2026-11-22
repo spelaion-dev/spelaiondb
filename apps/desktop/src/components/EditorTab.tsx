@@ -32,7 +32,7 @@ import { EditorActionsButton } from "./EditorMenu";
 import { SqlEditor, type NameAction, type RunLabel, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { ScriptOutline } from "./ScriptOutline";
 import type { ResolvedName } from "../sqlCompletion";
-import { commandSpec } from "../commandRegistry";
+import { commandShortcut } from "../shortcuts";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
@@ -1560,7 +1560,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   };
   const maximized = !tab.table && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
-  const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults")} title={t(maximized ? "restoreResults" : "maximizeResults")} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
+  const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} title={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
       <span className="sr-only" role="status">{runStatusLine}</span>
@@ -1706,30 +1706,30 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
                 <EditorActionIcon name="cancel" />
               </button>
             ) : (
-              <button className="editor-action editor-action-run" data-run-target={runLabel?.kind ?? ""} aria-label={runName} title={`${runPicks ? t("runSelectionPickHint", { count: runLabel?.statements }) : runName} (${commandSpec("editor.run").shortcut})`} disabled={historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
+              <button className="editor-action editor-action-run" data-run-target={runLabel?.kind ?? ""} aria-label={runName} title={`${runPicks ? t("runSelectionPickHint", { count: runLabel?.statements }) : runName} (${commandShortcut("editor.run")})`} disabled={historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
                 <EditorActionIcon name="run" />
               </button>
             )}
-            <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
+            <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint", { shortcut: commandShortcut("editor.runScript") })} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
               <EditorActionIcon name="script" />
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
             <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
             <EditorActionsButton />
             <span className="editor-actions-divider" aria-hidden="true" />
-            <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
+            <button className="editor-action" aria-label={t("format")} title={t("formatHint", { shortcut: commandShortcut("editor.format") })} onClick={() => editor.current?.format()}>
               <EditorActionIcon name="format" />
             </button>
             {tab.file ? (
-              <button className="editor-action" aria-label={t("files.saveFile")} title={t("files.saveFileHint")} onClick={() => void saveTab(tab.id)}>
+              <button className="editor-action" aria-label={t("files.saveFile")} title={t("files.saveFileHint", { shortcut: commandShortcut("file.save") })} onClick={() => void saveTab(tab.id)}>
                 <EditorActionIcon name="save" />
               </button>
             ) : (
-              <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
+              <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint", { shortcut: commandShortcut("file.save") })} onClick={() => void saveQuery()}>
                 <EditorActionIcon name="save" />
               </button>
             )}
-            <button className="editor-action" aria-label={t("files.saveAs")} title={t("files.saveAsHint")} onClick={() => void saveTabAs(tab.id)}>
+            <button className="editor-action" aria-label={t("files.saveAs")} title={t("files.saveAsHint", { shortcut: commandShortcut("file.saveAs") })} onClick={() => void saveTabAs(tab.id)}>
               <EditorActionIcon name="saveAs" />
             </button>
           </div>
@@ -1972,15 +1972,15 @@ function Results({
     <button
       className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
       aria-pressed={maximize.maximized}
-      aria-label={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
-      title={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
+      aria-label={maximize.maximized ? t("restoreResults", { shortcut: commandShortcut("results.maximize") }) : t("maximizeResults", { shortcut: commandShortcut("results.maximize") })}
+      title={maximize.maximized ? t("restoreResults", { shortcut: commandShortcut("results.maximize") }) : t("maximizeResults", { shortcut: commandShortcut("results.maximize") })}
       onClick={maximize.onToggle}
     >
       <Icon name={maximize.maximized ? "minimize" : "maximize"} />
     </button>
   );
   // Nothing to show yet: the button only brings the editor back if it was hidden.
-  if (!run) return <div className="empty">{t("results.empty")}{maximize?.maximized && maximizeButton}</div>;
+  if (!run) return <div className="empty">{t("results.empty", { shortcut: commandShortcut("editor.run") })}{maximize?.maximized && maximizeButton}</div>;
   const active = run.results.find((r) => r.id === run.activeResult) ?? null;
   const canRefresh = !!active && (!!table || !!active.refreshable);
   const showMessages = active === null;

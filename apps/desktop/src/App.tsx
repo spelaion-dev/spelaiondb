@@ -28,7 +28,8 @@ import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
 import { ErDiagramView } from "./components/ErDiagram";
 import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest } from "./connect";
-import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./commandRegistry";
+import { commandSpec, globalCommandFor, type CommandId } from "./commandRegistry";
+import { commandShortcut, commandTitle } from "./shortcuts";
 import { activeContext, isCommandId, runCommand } from "./commands";
 import { commands, events } from "./api";
 import { usePreferences } from "./preferences";
@@ -242,8 +243,8 @@ export default function App() {
                   <WelcomeButton command="connection.add" />
                   <WelcomeButton command="file.open" />
                 </div>
-                <p className="welcome-shortcut">{t("newQueryShortcut")}</p>
-                <p className="welcome-shortcut">{t("commands.paletteHint", { shortcut: commandSpec("palette.show").shortcut })}</p>
+                <p className="welcome-shortcut">{t("newQueryShortcut", { shortcut: commandShortcut("tab.new") })}</p>
+                <p className="welcome-shortcut">{t("commands.paletteHint", { shortcut: commandShortcut("palette.show") })}</p>
               </div>
             ) : (
               // All mounted (the editor keeps its state); only the active one is visible.
@@ -296,7 +297,7 @@ function WelcomeButton({ command, primary = false }: { command: CommandId; prima
   const { t } = useTranslation();
   const spec = commandSpec(command);
   return (
-    <button className={primary ? "primary" : undefined} data-command={command} title={withShortcut(t(spec.label), spec)} onClick={() => runCommand(command, activeContext("menu"))}>
+    <button className={primary ? "primary" : undefined} data-command={command} title={commandTitle(t(spec.label), command)} onClick={() => runCommand(command, activeContext("menu"))}>
       {t(spec.label)}
     </button>
   );

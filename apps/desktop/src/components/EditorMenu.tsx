@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { menuCommands, type CommandId } from "../commandRegistry";
+import { commandShortcut } from "../shortcuts";
 import { activeContext, commandEnabled, runCommand } from "../commands";
 
 export function EditorActionsButton() {
@@ -43,7 +44,7 @@ export function EditorMenu({ x, y, onClose }: { x: number; y: number; onClose():
     items[event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (at + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
   }}>
     {menuCommands("editor").map((command) => <button role="menuitem" data-command={command.id} aria-label={t(command.label)} key={command.id} disabled={!commandEnabled(command.id as CommandId, activeContext("menu"))} onClick={() => { onClose(); runCommand(command.id as CommandId, activeContext("menu")); }}>
-      <span>{t(command.label)}</span><span className="menu-shortcut">{command.shortcut}</span>
+      <span>{t(command.label)}</span><span className="menu-shortcut">{commandShortcut(command.id as CommandId)}</span>
     </button>)}
   </div>, document.body);
 }

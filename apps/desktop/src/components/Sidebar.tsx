@@ -78,6 +78,7 @@ import { ObjectMenu } from "./ObjectMenu";
 import { MissingPlugin } from "./MissingPlugin";
 import { FolderMenuButton } from "./FolderMenu";
 import { folderSwitchBlocked, switchFolder } from "../folders";
+import { commandShortcut, keyText } from "../shortcuts";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -557,7 +558,7 @@ function DetailRow({ label, icon, onOpen }: { label: string; icon: TreeIconKind;
         className="row leaf-row"
         role="button"
         tabIndex={0}
-        title={t("tableDetails.openHint")}
+        title={t("tableDetails.openHint", { shortcut: keyText("openOverview") })}
         onClick={onOpen}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -1171,7 +1172,7 @@ function Folder({
         }}
         onClick={() => { if (!onOpenView) setOpen(!open); }}
         onDoubleClick={onOpenView}
-        title={onOpenView ? t("tableDetails.openHint") : undefined}
+        title={onOpenView ? t("tableDetails.openHint", { shortcut: keyText("openOverview") }) : undefined}
         role="button"
         tabIndex={0}
         aria-expanded={open}
@@ -1552,7 +1553,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             }}
             aria-label={t("quickFilter")}
             aria-pressed={filter !== null}
-            title={t("quickFilterHint")}
+            title={t("quickFilterHint", { shortcut: commandShortcut("view.explorerFilter") })}
           >
             <SearchIcon />
           </button>

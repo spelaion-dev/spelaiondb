@@ -96,7 +96,7 @@
   "loadingDetails": "Cargando detalles de la tabla…",
   "connecting": "Conectando…",
   "quickFilter": "Filtrar el explorador",
-  "quickFilterHint": "Buscar conexiones por nombre, etiqueta, tipo o servidor, y filtrar lo cargado (Ctrl+Mayús+F)",
+  "quickFilterHint": "Buscar conexiones por nombre, etiqueta, tipo o servidor, y filtrar lo cargado ({{shortcut}})",
   "quickFilterPlaceholder": "Nombre, etiqueta, tipo o servidor",
   "quickFilterNothing": "Ninguna conexión, esquema u objeto cargado coincide con el filtro.",
   "moveFailed": "No se pudo mover {{name}}: {{detail}}",
@@ -178,7 +178,7 @@
   },
   "tableDetails": {
     "title": "{{section}} de {{table}}",
-    "openHint": "Doble clic o Ctrl+Intro para abrir la vista",
+    "openHint": "Doble clic o {{shortcut}} para abrir la vista",
     "name": "Nombre",
     "type": "Tipo",
     "nullable": "Admite nulos",
@@ -570,7 +570,7 @@
     "results": "Objetos encontrados",
     "searching": "Buscando…",
     "nothing": "Nada tiene ese nombre en lo que muestra el explorador.",
-    "hint": "↑ ↓ para elegir, Intro para abrirlo y mostrarlo en el explorador.",
+    "hint": "↑ ↓ para elegir, {{enter}} para abrirlo y mostrarlo en el explorador.",
     "noneConnected": "Conecta primero una conexión en el explorador: la búsqueda lee su catálogo."
   },
   "setActiveSchema": "Usar como esquema del editor",
@@ -941,5 +941,16 @@
     "type": "Tipo",
     "index": "Índice",
     "other": "Otro"
+  },
+  "keys": {
+    "Ctrl": "Ctrl",
+    "Shift": "Mayús",
+    "Alt": "Alt",
+    "Enter": "Intro",
+    "Escape": "Esc",
+    "Delete": "Supr",
+    "Insert": "Insert",
+    "Tab": "Tab",
+    "click": "clic"
   }
 }

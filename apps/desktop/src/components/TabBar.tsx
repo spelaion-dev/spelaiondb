@@ -13,7 +13,14 @@ import { type Tab, useApp } from "../store";
 import { isRunning, statusName, transactionOf } from "../tabState";
 import { FileMenuButton } from "./FileMenu";
 import { Icon } from "./Icons";
-import { commandSpec, type CommandId } from "../commandRegistry";
+import { KEYS, type CommandId } from "../commandRegistry";
+import { commandShortcut, commandTitle, shortcutText } from "../shortcuts";
+
+/** The switcher's keys in words: the modifier held down and the key pressed (`KEYS.switchTabs`). */
+function switcherKeys(): { modifier: string; key: string } {
+  const [modifier = "", key = ""] = KEYS.switchTabs.shortcut.split("+");
+  return { modifier: shortcutText(modifier), key: shortcutText(key) };
+}
 import { CommandMenuItem } from "./CommandMenuItem";
 
 /** Distinguishes SQL, table data and table metadata without adding labels to the tab bar. */
@@ -125,7 +132,7 @@ export function TabBar({ hidden }: { hidden: boolean }) {
           />
         ))}
       </div>
-      <button className="new-tab" type="button" onClick={() => addTab(null)} title={t("newQueryShortcut")} aria-label={t("newQueryShortcut")}><Icon name="plus" /></button>
+      <button className="new-tab" type="button" onClick={() => addTab(null)} title={t("newQueryShortcut", { shortcut: commandShortcut("tab.new") })} aria-label={t("newQueryShortcut", { shortcut: commandShortcut("tab.new") })}><Icon name="plus" /></button>
       <FileMenuButton />
       {menu && <TabMenu key={menu.id} {...menu} onClose={() => setMenu(null)} />}
       <TabSwitcher />
@@ -284,7 +291,7 @@ function TabItem({ id, index, active, renaming, marks, strip }: {
         <button
           className="close tab-unpin"
           aria-label={t("tabs.unpinButton", { name: view.label })}
-          title={`${t("tabs.unpin")} (${commandSpec("tab.pin").shortcut})`}
+          title={commandTitle(t("tabs.unpin"), "tab.pin")}
           onClick={(e) => {
             e.stopPropagation();
             useApp.getState().setPinned(id, false);
@@ -537,7 +544,7 @@ function TabSwitcher() {
           </div>
         );
       })}
-      <div className="tab-switcher-hint muted small">{t("tabs.switcherHint")}</div>
+      <div className="tab-switcher-hint muted small">{t("tabs.switcherHint", switcherKeys())}</div>
     </div>
   );
 }

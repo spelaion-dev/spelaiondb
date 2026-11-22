@@ -6,6 +6,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type KeyTargetItem, type RowReferenceItem } from "../api";
+import { keyText } from "../shortcuts";
 import { Icon } from "./Icons";
 
 /** Rows of each key the panel shows; "Open" shows them all. */
@@ -119,7 +120,7 @@ export function ReferencesPanel(props: {
             <strong>{t("references.rowTitle", { number: (row + 1).toLocaleString(i18n.language) })}</strong>
             <span className="muted small" title={`${schema}.${table}`}>{table}</span>
           </div>
-          <button className="ghost cell-viewer-close" aria-label={t("references.close")} title={t("references.close")} onClick={props.onClose}><Icon name="x" /></button>
+          <button className="ghost cell-viewer-close" aria-label={t("references.close", { shortcut: keyText("close") })} title={t("references.close", { shortcut: keyText("close") })} onClick={props.onClose}><Icon name="x" /></button>
         </div>
         <div className="cell-viewer-controls">{props.modes}</div>
       </header>

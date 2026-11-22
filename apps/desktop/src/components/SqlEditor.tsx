@@ -28,6 +28,7 @@ import { useDialogs } from "../dialogStore";
 import { EditorMenu } from "./EditorMenu";
 import { call, commands } from "../api";
 import { byteToIndex, indexToByte, wordEnd } from "../text";
+import { commandShortcut, keyText } from "../shortcuts";
 
 export interface RunRequest {
   /** Text to run: a statement, the selection or everything. */
@@ -281,7 +282,7 @@ function nameTooltip(name: ResolvedName, t: (key: string, values?: Record<string
   root.append(list);
   const more = table.details.length - HOVER_COLUMNS;
   if (more > 0) root.append(el("div", "sql-hover-note", t("names.moreColumns", { count: more })));
-  root.append(el("div", "sql-hover-note", t("names.openHint")));
+  root.append(el("div", "sql-hover-note", t("names.openHint", { gesture: keyText("openObjectByClick"), shortcut: commandShortcut("editor.openObject") })));
   return root;
 }
 

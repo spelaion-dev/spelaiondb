@@ -1,6 +1,6 @@
 {
   "title": "Configuración",
-  "open": "Configuración (Ctrl+,)",
+  "open": "Configuración ({{shortcut}})",
   "close": "Cerrar",
   "categories": "Categorías de la configuración",
   "loadError": "No se pudo cargar este ajuste:",
@@ -313,7 +313,7 @@
     "fontSize": "Tamaño de fuente (px)",
     "lineHeight": "Altura de línea (px)",
     "zoom": "Zoom",
-    "zoomHint": "Multiplica el tamaño de fuente y la altura de línea del editor. En el editor, Ctrl+= amplía, Ctrl+- reduce y Ctrl+0 vuelve al 100 %. Los tamaños son los del tamaño normal de la interfaz (Apariencia) y crecen con él.",
+    "zoomHint": "Multiplica el tamaño de fuente y la altura de línea del editor. En el editor, {{zoomIn}} amplía, {{zoomOut}} reduce y {{zoomReset}} vuelve al 100 %. Los tamaños son los del tamaño normal de la interfaz (Apariencia) y crecen con él.",
     "tabSize": "Tamaño de tabulación",
     "lineNumbers": "Mostrar números de línea",
     "wordWrap": "Ajustar líneas largas",
@@ -326,11 +326,11 @@
     "lower": "Minúsculas",
     "trailing": "Final de línea",
     "leading": "Inicio de línea",
-    "snippets": "Escribe sel, ins o upd y pulsa Tab para expandir un fragmento. Tab avanza al siguiente campo; Mayús+Tab vuelve atrás. Tus propios fragmentos y la plantilla de los scripts nuevos están en Ajustes › Fragmentos."
+    "snippets": "Escribe sel, ins o upd y pulsa {{next}} para expandir un fragmento. {{next}} avanza al siguiente campo; {{previous}} vuelve atrás. Tus propios fragmentos y la plantilla de los scripts nuevos están en Ajustes › Fragmentos."
   },
   "snippets": {
     "title": "Fragmentos",
-    "hint": "Un fragmento es texto que el editor inserta al escribir su nombre y pulsar Tab. Tab pasa después a su siguiente campo y Mayús+Tab vuelve atrás. Los fragmentos son solo tuyos, se guardan en este equipo y nunca se ejecutan por sí solos.",
+    "hint": "Un fragmento es texto que el editor inserta al escribir su nombre y pulsar {{next}}. {{next}} pasa después a su siguiente campo y {{previous}} vuelve atrás. Los fragmentos son solo tuyos, se guardan en este equipo y nunca se ejecutan por sí solos.",
     "yours": "Tus fragmentos",
     "none": "Todavía no tienes fragmentos.",
     "builtIn": "Fragmentos incluidos",
@@ -342,10 +342,10 @@
     "delete": "Eliminar",
     "deleteNamed": "Eliminar el fragmento {{name}}",
     "name": "Nombre",
-    "nameHint": "Lo que escribes antes de Tab: letras, dígitos y guiones bajos. Un nombre incluido (sel, ins, upd) sustituye a ese fragmento.",
+    "nameHint": "Lo que escribes antes de {{next}}: letras, dígitos y guiones bajos. Un nombre incluido (sel, ins, upd) sustituye a ese fragmento.",
     "description": "Descripción",
     "text": "Texto",
-    "textHint": "Los campos se escriben ${1:nombre}, ${2:otro}…; Tab los recorre en orden y ${0} es donde queda el cursor.",
+    "textHint": "Los campos se escriben ${1:nombre}, ${2:otro}…; {{next}} los recorre en orden y ${0} es donde queda el cursor.",
     "save": "Guardar fragmento",
     "cancel": "Cancelar",
     "full_one": "Ya tienes {{count}} fragmento, el máximo permitido",

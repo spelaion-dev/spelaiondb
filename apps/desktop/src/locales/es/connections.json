@@ -126,7 +126,7 @@
     "descriptionHint": "Se muestra como descripción emergente de la conexión y, si está expuesta, a los agentes de IA, para que sepan para qué sirve la base de datos. Nunca pongas contraseñas aquí.",
     "tags": "Etiquetas",
     "tagsPlaceholder": "facturación, eu, informes…",
-    "tagsHint": "Etiquetas cortas para encontrar la conexión: pulsa Intro o escribe una coma después de cada una. Haz clic en una etiqueta del explorador para ver solo las conexiones que la tienen.",
+    "tagsHint": "Etiquetas cortas para encontrar la conexión: pulsa {{enter}} o escribe una coma después de cada una. Haz clic en una etiqueta del explorador para ver solo las conexiones que la tienen.",
     "tagsFull": "Como mucho {{count}} etiquetas",
     "removeTag": "Quitar la etiqueta {{tag}}",
     "defaultSchema": "Esquema por defecto",
@@ -505,7 +505,7 @@
     "copiedWithout": "«{{name}}» copiada, sin su contraseña. Se ha quedado fuera: {{fields}}.",
     "pasted": "«{{name}}» se ha pegado como conexión personal, ya guardada. Su contraseña se pide al conectar. Revísala o cierra.",
     "pastedWithout": "«{{name}}» se ha pegado como conexión personal, ya guardada. Su contraseña se pide al conectar. No se ha tomado del portapapeles: {{fields}}. Revísala o cierra.",
-    "clipboardUnavailable": "No se ha podido leer el portapapeles: selecciona una conexión y pulsa Ctrl+V."
+    "clipboardUnavailable": "No se ha podido leer el portapapeles: selecciona una conexión y pulsa {{shortcut}}."
   },
   "move": {
     "menu": "Mover a carpeta…",

@@ -3,6 +3,7 @@
 
 import type { RefObject } from "react";
 import { useTranslation } from "react-i18next";
+import { keyText } from "../shortcuts";
 
 export function FindBar(props: {
   inputRef: RefObject<HTMLInputElement | null>;
@@ -17,6 +18,9 @@ export function FindBar(props: {
   onClose(): void;
 }) {
   const { t } = useTranslation("editor");
+  const previous = t("results.findPrevious", { inBox: keyText("findPreviousInBox"), shortcut: keyText("findPrevious") });
+  const next = t("results.findNext", { inBox: keyText("findNextInBox"), shortcut: keyText("findNext") });
+  const close = t("results.findClose", { shortcut: keyText("close") });
   return (
     <div
       className="grid-find"
@@ -48,8 +52,8 @@ export function FindBar(props: {
         type="button"
         className={`ghost small grid-find-case ${props.matchCase ? "active" : ""}`}
         aria-pressed={props.matchCase}
-        aria-label={t("results.findMatchCase")}
-        title={t("results.findMatchCase")}
+        aria-label={t("results.findMatchCase", { shortcut: keyText("findMatchCase") })}
+        title={t("results.findMatchCase", { shortcut: keyText("findMatchCase") })}
         onClick={() => props.onMatchCase(!props.matchCase)}
       >
         Aa
@@ -57,13 +61,13 @@ export function FindBar(props: {
       <span className="grid-find-status small muted" role="status">
         {props.status}
       </span>
-      <button type="button" className="ghost small" aria-label={t("results.findPrevious")} title={t("results.findPrevious")} disabled={!props.canStep} onClick={props.onPrevious}>
+      <button type="button" className="ghost small" aria-label={previous} title={previous} disabled={!props.canStep} onClick={props.onPrevious}>
         ↑
       </button>
-      <button type="button" className="ghost small" aria-label={t("results.findNext")} title={t("results.findNext")} disabled={!props.canStep} onClick={props.onNext}>
+      <button type="button" className="ghost small" aria-label={next} title={next} disabled={!props.canStep} onClick={props.onNext}>
         ↓
       </button>
-      <button type="button" className="ghost small" aria-label={t("results.findClose")} title={t("results.findClose")} onClick={props.onClose}>
+      <button type="button" className="ghost small" aria-label={close} title={close} onClick={props.onClose}>
         ×
       </button>
     </div>

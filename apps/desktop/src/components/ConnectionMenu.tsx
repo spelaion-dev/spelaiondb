@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import type { ConnectionItem } from "../api";
 import { useApp } from "../store";
 import { disconnectAll, hasSessions } from "../connectionControl";
+import { shortcutText } from "../shortcuts";
 
 /** The actions that need the explorer node's own state; the rest only need the store. */
 export interface ConnectionMenuActions {
@@ -81,7 +82,7 @@ export function ConnectionMenu({
         }}
       >
         <span>{label}</span>
-        <span className="menu-shortcut">{shortcut?.text ?? ""}</span>
+        <span className="menu-shortcut">{shortcut ? shortcutText(shortcut.text) : ""}</span>
       </button>
     );
   };
