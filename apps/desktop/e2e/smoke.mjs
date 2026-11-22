@@ -2286,7 +2286,10 @@ try {
       return active !== null && active !== old && /^1 row(?! \(loading\))/.test(status) && tab?.querySelector(".editor-action-cancel") === null;
     }, before);
   };
-  const firstCell = async () => {
+  // The first cell of the grid shown, copied with Ctrl+C. A grid replaced by a new result
+  // between the click and the key copies nothing: the loops that wait for a value pass a short
+  // `timeout`, get "" and try again, instead of failing on the first copy that never came.
+  const firstCell = async (timeout = 30_000) => {
     const grid = panel.locator(".grid-scroller");
     await grid.waitFor();
     let box = await grid.boundingBox();
@@ -2297,7 +2300,10 @@ try {
     const before = await page.evaluate(() => window.__copied.length);
     await page.mouse.click(box.x + 80, box.y + 34 + 12);
     await page.keyboard.press("Control+c");
-    return (await copied(before + 1)).trimEnd();
+    const arrived = await page
+      .waitForFunction((n) => window.__copied.length > n, before, { timeout })
+      .then(() => true, () => false);
+    return arrived ? (await page.evaluate(() => window.__copied[window.__copied.length - 1])).trimEnd() : "";
   };
   const sqlEditor = panel.locator(".cm-content");
   await sqlEditor.click();
@@ -2339,7 +2345,7 @@ try {
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   let selected = "";
   for (let i = 0; i < 20 && selected !== "second;"; i++) {
-    selected = await firstCell();
+    selected = await firstCell(3_000);
     if (selected !== "second;") await page.waitForTimeout(250);
   }
   assert.equal(selected, "second;");
@@ -2353,7 +2359,7 @@ try {
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   selected = "";
   for (let i = 0; i < 20 && selected !== "first"; i++) {
-    selected = await firstCell();
+    selected = await firstCell(3_000);
     if (selected !== "first") await page.waitForTimeout(250);
   }
   assert.equal(selected, "first");
@@ -2380,7 +2386,7 @@ try {
     const cellIs = async (expected) => {
       let cell = "";
       for (let i = 0; i < 20 && cell !== expected; i++) {
-        cell = await firstCell();
+        cell = await firstCell(3_000);
         if (cell !== expected) await page.waitForTimeout(250);
       }
       assert.equal(cell, expected);
@@ -2518,7 +2524,7 @@ try {
     const cellIs = async (expected) => {
       let cell = "";
       for (let i = 0; i < 20 && cell !== expected; i++) {
-        cell = await firstCell();
+        cell = await firstCell(3_000);
         if (cell !== expected) await page.waitForTimeout(250);
       }
       assert.equal(cell, expected);
@@ -2640,7 +2646,7 @@ try {
   const firstCellIs = async (value) => {
     let cell = "";
     for (let i = 0; i < 20 && cell !== value; i++) {
-      cell = await firstCell();
+      cell = await firstCell(3_000);
       if (cell !== value) await page.waitForTimeout(250);
     }
     assert.equal(cell, value);
