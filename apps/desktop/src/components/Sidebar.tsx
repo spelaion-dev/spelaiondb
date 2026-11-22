@@ -59,7 +59,7 @@ import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./Explorer
 import { EngineIcon } from "./EngineIcon";
 import { useFittingMarks } from "../connectionMarks";
 import { tlsWarningText } from "../tlsWarning";
-import { Icon } from "./Icons";
+import { Icon, type IconName } from "./Icons";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { DuplicateTableDialog } from "./DuplicateTableDialog";
 import { StructureDialog } from "./StructureDialog";
@@ -223,7 +223,7 @@ function AddConnectionButton() {
         aria-label={t("connections:add")}
         title={t("connections:add")}
       >
-        +
+        <Icon name="plus" />
       </button>
       <button
         ref={arrow}
@@ -240,7 +240,7 @@ function AddConnectionButton() {
           }
         }}
       >
-        ▾
+        <Icon name="chevronDown" />
       </button>
       {menu && (
         <ObjectMenu at={menu} label={t("connections:moreWaysToAdd")}>
@@ -418,34 +418,6 @@ function GeneratedSqlDialog({ initialSql, onClose }: { initialSql: string; onClo
         </div>
       </section>
     </div>
-  );
-}
-
-/** A plug: "Show only connected connections". */
-function PlugIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5V21" />
-    </svg>
-  );
-}
-
-/** Two chain links: "Link with editor". */
-function LinkIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
-    </svg>
-  );
-}
-
-/** The magnifying glass of the quick filter. */
-function SearchIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false">
-      <circle cx="10.5" cy="10.5" r="6" />
-      <path d="M15 15l5 5" />
-    </svg>
   );
 }
 
@@ -1138,23 +1110,25 @@ const SERVER_FOLDERS = ["roles", "users", "logins", "tablespaces", "extensions"]
 
 type TreeIconKind = "folder" | "table" | "view" | "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers" | "column" | "properties" | "partitions" | "dependencies";
 
+/** Each explorer node's icon: a table and a view share one, as they did. */
+const TREE_ICONS: Record<TreeIconKind, IconName> = {
+  folder: "folder",
+  table: "table",
+  view: "table",
+  columns: "columns",
+  constraints: "key",
+  foreignKeys: "foreignKey",
+  indexes: "indexes",
+  triggers: "trigger",
+  column: "column",
+  properties: "details",
+  partitions: "partitions",
+  dependencies: "dependencies",
+};
+
 /** Small, neutral line icons distinguish explorer nodes without competing with their labels. */
 function TreeIcon({ kind }: { kind: TreeIconKind }) {
-  return (
-    <svg className={`tree-icon tree-icon-${kind}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      {kind === "folder" && <path d="M1.8 4.1h4l1.3 1.4h7v6.8H1.8z" />}
-      {(kind === "table" || kind === "view") && <><rect x="2" y="2.5" width="12" height="11" rx="1" /><path d="M2 6.2h12M6 6.2v7.3M10 6.2v7.3" /></>}
-      {kind === "columns" && <><rect x="2.2" y="2.5" width="11.6" height="11" rx="1" /><path d="M6 3v10M10 3v10" /></>}
-      {kind === "column" && <><rect x="4" y="2" width="8" height="12" rx="1" /><path d="M4 6h8M4 10h8" /></>}
-      {kind === "constraints" && <><circle cx="6" cy="6" r="2.5" /><path d="m7.8 7.8 4.9 4.9m-1.5-1.5 1.4-1.4m-3 0 1.4-1.4" /></>}
-      {kind === "foreignKeys" && <><path d="M6.5 10.8 5.3 12a2.5 2.5 0 0 1-3.5-3.5l2.3-2.3a2.5 2.5 0 0 1 3.5 0M9.5 5.2 10.7 4a2.5 2.5 0 0 1 3.5 3.5l-2.3 2.3a2.5 2.5 0 0 1-3.5 0M5.9 10.1l4.2-4.2" /></>}
-      {kind === "indexes" && <><path d="M3 3.5h10M3 8h10M3 12.5h10" /><circle cx="5" cy="3.5" r="1" fill="var(--panel)" /><circle cx="10" cy="8" r="1" fill="var(--panel)" /><circle cx="6.5" cy="12.5" r="1" fill="var(--panel)" /></>}
-      {kind === "triggers" && <path d="M8.9 1.8 3.7 8h3.7l-.4 6.2L12.4 7H8.7z" />}
-      {kind === "properties" && <><circle cx="8" cy="8" r="6" /><path d="M8 7.3v4M8 4.9v.1" /></>}
-      {kind === "partitions" && <><rect x="2" y="2.5" width="12" height="11" rx="1" /><path d="M2 6.2h12M2 9.8h12" /></>}
-      {kind === "dependencies" && <><circle cx="4" cy="4" r="1.8" /><circle cx="12" cy="12" r="1.8" /><path d="m5.3 5.3 5.4 5.4M10.7 7.4v3.3H7.4" /></>}
-    </svg>
-  );
+  return <Icon name={TREE_ICONS[kind]} className={`tree-icon tree-icon-${kind}`} />;
 }
 
 function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[number] {
@@ -1321,7 +1295,7 @@ function Folder({
           onClick={onOpenView ? (e) => { e.stopPropagation(); setOpen(!open); } : undefined}
           onDoubleClick={onOpenView ? (e) => e.stopPropagation() : undefined}
         >
-          {open ? "▾" : "▸"}
+          <Icon name={open ? "chevronDown" : "chevronRight"} />
         </span>
         <TreeIcon kind={icon} />
         <span className="label">{label}</span>
@@ -1607,7 +1581,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
               return next;
             })}
           >
-            <svg className="connection-folder-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true"><path d="M1.8 4.1h4l1.3 1.4h7v6.8H1.8z" strokeLinejoin="round" /></svg>
+            <Icon name={expanded ? "chevronDown" : "chevronRight"} />
+            <Icon name="folder" className="connection-folder-icon" />
             <span
               className={`group-segment${dropClass(folder.personal, folder.path)}`}
               data-drop-folder={folder.path}
@@ -1641,7 +1616,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         <div className="sidebar-tools">
           <span className="sidebar-section-title">{t("connections")}</span>
           <button className="ghost icon-button" type="button" aria-label={t("collapseAllFolders")} title={t("collapseAllFolders")} onClick={collapseFolders} disabled={folderKeys.length === 0}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" aria-hidden="true"><rect x="3.5" y="4.5" width="9" height="9" rx="1" /><path d="M6 9h4M2 10.5V3a1 1 0 0 1 1-1h7.5" strokeLinecap="round" /></svg>
+            <Icon name="collapseAll" />
           </button>
           <button
             className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
@@ -1654,7 +1629,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             aria-pressed={explorer.linkWithEditor}
             title={t("linkWithEditorHint")}
           >
-            <LinkIcon />
+            <Icon name="link" />
           </button>
           <button
             className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
@@ -1666,7 +1641,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             aria-pressed={explorer.connectedOnly}
             title={t("connectedOnly")}
           >
-            <PlugIcon />
+            <Icon name="plug" />
           </button>
           <button
             className={`ghost icon-button${filter !== null ? " active" : ""}`}
@@ -1681,7 +1656,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             aria-pressed={filter !== null}
             title={t("quickFilterHint", { shortcut: commandShortcut("view.explorerFilter") })}
           >
-            <SearchIcon />
+            <Icon name="search" />
           </button>
           <AddConnectionButton />
         </div>
@@ -1759,16 +1734,16 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       {moveError && (
         <div className="banner" role="alert">
           {moveError}
-          <button className="ghost small" aria-label={t("connections:close")} onClick={() => setMoveError(null)}>
-            ×
+          <button className="ghost small" aria-label={t("connections:close")} title={t("connections:close")} onClick={() => setMoveError(null)}>
+            <Icon name="x" />
           </button>
         </div>
       )}
       {pasteError && (
         <div className="banner" role="alert">
           {pasteError}
-          <button className="ghost small" aria-label={t("connections:close")} onClick={() => setPasteError(null)}>
-            ×
+          <button className="ghost small" aria-label={t("connections:close")} title={t("connections:close")} onClick={() => setPasteError(null)}>
+            <Icon name="x" />
           </button>
         </div>
       )}
@@ -2057,7 +2032,7 @@ function ConnectionNode({
           aria-expanded={open}
           aria-label={t("toggleConnection", { connection: connection.name })}
         >
-          {open ? "▾" : "▸"}
+          <Icon name={open ? "chevronDown" : "chevronRight"} />
         </button>
         <EngineIcon engine={connection.engineMark} fallback={connection.engine} />
         <span
@@ -2081,7 +2056,7 @@ function ConnectionNode({
             {connection.tlsWarning && (
               // Its TLS does not check the server (SDB-395): the core decided it.
               <span className="tls-mark" role="img" aria-label={tlsWarningText(t, connection.tlsWarning)} title={tlsWarningText(t, connection.tlsWarning)}>
-                <Icon name="shieldAlert" size={14} />
+                <Icon name="shieldAlert" />
               </span>
             )}
             {connection.tunnel && (
@@ -2416,7 +2391,7 @@ function SchemaNode({
           }
         }}
       >
-        <span className="twisty">{open ? "▾" : "▸"}</span>
+        <span className="twisty"><Icon name={open ? "chevronDown" : "chevronRight"} /></span>
         <TreeIcon kind="folder" />
         <span className="label">{schema}</span>
         <BookmarkStar bookmark={{ connection: connectionId, schema, name: "", kind: "schema", detail: "" }} />
@@ -2843,7 +2818,7 @@ function ObjectNode({
           }}
           onDoubleClick={(e) => e.stopPropagation()}
         >
-          {open ? "▾" : "▸"}
+          <Icon name={open ? "chevronDown" : "chevronRight"} />
         </span>
         <span title={t(`kinds.${object.kind}`)}><TreeIcon kind={view ? "view" : "table"} /></span>
         <span className="label">{object.name}</span>
