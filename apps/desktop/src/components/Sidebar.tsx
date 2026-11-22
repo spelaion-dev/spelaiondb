@@ -2031,6 +2031,7 @@ function ConnectionNode({
           onClick={() => void toggle()}
           aria-expanded={open}
           aria-label={t("toggleConnection", { connection: connection.name })}
+          title={t("toggleConnection", { connection: connection.name })}
         >
           <Icon name={open ? "chevronDown" : "chevronRight"} />
         </button>

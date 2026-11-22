@@ -295,6 +295,7 @@ function TabItem({ id, index, active, renaming, marks, strip }: {
         <button
           className="close"
           aria-label={t("closeTab", { name: view.label })}
+          title={commandTitle(t("closeTab", { name: view.label }), "tab.close")}
           onClick={(e) => {
             e.stopPropagation();
             void closeQueryTab(id);

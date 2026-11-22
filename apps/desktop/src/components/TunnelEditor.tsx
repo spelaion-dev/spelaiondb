@@ -474,13 +474,13 @@ export function TunnelEditor(props: {
                     <span className="muted small"> · {i === 0 ? t("tunnel.first") : i === hops.length - 1 ? t("tunnel.last") : t("tunnel.middle")}</span>
                   </legend>
                   <div className="hop-actions">
-                    <button type="button" className="ghost small" disabled={i === 0} aria-label={t("tunnel.moveUp", { hop: label })} onClick={() => moveHop(i, -1)}>
+                    <button type="button" className="ghost small" disabled={i === 0} aria-label={t("tunnel.moveUp", { hop: label })} title={t("tunnel.moveUp", { hop: label })} onClick={() => moveHop(i, -1)}>
                       <Icon name="arrowUp" />
                     </button>
-                    <button type="button" className="ghost small" disabled={i === hops.length - 1} aria-label={t("tunnel.moveDown", { hop: label })} onClick={() => moveHop(i, 1)}>
+                    <button type="button" className="ghost small" disabled={i === hops.length - 1} aria-label={t("tunnel.moveDown", { hop: label })} title={t("tunnel.moveDown", { hop: label })} onClick={() => moveHop(i, 1)}>
                       <Icon name="arrowDown" />
                     </button>
-                    <button type="button" className="ghost small" disabled={hops.length === 1 && !proxy.enabled && !viaSsm} aria-label={t("tunnel.removeHop", { hop: label })} onClick={() => setHops((list) => list.filter((_, j) => j !== i))}>
+                    <button type="button" className="ghost small" disabled={hops.length === 1 && !proxy.enabled && !viaSsm} aria-label={t("tunnel.removeHop", { hop: label })} title={t("tunnel.removeHop", { hop: label })} onClick={() => setHops((list) => list.filter((_, j) => j !== i))}>
                       <Icon name="x" />
                     </button>
                   </div>
