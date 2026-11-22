@@ -1323,8 +1323,8 @@ select {
   align-items: center;
   flex-wrap: nowrap;
   min-width: 0;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
@@ -1517,23 +1517,23 @@ select {
   flex: 0 0 43px;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 7px 4px;
+  gap: var(--space-2xs);
+  padding: var(--space-sm) var(--space-xs);
   overflow-y: auto;
   background: var(--panel);
   border-right: 1px solid var(--line);
 }
 .editor-actions .editor-action {
   display: grid;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
+  flex: 0 0 var(--control-lg);
+  width: var(--control-lg);
+  height: var(--control-lg);
   place-items: center;
   padding: 0;
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 .editor-actions .editor-action:hover:not(:disabled) {
   color: var(--fg);
@@ -1552,7 +1552,7 @@ select {
 .editor-actions-divider {
   flex: 0 0 1px;
   width: 22px;
-  margin: 3px 0;
+  margin: var(--space-2xs) 0;
   background: var(--line);
 }
 .sql-editor {
@@ -1733,7 +1733,7 @@ select {
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 0;
+  border-radius: initial;
 }
 .script-outline-entry:hover:not(:disabled) {
   background: var(--accent-soft);
@@ -3134,15 +3134,15 @@ select {
 }
 .run-options-panel {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-popover);
   width: 260px;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
 }
 .run-options-panel fieldset {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-xs);
   margin: 0;
   padding: 0;
   border: 0;
@@ -5236,7 +5236,7 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .plan-heading h2 { font-size:var(--text-lg); margin:0 0 var(--space-xs); }
 .plan-heading button { white-space:nowrap; }
 .plan-tabs { display:flex; flex-shrink:0; gap:var(--space-xs); padding:0 var(--space-lg); border-bottom:1px solid var(--line); }
-.plan-tabs button { border:0; border-radius:0; background:transparent; padding:var(--space-md) var(--space-lg); color:var(--muted); border-bottom:2px solid transparent; }
+.plan-tabs button { border:0; border-radius:initial; background:transparent; padding:var(--space-md) var(--space-lg); color:var(--muted); border-bottom:2px solid transparent; }
 .plan-tabs button.active { color:var(--fg); border-bottom-color:var(--accent); }
 .plan-tabs button:hover { background:var(--hover); }
 .plan-run-controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-md); padding:var(--space-md) var(--space-lg); border-bottom:1px solid var(--line); background:var(--panel); flex-shrink:0; }
@@ -5266,7 +5266,7 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .plan-table-scroll { height:100%; overflow:auto; }
 .plan-table { width:max-content; min-width:100%; border-collapse:separate; border-spacing:0; font-size:var(--text-sm); }
 .plan-table th { position:sticky; top:0; z-index:var(--z-plan-header); text-align:start; background:var(--grid-header); white-space:nowrap; border-bottom:1px solid var(--line-strong); }
-.plan-table th button { font:inherit; font-weight:600; color:inherit; border:0; border-radius:0; background:transparent; padding:var(--space-md); }
+.plan-table th button { font:inherit; font-weight:600; color:inherit; border:0; border-radius:initial; background:transparent; padding:var(--space-md); }
 .plan-table td { border-bottom:1px solid var(--grid-line); padding:var(--space-xs) var(--space-md); white-space:nowrap; height:32px; }
 .plan-table th:first-child,.plan-table td:first-child { position:sticky; left:0; background:var(--panel); border-inline-end:1px solid var(--line); z-index:var(--z-sticky); }
 .plan-table th:first-child { z-index:var(--z-plan-corner); background:var(--grid-header); }
@@ -5292,7 +5292,7 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .plan-findings p { color:var(--muted); font-size:var(--text-sm); line-height:1.5; }
 .plan-paging { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:var(--space-md); padding:var(--space-md) var(--space-lg); border-top:1px solid var(--line); }
 .plan-raw { flex:1; min-height:0; overflow:auto; padding:var(--space-lg); }
-.plan-raw pre { font:var(--text-sm)/1.5 var(--font-code); white-space:pre-wrap; overflow-wrap:anywhere; margin:var(--space-lg) 0; }
+.plan-raw pre { font-family:var(--font-code); font-size:var(--text-sm); line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; margin:var(--space-lg) 0; }
 .plan-error { display:flex; align-items:center; justify-content:space-between; gap:var(--space-lg); flex-shrink:0; color:var(--danger-fg); background:var(--danger-soft); }
 .plan-error p { margin:0; overflow-wrap:anywhere; }
 .plan-graph-scroll { overflow:auto; height:100%; padding:var(--space-xl); }
@@ -5356,7 +5356,7 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 }
 .segmented button {
   border: none;
-  border-radius: 0;
+  border-radius: initial;
   background: none;
   height: var(--control-md);
   padding: 0 var(--space-lg);
