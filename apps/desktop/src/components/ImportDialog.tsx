@@ -303,8 +303,8 @@ function ImportForm({ request }: { request: ImportRequest }) {
     const built = importRequest();
     if (!built || !plan) return;
     if (!confirmed) {
-      // The risks point into the statements, then the insert.
-      const asked = await confirmShown(connection?.name ?? "", { sql: plan.insert, statements: [...plan.statements, plan.insert], risks: plan.risks });
+      // The risks point into the statements, then the insert, then what runs after it.
+      const asked = await confirmShown(connection?.name ?? "", { sql: plan.insert, statements: [...plan.statements, plan.insert, ...plan.finish], risks: plan.risks });
       if (asked === null) return;
       confirmed = asked;
     }
@@ -683,7 +683,18 @@ function ImportForm({ request }: { request: ImportRequest }) {
                   {plan.statements.length > 0 ? t("import.reviewIntro", { count: plan.statements.length }) : t("import.reviewIntroRows")}
                 </p>
                 <pre className="import-sql">{[...plan.statements, plan.insert].join(";\n\n")}</pre>
+                {plan.finish.length > 0 && (
+                  <>
+                    <p className="muted">{t("import.reviewFinish")}</p>
+                    <pre className="import-sql">{plan.finish.join(";\n\n")}</pre>
+                  </>
+                )}
                 <p className="muted small">{t("import.bound")}</p>
+                {plan.leftovers.length > 0 && (
+                  <p className="banner" role="note">
+                    {t("import.leftovers", { names: plan.leftovers.join(", ") })}
+                  </p>
+                )}
               </>
             )}
             {phase.kind === "running" && (

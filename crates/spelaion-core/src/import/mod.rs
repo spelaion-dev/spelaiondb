@@ -13,6 +13,9 @@
 //!    the quoted names of the columns. A cancel or an error rolls back the transaction it
 //!    happened in, so only whole committed batches stay.
 //!
+//! ClickHouse has no transactions (ADR-066): there the rows load into a table of our own, put
+//! in place by one atomic rename at the end and dropped if the import fails ([`staged`]).
+//!
 //! The import runs on a session of its own (never an editor tab's, which may hold a
 //! transaction, ADR-031), opened and closed by the caller.
 //!
@@ -20,6 +23,7 @@
 
 mod detect;
 mod source;
+mod staged;
 mod xlsx;
 
 use std::time::{Duration, Instant};
@@ -295,6 +299,12 @@ pub struct ImportPlan {
     pub statements: Vec<String>,
     /// How the rows go in: `COPY … FROM STDIN` or `INSERT … VALUES (?, …)` with bound values.
     pub insert: String,
+    /// Run once every row is in, in order: on ClickHouse, what puts the table of our own in
+    /// place (ADR-066). Empty elsewhere.
+    pub finish: Vec<String>,
+    /// Tables of our own that imports into this database left behind (ClickHouse, ADR-066):
+    /// shown, never dropped by the import.
+    pub leftovers: Vec<String>,
     /// The table and the columns the rows go to.
     pub schema: String,
     pub table: String,
@@ -302,7 +312,7 @@ pub struct ImportPlan {
     /// The table is created by the import.
     pub creates_table: bool,
     /// What the guard asks to confirm: the position of the statement (`statements.len()` is the
-    /// insert) and why.
+    /// insert, the `finish` statements follow it) and why.
     pub risks: Vec<(usize, Risk)>,
 }
 
@@ -319,6 +329,9 @@ struct Resolved {
     /// For each target column, the source column it reads.
     sources: Vec<usize>,
     kinds: Vec<TargetKind>,
+    /// The table of our own the rows load into, on ClickHouse (ADR-066), qualified and quoted:
+    /// dropped if the import does not end.
+    staging: Option<String>,
 }
 
 /// Writes what an import will run, after checking the request against the table (blocking file
@@ -369,8 +382,14 @@ async fn resolve(
         } => (schema, table, Some(*if_exists), true),
     };
     check_name("table", table)?;
+    // ClickHouse loads aside and swaps in (ADR-066), only where the swap is atomic.
+    let staged = staged::applies(dialect);
+    if staged {
+        staged::check_atomic(session, schema).await?;
+    }
     let existing = find_table(session, schema, table).await?;
     let mut statements = Vec::new();
+    let mut replaced = None;
     let table_info = match (existing, if_exists) {
         (None, _) if !wanted_new => {
             return Err(ImportError::Invalid(format!("there is no table {table}")));
@@ -378,19 +397,29 @@ async fn resolve(
         (None, _) => None,
         (Some(_), Some(IfExists::Fail)) => return Err(ImportError::TableExists(table.clone())),
         (Some(name), Some(IfExists::Replace)) => {
-            statements.push(format!(
-                "DROP TABLE {}",
-                qualified_name(dialect, schema, &[name])
-            ));
+            // Loaded aside, the old table is swapped out at the end instead.
+            if !staged {
+                statements.push(format!(
+                    "DROP TABLE {}",
+                    qualified_name(dialect, schema, std::slice::from_ref(&name))
+                ));
+            }
+            replaced = Some(name);
             None
         }
+        (Some(name), _) if staged => return Err(staged::no_append(&name)),
         (Some(name), _) => Some(session.connection().describe_table(schema, &name).await?),
     };
-    let table = table_info
-        .as_ref()
-        .map_or(table.clone(), |t| t.object.name.clone());
+    let table = match (&table_info, &replaced) {
+        (Some(info), _) => info.object.name.clone(),
+        (None, Some(name)) if staged => name.clone(),
+        (None, _) => table.clone(),
+    };
     let creates_table = table_info.is_none();
-    let qualified = qualified_name(dialect, schema, std::slice::from_ref(&table));
+    let staging = staged.then(staged::staging_name);
+    // The table the DDL and the rows go to: the target, or the table of our own.
+    let loaded = staging.clone().unwrap_or_else(|| table.clone());
+    let qualified = qualified_name(dialect, schema, std::slice::from_ref(&loaded));
 
     let mut targets: Vec<String> = Vec::new();
     let mut sources = Vec::new();
@@ -439,8 +468,13 @@ async fn resolve(
             .iter()
             .map(|(name, sql_type)| format!("  {} {sql_type}", dialect.quote_identifier(name)))
             .collect();
+        let engine = if staged {
+            format!(" {}", staged::TABLE_ENGINE)
+        } else {
+            String::new()
+        };
         statements.push(format!(
-            "CREATE TABLE {qualified} (\n{}\n)",
+            "CREATE TABLE {qualified} (\n{}\n){engine}",
             columns.join(",\n")
         ));
     } else {
@@ -458,14 +492,26 @@ async fn resolve(
     }
     let target = InsertTarget {
         schema: schema.clone(),
-        table: table.clone(),
+        table: loaded,
         columns: targets.clone(),
     };
     let insert = insert_display(dialect, &target);
+    let (finish, leftovers) = match &staging {
+        Some(ours) => (
+            staged::finish(dialect, schema, ours, &table, replaced.is_some()),
+            staged::leftovers(session, schema).await?,
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
     // The guard reads the rows' statement as the INSERT it is (`COPY` included).
     let guarded = target.insert_sql(dialect, 1, |_| "NULL".into());
     let mut risks = Vec::new();
-    for (index, statement) in statements.iter().chain([&guarded]).enumerate() {
+    for (index, statement) in statements
+        .iter()
+        .chain([&guarded])
+        .chain(&finish)
+        .enumerate()
+    {
         if let Some(risk) = script_risks(dialect, statement, safeguards)
             .into_iter()
             .map(|r| r.risk)
@@ -478,6 +524,8 @@ async fn resolve(
         plan: ImportPlan {
             statements,
             insert,
+            finish,
+            leftovers,
             schema: schema.clone(),
             table,
             columns: targets,
@@ -487,6 +535,7 @@ async fn resolve(
         target,
         sources,
         kinds,
+        staging: staging.map(|ours| qualified_name(dialect, schema, &[ours])),
     })
 }
 
@@ -499,6 +548,12 @@ fn insert_display(dialect: &dyn Dialect, target: &InsertTarget) -> String {
             target.column_list(dialect)
         ),
         "sqlserver" => target.insert_sql(dialect, 1, |n| format!("@P{n}")),
+        // The rows are the request's body, in that format (ADR-066).
+        "clickhouse" => format!(
+            "INSERT INTO {} {} FORMAT TabSeparated",
+            target.qualified(dialect),
+            target.column_list(dialect)
+        ),
         _ => target.insert_sql(dialect, 1, |_| "?".into()),
     }
 }
@@ -570,45 +625,92 @@ fn check_name(what: &str, name: &str) -> Result<(), ImportError> {
 }
 
 /// A column type typed by the user goes into `CREATE TABLE`/`ALTER TABLE` as written, so it may
-/// only be words, digits and one parenthesized list of numbers (`numeric(12, 2)`,
-/// `timestamp with time zone`, `nvarchar(max)`): no quotes, punctuation or comments that could
-/// end the statement or start another.
+/// only be words and digits, with one parenthesized list of sizes (`numeric(12, 2)`,
+/// `timestamp with time zone`, `nvarchar(max)`) whose items may be types themselves, as
+/// ClickHouse wraps them (`Nullable(Decimal(20, 2))`, ADR-066), up to three levels: no quotes,
+/// punctuation, comments or unbalanced parentheses that could end the statement or start another.
 pub fn check_sql_type(sql_type: &str) -> Result<(), ImportError> {
-    let invalid = || {
-        ImportError::Invalid(format!(
-            "{sql_type:?} is not a column type: use words, digits and one list of sizes in parentheses"
-        ))
-    };
-    let sql_type = sql_type.trim();
-    if sql_type.is_empty()
-        || sql_type.len() > 64
-        || !sql_type.starts_with(|c: char| c.is_ascii_alphabetic())
-    {
-        return Err(invalid());
+    let trimmed = sql_type.trim();
+    if trimmed.len() <= 64 && type_ok(trimmed, 0) {
+        Ok(())
+    } else {
+        Err(ImportError::Invalid(format!(
+            "{sql_type:?} is not a column type: use words, digits and one list of sizes or types in parentheses"
+        )))
     }
-    let (words, rest) = match sql_type.split_once('(') {
-        Some((words, rest)) => (words, Some(rest)),
-        None => (sql_type, None),
-    };
+}
+
+/// [`check_sql_type`] of `text` at `depth` levels of parentheses.
+fn type_ok(text: &str, depth: usize) -> bool {
     let word = |s: &str| {
         s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' ')
     };
-    if !word(words) {
-        return Err(invalid());
+    let text = text.trim();
+    if text.is_empty() || !text.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return false;
     }
-    if let Some(rest) = rest {
-        let (sizes, after) = rest.split_once(')').ok_or_else(invalid)?;
-        let sizes_ok = sizes.split(',').all(|s| {
-            let s = s.trim();
-            !s.is_empty()
-                && (s.bytes().all(|b| b.is_ascii_digit()) || s.eq_ignore_ascii_case("max"))
-        });
-        if !sizes_ok || !word(after) {
-            return Err(invalid());
+    // A type inside a wrapper is one word, with or without its own list.
+    if depth > 0 && text.split('(').next().unwrap_or(text).contains(' ') {
+        return false;
+    }
+    let Some(open) = text.find('(') else {
+        return word(text);
+    };
+    // The parenthesis that closes the first one.
+    let mut level = 0usize;
+    let mut close = None;
+    for (i, c) in text.char_indices().skip_while(|&(i, _)| i < open) {
+        match c {
+            '(' => level += 1,
+            ')' => {
+                level -= 1;
+                if level == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
         }
     }
-    Ok(())
+    let Some(close) = close else {
+        return false;
+    };
+    let inner = &text[open + 1..close];
+    // Items split on the commas between them, not on those inside a nested list.
+    let mut items = Vec::new();
+    let (mut level, mut start) = (0usize, 0usize);
+    for (i, c) in inner.char_indices() {
+        match c {
+            '(' => level += 1,
+            ')' => match level.checked_sub(1) {
+                Some(l) => level = l,
+                None => return false,
+            },
+            ',' if level == 0 => {
+                items.push(&inner[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(&inner[start..]);
+    // Types inside the list only after a one-word head, as a wrapper writes them
+    // (`Nullable(String)`): `int references users(id)` is a constraint, not a type.
+    let head = text[..open].trim_end();
+    let wraps = depth < 2 && !head.contains(' ');
+    let item_ok = |item: &str| {
+        let item = item.trim();
+        !item.is_empty()
+            && (item.bytes().all(|b| b.is_ascii_digit())
+                || item.eq_ignore_ascii_case("max")
+                || (wraps && type_ok(item, depth + 1)))
+    };
+    let after = &text[close + 1..];
+    word(head)
+        && items.into_iter().all(item_ok)
+        && word(after)
+        && (depth == 0 || after.trim().is_empty())
 }
 
 fn zone(options: &ParseOptions) -> Result<Option<chrono::FixedOffset>, ImportError> {
@@ -662,7 +764,10 @@ pub async fn run_import(
     }
     // An import loads its rows in transactions and rolls back the one that fails: where they do
     // not hold, a failure would leave rows half loaded and the summary would be wrong (SDB-354).
-    if let Some(reason) = session.atomic_writes_refusal() {
+    // ClickHouse loads aside and swaps in instead (ADR-066).
+    if resolved.staging.is_none()
+        && let Some(reason) = session.atomic_writes_refusal()
+    {
         return Err(ImportError::Invalid(format!(
             "{reason}: an import that failed part of the way would leave the rows before the failure loaded"
         )));
@@ -677,28 +782,41 @@ pub async fn run_import(
     }
     // The cancel reaches the session only while a step that can take long runs (the plan's
     // statements here, each batch's rows in `load`), never while the import begins, commits or
-    // rolls back its transaction: there a cancel only sets the flag the import checks right
-    // after. A cancel that interrupts a transaction's own statement can leave the engine in a
+    // rolls back its transaction, drops its table of its own or puts it in place (ClickHouse's
+    // finish, ADR-066): there a cancel only sets the flag the import checks right after. A
+    // cancel that interrupts a transaction's own statement can leave the engine in a
     // transaction the driver does not know of (SQL Server's descriptor, SDB-448), or commit
     // rows the import then counts as rolled back.
+    //
+    // The table of our own, once its `CREATE TABLE` made it: only then is it ours to drop.
+    let mut ours: Option<&str> = None;
+    let mut failed = None;
     {
         let Some(_attached) = cancel.attach(session) else {
             return Err(ImportError::Cancelled { committed: 0 });
         };
-        for statement in &resolved.plan.statements {
-            run_one(session, statement)
-                .await
-                .map_err(|message| ImportError::Statement {
-                    statement: first_line(statement),
-                    message,
-                })?;
+        for (index, statement) in resolved.plan.statements.iter().enumerate() {
+            if let Err(message) = run_one(session, statement).await {
+                failed = Some((statement, message));
+                break;
+            }
+            if index == 0 {
+                ours = resolved.staging.as_deref();
+            }
         }
+    }
+    if let Some((statement, message)) = failed {
+        drop_ours(session, ours).await;
+        return Err(ImportError::Statement {
+            statement: first_line(statement),
+            message,
+        });
     }
     let normalizer = Normalizer {
         kinds: resolved.kinds.clone(),
         formats: formats(&request.options)?,
         zone: zone(&request.options)?,
-        mysql: session.dialect().name() == "mysql",
+        mysql: matches!(session.dialect().name(), "mysql" | "clickhouse"),
     };
     // A panic while loading (SDB-163) rolls back the batch it was in, as any failure does, and
     // the import ends with an error instead of unwinding into the app.
@@ -712,19 +830,58 @@ pub async fn run_import(
     ))
     .await;
     let rows = match loaded {
-        Ok(rows) => rows?,
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => {
+            drop_ours(session, ours).await;
+            return Err(e);
+        }
         Err(_) => {
             if let Ok(TransactionState::Open | TransactionState::Failed) =
                 session.connection().transaction_state().await
             {
                 let _ = run_one(session, "ROLLBACK").await;
             }
+            drop_ours(session, ours).await;
             return Err(ImportError::Invalid(format!(
                 "the import stopped: {}; the batch it was loading was rolled back",
                 crate::panics::INTERNAL_ERROR
             )));
         }
     };
+    // Every row is in the table of our own: one atomic statement puts it in place (ADR-066),
+    // unless the import was cancelled meanwhile.
+    if ours.is_some() && cancel.is_cancelled() {
+        drop_ours(session, ours).await;
+        return Err(ImportError::Cancelled { committed: 0 });
+    }
+    for (index, statement) in resolved.plan.finish.iter().enumerate() {
+        if let Err(message) = run_one(session, statement).await {
+            if index == 0 {
+                // Not swapped in: the target is as it was, and the table of our own goes.
+                drop_ours(session, ours).await;
+                return Err(ImportError::Statement {
+                    statement: first_line(statement),
+                    message,
+                });
+            }
+            // Swapped in, but what it replaced could not be dropped: it stays, under our name.
+            return Err(ImportError::Statement {
+                statement: first_line(statement),
+                message: format!(
+                    "{message}. The {rows} rows are in {}; the table they replaced is left as {}",
+                    resolved.plan.table,
+                    ours.unwrap_or_default()
+                ),
+            });
+        }
+    }
+    if ours.is_some() {
+        // In place: every row is committed at once.
+        progress(ImportProgress {
+            read: rows,
+            committed: rows,
+        });
+    }
     Ok(ImportSummary {
         schema: resolved.plan.schema,
         table: resolved.plan.table,
@@ -732,6 +889,14 @@ pub async fn run_import(
         created_table: resolved.plan.creates_table,
         elapsed: started.elapsed(),
     })
+}
+
+/// Drops the table of our own an import made (ClickHouse, ADR-066), when it made one. Best
+/// effort: if even this fails, the table is listed as left behind in the next import's plan.
+async fn drop_ours(session: &Session, ours: Option<&str>) {
+    if let Some(ours) = ours {
+        let _ = run_one(session, &format!("DROP TABLE IF EXISTS {ours}")).await;
+    }
 }
 
 fn first_line(statement: &str) -> String {
@@ -808,6 +973,9 @@ async fn load(
         "mysql" => "START TRANSACTION",
         _ => "BEGIN",
     };
+    // Loaded into a table of our own (ClickHouse, ADR-066): no transactions, the whole import is
+    // one unit, and nothing counts as committed until the table is put in place.
+    let transactions = resolved.staging.is_none();
     let (mut batches, reader) = read_batches(request);
     let mut read = 0u64;
     let mut committed = 0u64;
@@ -870,7 +1038,7 @@ async fn load(
                 rollback(open).await;
                 return Err(ImportError::Cancelled { committed });
             }
-            let room = if request.commit_every == 0 {
+            let room = if request.commit_every == 0 || !transactions {
                 u64::MAX
             } else {
                 request.commit_every - in_transaction
@@ -881,7 +1049,7 @@ async fn load(
             let part = rows.slice(taken, length);
             taken += length;
             let count = length as u64;
-            if !open {
+            if !open && transactions {
                 // Not cancellable (see `run_import`): a cancel meanwhile is seen below.
                 if let Err(message) = run_one(session, begin).await {
                     return Err(ImportError::Statement {
@@ -915,7 +1083,7 @@ async fn load(
             }
             read += count;
             in_transaction += count;
-            if request.commit_every > 0 && in_transaction >= request.commit_every {
+            if transactions && request.commit_every > 0 && in_transaction >= request.commit_every {
                 if cancel.is_cancelled() {
                     rollback(open).await;
                     return Err(ImportError::Cancelled { committed });
@@ -966,7 +1134,8 @@ async fn load(
         .await?;
     }
     progress(ImportProgress { read, committed });
-    Ok(committed)
+    // Loaded aside, every row read is in the table of our own, to be put in place.
+    Ok(if transactions { committed } else { read })
 }
 
 async fn commit(
@@ -1109,6 +1278,12 @@ mod tests {
             "double precision",
             "DATETIME(6)",
             "varchar(80) binary",
+            // ClickHouse's wrapped types (ADR-066).
+            "Nullable(String)",
+            "Nullable(Decimal(20, 2))",
+            "LowCardinality(Nullable(String))",
+            "Array(Nullable(Decimal(10, 2)))",
+            "Nullable(DateTime64(6))",
         ] {
             assert!(check_sql_type(ok).is_ok(), "{ok}");
         }
@@ -1126,6 +1301,17 @@ mod tests {
             "\"int\"",
             "int\nprimary key",
             "int(1,)",
+            // Wrapped types: still balanced, still nothing but words and sizes.
+            "Nullable(String",
+            "Nullable(String))",
+            "Nullable(String) DEFAULT 'x'",
+            "Nullable(String)) ENGINE = Log; DROP TABLE t; --",
+            "Nullable(String, x String) ENGINE",
+            "Nullable(DateTime64(6, 'UTC'))",
+            "Nullable()",
+            "Nullable(Array(Array(Array(Int8))))",
+            "int references users(id)",
+            "Nullable(Decimal(20, 2) x)",
         ] {
             assert!(check_sql_type(bad).is_err(), "{bad:?}");
         }
