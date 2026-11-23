@@ -15,6 +15,7 @@ mod export;
 mod library;
 mod map;
 mod shortcuts;
+mod side_panel;
 mod table_filters;
 mod tabs;
 #[cfg(test)]
@@ -34,6 +35,10 @@ pub use map::{
     check_tile_server,
 };
 pub use shortcuts::{SHORTCUT_COMMAND_MAX, ShortcutOverride, is_command_id};
+pub use side_panel::{
+    SIDE_PANEL_DEFAULT_WIDTH, SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, SidePanelPreferences,
+    SidePanelWidthError,
+};
 pub use table_filters::{FilteredTable, TABLE_FILTER_HISTORY, TABLE_FILTER_MAX_CHARS};
 pub use tabs::{
     FileEncoding, LineEnding, MAX_RECENT_FILES, RecentFile, SavedFile, SavedTab, SavedTabs,

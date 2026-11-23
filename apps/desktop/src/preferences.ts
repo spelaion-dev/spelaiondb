@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
-import type { EditorPreferencesItem, MapPreferencesItem, SizeStepsItem } from "./bindings";
+import type { EditorPreferencesItem, MapPreferencesItem, SidePanelItem, SizeStepsItem } from "./bindings";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 import { createSaveQueue, savedSetting } from "./saveQueue";
 
@@ -60,7 +60,7 @@ export function zoomed(size: number, zoom: number): number {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export type PreferenceSetting = "language" | "theme" | "interfaceSize" | "explorer" | "grid" | "script" | "editor" | "map";
+export type PreferenceSetting = "language" | "theme" | "interfaceSize" | "explorer" | "grid" | "script" | "editor" | "map" | "sidePanel";
 
 export interface PreferenceError {
   setting: PreferenceSetting;
@@ -93,6 +93,11 @@ interface PreferencesStore {
   setMap(next: MapPreferencesItem, optimistic?: boolean): Promise<boolean>;
   /** Connect the restored tabs at startup (ADR-036): connect only, never run. Off by default. */
   reconnectOnStart: boolean;
+  /** The side panel as it was left (SDB-451): hidden or not, its width, and the widths the
+   *  core allows. Read once at startup; the page saves it as it changes. */
+  sidePanel: SidePanelItem;
+  /** Saves whether the side panel is hidden and its width (the core refuses one out of range). */
+  setSidePanel(hidden: boolean, width: number): Promise<void>;
   loading: boolean;
   /** The setting being saved, `null` when nothing is. Changes made meanwhile wait for it and
    *  are saved after it, in order: none is dropped (SDB-83). */
@@ -119,6 +124,8 @@ const DEFAULT_EDITOR: EditorPreferencesItem = { font: "system", fontSize: 13, li
 // that the core would refuse (the size and zoom are sent as one of these).
 const DEFAULT_STEPS: SizeStepsItem = { interfaceSizes: [90, 100, 110, 125, 150], defaultInterfaceSize: 100, editorZooms: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200], defaultEditorZoom: 100 };
 const DEFAULT_MAP: MapPreferencesItem = { tiles: false, tileName: "", tileUrl: "", tileAttribution: "" };
+// Only until the core's answer arrives: its defaults and limits.
+const DEFAULT_SIDE_PANEL: SidePanelItem = { hidden: false, width: 290, minWidth: 210, maxWidth: 700, defaultWidth: 290 };
 
 // Every save goes through one queue. The settings shown at once keep what was last saved, to go
 // back to it when their newest change fails to save.
@@ -143,11 +150,12 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
   editor: DEFAULT_EDITOR,
   map: DEFAULT_MAP,
   reconnectOnStart: false,
+  sidePanel: DEFAULT_SIDE_PANEL,
   loading: true,
   saving: null,
   error: null,
   async load() {
-    const [language, theme, explorer, grid, script, reconnect, editor, map, interfaceSize, steps] = await Promise.allSettled([
+    const [language, theme, explorer, grid, script, reconnect, editor, map, interfaceSize, steps, sidePanel] = await Promise.allSettled([
       call(commands.getLanguage()),
       call(commands.getTheme()),
       call(commands.getExplorerPreferences()),
@@ -158,9 +166,12 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
       call(commands.getMapPreferences()),
       call(commands.getInterfaceSize()),
       commands.sizeSteps(),
+      call(commands.getSidePanel()),
     ]);
     let error: PreferenceError | null = null;
     if (steps.status === "fulfilled") set({ steps: steps.value });
+    if (sidePanel.status === "fulfilled") set({ sidePanel: sidePanel.value });
+    else error = { setting: "sidePanel", phase: "load", detail: errorText(sidePanel.reason) };
     if (interfaceSize.status === "fulfilled") set({ interfaceSize: interfaceSize.value });
     else error = { setting: "interfaceSize", phase: "load", detail: errorText(interfaceSize.reason) };
     if (map.status === "fulfilled") { saved.map.loaded(map.value); set({ map: map.value }); }
@@ -290,6 +301,16 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
         const back = optimistic ? saved.map.failed(ticket) : undefined;
         set({ ...(back ? { map: back } : {}), error: { setting: "map", phase: "save", detail: errorText(e) } });
         return false;
+      }
+    });
+  },
+  setSidePanel(hidden, width) {
+    set((s) => ({ sidePanel: { ...s.sidePanel, hidden, width }, error: null }));
+    return enqueue("sidePanel", async () => {
+      try {
+        await call(commands.setSidePanel(hidden, width));
+      } catch (e) {
+        set({ error: { setting: "sidePanel", phase: "save", detail: errorText(e) } });
       }
     });
   },

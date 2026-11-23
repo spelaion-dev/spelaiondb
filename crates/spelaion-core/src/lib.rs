@@ -270,7 +270,8 @@ pub use spelaion_store::{
     BackupPreferences, Bookmark, BookmarkKind, DEFAULT_EDITOR_ZOOM, DEFAULT_INTERFACE_SIZE,
     EDITOR_ZOOMS, EditorPreferences, EditorSnippet, ExplorerFilter, ExplorerPreferences,
     FilterKind, FilteredTable, GridPreferences, INTERFACE_SIZES, MapPreferences, RecentFile,
-    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX,
+    SIDE_PANEL_DEFAULT_WIDTH, SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, SavedFile, SavedTab,
+    SavedTabs, ScriptErrorMode, ScriptPreferences, SidePanelPreferences, TILE_ATTRIBUTION_MAX,
     TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
 };
 pub use sql_file::{

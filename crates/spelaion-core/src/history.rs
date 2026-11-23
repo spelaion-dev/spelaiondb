@@ -11,7 +11,8 @@ use spelaion_store::{
     AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, EditorPreferences,
     ExplorerFilter, ExplorerPreferences, FilteredTable, GridPreferences, HistoryEntry,
     HistoryFilter, HistoryPage, MapPreferences, NewHistoryEntry, RecentFile, SavedTabs,
-    ScriptPreferences, Snippet, SnippetFilter, SnippetFolder, Store, StoreError, ToolOutput,
+    ScriptPreferences, SidePanelPreferences, Snippet, SnippetFilter, SnippetFolder, Store,
+    StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -239,6 +240,13 @@ enum Request {
     },
     GetMap {
         reply: Reply<MapPreferences>,
+    },
+    GetSidePanel {
+        reply: Reply<SidePanelPreferences>,
+    },
+    SetSidePanel {
+        preferences: SidePanelPreferences,
+        reply: Reply<()>,
     },
     GetBackup {
         reply: Reply<crate::BackupPreferences>,
@@ -545,6 +553,12 @@ impl QueryHistory {
                         }
                         Request::GetMap { reply } => {
                             let _ = reply.send(store.get_map_preferences());
+                        }
+                        Request::GetSidePanel { reply } => {
+                            let _ = reply.send(store.get_side_panel_preferences());
+                        }
+                        Request::SetSidePanel { preferences, reply } => {
+                            let _ = reply.send(store.set_side_panel_preferences(&preferences));
                         }
                         Request::GetBackup { reply } => {
                             let _ = reply.send(store.get_backup_preferences());
@@ -1094,6 +1108,20 @@ impl QueryHistory {
         preferences: MapPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetMap { preferences, reply })
+            .await
+    }
+
+    /// The side panel as the user left it (SDB-451): hidden or not, and its width.
+    pub async fn side_panel_preferences(&self) -> Result<SidePanelPreferences, HistoryError> {
+        self.request(|reply| Request::GetSidePanel { reply }).await
+    }
+
+    /// Saves the side panel's state; a width out of range is refused.
+    pub async fn set_side_panel_preferences(
+        &self,
+        preferences: SidePanelPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetSidePanel { preferences, reply })
             .await
     }
 

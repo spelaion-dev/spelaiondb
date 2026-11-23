@@ -9,6 +9,7 @@ import { CONNECTING, DISCONNECTED, connectedWith, isConnected, isConnecting } fr
 import { EngineIcon } from "./EngineIcon";
 import { Icon } from "./Icons";
 import { LockView, SettingsView, type ProcessActions } from "./ServerObservation";
+import { HideSidePanelButton } from "./SidePanelButtons";
 
 /** The monitor's views: its processes, their locks, and the server's settings. */
 type MonitorView = "processes" | "locks" | "settings";
@@ -21,7 +22,7 @@ export function ProcessSidebar({ selected, onSelect }: { selected: string | null
   const { t } = useTranslation("shell");
   const connections = useApp((s) => s.connections);
   return <aside id="processes-sidebar" className="sidebar process-sidebar">
-    <div className="sidebar-header"><div className="workspace-name">{t("processMonitor.title")}</div></div>
+    <div className="sidebar-header"><div className="workspace-name">{t("processMonitor.title")}</div><HideSidePanelButton /></div>
     <div className="tree">
       <div className="group-title">{t("connections")}</div>
       {connections.length === 0 && <div className="empty small">{t("processMonitor.noConnections")}</div>}

@@ -35,16 +35,13 @@ import { commands, events } from "./api";
 import { usePreferences } from "./preferences";
 import { isInstalling, manualUpdateKey, useUpdate } from "./update";
 import { UpdateInstallButton, UpdateProblem } from "./components/UpdateInstall";
-import { useApp, useDialogs } from "./store";
+import { isSidePanel, useApp, useDialogs } from "./store";
 import { sessionLost } from "./tabState";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
 import { ScreenBoundary } from "./components/ScreenBoundary";
 import { openLaunchRequest } from "./launch";
 
-const SIDEBAR_DEFAULT = 290;
-const SIDEBAR_MIN = 210;
-const SIDEBAR_MAX = 700;
 const EDITOR_MIN = 360;
 const ACTIVITY_WIDTH = 48;
 
@@ -67,9 +64,38 @@ export default function App() {
   const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
   const launchNotice = useApp((s) => s.launchNotice);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  // The side panel's widths come from the core, with the width and the hidden state it was left
+  // with (SDB-451): a personal preference saved as they change.
+  const sidePanel = usePreferences((s) => s.sidePanel);
+  const preferencesLoading = usePreferences((s) => s.loading);
+  const { minWidth: SIDEBAR_MIN, maxWidth: SIDEBAR_MAX, defaultWidth: SIDEBAR_DEFAULT } = sidePanel;
+  const [sidebarWidth, setSidebarWidth] = useState(sidePanel.width);
   const sidebarSection = useApp((s) => s.sidebarSection);
   const setSidebarSection = useApp((s) => s.setSidebarSection);
+  /** The column was hidden by the user: `null`, not the MCP page (which has no column). */
+  const sideHidden = sidebarSection === null;
+  const restored = useRef(false);
+  // Once the preferences are read: the width, and hidden if it was left hidden.
+  useEffect(() => {
+    if (preferencesLoading || restored.current) return;
+    restored.current = true;
+    const { sidePanel: left } = usePreferences.getState();
+    setSidebarWidth(left.width);
+    if (left.hidden) setSidebarSection((section) => (isSidePanel(section) ? null : section));
+  }, [preferencesLoading]);
+  // Hiding and showing are remembered; the MCP page says nothing about the column. Read from the
+  // store, not this render: the restore above may have just changed it.
+  useEffect(() => {
+    const section = useApp.getState().sidebarSection;
+    if (!restored.current || section === "mcp") return;
+    const { sidePanel: saved, setSidePanel } = usePreferences.getState();
+    if (saved.hidden !== (section === null)) void setSidePanel(section === null, saved.width);
+  }, [sideHidden, sidebarSection]);
+  /** Saves the width the separator left, at the end of a drag or a key press. */
+  const saveWidth = (width: number) => {
+    const { sidePanel: saved, setSidePanel } = usePreferences.getState();
+    if (saved.width !== width) void setSidePanel(saved.hidden, width);
+  };
   const paletteOpen = useApp((s) => s.paletteOpen);
   const [processConnection, setProcessConnection] = useState<string | null>(null);
   const connections = useApp((s) => s.connections);
@@ -204,19 +230,23 @@ export default function App() {
           setSidebarWidth(clampSidebar(sidebarDrag.current.width + e.clientX - sidebarDrag.current.x));
         }}
         onPointerUp={(e) => {
+          if (sidebarDrag.current) saveWidth(shownSidebarWidth);
           sidebarDrag.current = null;
           if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
         }}
         onPointerCancel={() => { sidebarDrag.current = null; }}
-        onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
+        onDoubleClick={() => { setSidebarWidth(SIDEBAR_DEFAULT); saveWidth(clampSidebar(SIDEBAR_DEFAULT)); }}
         onKeyDown={(e) => {
           const step = e.shiftKey ? 50 : 10;
-          if (e.key === "ArrowLeft") setSidebarWidth(clampSidebar(shownSidebarWidth - step));
-          else if (e.key === "ArrowRight") setSidebarWidth(clampSidebar(shownSidebarWidth + step));
-          else if (e.key === "Home") setSidebarWidth(SIDEBAR_MIN);
-          else if (e.key === "End") setSidebarWidth(maxSidebarWidth);
+          let next: number;
+          if (e.key === "ArrowLeft") next = clampSidebar(shownSidebarWidth - step);
+          else if (e.key === "ArrowRight") next = clampSidebar(shownSidebarWidth + step);
+          else if (e.key === "Home") next = SIDEBAR_MIN;
+          else if (e.key === "End") next = maxSidebarWidth;
           else return;
           e.preventDefault();
+          setSidebarWidth(next);
+          saveWidth(next);
         }}
       />
       <main className="main">
