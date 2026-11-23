@@ -44,6 +44,7 @@ import {
   Minimize2,
   Minus,
   Network,
+  PanelLeftClose,
   PanelRight,
   Pin,
   Play,
@@ -156,6 +157,8 @@ const ICONS = {
   redo: Redo2,
   discard: CircleX,
   sidePanel: PanelRight,
+  // "Hide side panel" (SDB-451).
+  panelHide: PanelLeftClose,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

@@ -190,6 +190,13 @@ export const commands = {
 	/**  Saves the map's preferences; the core checks the tile server first. */
 	setMapPreferences: (preferences: MapPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
 	/**
+	 *  The side panel as the user left it (SDB-451): hidden or not, its width, and the widths the
+	 *  core allows.
+	 */
+	getSidePanel: () => typedError<SidePanelItem, string>(__TAURI_INVOKE("get_side_panel")),
+	/**  Saves the side panel's state; the core refuses a width out of range. */
+	setSidePanel: (hidden: boolean, width: number) => typedError<null, string>(__TAURI_INVOKE("set_side_panel", { hidden, width })),
+	/**
 	 *  Every geometry of a result's column, in the current view, for one map (ADR-045): GeoJSON
 	 *  from the core, at most `MAP_MAX_SHAPES` shapes.
 	 */
@@ -6285,6 +6292,15 @@ export type ShortcutOverrideItem_Deserialize = {
 export type ShortcutOverrideItem_Serialize = {
 	command: string,
 	keys: string | null,
+};
+
+/**  The side panel as the user left it (SDB-451), with the widths the core allows it. */
+export type SidePanelItem = {
+	hidden: boolean,
+	width: number,
+	minWidth: number,
+	maxWidth: number,
+	defaultWidth: number,
 };
 
 /**

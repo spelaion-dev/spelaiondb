@@ -651,6 +651,24 @@ try {
   await sidebarResizer.dblclick();
   assert.equal(Math.round((await sidebar.boundingBox()).width), 290);
 
+  step("side panel: its own button hides it, Ctrl+B brings the same panel back at its width (SDB-451)");
+  {
+    const hideButton = sidebar.getByRole("button", { name: "Hide side panel", exact: true });
+    assert.equal(await hideButton.getAttribute("title"), "Hide side panel (Ctrl+B)");
+    // From inside the panel: the focus goes to its icon in the activity bar.
+    await hideButton.focus();
+    await page.keyboard.press("Enter");
+    await sidebar.waitFor({ state: "hidden" });
+    assert.equal(await connectionsActivity.evaluate((button) => button === document.activeElement), true, "the focus is on the panel's activity icon");
+    assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "false");
+    assert.equal(await sidebarResizer.isVisible(), false, "the separator is not reachable while hidden");
+    await shot("sdb-451-side-panel-hidden");
+    await page.keyboard.press("Control+b");
+    await sidebar.waitFor({ state: "visible" });
+    await page.locator(".connection-row").first().waitFor();
+    assert.equal(Math.round((await sidebar.boundingBox()).width), 290);
+  }
+
   step("settings: a dialog over the tabs, Ctrl+, opens it and Escape closes it");
   const tabsWithoutSettings = await page.locator(".tabbar [role=tab]").count();
   await page.keyboard.press("Control+,");

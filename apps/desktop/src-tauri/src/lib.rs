@@ -554,6 +554,28 @@ async fn get_map_preferences(state: State<'_, AppState>) -> CmdResult<MapPrefere
         .map_err(|e| e.to_string())
 }
 
+/// The side panel as the user left it (SDB-451): hidden or not, its width, and the widths the
+/// core allows.
+#[command]
+async fn get_side_panel(state: State<'_, AppState>) -> CmdResult<SidePanelItem> {
+    state
+        .history
+        .side_panel_preferences()
+        .await
+        .map(SidePanelItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the side panel's state; the core refuses a width out of range.
+#[command]
+async fn set_side_panel(hidden: bool, width: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .history
+        .set_side_panel_preferences(spelaion_core::SidePanelPreferences { hidden, width })
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Saves the map's preferences; the core checks the tile server first.
 #[command]
 async fn set_map_preferences(
@@ -6318,6 +6340,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             time_zones,
             get_map_preferences,
             set_map_preferences,
+            get_side_panel,
+            set_side_panel,
             column_map,
             get_script_preferences,
             set_script_preferences,

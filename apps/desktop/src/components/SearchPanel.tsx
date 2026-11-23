@@ -25,6 +25,7 @@ import { ended, failed, markCancelling, searching, startedRun, withEvent, type S
 import { useApp } from "../store";
 import { explorerSessionOpen } from "../tabState";
 import { openFound } from "./OpenObjectDialog";
+import { HideSidePanelButton } from "./SidePanelButtons";
 
 /** Fired on `window` by the "Search" command: the panel focuses its box. */
 export const FOCUS_SEARCH_EVENT = "spelaion-focus-search";
@@ -62,7 +63,7 @@ export function SearchPanel({ hidden }: { hidden: boolean }) {
 
   return (
     <aside id="search-sidebar" className="search-sidebar" hidden={hidden} aria-label={t("search.title")}>
-      <div className="sidebar-header"><div className="workspace-name">{t("search.title")}</div></div>
+      <div className="sidebar-header"><div className="workspace-name">{t("search.title")}</div><HideSidePanelButton /></div>
       <div className="search-box">
         <input
           ref={input}

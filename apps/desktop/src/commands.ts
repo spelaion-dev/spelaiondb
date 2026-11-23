@@ -8,6 +8,7 @@ import { call, commands as core, type ConnectionItem, type NameFilter, type Obje
 import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./commandRegistry";
 import { closeQueryTab, connectTabFromExplorer, explorerDatabase, newQueryOnConnection } from "./connect";
 import { readClipboardText } from "./clipboardText";
+import { toggleSidePanel } from "./sidePanel";
 import { duplicateConnection } from "./connectionCopies";
 import { disconnectAll, hasSessions } from "./connectionControl";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
@@ -401,6 +402,9 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "editor.zoomOut": { run: () => void usePreferences.getState().zoomEditor(-1) },
   "editor.zoomReset": { run: () => void usePreferences.getState().zoomEditor(0) },
   "view.explorer": { run: () => toggleSection("connections") },
+  // Hides the side column, or brings back the panel it showed (SDB-451); the focus leaves a
+  // hidden panel for the button that shows it again.
+  "view.sidePanel": { run: () => toggleSidePanel() },
   "view.explorerFilter": {
     run: () => {
       // Focus the explorer's quick filter, showing the explorer if it is hidden.

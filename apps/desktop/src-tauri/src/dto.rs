@@ -1124,6 +1124,29 @@ pub struct SizeStepsItem {
     pub default_editor_zoom: u16,
 }
 
+/// The side panel as the user left it (SDB-451), with the widths the core allows it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SidePanelItem {
+    pub hidden: bool,
+    pub width: u32,
+    pub min_width: u32,
+    pub max_width: u32,
+    pub default_width: u32,
+}
+
+impl From<spelaion_core::SidePanelPreferences> for SidePanelItem {
+    fn from(preferences: spelaion_core::SidePanelPreferences) -> Self {
+        Self {
+            hidden: preferences.hidden,
+            width: preferences.width,
+            min_width: spelaion_core::SIDE_PANEL_MIN_WIDTH,
+            max_width: spelaion_core::SIDE_PANEL_MAX_WIDTH,
+            default_width: spelaion_core::SIDE_PANEL_DEFAULT_WIDTH,
+        }
+    }
+}
+
 /// The map view's background (ADR-045): tiles from the user's server, off by default.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

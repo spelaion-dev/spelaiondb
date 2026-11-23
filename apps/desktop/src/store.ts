@@ -314,6 +314,11 @@ export type GridCommand =
 
 /** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
 export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;
+/** A panel that shares the side column (the MCP page fills the window instead). */
+export type SidePanel = "connections" | "processes" | "search";
+
+export const isSidePanel = (section: SidebarSection): section is SidePanel =>
+  section === "connections" || section === "processes" || section === "search";
 
 /** How many closed tabs Ctrl+Shift+T can bring back. */
 const MAX_CLOSED_TABS = 20;
@@ -363,7 +368,11 @@ interface AppStore {
   openObject: { connectionId: string | null } | null;
   /** The command palette (Ctrl+Shift+P) is open. */
   paletteOpen: boolean;
+  /** `null` hides the side column (SDB-451): the one value that says what it shows (ADR-060). */
   sidebarSection: SidebarSection;
+  /** The panel "Show side panel" brings back: the last one shown in the column. Not a state of
+   *  the column, which `sidebarSection` alone says. */
+  sidePanelToRestore: SidePanel;
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
   /** Opens an editor tab. Without `sql` it is a new script: it starts with the user's
@@ -438,6 +447,8 @@ interface AppStore {
   setOpenObject(open: { connectionId: string | null } | null): void;
   setPaletteOpen(open: boolean): void;
   setSidebarSection(section: SidebarSection | ((current: SidebarSection) => SidebarSection)): void;
+  /** Hides the side column, or brings back the panel it showed ("Toggle side panel", Ctrl+B). */
+  toggleSidePanel(): void;
   setBookmarks(bookmarks: BookmarkItem[]): void;
 }
 
@@ -468,6 +479,7 @@ export const useApp = create<AppStore>((set) => ({
   openObject: null,
   paletteOpen: false,
   sidebarSection: "connections",
+  sidePanelToRestore: "connections",
   bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
@@ -663,7 +675,12 @@ export const useApp = create<AppStore>((set) => ({
   setOpenObject: (openObject) => set({ openObject }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   setSidebarSection: (section) =>
-    set((s) => ({ sidebarSection: typeof section === "function" ? section(s.sidebarSection) : section })),
+    set((s) => {
+      const next = typeof section === "function" ? section(s.sidebarSection) : section;
+      return { sidebarSection: next, sidePanelToRestore: isSidePanel(next) ? next : s.sidePanelToRestore };
+    }),
+  // From the MCP page (no column) or a hidden column, the last panel comes back.
+  toggleSidePanel: () => set((s) => ({ sidebarSection: isSidePanel(s.sidebarSection) ? null : s.sidePanelToRestore })),
   setBookmarks: (bookmarks) => set({ bookmarks }),
   setExplorerConnected: (connection, connected) => set((s) => ({
     explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),
