@@ -55,13 +55,37 @@ each server's image (`testing/docker/pg-family`):
 | Server | `BEGIN READ ONLY` | Session's read-only mode | What it gets |
 |---|---|---|---|
 | PostgreSQL (and TimescaleDB, an extension), CockroachDB 24.3, YugabyteDB 2026.1 | enforced | enforced | everything |
-| RisingWave 3.1 | enforced | accepted with a notice, ignored | no read-only connections, so no agents (their reads open read-only); streaming reads |
+| RisingWave 3.1 | enforced | accepted with a notice, ignored | no read-only connections, no agents (2026-11-23, below); streaming reads |
 | Materialize 26.50 | refuses `INSERT`, lets `CREATE TABLE` through | refused | no agents, read-only connections or streaming reads |
 | CrateDB 6.5 | accepted, ignored (no transactions) | accepted, ignored | no agents, read-only connections or streaming reads |
 | A fork that names itself and was not checked (Redshift, Greenplum…), or a server whose version does not start with `PostgreSQL` | not assumed | not assumed | no agents, read-only connections or streaming reads |
 
 The refusal comes when the session opens (a read-only connection, agents' sessions) or before
 the read is sent (streaming exports, column statistics, the data search), with the reason.
+
+**2026-11-23, RisingWave gets no agents (SDB-302).** Checked against RisingWave 3.1.1, whose
+read-only transaction refuses every write and DDL sent inside it, and changes nothing when
+`SET TRANSACTION READ WRITE` or `BEGIN READ WRITE` is sent inside it:
+- **It does not stop the table functions that reach outside.** `postgres_query` and
+  `mysql_query` run their text on another server (checked: one reached the test MySQL from
+  inside `BEGIN READ ONLY`), `file_scan` reads a bucket (it reached S3), and
+  `openai_embedding` sends its text to a remote service. The classifier refuses the four on
+  every PostgreSQL connection, before anything is sent.
+- **That list cannot be the barrier.** RisingWave lists none of its built-in functions
+  (`pg_proc` is empty, `information_schema.routines` is not implemented, `SHOW FUNCTIONS` and
+  `rw_catalog.rw_functions` list only user functions), so it cannot be checked complete
+  against the server. Any view may also call one, and the statement then only names the view:
+  a view over `postgres_query` passes the classifier and runs its query on the other server
+  inside the read-only transaction (`tests/postgres_family.rs` keeps that evidence).
+- **So agents' reads stay refused** when their session opens, as before (their session is a
+  read-only connection's, whose mode RisingWave ignores).
+- **Agents' writes are refused** on any server whose transactions do not hold
+  (`Session::atomic_writes_refusal`). They run in a transaction of their own (ADR-019), and
+  RisingWave's writes are not transactional. Before this, an agent's write session opened on
+  RisingWave.
+
+Offering agents on RisingWave would need a barrier that a view cannot get around, for example
+a read-only database user that cannot reach other servers, decided in an ADR of its own.
 
 ### Servers that speak MySQL's protocol (2026-11-15, SDB-170)
 The same for a MySQL connection, read from `select version(), @@version_comment`. A MySQL

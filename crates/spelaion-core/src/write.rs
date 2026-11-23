@@ -364,6 +364,13 @@ impl Session {
         };
         let sql = sql.trim().trim_end_matches(';').trim();
         check_write(self.dialect().as_ref(), sql).map_err(WriteError::Rejected)?;
+        // ADR-019's transaction of its own must hold: not on a server that accepts `BEGIN` and
+        // ignores it (RisingWave, SDB-302), where a failed write could stay half applied.
+        if let Some(reason) = self.atomic_writes_refusal() {
+            return Err(WriteError::Rejected(format!(
+                "{reason}, and each write from an agent runs in a transaction of its own"
+            )));
+        }
         let started = Instant::now();
         // Strings are read by the server as `check_write` read them (SDB-116).
         if engine == "mysql" {
