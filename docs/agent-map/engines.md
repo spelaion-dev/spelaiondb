@@ -109,8 +109,10 @@
   and its read barrier: no transactions, so the session's `readonly` setting
   (`readonly.rs`'s `clickhouse_read_only`), set once for agents' reads, exports, column
   statistics and read-only connections, and never set twice (a user whose profile is
-  read-only cannot set it). It declares no transactions, no editing, no imports, no plans
-  and no data search, and agents' writes are refused (`run_write` needs a transaction). Its
+  read-only cannot set it). It declares no transactions, no editing, no imports and no plans,
+  and agents' writes are refused (`run_write` needs a transaction). Data search writes its
+  ClickHouse forms (`toString`, `positionCaseInsensitiveUTF8`, `substringUTF8`; its `String`
+  is searched as text) and binds `{pN:String}`. Its
   tests: `tests/clickhouse.rs` with `SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123` (and
   `SPELAION_TEST_SSH` for the tunnel); `SPELAION_DEV_PLUGIN_CLICKHOUSE` in a development build.
 - **Trino and Presto are one plugin** (`spelaion-dev/spelaiondb-plugin-trino`, engines `trino`

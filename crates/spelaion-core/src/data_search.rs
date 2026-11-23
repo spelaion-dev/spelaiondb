@@ -332,6 +332,7 @@ fn as_text(engine: &str, column: &str) -> String {
         "mysql" => format!("CONVERT(CAST({column} AS CHAR) USING utf8mb4)"),
         "sqlserver" => format!("CAST({column} AS NVARCHAR(MAX))"),
         "duckdb" => format!("CAST({column} AS VARCHAR)"),
+        "clickhouse" => format!("toString({column})"),
         _ => format!("CAST({column} AS TEXT)"),
     }
 }
@@ -353,6 +354,9 @@ fn position(engine: &str, text: &str, value: &str, case_sensitive: bool) -> Stri
         ("sqlserver", false) => {
             format!("CHARINDEX({value}, {text} COLLATE Latin1_General_100_CI_AS)")
         }
+        // In characters, as the snippet's `substringUTF8` counts them.
+        ("clickhouse", true) => format!("positionUTF8({text}, {value})"),
+        ("clickhouse", false) => format!("positionCaseInsensitiveUTF8({text}, {value})"),
         (_, true) => format!("instr({text}, {value})"),
         (_, false) => format!("instr(lower({text}), lower({value}))"),
     }
@@ -365,20 +369,26 @@ fn snippet(engine: &str, text: &str, position: &str) -> String {
             format!("IIF({position} > {SNIPPET_BEFORE}, {position} - {SNIPPET_BEFORE}, 1)")
         }
         "sqlite" => format!("max({position} - {SNIPPET_BEFORE}, 1)"),
+        // ClickHouse's position is unsigned: subtracting from it would wrap around.
+        "clickhouse" => format!("greatest(toInt64({position}) - {SNIPPET_BEFORE}, 1)"),
         _ => format!("GREATEST({position} - {SNIPPET_BEFORE}, 1)"),
     };
     match engine {
         "mysql" | "sqlserver" => format!("SUBSTRING({text}, {start}, {SNIPPET_CHARS})"),
+        "clickhouse" => format!("substringUTF8({text}, {start}, {SNIPPET_CHARS})"),
         _ => format!("substr({text}, {start}, {SNIPPET_CHARS})"),
     }
 }
 
-/// The value as a number every engine compares exactly.
-fn number(engine: &str, value: &str) -> String {
+/// The value as a number every engine compares exactly with a column of `logical` type.
+fn number(engine: &str, logical: LogicalType, value: &str) -> String {
     match engine {
         "postgres" => format!("CAST({value} AS numeric)"),
         "mysql" => format!("CAST({value} AS DECIMAL(38, 10))"),
         "sqlserver" | "duckdb" => format!("TRY_CAST({value} AS DECIMAL(38, 10))"),
+        // ClickHouse compares a decimal with integers and decimals, but not with floats.
+        "clickhouse" if logical == LogicalType::Float => format!("toFloat64OrNull({value})"),
+        "clickhouse" => format!("toDecimal128OrNull({value}, 10)"),
         _ => format!("CAST({value} AS NUMERIC)"),
     }
 }
@@ -392,6 +402,8 @@ fn contains_bytes(engine: &str, column: &str, value: &str) -> String {
             "CHARINDEX(CAST({value} AS VARCHAR(MAX)) COLLATE Latin1_General_100_BIN2, CAST(CAST({column} AS VARBINARY(MAX)) AS VARCHAR(MAX)) COLLATE Latin1_General_100_BIN2) > 0"
         ),
         "duckdb" => format!("contains(CAST({column} AS VARCHAR), {value})"),
+        // A ClickHouse `String` holds any bytes.
+        "clickhouse" => format!("position(toString({column}), {value}) > 0"),
         _ => format!("instr({column}, CAST({value} AS BLOB)) > 0"),
     }
 }
@@ -457,7 +469,10 @@ pub fn table_search_sql(
                 (format!("{at} > 0"), snippet(engine, &text, &at))
             }
             SearchColumnKind::Number => (
-                format!("{quoted} = {}", number(engine, &placeholder)),
+                format!(
+                    "{quoted} = {}",
+                    number(engine, column.logical, &placeholder)
+                ),
                 as_text(engine, &quoted),
             ),
             SearchColumnKind::Binary => {

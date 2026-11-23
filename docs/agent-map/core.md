@@ -169,7 +169,10 @@
   table written from the catalog and the columns' types, the value always bound as a parameter
   (`Connection::execute_bound`), each a read in the engine's read-only transaction in a session
   of its own, bounded (rows per table, total hits) and cancellable; `tests/data_search.rs` runs
-  it on every engine, 50 tables cancelled mid-way included. Metadata search is the app's
+  it on every engine, 50 tables cancelled mid-way included. ClickHouse (SDB-324) has its own
+  forms (`toString`, `positionUTF8`, `substringUTF8`, a float or decimal cast by the column's
+  type, since it compares no float with a decimal); it has no unique key nor transactions, so
+  its hits are filtered by their values and its reads need none. Metadata search is the app's
   (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
