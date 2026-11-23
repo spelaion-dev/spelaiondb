@@ -339,7 +339,12 @@
   the DDL, checks read-only and the guard, and loads the rows in transactions through
   `Connection::insert_rows`, which takes them as columns of text (`TextRows`: Arrow, read as
   `&str`, never one `String` per cell, so they reach a plugin as they are) and binds every value (`COPY` on PostgreSQL, prepared inserts on
-  MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
+  MySQL, a TDS bulk load on SQL Server, the appender on DuckDB, TabSeparated data in the
+  request's body on ClickHouse): never SQL text. ClickHouse has no transactions: `staged.rs`
+  (ADR-066) loads into a table of our own (`__spelaion_import_` + a random UUID, created
+  without `IF NOT EXISTS`) and puts it in place with one `RENAME TABLE` or `EXCHANGE TABLES`
+  (the plan's `finish`), drops it on any failure or cancel, refuses appends and databases that
+  are not `Atomic`, and lists the ones left behind (`leftovers`) without dropping them.
   `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
   to get around it.
   `objects/` writes the explorer's object actions (ADR-026: qualified names, rename, drop,

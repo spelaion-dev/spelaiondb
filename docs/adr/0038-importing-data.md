@@ -1,6 +1,6 @@
 # ADR-038: Importing data into a table: values bound, statements shown first, whole batches
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented); point 13 superseded for ClickHouse by ADR-066
 - **Date:** 2026-11-08
 - **Builds on:** ADR-005 (driver model), ADR-014 (table edits), ADR-026 (object actions),
   ADR-029 (connection types), ADR-031 (transactions), ADR-034 (streaming exports)

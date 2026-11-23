@@ -109,8 +109,10 @@
   and its read barrier: no transactions, so the session's `readonly` setting
   (`readonly.rs`'s `clickhouse_read_only`), set once for agents' reads, exports, column
   statistics and read-only connections, and never set twice (a user whose profile is
-  read-only cannot set it). It declares no transactions, no editing and no imports, and
-  agents' writes are refused (`run_write` needs a transaction). Data search writes its
+  read-only cannot set it). It declares no transactions and no editing, and agents' writes
+  are refused (`run_write` needs a transaction). Imports load into a table of our own put in
+  place by one atomic rename (ADR-066: `import/staged.rs`; new tables only, `Atomic`
+  databases only). Data search writes its
   ClickHouse forms (`toString`, `positionCaseInsensitiveUTF8`, `substringUTF8`; its `String`
   is searched as text) and binds `{pN:String}`. Its plans are estimated only
   (`plan/clickhouse.rs`, `tests/plans_clickhouse.rs`; no ANALYZE). Its

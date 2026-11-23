@@ -901,6 +901,8 @@
     "reviewIntro_other": "These statements run first, then the rows are loaded:",
     "reviewIntroRows": "The rows are loaded with this statement:",
     "bound": "Values travel as parameters or as the engine's bulk data, never written into the SQL.",
+    "reviewFinish": "When every row is in, this puts the table in place at once; if anything fails before, nothing is kept:",
+    "leftovers": "Tables left by imports that did not finish: {{names}}. Drop them from the explorer once no import is running.",
     "start": "Import",
     "again": "Import again",
     "progress_one": "{{formattedCount}} row loaded · {{committed}} committed",

@@ -901,6 +901,8 @@
     "reviewIntro_other": "Primero se ejecutan estas sentencias y después se cargan las filas:",
     "reviewIntroRows": "Las filas se cargan con esta sentencia:",
     "bound": "Los valores viajan como parámetros o como datos de carga masiva del motor, nunca escritos en el SQL.",
+    "reviewFinish": "Cuando todas las filas están dentro, esto pone la tabla en su sitio de una vez; si algo falla antes, no se guarda nada:",
+    "leftovers": "Tablas que dejaron importaciones que no terminaron: {{names}}. Bórralas desde el explorador cuando no haya ninguna importación en marcha.",
     "start": "Importar",
     "again": "Importar de nuevo",
     "progress_one": "{{formattedCount}} fila cargada · {{committed}} confirmadas",

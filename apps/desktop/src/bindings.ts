@@ -3546,6 +3546,10 @@ export type ImportOptionsItem = {
 export type ImportPlanItem = {
 	statements: string[],
 	insert: string,
+	/**  Run once every row is in: on ClickHouse, what puts the loaded table in place (ADR-066). */
+	finish: string[],
+	/**  Tables that unfinished imports into this database left behind (ClickHouse, ADR-066). */
+	leftovers: string[],
 	schema: string,
 	table: string,
 	columns: string[],
