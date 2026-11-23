@@ -8,8 +8,9 @@
 //!   connections: a view hides its table functions that reach other servers (SDB-302);
 //! - Materialize (`SPELAION_TEST_MATERIALIZE`) browses, and its read-only transaction is
 //!   shown letting DDL through (SDB-303);
-//! - RisingWave, Materialize and CrateDB (`SPELAION_TEST_CRATEDB`) are recognised and get only
-//!   what they enforce.
+//! - CrateDB (`SPELAION_TEST_CRATEDB`) browses, and, like RisingWave, has no transaction its
+//!   editor sessions follow: they stay in auto-commit (SDB-304);
+//! - RisingWave, Materialize and CrateDB are recognised and get only what they enforce.
 //!
 //! Each variable is `host:port`; a server without one is skipped, which does not count as
 //! tested.
@@ -29,8 +30,8 @@ use spelaion_config::{
 use spelaion_core::{
     CoreEvent, CsvOptions, DEFAULT_BATCH_ROWS, Engines, ExportError, ExportFormat, JobCancel,
     OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits, ResultStore, ServerFamily,
-    StreamExport, TextEncoding, TunnelPool, WriteError, WriteLimits, classify_read_only,
-    export_query, open_connection,
+    StreamExport, TextEncoding, TransactionError, TunnelPool, WriteError, WriteLimits,
+    classify_read_only, export_query, open_connection,
 };
 use spelaion_driver_api::{ExecEvent, ExecOptions, TransactionState};
 use spelaion_ssh::{KnownHosts, NonInteractive};
@@ -943,6 +944,181 @@ async fn materialize_read_only_transaction_lets_ddl_through() {
             ];
             async move {
                 support::run_cleanup("Materialize", session, &statements, panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
+}
+
+/// CrateDB browses through the PostgreSQL plugin (SDB-304): its keys, functions and
+/// definitions come from what its catalog has (`information_schema`, `SHOW CREATE TABLE`).
+#[tokio::test]
+async fn cratedb_connects_and_browses() {
+    let Some(file) = CRATEDB.file(false) else {
+        return;
+    };
+    let ws = Workspace::new();
+    let open = ws.open(&file, false).await.unwrap();
+    assert_eq!(open.session.server_family(), Some(&ServerFamily::CrateDb));
+    let table = unique("sdb_crate_table");
+    let view = unique("sdb_crate_view");
+    run(
+        &open,
+        &format!(
+            "create table doc.{table} (id int primary key, name text);
+             create view doc.{view} as select id, name from doc.{table};"
+        ),
+    )
+    .await
+    .unwrap();
+    support::cleaning_up(
+        async {
+            let conn = open.session.connection();
+            let schemas = conn.list_schemas().await.unwrap();
+            assert!(schemas.iter().any(|s| s.name == "doc"), "{schemas:?}");
+            let objects = conn.list_objects("doc").await.unwrap();
+            for name in [&table, &view] {
+                assert!(
+                    objects.iter().any(|o| &o.name == name),
+                    "{name} in {objects:?}"
+                );
+            }
+            let info = conn.describe_table("doc", &table).await.unwrap();
+            let columns: Vec<_> = info.columns.iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(columns, ["id", "name"]);
+            assert_eq!(info.primary_key, ["id"]);
+            let all = conn.list_columns("doc").await.unwrap();
+            assert!(all.iter().any(|c| c.table == table && c.name == "name"));
+            assert!(
+                conn.list_referencing_keys("doc", &table)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            conn.list_schema_objects("doc").await.unwrap();
+            assert!(!conn.list_server_objects().await.unwrap().is_empty());
+            let ddl = conn.relation_definition("doc", &table).await.unwrap();
+            assert!(ddl.starts_with("CREATE TABLE"), "{ddl}");
+            let ddl = conn.relation_definition("doc", &view).await.unwrap();
+            assert!(ddl.contains("VIEW"), "{ddl}");
+        },
+        |panicked| {
+            let session = &open.session;
+            let statements = vec![
+                format!("drop view if exists doc.{view}"),
+                format!("drop table if exists doc.{table}"),
+            ];
+            async move {
+                support::run_cleanup("CrateDB", session, &statements, panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
+}
+
+/// SDB-304: a server that accepts `BEGIN` and writes at once anyway gets no transaction to
+/// follow. Under a connection type that asks for manual commit, its editor session stays in
+/// auto-commit, and Commit, Rollback and the auto-commit switch say why. Before, the session
+/// showed a transaction "held back" that was already written, and a Rollback that undid
+/// nothing (CrateDB: `ROLLBACK` is a syntax error there, and the row stays). A server that keeps
+/// its transactions (CockroachDB) still starts in manual commit.
+#[tokio::test]
+async fn servers_that_ignore_begin_get_no_manual_commit() {
+    let manual = Safeguards {
+        manual_commit: true,
+        ..Safeguards::default()
+    };
+    if let Some(file) = COCKROACH.file(false) {
+        let ws = Workspace::new();
+        let open = ws.open(&file, false).await.unwrap();
+        let status = open.session.follow_transactions(&manual).await;
+        assert!(status.supported && !status.auto_commit, "{status:?}");
+        open.close().await;
+    }
+    for server in [&CRATEDB, &RISINGWAVE] {
+        let Some(file) = server.file(false) else {
+            continue;
+        };
+        let label = server.label;
+        let ws = Workspace::new();
+        let open = ws.open(&file, false).await.unwrap();
+        let status = open.session.follow_transactions(&manual).await;
+        assert!(!status.supported, "{label}: {status:?}");
+        assert!(status.auto_commit, "{label}: {status:?}");
+        assert!(
+            matches!(
+                open.session.set_auto_commit(false).await,
+                Err(TransactionError::Unsupported)
+            ),
+            "{label}"
+        );
+        assert!(
+            matches!(
+                open.session.rollback().await,
+                Err(TransactionError::Unsupported)
+            ),
+            "{label}"
+        );
+        assert!(!open.session.close_needs_confirmation().await, "{label}");
+        open.close().await;
+    }
+
+    // Why: on CrateDB a write inside `BEGIN` is written at once, and `ROLLBACK` is refused.
+    let Some(file) = CRATEDB.file(false) else {
+        return;
+    };
+    let ws = Workspace::new();
+    let open = ws.open(&file, false).await.unwrap();
+    let table = unique("sdb_crate_tx");
+    run(&open, &format!("create table doc.{table} (id int)"))
+        .await
+        .unwrap();
+    support::cleaning_up(
+        async {
+            assert!(engine_error(&open, "begin").await.is_none());
+            assert!(
+                engine_error(&open, &format!("insert into doc.{table} values (1)"))
+                    .await
+                    .is_none()
+            );
+            assert!(
+                engine_error(&open, "rollback").await.is_some(),
+                "CrateDB accepted ROLLBACK"
+            );
+            assert!(
+                engine_error(&open, &format!("refresh table doc.{table}"))
+                    .await
+                    .is_none()
+            );
+            let mut events = open
+                .session
+                .connection()
+                .execute(
+                    &format!("select count(*) from doc.{table}"),
+                    &ExecOptions::default(),
+                )
+                .await
+                .unwrap();
+            let mut count = None;
+            while let Some(event) = events.next().await {
+                if let ExecEvent::Batch(batch) = event.unwrap() {
+                    count = spelaion_driver_api::Value::from_array(
+                        batch.column(0).as_ref(),
+                        0,
+                        spelaion_driver_api::LogicalType::Int,
+                    )
+                    .map(|v| v.to_string());
+                }
+            }
+            assert_eq!(count.as_deref(), Some("1"), "the rolled-back row stayed");
+        },
+        |panicked| {
+            let session = &open.session;
+            let statements = vec![format!("drop table if exists doc.{table}")];
+            async move {
+                support::run_cleanup("CrateDB", session, &statements, panicked).await;
             }
         },
     )

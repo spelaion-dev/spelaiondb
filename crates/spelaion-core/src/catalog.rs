@@ -248,6 +248,18 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             Some("materialize"),
             Some("materialize"),
         ),
+        // SDB-304: it browses through the PostgreSQL plugin. It has no transactions, so its
+        // editor sessions stay in auto-commit (`ServerFamily::opens_transactions`), and it
+        // gets no agents, read-only connections or streaming reads.
+        kind_of(
+            Engine::Postgres,
+            "cratedb",
+            "CrateDB",
+            Analytical,
+            5432,
+            Some("crate"),
+            Some("doc"),
+        ),
         supported(Engine::Duckdb, "DuckDB", Analytical, File),
         // CSV, TSV and Parquet files read through DuckDB: a DuckDB connection whose target is a
         // folder, saved with `file_folder = true` (SDB-316).
@@ -435,6 +447,7 @@ mod tests {
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),
                 ("risingwave", Some(Engine::Postgres), Some(4566)),
                 ("materialize", Some(Engine::Postgres), Some(6875)),
+                ("cratedb", Some(Engine::Postgres), Some(5432)),
                 ("influxdb", Some(Engine::Flightsql), Some(8181)),
                 ("valkey", Some(Engine::Redis), Some(6379)),
                 ("scylladb", Some(Engine::Cassandra), Some(9042)),

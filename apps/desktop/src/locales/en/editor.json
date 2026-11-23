@@ -662,7 +662,7 @@
     "autoCommitLocked": "A transaction is open: commit or roll it back before turning auto-commit on.",
     "smartCommitHint": "Smart commit (from the connection's type): the first statement that changes data switches this tab to manual commit until you commit or roll back.",
     "smart": "smart",
-    "unsupported": "Auto-commit only: this connection cannot tell whether a transaction is open.",
+    "unsupported": "Auto-commit only: this connection cannot tell whether a transaction is open, or its server does not keep transactions.",
     "open": "TX open",
     "openCount": "TX open · {{count}}",
     "openHint": "A transaction is open on this tab: its changes are not visible to others until you commit.",

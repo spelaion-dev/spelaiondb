@@ -219,7 +219,7 @@ pub fn engine_kind_base(kind: &str) -> Option<Engine> {
     match kind {
         "localdb" => Some(Engine::Sqlserver),
         "tidb" | "oceanbase" | "singlestore" | "greptimedb" | "starrocks" => Some(Engine::Mysql),
-        "cockroachdb" | "yugabytedb" | "timescaledb" | "risingwave" | "materialize" => {
+        "cockroachdb" | "yugabytedb" | "timescaledb" | "risingwave" | "materialize" | "cratedb" => {
             Some(Engine::Postgres)
         }
         "influxdb" => Some(Engine::Flightsql),

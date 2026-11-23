@@ -13,6 +13,7 @@
     "cockroachdb": "cockroachlabs.svg",
     "yugabytedb": "yugabytedb-plain.svg",
     "timescaledb": "timescale.svg",
+    "cratedb": "cratedb.svg",
     "duckdb": "duckdb.svg",
     "clickhouse": "clickhouse.svg",
     "trino": "trino.svg",

@@ -88,7 +88,7 @@ pub enum TransactionError {
     #[error("a script is running on this tab: wait for it to finish or cancel it")]
     Busy,
     #[error(
-        "this connection cannot tell whether a transaction is open, so it only runs in auto-commit"
+        "this connection only runs in auto-commit: it cannot tell whether a transaction is open, or its server does not keep transactions"
     )]
     Unsupported,
     #[error("a transaction is open: commit or roll it back first")]
