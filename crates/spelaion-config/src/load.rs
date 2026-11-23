@@ -665,7 +665,8 @@ pub(crate) fn validate_connection(
     }
     // ADR-059, point 2: Oracle's read-only mode waits for a barrier that stands up to tests
     // that try to get around it (a function with an autonomous transaction writes from inside
-    // a SELECT, even in a read-only transaction).
+    // a SELECT, even in a read-only transaction, and undoes any session setting that would
+    // stop it: ADR-059's 2026-11-23 note).
     if file.engine == Engine::Oracle && file.read_only {
         return Err(ConfigError::new(
             path,

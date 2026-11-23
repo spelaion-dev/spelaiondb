@@ -137,8 +137,11 @@
   unit asks nothing). It has **no read-only mode and no agents yet**: the configuration
   refuses `read_only` and `has_read_barrier` (`agent_view`, the form) leaves it out, because
   a function with an autonomous transaction writes from inside a `SELECT`, even in a
-  read-only transaction (ADR-059's 2026-11-15 note); no exports, column statistics or data
-  search either, which need that barrier. Its tests: `tests/oracle.rs` with
+  read-only transaction (ADR-059's 2026-11-15 note), and undoes any session setting that would
+  stop it (`DISABLE COMMIT IN PROCEDURE`, `READ_ONLY = TRUE`) with an `ALTER SESSION` of its
+  own (the 2026-11-23 note; `tests/oracle.rs` keeps that evidence). Do not turn the barrier on
+  with a session setting; no exports, column statistics or data search either, which need
+  that barrier. Its tests: `tests/oracle.rs` with
   `SPELAION_TEST_ORACLE=127.0.0.1:11521` (and `SPELAION_TEST_SSH` for TLS through the two
   bastions); `SPELAION_DEV_PLUGIN_ORACLE` in a development build.
 - **libSQL only exists as a plugin** (ADR-058): `spelaion-dev/spelaiondb-plugin-libsql` (Hrana

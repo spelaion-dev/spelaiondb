@@ -259,6 +259,127 @@ fn oracle_has_no_read_only_mode_nor_agents_yet() {
     }
 }
 
+/// The error of the first statement of `sql` that fails, if any.
+async fn failure(open: &OpenConnection, sql: &str) -> Option<String> {
+    let events: Vec<CoreEvent> = open.session.run_script(sql).collect().await;
+    events.into_iter().find_map(|e| match e {
+        CoreEvent::StatementFailed { error, .. } => Some(error.message),
+        _ => None,
+    })
+}
+
+/// Why Oracle still has no read barrier (ADR-059, the 2026-11-23 note; SDB-339). Each session
+/// setting a restricted session could start with stops a function that writes behind a
+/// `SELECT` in an autonomous transaction, and none stops one that undoes the setting first: an
+/// `ALTER SESSION` inside `EXECUTE IMMEDIATE` needs no privilege and runs from inside a query.
+/// - `SET TRANSACTION READ ONLY` does not reach the autonomous transaction at all.
+/// - `ALTER SESSION DISABLE COMMIT IN PROCEDURE` refuses its `COMMIT` (ORA-00034), and a
+///   function that runs `ALTER SESSION ENABLE COMMIT IN PROCEDURE` first commits anyway.
+/// - `ALTER SESSION SET READ_ONLY = TRUE` (23ai) refuses its `INSERT` (ORA-28193), and a
+///   function that runs `ALTER SESSION SET READ_ONLY = FALSE` first writes anyway.
+///
+/// If this test fails, Oracle has changed what these settings do: read the note again before
+/// turning the barrier on.
+#[tokio::test]
+async fn no_session_setting_stops_a_function_that_undoes_it() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = Workspace::new("oracle-get-around");
+    ws.write(
+        ".spelaion/connections/ora.toml",
+        &connection(&host, port, ""),
+    );
+    let owner = ws.open("ora").await;
+    let id = std::process::id();
+    let table = format!("spelaion_written_{id}");
+    let plain = format!("spelaion_plain_{id}");
+    let undo_commit = format!("spelaion_undo_commit_{id}");
+    let undo_read_only = format!("spelaion_undo_read_only_{id}");
+    // A function declared with an autonomous transaction, which writes a row and commits it;
+    // `undo` runs before the write.
+    let function = |name: &str, undo: &str| {
+        format!(
+            "create or replace function {name} return number is\n  pragma autonomous_transaction;\n\
+             begin\n  {undo}\n  insert into {table} values ('{name}');\n  commit;\n  return 1;\nend;\n/\n"
+        )
+    };
+    script(
+        &owner,
+        &format!(
+            "begin execute immediate 'drop table {table} purge'; exception when others then null; end;\n/\n\
+             create table {table} (note varchar2(60));\n{}{}{}",
+            function(&plain, "null;"),
+            function(
+                &undo_commit,
+                "execute immediate 'alter session enable commit in procedure';"
+            ),
+            function(
+                &undo_read_only,
+                "execute immediate 'alter session set read_only = false';"
+            ),
+        ),
+    )
+    .await;
+    let written = |name: &str| format!("select count(*) from {table} where note = '{name}'");
+
+    // A read-only transaction: the autonomous transaction writes anyway.
+    let open = ws.open("ora").await;
+    script(&open, "set transaction read only").await;
+    assert_eq!(
+        value(&open, &format!("select {plain}() from dual")).await,
+        "1"
+    );
+    script(&open, "rollback").await;
+    open.close().await;
+    assert_eq!(value(&owner, &written(&plain)).await, "1");
+
+    // Commits disabled in procedures: refused, until the function enables them again.
+    let open = ws.open("ora").await;
+    script(&open, "alter session disable commit in procedure").await;
+    script(&open, "set transaction read only").await;
+    let refused = failure(&open, &format!("select {plain}() from dual")).await;
+    assert!(
+        refused.as_deref().is_some_and(|e| e.contains("ORA-00034")),
+        "{refused:?}"
+    );
+    script(&open, "rollback").await;
+    script(&open, "set transaction read only").await;
+    assert_eq!(
+        value(&open, &format!("select {undo_commit}() from dual")).await,
+        "1"
+    );
+    script(&open, "rollback").await;
+    open.close().await;
+    assert_eq!(value(&owner, &written(&plain)).await, "1");
+    assert_eq!(value(&owner, &written(&undo_commit)).await, "1");
+
+    // A read-only session: refused, until the function makes the session writable again.
+    let open = ws.open("ora").await;
+    script(&open, "alter session set read_only = true").await;
+    let refused = failure(&open, &format!("select {plain}() from dual")).await;
+    assert!(
+        refused.as_deref().is_some_and(|e| e.contains("ORA-28193")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        value(&open, &format!("select {undo_read_only}() from dual")).await,
+        "1"
+    );
+    open.close().await;
+    assert_eq!(value(&owner, &written(&plain)).await, "1");
+    assert_eq!(value(&owner, &written(&undo_read_only)).await, "1");
+
+    script(
+        &owner,
+        &format!(
+            "drop function {plain};\ndrop function {undo_commit};\ndrop function {undo_read_only};\n\
+             drop table {table} purge"
+        ),
+    )
+    .await;
+    owner.close().await;
+}
+
 /// Through the two bastions of `testing/docker`, with TLS: the plugin connects to the tunnel's
 /// local end (127.0.0.1) and checks the certificate against the database's name behind the
 /// bastions, `oracle-tls`, signed by the test authority (ADR-059, ADR-041: a plugin opens no
