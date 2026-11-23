@@ -60,6 +60,7 @@ mod oracle;
 mod panics;
 mod pgbouncer;
 mod plans;
+mod plans_clickhouse;
 mod plans_mysql;
 mod plans_sqlite_duckdb;
 mod plans_sqlserver;

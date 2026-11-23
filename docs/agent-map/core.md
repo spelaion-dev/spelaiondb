@@ -265,7 +265,10 @@
   and `:named` placeholders; UPDATE and DELETE always carry a WHERE on what identifies a row
   (the primary key, else a unique constraint, else every column) (`tests/generated_sql.rs`).
   `plan/` is Visual EXPLAIN: each engine's reader (`postgres.rs`, `mysql.rs`, `sqlserver.rs`,
-  `sqlite.rs`, `duckdb.rs`) turns its plan into one tree, analysed the same way; the plan's
+  `sqlite.rs`, `duckdb.rs`, `clickhouse.rs`) turns its plan into one tree, analysed the same
+  way (ClickHouse's `EXPLAIN json = 1, indexes = 1, description = 1` is estimated only: no
+  costs or rows, its indexes' granules tell a full read; `classify.rs` reads its option list
+  so read-only connections and agents can explain); the plan's
   run (`run.rs`) is serialized and cancellable; `ANALYZE`, which runs the statement, needs a
   confirmation of its own and is off on a read-only connection; explicit runs are recorded in
   history; raw plan rows stay in the core, the page receives a bounded projection
