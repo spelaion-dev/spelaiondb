@@ -17,7 +17,8 @@
   server that speaks another engine's protocol is a kind of that engine's connection there
   (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169, and so is
   RisingWave, SDB-302, which gets no agents: a view hides its table functions that reach
-  other servers from the classifier, ADR-020's 2026-11-23 note; TiDB, OceanBase
+  other servers from the classifier, ADR-020's 2026-11-23 note; and Materialize, SDB-303,
+  which gets no agents either: its read-only transaction lets DDL through; TiDB, OceanBase
   and SingleStore are MySQL connections, SDB-170, and so is GreptimeDB, SDB-344, whose rows the
   MySQL plugin keys by primary key and time index, and an append-only table by nothing, and
   StarRocks, SDB-310, whose primary keys the plugin reads from `information_schema.columns`
