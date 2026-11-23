@@ -33,6 +33,10 @@
   asking its own `current_version()`, SDB-310). `ServerFamily::opens_transactions` is false where
   `START TRANSACTION` and `autocommit = 0` open nothing (CrateDB, GreptimeDB, StarRocks): the
   session does not follow transactions there, so manual commit is refused rather than offered.
+  On a SQL Server connection it tells only Babelfish apart (`@@VERSION`, SDB-313, ADR-020's
+  note): its transactions hold, but its T-SQL reaches PostgreSQL's functions past SQL Server's
+  rolled-back transaction, so it gets no agents, read-only connections or streaming reads
+  (`tests/babelfish.rs`, against `testing/docker/babelfish`).
   Like `readonly.rs`, any change
   there needs tests that try to get around it (`tests/postgres_family.rs` and
   `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`, and GreptimeDB

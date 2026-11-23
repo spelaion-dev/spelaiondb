@@ -103,6 +103,35 @@ whatever it calls itself.
 | SingleStore 10.9, Apache Doris 3.0 | a syntax error | accepted, session stays writable | no agents, read-only connections or streaming reads |
 | StarRocks 3.4 (says it is MySQL; recognised by its `current_version()`, SDB-310) | a syntax error | accepted, session stays writable | no agents, read-only connections or streaming reads |
 
+### Babelfish through SQL Server's protocol (2026-11-23, SDB-313)
+Babelfish for PostgreSQL speaks TDS in front of PostgreSQL. A SQL Server connection to it is
+told apart from `@@VERSION` ("Babelfish for PostgreSQL…") when the session opens; a server that
+does not say so keeps SQL Server's barrier, unchanged. Checked against Babelfish 5.6.0
+(PostgreSQL 17.10), built in `testing/docker/babelfish`:
+- **Its transactions hold.** A write rolled back is gone, so table edits, imports and agents'
+  writes, which rely on a transaction of their own, work as on SQL Server.
+- **SQL Server's barrier does not hold.** The barrier rests on T-SQL functions that cannot change
+  anything. On Babelfish, T-SQL reaches PostgreSQL's own functions:
+  - `pg_backend_pid()` and `set_config(...)` answer;
+  - a `SELECT` of `pg_try_advisory_lock` inside a transaction that is then rolled back leaves the
+    lock held (`tests/babelfish.rs` keeps that evidence);
+  - `pg_advisory_lock` takes its lock even though the statement then fails on its `void` result.
+  The classifier could name them, as it does on PostgreSQL connections, but any view may call
+  one, and the statement then only names the view.
+- **So Babelfish gets no agents' reads and no read-only connections**, refused when the session
+  opens, with the reason. Nor does it get the reads that rely on the same barrier (streaming
+  exports, column statistics, the data search), refused before they are sent.
+- **The SQL Server plugin follows Babelfish's differences** (its 0.1.2):
+  - the transaction state comes from `XACT_STATE()`, since Babelfish sends no transaction
+    descriptor;
+  - plans are not declared, since Babelfish has none;
+  - a cancel, which Babelfish would answer only once the statement ends on its own, stops the
+    statement from a second connection: with `pg_cancel_backend` where the login may, otherwise
+    with `KILL`, which ends the session and says so.
+
+Offering agents on Babelfish would need a barrier a view cannot get around, such as a
+PostgreSQL role for agents that cannot reach those functions, decided in an ADR of its own.
+
 ## Alternatives
 - **Only the classifier for the new engines:** it cannot see what a function does. The
   engine's own barrier stays.
