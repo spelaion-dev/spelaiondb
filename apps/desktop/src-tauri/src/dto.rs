@@ -1984,9 +1984,10 @@ pub struct ColumnItem {
 )]
 pub enum ScriptEvent {
     /// The run was accepted, before any of its statements: the result tabs it replaced,
-    /// already freed by the core (SDB-378).
+    /// already freed by the core (SDB-378). Paged runs also report the effective grid sort.
     RunStarted {
         closed: Vec<u32>,
+        page_sort: Option<Vec<SortKeyItem>>,
     },
     /// Byte range of the statement within the script.
     StatementStarted {
@@ -2442,8 +2443,9 @@ impl RunEvents {
     }
 
     /// The first event of the run: what it replaced.
-    pub fn started(&self) -> ScriptEvent {
+    pub fn started(&self, page_sort: Option<Vec<SortKeyItem>>) -> ScriptEvent {
         ScriptEvent::RunStarted {
+            page_sort,
             closed: self
                 .results
                 .closed()
@@ -3116,20 +3118,14 @@ pub struct IndexDetails {
     pub definition: String,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct EditableTableItem {
-    pub schema: String,
-    pub name: String,
-    pub primary_key: Vec<String>,
-}
-
 /// The table whose foreign keys a query's result follows (SDB-93), as the core matched it.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyTableItem {
     pub schema: String,
     pub name: String,
+    pub primary_key: Vec<String>,
+    pub writable: bool,
 }
 
 /// Where rows copied as UPDATE statements come from (SDB-388): a table data tab's table, or
@@ -4798,7 +4794,7 @@ impl From<spelaion_core::ColumnFilter> for ColumnFilterItem {
 }
 
 /// One key of a result's sort: a result column by position, and its direction.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize, Serialize, Type)]
 pub struct SortKeyItem {
     pub column: u32,
     pub descending: bool,

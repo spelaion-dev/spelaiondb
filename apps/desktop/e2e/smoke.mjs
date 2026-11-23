@@ -6864,13 +6864,13 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const readTab = await activeTab.locator(".tab-label").innerText();
     await replaceQuery(shown, "select id, name from spelaion.sdb137;");
     await run(shown);
-    await shown.getByRole("button", { name: "Add row" }).waitFor();
+    await shown.getByRole("button", { name: "Add row" }).and(shown.locator(":enabled")).waitFor();
     // The tab moves to MariaDB. Run asks for a value after connecting there; cancelled, the
     // rows read on MySQL stay on screen with the tab connected to MariaDB.
     const connectionList = shown.locator(".toolbar select").first();
     const mariadb = await connectionList.locator("option", { hasText: "MariaDB (Docker) (" }).first().getAttribute("value");
     await connectionList.selectOption(mariadb);
-    await shown.getByRole("button", { name: "Add row" }).waitFor({ state: "detached" });
+    await shown.getByRole("button", { name: "Add row" }).and(shown.locator(":disabled")).waitFor();
     await replaceQuery(shown, "select :marker;");
     await run(shown);
     await logIn("MariaDB (Docker)");
@@ -6881,7 +6881,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await activeTab.locator(".dot-connected").waitFor();
     // The editability check runs again on MariaDB's session: the core says no.
     await page.waitForTimeout(1_000);
-    assert.equal(await shown.getByRole("button", { name: "Add row" }).count(), 0, "the grid stays read-only");
+    assert.ok(await shown.getByRole("button", { name: "Add row" }).isDisabled(), "the grid stays read-only");
     await shown.locator("span.muted", { hasText: /^Read-only$/ }).first().waitFor();
     const box = await shown.locator(".grid-scroller").boundingBox();
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
@@ -7097,7 +7097,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mysqlPages.getByLabel("Rows per page").selectOption("100");
   await page.waitForFunction((el) => !el.isConnected, firstMysqlResult);
   await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
-  await panel.getByRole("button", { name: "Add row" }).waitFor();
+  await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
   const mysqlGrid = panel.locator(".grid-scroller");
   const mysqlBox = await mysqlGrid.boundingBox();
   await page.mouse.dblclick(mysqlBox.x + 52 + 20, mysqlBox.y + 34 + 12);
@@ -7321,7 +7321,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.locator(".status-connected").waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
   await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
-  await panel.getByRole("button", { name: "Add row" }).waitFor();
+  await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
   // What loads a table's page again (Apply, saving the edits) replaces its grid: the one
   // shown goes away and another is mounted when the new page arrives. A click or a key sent
   // in between reaches no grid, so wait for the new one, ready to be edited (Add row is
@@ -7340,7 +7340,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await pageReloadedBy(() => panel.getByRole("button", { name: "Apply", exact: true }).click());
   await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
   await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
-  await panel.getByRole("button", { name: "Add row" }).waitFor();
+  await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
   {
     let box = null;
     for (let i = 0; i < 40 && !box; i++) {
@@ -7533,18 +7533,51 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await queryDatabase.elementHandle());
   await panel.locator(".cm-content").click();
   await page.keyboard.insertText("select id, name from smoke_edit order by id;");
-  await run(panel);
-  await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+  // Hold just the metadata response to check how the grid behaves on a slow link.
+  await page.evaluate(() => {
+    const fetch = window.fetch;
+    const ipc = (command) => window.__TAURI_INTERNALS__.convertFileSrc(command, "ipc");
+    const commands = new Map(["query_page_supported", "run_query_page", "query_key_table", "editable_query_table"].map((name) => [ipc(name), name]));
+    const calls = [];
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    window.__resultMetadata = { calls, release, restore: () => { window.fetch = fetch; } };
+    window.fetch = async (input, options) => {
+      const command = commands.get(input);
+      if (command) calls.push(command);
+      const response = await fetch(input, options);
+      if (command === "query_key_table") await held;
+      return response;
+    };
+  });
+  try {
+    await run(panel);
+    const rowActions = panel.getByRole("toolbar", { name: "Row actions" });
+    await panel.locator(".grid-scroller").waitFor();
+    await rowActions.getByText("Checking editability…", { exact: true }).waitFor();
+    const add = rowActions.getByRole("button", { name: "Add row" });
+    assert.ok(await add.isDisabled(), "row actions appear before editability is known");
+    await page.evaluate(() => window.__resultMetadata.release());
+    await add.and(panel.locator(":enabled")).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.__resultMetadata.calls), ["run_query_page", "query_key_table"]);
+  } finally {
+    await page.evaluate(() => {
+      window.__resultMetadata.release();
+      window.__resultMetadata.restore();
+      delete window.__resultMetadata;
+    });
+  }
   // What a screen reader is given as the selection moves (SDB-425): the canvas grid's active
   // descendant is a cell of its own for each move, its row, visible column and value written
   // before it becomes the active descendant, once per move, and again after an edit.
   const announceGrid = panel.locator(".grid-scroller");
-  const announced = (pattern) => page.waitForFunction(([source]) => {
+  const announced = (pattern, column = null) => page.waitForFunction(([source, column]) => {
     const grid = document.querySelector(".tab-panel:not([hidden]) .grid-scroller");
     const id = grid?.getAttribute("aria-activedescendant");
     const cell = id ? document.getElementById(id) : null;
-    return Boolean(cell && new RegExp(source).test(cell.textContent ?? ""));
-  }, [pattern.source]);
+    return Boolean(cell && new RegExp(source).test(cell.textContent ?? "")
+      && (column === null || cell.getAttribute("aria-colindex") === column));
+  }, [pattern.source, column]);
   const announcements = () => page.evaluate(() => window.__announcements.length);
   await announceGrid.evaluate((grid) => {
     window.__announcements = [];
@@ -7585,8 +7618,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.mouse.click(box.x + 52 + 20, box.y + 18, { button: "right" });
     await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Hide id" }).click();
     await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
-    await announced(/^Row 1, name \(/);
-    assert.equal(await page.evaluate((id) => document.getElementById(id).getAttribute("aria-colindex"), await announceGrid.getAttribute("aria-activedescendant")), "1");
+    await announced(/^Row 1, name \(/, "1");
     await announceMove("ArrowDown", /^Row 2, name \(/);
     await panel.locator(".grid-footer .grid-hidden").click();
     await panel.getByRole("dialog", { name: "Columns" }).getByRole("button", { name: "Show all" }).click();
@@ -7610,7 +7642,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await valueEditor.press("Control+s");
     await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
     await page.waitForFunction((el) => !el.isConnected, beforeSave);
-    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
     const updated = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.click(updated.x + 52 + 110 + 20, updated.y + 34 + 12);
     await page.keyboard.press("Enter");
@@ -7624,7 +7656,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await run(panel);
   await page.waitForFunction((el) => !el.isConnected, previousEditResult);
   await panel.locator(".statusline", { hasText: "4 rows" }).waitFor();
-  assert.equal(await panel.getByRole("toolbar", { name: "Row actions" }).count(), 0);
+  await panel.getByRole("toolbar", { name: "Row actions" }).getByText("Read-only", { exact: true }).waitFor();
+  assert.ok(await panel.getByRole("button", { name: "Add row" }).isDisabled());
   // A join is not paged (ADR-054: its pages could not be fetched exactly): it ran as written,
   // every row at once, with no page controls.
   assert.equal(await panel.getByRole("group", { name: "Query result pages" }).count(), 0);
@@ -7647,7 +7680,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await replaceQuery(panel, "select id, img from smoke_blob order by id;");
     await run(panel);
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
     const openImage = async () => {
       const box = await panel.locator(".grid-scroller").boundingBox();
       await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
@@ -7681,7 +7714,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.getByRole("status").filter({ hasText: "Loaded 32x32.png into img" }).waitFor();
     await page.evaluate(() => delete window.__spelaionOpenPath);
     await page.waitForFunction((el) => !el.isConnected, beforeLoad);
-    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
     await openImage();
     await panel.locator(".cell-viewer").getByText("PNG image · 32 × 32 px").waitFor();
     // The cell menu saves it too, named with the extension the core gives.
@@ -7732,7 +7765,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await replaceQuery(panel, "select id, due, mood, status, ref_id from smoke_pick order by id;");
     await run(panel);
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
     {
       const box = await panel.locator(".grid-scroller").boundingBox();
       await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
@@ -7800,7 +7833,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await viewer.getByRole("textbox", { name: "New value for ref_id" }).press("Control+s");
     await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
     await page.waitForFunction((el) => !el.isConnected, beforeSave);
-    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
     {
       const box = await panel.locator(".grid-scroller").boundingBox();
       await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
@@ -8484,10 +8517,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.locator(".tabbar .tab.active .tab-running").waitFor({ state: "detached" });
   await replaceQuery(panel, "select id, name from sdb137");
   await run(panel);
-  await panel.getByRole("button", { name: "Add row" }).waitFor();
+  await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":enabled")).waitFor();
   await sqlServerDatabase.selectOption("spelaion");
   await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await sqlServerDatabase.elementHandle());
-  await panel.getByRole("button", { name: "Add row" }).waitFor({ state: "detached" });
+  await panel.getByRole("button", { name: "Add row" }).and(panel.locator(":disabled")).waitFor();
   await panel.locator("span.muted", { hasText: /^Read-only$/ }).first().waitFor();
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
@@ -10603,7 +10636,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 12;");
     await run(shown);
     await shown.locator(".statusline", { hasText: /^12 rows/ }).waitFor();
-    await shown.getByRole("button", { name: "Add row" }).waitFor();
+    await shown.getByRole("button", { name: "Add row" }).and(shown.locator(":enabled")).waitFor();
     // The grid's place is read for each click: the filter bar moves it down.
     const at = async (row, x) => {
       const box = await shown.locator(".grid-scroller").boundingBox();
@@ -10661,7 +10694,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 5;");
     await run(shown);
     await shown.locator(".statusline", { hasText: "5 rows" }).waitFor();
-    await shown.getByRole("button", { name: "Add row" }).waitFor();
+    await shown.getByRole("button", { name: "Add row" }).and(shown.locator(":enabled")).waitFor();
     const box = await shown.locator(".grid-scroller").boundingBox();
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     const cell = shown.locator("input.cell-editor").and(shown.getByRole("textbox", { name: "New value for name" }));
