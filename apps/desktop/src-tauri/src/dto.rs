@@ -8161,11 +8161,23 @@ impl From<spelaion_core::LastPage> for LastPageItem {
 }
 
 /// A connection whose TLS does not check its server (SDB-395), as the core decided it.
+/// What a connection's TLS leaves unchecked (SDB-395), as the core decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TlsRiskItem {
+    /// `disable`: nothing is encrypted.
+    Unencrypted,
+    /// `prefer` or `require`: encrypted, but the server's certificate is not checked.
+    Unverified,
+    /// A SQL login to a LocalDB instance: its password crosses the local pipe without TLS
+    /// (ADR-068).
+    LocalDbPassword,
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TlsWarningItem {
-    /// `unencrypted` (`disable`) or `unverified` (`prefer`, `require`).
-    pub risk: String,
+    pub risk: TlsRiskItem,
     /// The TLS mode as the connection file writes it.
     pub mode: String,
     pub host: String,
@@ -8177,10 +8189,10 @@ impl From<spelaion_core::TlsWarning> for TlsWarningItem {
     fn from(w: spelaion_core::TlsWarning) -> Self {
         Self {
             risk: match w.risk {
-                spelaion_core::TlsRisk::Unencrypted => "unencrypted",
-                spelaion_core::TlsRisk::Unverified => "unverified",
-            }
-            .into(),
+                spelaion_core::TlsRisk::Unencrypted => TlsRiskItem::Unencrypted,
+                spelaion_core::TlsRisk::Unverified => TlsRiskItem::Unverified,
+                spelaion_core::TlsRisk::LocalDbPassword => TlsRiskItem::LocalDbPassword,
+            },
             mode: w.mode.into(),
             host: w.host,
             tunneled: match w.route {

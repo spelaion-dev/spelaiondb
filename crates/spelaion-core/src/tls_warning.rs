@@ -16,6 +16,9 @@
 //!   traffic is encrypted to a machine next to the server, and only the last stretch is not
 //!   checked. A host that is that machine itself does not warn. A proxy alone (SOCKS5, HTTP)
 //!   encrypts nothing: it warns as a direct connection does.
+//! - A SQL Server LocalDB instance (ADR-068) is reached through its pipe on this machine, whose
+//!   login goes without TLS: only a SQL login warns, since its password crosses that pipe
+//!   unencrypted; the Windows account sends none.
 
 use std::net::IpAddr;
 
@@ -29,6 +32,10 @@ pub enum TlsRisk {
     Unencrypted,
     /// `prefer` or `require`: encrypted, but the server's certificate is not checked.
     Unverified,
+    /// A SQL login to a LocalDB instance (ADR-068): the login goes through the instance's pipe
+    /// on this machine without TLS, so its password crosses that pipe unencrypted. With the
+    /// Windows account (no user) no password travels and nothing warns.
+    LocalDbPassword,
 }
 
 /// How the connection reaches its server.
@@ -113,11 +120,31 @@ pub fn tls_warning(
     })
 }
 
+/// The rule for a LocalDB instance (ADR-068), which has no network and no TLS inside its pipe:
+/// `None` when `host` names none, otherwise its warning, if any. Only a SQL login warns, since
+/// its password crosses the pipe unencrypted; the Windows account sends none.
+fn localdb_warning(engine: Engine, host: &str, user: &str) -> Option<Option<TlsWarning>> {
+    spelaion_config::localdb_instance(engine, Some(host))?;
+    Some((!user.trim().is_empty()).then(|| TlsWarning {
+        risk: TlsRisk::LocalDbPassword,
+        mode: "none",
+        host: host.trim().to_string(),
+        route: TlsRoute::Direct,
+    }))
+}
+
 /// The warning for a resolved connection (the connection test, an open session): its host and
 /// TLS mode as resolved, before any tunnel points it elsewhere.
 pub fn connection_tls_warning(resolved: &ResolvedConnection) -> Option<TlsWarning> {
     if resolved.file_folder.is_some() || resolved.sqlite3.is_some() {
         return None;
+    }
+    if let Some(warning) = localdb_warning(
+        resolved.engine,
+        &resolved.params.host,
+        &resolved.params.user,
+    ) {
+        return warning;
     }
     let tunneled = resolved.kubernetes.is_some()
         || resolved
@@ -184,26 +211,32 @@ pub fn file_tls_warning(config: &Config, entry: &ConnectionEntry) -> Option<TlsW
         entry.id.source,
         file.engine,
         file.host.as_deref().unwrap_or_default(),
+        file.user.as_deref().unwrap_or_default(),
         tls_mode_of(file.tls.mode),
         file.tunnel.as_deref(),
         file.kubernetes.is_some(),
     )
 }
 
-/// The warning for what the add / edit connection form holds: its engine, host and TLS mode,
-/// and the network profile and Kubernetes forward it names. `source` is where the connection
-/// is (or will be) saved, which decides where its profile is looked up.
+/// The warning for what the add / edit connection form holds: its engine, host, user and TLS
+/// mode, and the network profile and Kubernetes forward it names. `source` is where the
+/// connection is (or will be) saved, which decides where its profile is looked up.
+#[allow(clippy::too_many_arguments)]
 pub fn draft_tls_warning(
     config: &Config,
     source: spelaion_config::Source,
     engine: Engine,
     host: &str,
+    user: &str,
     mode: TlsMode,
     tunnel: Option<&str>,
     kubernetes: bool,
 ) -> Option<TlsWarning> {
     if host.contains("${") {
         return None;
+    }
+    if let Some(warning) = localdb_warning(engine, host, user) {
+        return warning;
     }
     let tunnel = tunnel.map(str::trim).filter(|name| !name.is_empty());
     tls_warning(
@@ -227,6 +260,7 @@ pub fn connection_draft_tls_warning(
         draft.source,
         draft.engine,
         &draft.host,
+        &draft.user,
         tls_mode_of(draft.tls_mode),
         Some(&draft.tunnel),
         draft.kubernetes.is_some(),
@@ -305,6 +339,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// LocalDB (ADR-068): no TLS inside its pipe, so a SQL login's password crosses it
+    /// unencrypted and says so; the Windows account sends no password, and nothing warns.
+    #[test]
+    fn a_localdb_sql_login_is_told_its_password_crosses_the_pipe_unencrypted() {
+        let host = "(localdb)\\MSSQLLocalDB";
+        for mode in [TlsMode::Disable, TlsMode::Prefer, TlsMode::Require] {
+            assert_eq!(
+                localdb_warning(Engine::Sqlserver, host, ""),
+                Some(None),
+                "{mode:?}"
+            );
+            let warning = localdb_warning(Engine::Sqlserver, host, "app")
+                .flatten()
+                .unwrap();
+            assert_eq!(warning.risk, TlsRisk::LocalDbPassword);
+            assert_eq!(warning.host, host);
+        }
+        // Not LocalDB: the ordinary rule decides.
+        assert_eq!(
+            localdb_warning(Engine::Sqlserver, "db.internal", "app"),
+            None
+        );
+        assert_eq!(localdb_warning(Engine::Postgres, host, "app"), None);
     }
 
     #[test]

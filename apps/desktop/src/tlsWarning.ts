@@ -8,6 +8,19 @@ import type { TlsWarningItem } from "./bindings";
 
 /** The warning's sentence, in the `connections` namespace. */
 export function tlsWarningText(t: TFunction, warning: TlsWarningItem): string {
-  const key = `${warning.risk === "unencrypted" ? "unencrypted" : "unverified"}${warning.tunneled ? "Tunneled" : ""}`;
-  return t(`connections:tlsWarning.${key}`, { mode: warning.mode, host: warning.host });
+  const values = { mode: warning.mode, host: warning.host };
+  const tunneled = warning.tunneled ? "Tunneled" : "";
+  switch (warning.risk) {
+    case "unencrypted":
+      return t(`connections:tlsWarning.unencrypted${tunneled}`, values);
+    case "unverified":
+      return t(`connections:tlsWarning.unverified${tunneled}`, values);
+    // A SQL login to LocalDB (ADR-068): no network, only the local pipe without TLS.
+    case "localDbPassword":
+      return t("connections:tlsWarning.localDbPassword", values);
+    default: {
+      const never: never = warning.risk;
+      return never;
+    }
+  }
 }

@@ -557,6 +557,7 @@
   },
   "tlsWarning": {
     "unverified": "TLS mode “{{mode}}” does not check the server's certificate: anyone on the network between you and {{host}} could read or impersonate it. Use verify-full to check it.",
+    "localDbPassword": "LocalDB is reached through its pipe on this computer without TLS: this SQL login's password crosses it unencrypted. Leave the user empty to log in with your Windows account, which sends no password.",
     "unencrypted": "TLS is off: everything sent to {{host}}, the password included, crosses the network unencrypted.",
     "unverifiedTunneled": "Through the tunnel, TLS mode “{{mode}}” does not check {{host}}'s certificate on the last stretch, from the tunnel's end to the server.",
     "unencryptedTunneled": "Through the tunnel, the last stretch to {{host}}, from the tunnel's end to the server, is not encrypted."
