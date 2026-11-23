@@ -27,8 +27,12 @@ not reach LocalDB (SDB-312).
    one value starting `np:\\.\pipe\`. It then speaks TDS through the pipe; tiberius takes any
    byte stream.
    - `SqlLocalDB.exe` is the one on the PATH, where its installer puts it. It runs without a
-     shell and without a window, is killed if the connection gives up, and counts within the
-     connection's `connect_timeout`.
+     shell and without a window.
+   - Starting has an allowance of its own, two minutes, apart from the connection's
+     `connect_timeout`. A cold start takes tens of seconds, and stopping `SqlLocalDB` half way
+     leaves the instance stopped (seen in CI). The pipe may show in `info` a moment after
+     `start` answers, and may close at once while the instance gets ready. The login through
+     it is tried again within `connect_timeout`, but a refused login ends at once.
    - Its only arguments are the subcommand and the instance name. The name is checked twice,
      when the configuration loads and in the plugin: letters, digits, spaces, `_`, `-` and `.`,
      up to 128 characters, never starting with `-`. Nothing else reaches the command line.
@@ -41,16 +45,21 @@ not reach LocalDB (SDB-312).
    tunnels) and is left out.
 4. **Nothing of a network route applies.** A LocalDB connection loads with no tunnel,
    Kubernetes, port, `local_port`, `verify-ca`/`verify-full` or CA; the configuration refuses
-   each, saying why, and the plugin refuses a forwarded address too. The login is still
-   encrypted, with LocalDB's own certificate, which there is nothing to verify against.
-5. **Windows only, and said so.** The picker lists "SQL Server LocalDB" on Windows. Elsewhere it
+   each, saying why, and the plugin refuses a forwarded address too.
+5. **No TLS inside the pipe.** LocalDB closed the pipe as soon as tiberius started TLS inside
+   it, in every mode, while the same login without TLS connected (GitHub's Windows runners,
+   SQL Server 2025's LocalDB). The pipe is communication within the machine that only the
+   instance's owner can open. With the Windows account no password travels; a SQL login's
+   password crosses that local pipe unencrypted. `disable`, `prefer` and `require` all log in
+   that way, and `verify-*` is refused, never quietly ignored.
+6. **Windows only, and said so.** The picker lists "SQL Server LocalDB" on Windows. Elsewhere it
    is listed as "(Windows only)" and cannot be picked. A LocalDB connection in a shared
    repository still loads on macOS and Linux, and connecting there fails, saying LocalDB runs
    only on Windows.
-6. **The connection test** (ADR-032) has no "reach host:port" step for it: there is no address
+7. **The connection test** (ADR-032) has no "reach host:port" step for it: there is no address
    to probe. Its login step starts the instance and logs in, and a failure there says which of
    the two failed.
-7. **Everything after the login is SQL Server's**: the same plugin, dialect, catalog, read
+8. **Everything after the login is SQL Server's**: the same plugin, dialect, catalog, read
    barrier (ADR-053), cancel (TDS attention, through the pipe) and agents' rules.
 
 ## Tests
@@ -79,5 +88,7 @@ not reach LocalDB (SDB-312).
 ## What would change this
 - If users need Windows authentication to SQL Servers on their network, an ADR of its own
   (Kerberos, NTLM, and how they work through a tunnel).
+- If TLS inside the pipe can be made to work (a tiberius change, or what LocalDB expects of it),
+  encrypting the login as over TCP.
 - If `SqlLocalDB` is not on the PATH for many installations, finding it through the registry
   key LocalDB's installer writes.
