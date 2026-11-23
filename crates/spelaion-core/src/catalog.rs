@@ -190,6 +190,18 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             Some("postgres"),
             Some("postgres"),
         ),
+        // SDB-302: it browses through the PostgreSQL plugin. It gets no read-only connections
+        // (its session's read-only mode is ignored) and no agents (a view hides its table
+        // functions that reach other servers): ADR-020's 2026-11-23 note.
+        kind_of(
+            Engine::Postgres,
+            "risingwave",
+            "RisingWave",
+            Analytical,
+            4566,
+            Some("root"),
+            Some("dev"),
+        ),
         supported(Engine::Duckdb, "DuckDB", Analytical, File),
         // CSV, TSV and Parquet files read through DuckDB: a DuckDB connection whose target is a
         // folder, saved with `file_folder = true` (SDB-316).
@@ -363,6 +375,7 @@ mod tests {
                 ("cockroachdb", Some(Engine::Postgres), Some(26257)),
                 ("yugabytedb", Some(Engine::Postgres), Some(5433)),
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),
+                ("risingwave", Some(Engine::Postgres), Some(4566)),
                 ("influxdb", Some(Engine::Flightsql), Some(8181)),
                 ("valkey", Some(Engine::Redis), Some(6379)),
                 ("scylladb", Some(Engine::Cassandra), Some(9042)),

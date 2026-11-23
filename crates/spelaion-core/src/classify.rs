@@ -572,6 +572,15 @@ fn outside_functions(engine: &str) -> &'static [&'static str] {
             "pg_file_unlink",
             "pg_file_rename",
             "pg_file_sync",
+            // RisingWave, through PostgreSQL's protocol (SDB-302). Its read-only transaction
+            // does not stop them (checked with 3.1): `postgres_query` and `mysql_query` run
+            // their text on another server, `file_scan` reads a bucket, `openai_embedding`
+            // sends its text to a remote service. A view still hides them, so RisingWave gets
+            // no agents (ADR-020's 2026-11-23 note): this only refuses them written out.
+            "postgres_query",
+            "mysql_query",
+            "file_scan",
+            "openai_embedding",
         ],
         "sqlite" => &[
             "load_extension",
@@ -942,6 +951,23 @@ mod tests {
             ("postgres", "select PG_TERMINATE_BACKEND(42)"),
             ("postgres", "select pg_catalog.pg_ls_dir('.')"),
             ("postgres", "select (select pg_advisory_lock(1))"),
+            // RisingWave (SDB-302): other servers, buckets and a remote service.
+            (
+                "postgres",
+                "select * from postgres_query('h', '5432', 'u', 'p', 'd', 'delete from t')",
+            ),
+            (
+                "postgres",
+                "select * from rw_catalog.mysql_query('h', '3306', 'u', 'p', 'd', 'select 1')",
+            ),
+            (
+                "postgres",
+                "with f as (select * from FILE_SCAN('parquet', 's3', 'r', 'k', 's', 's3://b/x')) select count(*) from f",
+            ),
+            (
+                "postgres",
+                "select id from t where openai_embedding('{}'::jsonb, name) is not null",
+            ),
             ("sqlite", "select load_extension('x')"),
             ("mysql", "select load_file('/etc/passwd')"),
             ("mysql", "select get_lock('x', 10)"),
@@ -1263,6 +1289,23 @@ mod tests {
             ),
             ("postgres", "select lo_import('/etc/passwd')"),
             ("postgres", "select pg_advisory_lock(1)"),
+            // RisingWave's table functions that reach other servers, buckets and services.
+            (
+                "postgres",
+                "select * from postgres_query('h', '5432', 'u', 'p', 'd', 'delete from t')",
+            ),
+            (
+                "postgres",
+                "SELECT * FROM MYSQL_QUERY('h', '3306', 'u', 'p', 'd', 'delete from t')",
+            ),
+            (
+                "postgres",
+                "select count(*) from file_scan('parquet', 's3', 'r', 'k', 's', 's3://b/x')",
+            ),
+            (
+                "postgres",
+                "select openai_embedding('{\"model\": \"m\"}'::jsonb, secret) from t",
+            ),
             // Turning read-only mode off, in every spelling.
             ("postgres", "begin read write"),
             ("postgres", "START TRANSACTION READ WRITE"),
