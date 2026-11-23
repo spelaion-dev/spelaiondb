@@ -213,7 +213,10 @@
   it on every engine, 50 tables cancelled mid-way included. ClickHouse (SDB-324) has its own
   forms (`toString`, `positionUTF8`, `substringUTF8`, a float or decimal cast by the column's
   type, since it compares no float with a decimal); it has no unique key nor transactions, so
-  its hits are filtered by their values and its reads need none. Metadata search is the app's
+  its hits are filtered by their values and its reads need none. Where any other server does
+  not enforce the read-only transaction the search is refused, except where ADR-091 checked
+  that its own statements cannot write (GreptimeDB: base tables only, a fixed list of
+  functions; a change to the template keeps to that list). Metadata search is the app's
   (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
   `schema_compare/` (ADR-070) compares two schemas of the same engine: `compare_support` says
   which sessions can (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB proper; every
