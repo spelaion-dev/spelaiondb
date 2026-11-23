@@ -687,9 +687,16 @@ impl Session {
     pub async fn follow_transactions(&self, safeguards: &Safeguards) -> TransactionStatus {
         let _running = self.control.lock().await;
         self.cancel_gate.settled().await;
+        // A driver without transactions, or a server whose `START TRANSACTION` opens nothing
+        // (SDB-310), has no transaction to follow: no manual commit, Commit or Rollback.
+        let opens = self.connection.capabilities().transactions
+            && self
+                .server_family
+                .as_ref()
+                .is_none_or(crate::ServerFamily::opens_transactions);
         let lifecycle = match self.connection.transaction_state().await {
-            Ok(state) => TransactionLifecycle::follow(safeguards, state),
-            Err(_) => TransactionLifecycle::NotFollowed,
+            Ok(state) if opens => TransactionLifecycle::follow(safeguards, state),
+            Ok(_) | Err(_) => TransactionLifecycle::NotFollowed,
         };
         self.transaction.send_replace(lifecycle);
         lifecycle.into()
@@ -1638,6 +1645,56 @@ mod tests {
                 .supported
         );
         session
+    }
+
+    /// SDB-310: a server whose `START TRANSACTION` opens nothing is not followed: no manual
+    /// commit, even where the connection type asks for it, and no switch to it; a server whose
+    /// transactions hold is followed as before.
+    #[tokio::test]
+    async fn a_server_whose_transactions_open_nothing_is_not_followed() {
+        let driver = crate::open::test_driver(spelaion_config::Engine::Sqlite);
+        let open = |family: crate::ServerFamily| {
+            let driver = driver.clone();
+            async move {
+                Session::new(
+                    driver
+                        .connect(&ConnectParams {
+                            database: ":memory:".into(),
+                            ..Default::default()
+                        })
+                        .await
+                        .expect("connecting"),
+                    spelaion_dialect::for_engine("sqlite").expect("a dialect"),
+                    Arc::new(ResultStore::new()),
+                )
+                .with_server_family(family)
+            }
+        };
+        let manual = Safeguards {
+            manual_commit: true,
+            ..Safeguards::default()
+        };
+        for family in [
+            crate::ServerFamily::StarRocks,
+            crate::ServerFamily::CrateDb,
+            crate::ServerFamily::GreptimeDb,
+        ] {
+            let session = open(family.clone()).await;
+            let status = session.follow_transactions(&manual).await;
+            assert!(!status.supported, "{family:?}");
+            assert!(status.auto_commit, "{family:?}");
+            assert!(
+                matches!(
+                    session.set_auto_commit(false).await,
+                    Err(TransactionError::Unsupported)
+                ),
+                "{family:?}"
+            );
+        }
+        let held = open(crate::ServerFamily::TiDb).await;
+        let status = held.follow_transactions(&manual).await;
+        assert!(status.supported);
+        assert!(!status.auto_commit);
     }
 
     /// SQLite and DuckDB always; the Docker servers when their variables are set.

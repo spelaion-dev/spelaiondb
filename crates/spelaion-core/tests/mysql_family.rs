@@ -6,8 +6,10 @@
 //!   `KILL QUERY` and bind a read's values;
 //! - OceanBase keeps read-only connections and agents' reads from writing with its own
 //!   barriers; TiDB and SingleStore are recognised and get neither;
-//! - StarRocks (`SPELAION_TEST_STARROCKS`) does not say what it is: its read-only connection is
-//!   refused because the server says its session is still writable;
+//! - StarRocks (`SPELAION_TEST_STARROCKS`) answers as MySQL with only its release as its comment:
+//!   it is recognised by its own `current_version()` (SDB-310) and gets no read-only connection,
+//!   agents, streaming reads, manual commit, edits or imports, since its transactions open
+//!   nothing;
 //! - Databend (`SPELAION_TEST_DATABEND_MYSQL`) accepts MySQL's read-only transaction and session and
 //!   writes anyway: it is recognised by its version and gets neither (SDB-350).
 //! - GreptimeDB (`SPELAION_TEST_GREPTIME_MYSQL`, the main project's `greptime` service, which CI
@@ -85,12 +87,12 @@ const SINGLESTORE: Server = Server {
     table_options: "",
     database: None,
 };
-// StarRocks says it is MySQL: only reading its session back tells it apart.
+// StarRocks says it is MySQL 8.0.33; its `current_version()` tells it apart (SDB-310).
 const STARROCKS: Server = Server {
     label: "StarRocks",
     var: "SPELAION_TEST_STARROCKS",
     password: None,
-    family: ServerFamily::MySql,
+    family: ServerFamily::StarRocks,
     table_options: " properties ('replication_num' = '1')",
     database: None,
 };
@@ -456,12 +458,11 @@ async fn oceanbase_keeps_reads_from_writing() {
     owner.close().await;
 }
 
-/// TiDB, SingleStore, GreptimeDB and Databend are recognised and get no read-only connection,
-/// no agents' reads and no streaming reads; StarRocks, which says it is MySQL, has its read-only connection
-/// refused because its session stays writable.
+/// TiDB, SingleStore, GreptimeDB, Databend and StarRocks are recognised and get no read-only
+/// connection, no agents' reads and no streaming reads.
 #[tokio::test]
 async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
-    for server in [&TIDB, &SINGLESTORE, &GREPTIME, &DATABEND] {
+    for server in [&TIDB, &SINGLESTORE, &GREPTIME, &DATABEND, &STARROCKS] {
         let ws = Workspace::new();
         let Some(read_only) = ws.open(server, true, false).await else {
             continue;
@@ -511,27 +512,6 @@ async fn servers_without_a_barrier_get_no_read_only_mode_nor_agents() {
             }
             other => panic!("{label}: {other:?}"),
         }
-        open.close().await;
-    }
-
-    let ws = Workspace::new();
-    if let Some(read_only) = ws.open(&STARROCKS, true, false).await {
-        match read_only {
-            Err(OpenError::NoReadOnlyBarrier(reason)) => {
-                assert!(reason.contains("its session is still writable"), "{reason}")
-            }
-            Err(other) => panic!("StarRocks: {other}"),
-            Ok(_) => panic!("StarRocks: a read-only connection opened"),
-        }
-        // Agents' reads open read-only connections: refused the same way.
-        assert!(matches!(
-            ws.open(&STARROCKS, true, true).await.unwrap(),
-            Err(OpenError::NoReadOnlyBarrier(_))
-        ));
-        let open = ws.open(&STARROCKS, false, false).await.unwrap().unwrap();
-        assert_eq!(open.session.server_family(), Some(&STARROCKS.family));
-        // StarRocks has no `START TRANSACTION READ ONLY`: the export fails before it reads.
-        assert!(export(&open, "select 1").await.is_err());
         open.close().await;
     }
 }
@@ -910,4 +890,99 @@ async fn databend_read_only_modes_do_not_stop_writes() {
     .await;
     open.close().await;
     assert_eq!(rows, 2, "Databend unexpectedly enforced a read-only mode");
+}
+
+/// SDB-310: StarRocks accepts `START TRANSACTION` and opens nothing: a ROLLBACK keeps the write.
+/// So its session is not followed (no manual commit, even where the connection type asks for
+/// it), and several table edits are refused (they could not be all or nothing); an import is
+/// refused by the same check (`Session::atomic_writes_refusal`).
+#[tokio::test]
+async fn starrocks_transactions_open_nothing_so_it_gets_no_manual_commit_edits_or_imports() {
+    let ws = Workspace::new();
+    let Some(open) = ws.open(&STARROCKS, false, false).await else {
+        return;
+    };
+    let open = open.unwrap();
+    assert_eq!(open.session.server_family(), Some(&ServerFamily::StarRocks));
+    let db = unique("sdb_starrocks");
+    run(&open, &format!("create database {db}")).await.unwrap();
+    let table = format!("{db}.t");
+    let kept = support::cleaning_up(
+        async {
+            run(
+                &open,
+                &format!(
+                    "create table {table} (id int, v varchar(10)) duplicate key(id) \
+                     distributed by hash(id) buckets 1{}",
+                    STARROCKS.table_options
+                ),
+            )
+            .await
+            .unwrap();
+            // The reason: a write inside its transaction stays after a ROLLBACK.
+            assert!(engine_error(&open, "start transaction").await.is_none());
+            assert!(
+                engine_error(&open, &format!("insert into {table} values (1, 'a')"))
+                    .await
+                    .is_none()
+            );
+            assert!(engine_error(&open, "rollback").await.is_none());
+            let mut events = open
+                .session
+                .connection()
+                .execute(
+                    &format!("select count(*) from {table}"),
+                    &ExecOptions::default(),
+                )
+                .await
+                .unwrap();
+            let mut kept = String::new();
+            while let Some(event) = events.next().await {
+                if let ExecEvent::Batch(batch) = event.unwrap() {
+                    let column = batch.column(0);
+                    kept = Value::from_array(
+                        column.as_ref(),
+                        0,
+                        spelaion_driver_api::LogicalType::Int,
+                    )
+                    .map(|v| v.to_string())
+                    .unwrap_or_default();
+                }
+            }
+
+            // No manual commit, even where the connection type asks for it.
+            let manual = Safeguards {
+                manual_commit: true,
+                ..Safeguards::default()
+            };
+            let status = open.session.follow_transactions(&manual).await;
+            assert!(!status.supported, "{status:?}");
+            assert!(status.auto_commit, "{status:?}");
+
+            // Several edits at once could not be all or nothing.
+            let refusal = open.session.atomic_writes_refusal().expect("refused");
+            assert!(refusal.contains("StarRocks"), "{refusal}");
+            let edits = [
+                format!("update {table} set v = 'b' where id = 1"),
+                format!("update {table} set v = 'c' where id = 1"),
+            ];
+            match apply_edits(&open.session, &edits).await {
+                Err(EditError::NotAtomic(reason)) => {
+                    assert!(reason.contains("StarRocks"), "{reason}")
+                }
+                other => panic!("StarRocks: {other:?}"),
+            }
+            kept
+        },
+        |panicked| {
+            let session = &open.session;
+            let drop_db = format!("drop database if exists {db} force");
+            async move {
+                support::run_cleanup("StarRocks", session, &[drop_db], panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
+    assert_eq!(kept, "1", "StarRocks unexpectedly rolled its write back");
 }

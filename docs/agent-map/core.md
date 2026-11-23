@@ -19,14 +19,20 @@
   RisingWave, SDB-302, which gets no agents: a view hides its table functions that reach
   other servers from the classifier, ADR-020's 2026-11-23 note; TiDB, OceanBase
   and SingleStore are MySQL connections, SDB-170, and so is GreptimeDB, SDB-344, whose rows the
-  MySQL plugin keys by primary key and time index, and an append-only table by nothing), and
+  MySQL plugin keys by primary key and time index, and an append-only table by nothing, and
+  StarRocks, SDB-310, whose primary keys the plugin reads from `information_schema.columns`
+  and whose imports and data search it refuses, since it prepares neither), and
   `server_family.rs` reads which server a PostgreSQL or MySQL session reached from the server:
   one that does not enforce its engine's read-only transaction or session mode gets no agents,
   streaming reads or read-only connections (unchecked PostgreSQL forks neither), and a
   read-only connection's session mode is read back from the server after it is set (a MySQL
-  fork that names itself as MySQL, StarRocks, is caught there). A MySQL transaction's read-only
+  fork that names itself as MySQL is caught there). A MySQL transaction's read-only
   mode cannot be read back, so a fork that accepts it and writes anyway must be recognised by
-  its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350).
+  its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350;
+  StarRocks, a MySQL connection in the picker whose comment is only its release and commit, by
+  asking its own `current_version()`, SDB-310). `ServerFamily::opens_transactions` is false where
+  `START TRANSACTION` and `autocommit = 0` open nothing (CrateDB, GreptimeDB, StarRocks): the
+  session does not follow transactions there, so manual commit is refused rather than offered.
   Like `readonly.rs`, any change
   there needs tests that try to get around it (`tests/postgres_family.rs` and
   `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`, and GreptimeDB

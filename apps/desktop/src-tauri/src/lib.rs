@@ -125,6 +125,7 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
             ServerFamily::TiDb => "tidb",
             ServerFamily::SingleStore => "singlestore",
             ServerFamily::GreptimeDb => "greptimedb",
+            ServerFamily::StarRocks => "starrocks",
             ServerFamily::PostgreSql
             | ServerFamily::RisingWave
             | ServerFamily::Materialize
