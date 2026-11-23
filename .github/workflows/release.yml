@@ -1,6 +1,7 @@
 # Releases: pushing a tag `vX.Y.Z` (from a main that passed CI) builds the desktop installers
 # on Windows, macOS (Apple Silicon and Intel) and Linux, plus the `spelaiondb` CLI with the MCP
-# server, and publishes them as the latest GitHub release. Its notes are `docs/releases/vX.Y.Z.md`
+# server (built once, by the app's job for each platform, which ships it inside the app and
+# uploads its archive: SDB-129), and publishes them as the latest GitHub release. Its notes are `docs/releases/vX.Y.Z.md`
 # followed by every commit since the previous tag (`scripts/release-notes.sh`). The app's
 # update artifacts (`.sig` files and `latest.json`) are signed with the repository secret
 # `TAURI_SIGNING_PRIVATE_KEY` (ADR-021).
@@ -141,6 +142,33 @@ jobs:
           cargo run -q --locked -p spelaion-plugin-fetch -- --platform "${{ matrix.target }}" \
             --into "$RUNNER_TEMP/plugins" --archives-into src-tauri/plugins > /dev/null
           ls -l src-tauri/binaries src-tauri/plugins
+      - name: Package and upload the CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The CLI the build step built for this app, which ships inside it too: one build (SDB-129).
+          name="spelaiondb-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          out="target/release"
+          if [ -n "${{ matrix.args }}" ]; then out="target/${{ matrix.target }}/release"; fi
+          mkdir "$name"
+          cp LICENSE "$name/"
+          # The engines that are plugins ship with the CLI too, next to it (ADR-042): without
+          # them `spelaiondb mcp` from this archive would have SQLite and nothing else. The
+          # builds plugins.toml pins for this target, let in only with the pinned hashes.
+          cargo run -q --locked -p spelaion-plugin-fetch -- \
+            --platform "${{ matrix.target }}" --into "$name" > /dev/null
+          ls -l "$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$out/spelaiondb.exe" "$name/"
+            7z a "$name.zip" "$name" > /dev/null
+            archive="$name.zip"
+          else
+            cp "$out/spelaiondb" "$name/"
+            tar czf "$name.tar.gz" "$name"
+            archive="$name.tar.gz"
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$archive" --clobber
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -161,68 +189,9 @@ jobs:
           # app's crate is built again.
           args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }} -- --locked -p spelaion-desktop -p spelaion-cli
 
-  cli:
-    name: CLI · ${{ matrix.target }}
-    needs: create
-    if: github.ref_type == 'tag'
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: cli-${{ matrix.target }}
-          save-if: false
-      - if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
-      - run: cargo build --release --locked -p spelaion-cli --target ${{ matrix.target }}
-      - name: Package and upload
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          name="spelaiondb-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          mkdir "$name"
-          cp LICENSE "$name/"
-          # The engines that are plugins ship with the CLI too, next to it (ADR-042): without
-          # them `spelaiondb mcp` from this archive would have SQLite and nothing else. The
-          # builds plugins.toml pins for this target, let in only with the pinned hashes.
-          cargo run -q --locked -p spelaion-plugin-fetch -- \
-            --platform "${{ matrix.target }}" --into "$name" > /dev/null
-          ls -l "$name"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/spelaiondb.exe" "$name/"
-            7z a "$name.zip" "$name" > /dev/null
-            archive="$name.zip"
-          else
-            cp "target/${{ matrix.target }}/release/spelaiondb" "$name/"
-            tar czf "$name.tar.gz" "$name"
-            archive="$name.tar.gz"
-          fi
-          gh release upload "$GITHUB_REF_NAME" "$archive" --clobber
-
   publish:
     name: Publish
-    needs: [create, app, cli]
+    needs: [create, app]
     if: github.ref_type == 'tag'
     permissions:
       contents: write
@@ -324,6 +293,34 @@ jobs:
           cargo run -q --locked -p spelaion-plugin-fetch -- --platform "${{ matrix.target }}" \
             --into "$RUNNER_TEMP/plugins" --archives-into src-tauri/plugins > /dev/null
           ls -l src-tauri/binaries src-tauri/plugins
+      # The app job's CLI packaging, named after the version the tag would have (a branch name
+      # holds a `/`), and kept for the upload instead of going to a release.
+      - name: Package the CLI
+        id: package
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          name="spelaiondb-v${version}-${{ matrix.target }}"
+          out="target/release"
+          if [ -n "${{ matrix.args }}" ]; then out="target/${{ matrix.target }}/release"; fi
+          mkdir "$name"
+          cp LICENSE "$name/"
+          # The engines that are plugins ship with the CLI too, next to it (ADR-042): without
+          # them `spelaiondb mcp` from this archive would have SQLite and nothing else. The
+          # builds plugins.toml pins for this target, let in only with the pinned hashes.
+          cargo run -q --locked -p spelaion-plugin-fetch -- \
+            --platform "${{ matrix.target }}" --into "$name" > /dev/null
+          ls -l "$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$out/spelaiondb.exe" "$name/"
+            7z a "$name.zip" "$name" > /dev/null
+            archive="$name.zip"
+          else
+            cp "$out/spelaiondb" "$name/"
+            tar czf "$name.tar.gz" "$name"
+            archive="$name.tar.gz"
+          fi
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
       # What tauri-action runs in the app job (the same `tauri build` and arguments), with
       # tauri.rehearsal.conf.json merged last: no update artifacts, so no signing key is wanted.
       - name: Build the installers
@@ -341,7 +338,13 @@ jobs:
             target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 14
-      # After the upload, so a failing check still leaves the installers to look at.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-${{ matrix.target }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 14
+      # After the uploads, so a failing check still leaves the installers to look at.
       - name: Check the plugins inside the installers
         shell: bash
         run: |
@@ -353,70 +356,6 @@ jobs:
             Linux) scripts/check-release-plugins.sh --installer "${{ matrix.target }}" \
                      target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage ;;
           esac
-
-  rehearsal-cli:
-    name: Rehearsal · CLI · ${{ matrix.target }}
-    needs: rehearsal-versions
-    if: github.ref_type == 'branch' && startsWith(github.ref, 'refs/heads/release-test/')
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: cli-${{ matrix.target }}
-          save-if: false
-      - if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
-      - run: cargo build --release --locked -p spelaion-cli --target ${{ matrix.target }}
-      # The cli job's packaging, named after the version the tag would have (a branch name
-      # holds a `/`), and kept for the upload instead of going to a release.
-      - name: Package
-        id: package
-        shell: bash
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          name="spelaiondb-v${version}-${{ matrix.target }}"
-          mkdir "$name"
-          cp LICENSE "$name/"
-          cargo run -q --locked -p spelaion-plugin-fetch -- \
-            --platform "${{ matrix.target }}" --into "$name" > /dev/null
-          ls -l "$name"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/spelaiondb.exe" "$name/"
-            7z a "$name.zip" "$name" > /dev/null
-            archive="$name.zip"
-          else
-            cp "target/${{ matrix.target }}/release/spelaiondb" "$name/"
-            tar czf "$name.tar.gz" "$name"
-            archive="$name.tar.gz"
-          fi
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: cli-${{ matrix.target }}
-          path: ${{ steps.package.outputs.archive }}
-          if-no-files-found: error
-          retention-days: 14
-      - name: Check the plugins inside the archive
+      - name: Check the plugins inside the CLI archive
         shell: bash
         run: scripts/check-release-plugins.sh "${{ matrix.target }}" "${{ steps.package.outputs.archive }}"
