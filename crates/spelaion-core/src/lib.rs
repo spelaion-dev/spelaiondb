@@ -227,7 +227,8 @@ pub use pending::{
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use progress::{ROWS_PROGRESS_INTERVAL, coalesce_rows};
 pub use query_page::{
-    append_query_page, count_query_rows, first_query_page_sql, query_count_sql, query_pages_exactly,
+    append_query_page, count_query_rows, editor_query_page_sql, first_query_page_sql,
+    query_count_sql, query_pages_exactly,
 };
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use references::{

@@ -98,7 +98,7 @@ pub async fn explain_query(
             )
             .await?,
     );
-    let _ = on_event.send(replaced.started());
+    let _ = on_event.send(replaced.started(None));
     drop(replaced);
     let document = plan::explain(
         &open.session,

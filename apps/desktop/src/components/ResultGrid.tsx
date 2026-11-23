@@ -329,6 +329,8 @@ function filterLabel(filter: ColumnFilterItem, columns: ResultMeta["columns"]): 
 }
 
 
+export type GridEditingState = "checking" | "readOnly" | "available";
+
 export function ResultGrid({
   result,
   session,
@@ -337,6 +339,7 @@ export function ResultGrid({
   serverSort,
   onQuerySort,
   editing,
+  editingState,
   viewerOpen: viewer,
   onViewerOpen: setViewer,
   viewerWidth,
@@ -371,6 +374,7 @@ export function ResultGrid({
   onQuerySort?(sort: SortState[]): Promise<boolean>;
   /** Editable table data tab: pending changes and how to change them. */
   editing?: GridEditing;
+  editingState?: GridEditingState;
   viewerOpen: boolean;
   onViewerOpen(open: boolean): void;
   viewerWidth: number;
@@ -2151,6 +2155,8 @@ export function ResultGrid({
   const pageBusy = pagingLocked || !!paging?.loading || !!cellEditor || sorting;
   const pageCanLoad = !!paging?.hasMore && (paging.total === undefined || result.rows < paging.total);
   const pageStart = paging ? queryPage * paging.pageSize : 0;
+  const showRowActions = editingState !== undefined || editing !== undefined;
+  const editActionsDisabled = !editing || editing.busy || sorting;
   const hasPendingEdits = !!editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0);
   const updatedRows = editing?.updatedRows ?? 0;
 
@@ -2981,7 +2987,7 @@ export function ResultGrid({
       )}
       <span className="grid-selection">{selectionText}</span>
     </div>
-    {(editing || paging) && (
+    {(showRowActions || paging) && (
       <div className="result-editing">
         {editing && editing.inserts.length > 0 && <div className="pending-rows" aria-label={t("edit.newRows")}>
           {editing.inserts.map((values, index) => <div className="pending-row" key={index}>
@@ -2990,22 +2996,28 @@ export function ResultGrid({
             <button className="ghost small" aria-label={t("edit.removeNewRow", { number: index + 1 })} title={t("edit.removeNewRow", { number: index + 1 })} disabled={editing.busy || sorting} onClick={() => editing.onRemoveInsert(index)}><Icon name="x" /></button>
           </div>)}
         </div>}
-        <div className="result-edit-toolbar" role="toolbar" aria-label={t(editing ? "edit.toolbar" : "queryPaging.label")}>
-          {editing && <>
+        <div className="result-edit-toolbar" role="toolbar" aria-label={t(showRowActions ? "edit.toolbar" : "queryPaging.label")}>
+          {showRowActions && <>
             <div className="result-row-actions" role="group" aria-label={t("edit.toolbar")}>
-              <button className="ghost" title={t("edit.shortcutAdd", { shortcut: keyText("addRow") })} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !ended(result)} onClick={() => setInserting({ values: [] })}><Icon name="addRow" /><span>{t("edit.addRow")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDuplicate", { shortcut: keyText("duplicateRow") })} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><Icon name="duplicateRow" /><span>{t("edit.duplicateAction")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDelete", { shortcut: keyText("deleteSelectedRows") })} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><Icon name="delete" /><span>{t("edit.deleteAction")}</span></button>
-              <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><Icon name="revert" /><span>{t("edit.revertAction")}</span></button>
+              <button type="button" className="ghost" title={t("edit.shortcutAdd", { shortcut: keyText("addRow") })} aria-label={t("edit.addRow")} disabled={editActionsDisabled || !ended(result)} onClick={() => setInserting({ values: [] })}><Icon name="addRow" /><span>{t("edit.addRow")}</span></button>
+              <button type="button" className="ghost" title={t("edit.shortcutDuplicate", { shortcut: keyText("duplicateRow") })} aria-label={t("edit.duplicateRow")} disabled={editActionsDisabled || !selection || editing?.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><Icon name="duplicateRow" /><span>{t("edit.duplicateAction")}</span></button>
+              <button type="button" className="ghost" title={t("edit.shortcutDelete", { shortcut: keyText("deleteSelectedRows") })} aria-label={t("edit.deleteSelected")} disabled={editActionsDisabled || !selection} onClick={() => editing?.onDelete(selectedRows())}><Icon name="delete" /><span>{t("edit.deleteAction")}</span></button>
+              <button type="button" className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editActionsDisabled || !selection} onClick={() => editing?.onRevert(selectedRows())}><Icon name="revert" /><span>{t("edit.revertAction")}</span></button>
             </div>
             <div className="result-commit-actions" role="group" aria-label={t("edit.pendingActions")}>
-              <button className="ghost" title={withShortcut(t("edit.undo"), commandShortcut("edits.undo"))} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><Icon name="undo" /></button>
-              <button className="ghost" title={withShortcut(t("edit.redo"), commandShortcut("edits.redo"))} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><Icon name="redo" /></button>
-              <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave", { shortcut: keyText("saveEdits") })} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><Icon name="save" /><span>{t("edit.saveChanges")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDiscard", { shortcut: keyText("discardEdits") })} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><Icon name="discard" /><span>{t("edit.discard")}</span></button>
+              <button type="button" className="ghost" title={withShortcut(t("edit.undo"), commandShortcut("edits.undo"))} aria-label={t("edit.undo")} disabled={editActionsDisabled || !editing?.canUndo} onClick={() => { scrollerRef.current?.focus(); editing?.onUndo(); }}><Icon name="undo" /></button>
+              <button type="button" className="ghost" title={withShortcut(t("edit.redo"), commandShortcut("edits.redo"))} aria-label={t("edit.redo")} disabled={editActionsDisabled || !editing?.canRedo} onClick={() => { scrollerRef.current?.focus(); editing?.onRedo(); }}><Icon name="redo" /></button>
+              <button type="button" className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave", { shortcut: keyText("saveEdits") })} aria-label={t("edit.saveChanges")} disabled={editActionsDisabled || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing?.onApply(); }}><Icon name="save" /><span>{t("edit.saveChanges")}</span></button>
+              <button type="button" className="ghost" title={t("edit.shortcutDiscard", { shortcut: keyText("discardEdits") })} aria-label={t("edit.discard")} disabled={editActionsDisabled || !hasPendingEdits} onClick={editing?.onDiscard}><Icon name="discard" /><span>{t("edit.discard")}</span></button>
             </div>
-            <span className={`small result-edit-count${hasPendingEdits ? " has-pending" : " muted"}`} role="status">
-              {hasPendingEdits ? t("edit.counts", { inserted: editing.inserts.length, deleted: editing.deleted.length, updated: updatedRows }) : t("edit.noPending")}
+            <span
+              className={`small result-edit-count${hasPendingEdits ? " has-pending" : " muted"}`}
+              role="status"
+              title={editingState === "readOnly" ? t("edit.queryReadOnlyHint") : undefined}
+            >
+              {hasPendingEdits && editing
+                ? t("edit.counts", { inserted: editing.inserts.length, deleted: editing.deleted.length, updated: updatedRows })
+                : t(editingState === "checking" ? "edit.checking" : editingState === "readOnly" ? "edit.readOnly" : "edit.noPending")}
             </span>
           </>}
           {paging && <>

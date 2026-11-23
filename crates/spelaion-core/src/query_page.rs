@@ -575,6 +575,18 @@ fn unique_keys(engine: &str, family: Option<&crate::ServerFamily>) -> bool {
 /// The keyset of `sql` on `session` ordered by the grid's `sort` first, with its table's key
 /// read from the catalog now.
 async fn resolve(session: &Session, sql: &str, sort: &[SortKey]) -> Option<Keyset> {
+    resolve_order(session, sql, sort, false)
+        .await
+        .map(|(keyset, _)| keyset)
+}
+
+/// Resolves the first page, retrying an ineligible grid sort against the same catalog read.
+async fn resolve_order(
+    session: &Session,
+    sql: &str,
+    sort: &[SortKey],
+    use_query_order_if_needed: bool,
+) -> Option<(Keyset, bool)> {
     let dialect = session.dialect();
     let engine = dialect.name();
     if !unique_keys(engine, session.server_family()) {
@@ -595,7 +607,20 @@ async fn resolve(session: &Session, sql: &str, sort: &[SortKey]) -> Option<Keyse
     let masked = |column: &str, result_name: &str| {
         masking.masks_table_column(&table, column) || masking.masks(result_name)
     };
-    keyset(engine, query, qualifier, &info, sort, &masked)
+    if use_query_order_if_needed && !sort.is_empty() {
+        if let Some(keyset) = keyset(
+            engine,
+            query.clone(),
+            qualifier.clone(),
+            &info,
+            sort,
+            &masked,
+        ) {
+            return Some((keyset, true));
+        }
+        return keyset(engine, query, qualifier, &info, &[], &masked).map(|keyset| (keyset, false));
+    }
+    keyset(engine, query, qualifier, &info, sort, &masked).map(|keyset| (keyset, !sort.is_empty()))
 }
 
 /// Whether the editor pages `sql` (ADR-054) ordered by the grid's `sort` first (result
@@ -619,6 +644,22 @@ pub async fn first_query_page_sql(
     resolve(session, sql, sort)
         .await?
         .page_sql(session.dialect().as_ref(), limit, None)
+}
+
+/// Prepares the first editor page with one catalog read. The boolean says whether the
+/// requested grid sort was used. Without a page, the editor runs the original SQL.
+pub async fn editor_query_page_sql(
+    session: &Session,
+    sql: &str,
+    limit: u64,
+    sort: &[SortKey],
+) -> Option<(String, bool)> {
+    if limit == 0 || limit > MAX_PAGE_ROWS {
+        return None;
+    }
+    let (keyset, used_sort) = resolve_order(session, sql, sort, true).await?;
+    let page = keyset.page_sql(session.dialect().as_ref(), limit, None)?;
+    Some((page, used_sort))
 }
 
 /// Counts the original query, without its ordering, so Count always means all matching rows.

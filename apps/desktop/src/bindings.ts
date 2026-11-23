@@ -1032,8 +1032,8 @@ export const commands = {
 	 */
 	queryPageSupported: (session: string, sql: string, sort: SortKeyItem[]) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql, sort })),
 	/**
-	 *  Run the first page, keeping the original SQL in the user's query history. `sort` is the
-	 *  grid's sort: the core writes the page's order from it.
+	 *  Run an editor query, using the first page when the core can page it exactly. A grid
+	 *  sort the page cannot follow falls back to the query's order, then to running as written.
 	 */
 	runQueryPage: (session: string, sql: string, limit: number, sort: SortKeyItem[], confirmed: boolean, options: RunOptionsItem_Deserialize, placement: ResultPlacementItem, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, sort, confirmed, options, placement, onEvent })),
 	/**
@@ -1141,11 +1141,10 @@ export const commands = {
 	 *  (`INNER JOIN … ON`, or the simple `FROM a, b WHERE`), to open in a new tab.
 	 */
 	joinSql: (session: string, tables: TableRefItem[], inner: boolean) => typedError<string, string>(__TAURI_INVOKE("join_sql", { session, tables, inner })),
-	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
-	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**
 	 *  The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
-	 *  none: the core matches the rows to one table, on a read-only connection too.
+	 *  none: the core matches the rows to one table, on a read-only connection too. The same
+	 *  answer says whether the session permits editing, so both actions share the catalog read.
 	 */
 	queryKeyTable: (session: string, result: number, sql: string) => typedError<KeyTableItem | null, string>(__TAURI_INVOKE("query_key_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
@@ -2643,12 +2642,6 @@ export type EditableColumnItem_Serialize = {
 	generated: boolean,
 };
 
-export type EditableTableItem = {
-	schema: string,
-	name: string,
-	primaryKey: string[],
-};
-
 /**  A connection opened in the editor. */
 export type EditedConnectionItem = EditedConnectionItem_Serialize | EditedConnectionItem_Deserialize;
 
@@ -3807,6 +3800,8 @@ export type KeyRefItem = {
 export type KeyTableItem = {
 	schema: string,
 	name: string,
+	primaryKey: string[],
+	writable: boolean,
 };
 
 /**  Where a followed key leads: a table data tab of `schema.table` with the core's `filter`. */
@@ -5974,9 +5969,9 @@ export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 export type ScriptEvent_Deserialize = 
 /**
  *  The run was accepted, before any of its statements: the result tabs it replaced,
- *  already freed by the core (SDB-378).
+ *  already freed by the core (SDB-378). Paged runs also report the effective grid sort.
  */
-{ kind: "runStarted"; closed: number[] } | 
+{ kind: "runStarted"; closed: number[]; pageSort?: SortKeyItem[] | null } | 
 /**  Byte range of the statement within the script. */
 { kind: "statementStarted"; index: number; start: number; end: number } | 
 /**
@@ -6008,9 +6003,9 @@ end: StatementEndItem } |
 export type ScriptEvent_Serialize = 
 /**
  *  The run was accepted, before any of its statements: the result tabs it replaced,
- *  already freed by the core (SDB-378).
+ *  already freed by the core (SDB-378). Paged runs also report the effective grid sort.
  */
-{ kind: "runStarted"; closed: number[] } | 
+{ kind: "runStarted"; closed: number[]; pageSort: SortKeyItem[] | null } | 
 /**  Byte range of the statement within the script. */
 { kind: "statementStarted"; index: number; start: number; end: number } | 
 /**
