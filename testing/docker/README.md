@@ -230,6 +230,22 @@ variables are at the top of the file.
 docker compose -f testing/docker/mysql-family/compose.yaml up -d --wait
 ```
 
+## Babelfish (SQL Server's protocol in front of PostgreSQL)
+
+`babelfish/compose.yaml` (`spelaion-test-babelfish`) builds Babelfish for PostgreSQL 5.6.0
+(PostgreSQL 17.10) from its two open-source repositories, pinned by commit, since it has no
+official image, for `crates/spelaion-core/tests/babelfish.rs` and the SQL Server plugin's
+`tests/babelfish.rs` (SDB-313). The first build takes tens of minutes, so nothing starts it unless
+asked, and CI does not. It listens on 127.0.0.1:11434 (TDS); the login is `babelfish_user` with
+the SQL Server container's password, over TLS (a certificate of its own, made when the
+container first starts). Its TDS login checks passwords with md5, so that login's password is
+stored that way.
+
+```bash
+docker compose -f testing/docker/babelfish/compose.yaml up -d --wait
+SPELAION_TEST_BABELFISH=127.0.0.1:11434 cargo test -p spelaion-core babelfish
+```
+
 ## GreptimeDB
 
 GreptimeDB 1.3.1 is the main project's `greptime` service, in the `warehouse` profile (see the

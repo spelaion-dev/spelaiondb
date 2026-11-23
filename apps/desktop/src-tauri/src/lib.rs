@@ -134,7 +134,8 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
             | ServerFamily::MySql
             | ServerFamily::MariaDb
             | ServerFamily::Doris
-            | ServerFamily::Databend => return None,
+            | ServerFamily::Databend
+            | ServerFamily::Babelfish => return None,
         };
         (spelaion_config::engine_kind_base(mark) == Some(open.resolved.engine))
             .then(|| mark.to_owned())

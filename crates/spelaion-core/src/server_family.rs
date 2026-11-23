@@ -67,6 +67,12 @@ pub enum ServerFamily {
     /// TRANSACTION READ ONLY` is a syntax error, and `SET SESSION TRANSACTION READ ONLY` leaves
     /// the session writable (checked with 3.4.5).
     StarRocks,
+    /// Babelfish for PostgreSQL through SQL Server's protocol (SDB-313), told from `@@VERSION`.
+    /// Its transactions hold (a rolled-back write is gone), but its T-SQL reaches PostgreSQL's
+    /// own functions, some of whose effects outlive a rolled-back transaction: a `SELECT` took an
+    /// advisory lock that stayed after the rollback, and `set_config` changes the session
+    /// (checked with 5.6.0). A view can hide them, so SQL Server's barrier does not hold here.
+    Babelfish,
 }
 
 /// PostgreSQL forks that name themselves in their `version()` without verified barriers:
@@ -147,6 +153,11 @@ impl ServerFamily {
         ServerFamily::PostgreSql
     }
 
+    /// Whether a SQL Server connection's `@@VERSION` is Babelfish's.
+    pub fn is_babelfish(version: &str) -> bool {
+        version.trim_start().starts_with("Babelfish for PostgreSQL")
+    }
+
     /// Reads a MySQL server's `select version(), @@version_comment`.
     pub fn from_mysql_version(version: &str, comment: &str) -> Self {
         if contains(version, "GreptimeDB") || contains(comment, "GreptimeDB") {
@@ -188,6 +199,7 @@ impl ServerFamily {
             ServerFamily::GreptimeDb => "GreptimeDB",
             ServerFamily::Databend => "Databend",
             ServerFamily::StarRocks => "StarRocks",
+            ServerFamily::Babelfish => "Babelfish",
         }
     }
 
@@ -208,7 +220,8 @@ impl ServerFamily {
             | ServerFamily::RisingWave
             | ServerFamily::Materialize
             | ServerFamily::CrateDb
-            | ServerFamily::Unchecked(_) => false,
+            | ServerFamily::Unchecked(_)
+            | ServerFamily::Babelfish => false,
         }
     }
 
@@ -227,7 +240,8 @@ impl ServerFamily {
             | ServerFamily::MariaDb
             | ServerFamily::OceanBase
             | ServerFamily::TiDb
-            | ServerFamily::SingleStore => true,
+            | ServerFamily::SingleStore
+            | ServerFamily::Babelfish => true,
             ServerFamily::RisingWave
             | ServerFamily::CrateDb
             | ServerFamily::Unchecked(_)
@@ -258,7 +272,9 @@ impl ServerFamily {
             | ServerFamily::TiDb
             | ServerFamily::SingleStore
             | ServerFamily::Doris
-            | ServerFamily::Databend => true,
+            | ServerFamily::Databend
+            // Its transactions hold: a rolled-back write is gone (checked with 5.6.0).
+            | ServerFamily::Babelfish => true,
         }
     }
 
@@ -275,7 +291,8 @@ impl ServerFamily {
             | ServerFamily::MySql
             | ServerFamily::MariaDb
             | ServerFamily::OceanBase
-            | ServerFamily::TiDb => true,
+            | ServerFamily::TiDb
+            | ServerFamily::Babelfish => true,
             ServerFamily::RisingWave
             | ServerFamily::Materialize
             | ServerFamily::CrateDb
@@ -308,7 +325,8 @@ impl ServerFamily {
             | ServerFamily::Doris
             | ServerFamily::GreptimeDb
             | ServerFamily::Databend
-            | ServerFamily::StarRocks => false,
+            | ServerFamily::StarRocks
+            | ServerFamily::Babelfish => false,
         }
     }
 
@@ -331,7 +349,8 @@ impl ServerFamily {
             | ServerFamily::Doris
             | ServerFamily::GreptimeDb
             | ServerFamily::Databend
-            | ServerFamily::StarRocks => false,
+            | ServerFamily::StarRocks
+            | ServerFamily::Babelfish => false,
         }
     }
 
@@ -351,8 +370,20 @@ impl ServerFamily {
         }
     }
 
+    /// Why SQL Server's barrier (a transaction always rolled back, ADR-020) does not hold on
+    /// Babelfish, for the refusals.
+    const BABELFISH_REASON: &'static str = "its T-SQL reaches PostgreSQL's own functions, some \
+        of whose effects (advisory locks, settings) outlive a rolled-back transaction, and a view \
+        can hide them";
+
     /// Why a read that relies on the read-only transaction is refused here, if it is.
     pub fn read_only_transactions_refusal(&self) -> Option<String> {
+        if *self == ServerFamily::Babelfish {
+            return Some(format!(
+                "Babelfish: {}, so SpelaionDB cannot keep this read from writing",
+                Self::BABELFISH_REASON
+            ));
+        }
         (!self.read_only_transactions()).then(|| {
             format!(
                 "{} does not enforce read-only transactions ({}): \
@@ -365,6 +396,12 @@ impl ServerFamily {
 
     /// Why a read-only connection is refused here, if it is.
     pub fn read_only_sessions_refusal(&self) -> Option<String> {
+        if *self == ServerFamily::Babelfish {
+            return Some(format!(
+                "read-only mode is not available on Babelfish: {}",
+                Self::BABELFISH_REASON
+            ));
+        }
         (!self.read_only_sessions()).then(|| {
             format!(
                 "read-only mode is not available on {}: it does not enforce a read-only session \
@@ -413,6 +450,15 @@ pub(crate) async fn read_family(
             }
             Some(family)
         }
+        // Only Babelfish is told apart: SQL Server itself keeps its own barrier, unchanged, and
+        // a server that does not answer is taken for SQL Server, as before (SDB-313).
+        "sqlserver" => first_row(connection, "SELECT @@VERSION")
+            .await
+            .filter(|row| {
+                row.first()
+                    .is_some_and(|version| ServerFamily::is_babelfish(version))
+            })
+            .map(|_| ServerFamily::Babelfish),
         _ => None,
     }
 }
@@ -702,6 +748,35 @@ mod tests {
                     .unwrap()
                     .contains("START TRANSACTION READ ONLY")
             );
+        }
+    }
+
+    /// Babelfish (SDB-313), from `@@VERSION` as 5.6.0 answered it: its transactions and keys
+    /// hold, SQL Server's barrier does not, and the refusals say why in Babelfish's terms.
+    #[test]
+    fn babelfish_is_recognised_and_refused_what_its_barrier_cannot_keep() {
+        let version = "Babelfish for PostgreSQL with SQL Server Compatibility - 12.0.2000.8\n\
+                       Nov 23 2026 12:53:37\nCopyright (c) Amazon Web Services\n\
+                       PostgreSQL 17.10 on x86_64-pc-linux-gnu (Babelfish 5.6.0)";
+        assert!(ServerFamily::is_babelfish(version));
+        for sql_server in [
+            "Microsoft SQL Server 2022 (RTM-CU20) (KB5059390) - 16.0.4205.1 (X64)",
+            "PostgreSQL 17.10 (Babelfish 5.6.0)",
+            "",
+        ] {
+            assert!(!ServerFamily::is_babelfish(sql_server), "{sql_server}");
+        }
+        let family = Babelfish;
+        assert!(family.enforces_transactions() && family.enforces_unique_keys());
+        assert!(family.opens_transactions());
+        assert!(!family.read_only_transactions() && !family.read_only_sessions());
+        for reason in [
+            family.read_only_transactions_refusal().unwrap(),
+            family.read_only_sessions_refusal().unwrap(),
+        ] {
+            assert!(reason.contains("Babelfish"), "{reason}");
+            assert!(reason.contains("PostgreSQL's own functions"), "{reason}");
+            assert!(!reason.contains("BEGIN READ ONLY"), "{reason}");
         }
     }
 

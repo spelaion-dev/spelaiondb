@@ -16,6 +16,7 @@ mod serial;
 mod support;
 
 mod agents_engines;
+mod babelfish;
 mod backup;
 mod backup_files;
 mod bulk_edits;
