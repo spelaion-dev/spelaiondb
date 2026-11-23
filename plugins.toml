@@ -47,34 +47,34 @@ schema_version = 1
 [[plugin]]
 name = "spelaiondb-plugin-sqlserver"
 repository = "spelaion-dev/spelaiondb-plugin-sqlserver"
-version = "0.1.1"
+version = "0.1.2"
 protocol = "1.0"
 engines = ["sqlserver"]
 min_app = "0.10.0"
 
 [plugin.platform.aarch64-apple-darwin]
-archive = "spelaiondb-plugin-sqlserver-0.1.1-aarch64-apple-darwin.tar.gz"
-archive_sha256 = "9e1995f326f0a6f5cb1940ad50619fae3e4bc7591fbf28d1ecb0ce929f235176"
-archive_size = 3525487
-program_sha256 = "95a5569b8f2ba6a99beab76135f1e413ca0022046b0707e3418ba133aaf83441"
+archive = "spelaiondb-plugin-sqlserver-0.1.2-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "e9e769cf5ad0516a8e08918f69ca140f76815bc86e4683003452f29b49a54fa9"
+archive_size = 3572831
+program_sha256 = "a2dc7935db1e2f13e22c4cb6e69e96d05fc6676141bf693572bfc2fa312cc70c"
 
 [plugin.platform.x86_64-apple-darwin]
-archive = "spelaiondb-plugin-sqlserver-0.1.1-x86_64-apple-darwin.tar.gz"
-archive_sha256 = "58d3f736ccd2e63087a1e86be69750d2c0417fd217ed00defc846c4e6fe07836"
-archive_size = 3810071
-program_sha256 = "fadcd63bc7d2fb3d4f67189c402927a6b8578a45805c9b1965bedeabeec1de81"
+archive = "spelaiondb-plugin-sqlserver-0.1.2-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "c304afd909470d010b7428e431efd2bf35cc6e2aef8b89f3e534766f9a8ab7fd"
+archive_size = 3861228
+program_sha256 = "f914bfcfa459db20b8163e7c9937cc44ab13df47e19e9bc61cc242e4dd1477d0"
 
 [plugin.platform.x86_64-pc-windows-msvc]
-archive = "spelaiondb-plugin-sqlserver-0.1.1-x86_64-pc-windows-msvc.tar.gz"
-archive_sha256 = "391f125fafb38ee5c6c324662abe4a3147b71bef0747cbe845da9c3129a33d38"
-archive_size = 3496091
-program_sha256 = "dc36887d96116e3c55843082663db8bdc6937ebcea84f9265c7e2518fe6f35a5"
+archive = "spelaiondb-plugin-sqlserver-0.1.2-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "94e4f76c47b15f2d2d0e406ea4f9c66a6486b062baba256858001eb86944c305"
+archive_size = 3666482
+program_sha256 = "fa261952ff04c19b9ace228434255fa51558de9b531ea82fb4c6fb482dbed6b7"
 
 [plugin.platform.x86_64-unknown-linux-gnu]
-archive = "spelaiondb-plugin-sqlserver-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
-archive_sha256 = "7f2ee760f0dca16975dcb9c14867c0ef965ae410cc1c9272b35563b5dce7142c"
-archive_size = 4026762
-program_sha256 = "66aae0237457a171802b9719023bcaf6ff29323b94ad7a70f10fb71e34c1e67e"
+archive = "spelaiondb-plugin-sqlserver-0.1.2-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "5a019fbd968cf0646ec52e734c91844fe696d6b7ee09b913491ad1d6913ea8ee"
+archive_size = 4079320
+program_sha256 = "89ec2460bebf069af840fca554da6ac1da561d9e62826076ab91d871732ca963"
 
 # MySQL and MariaDB.
 [[plugin]]
