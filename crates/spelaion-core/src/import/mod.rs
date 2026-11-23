@@ -675,16 +675,24 @@ pub async fn run_import(
             "a transaction is open on this session: commit or roll it back first".into(),
         ));
     }
-    let Some(_attached) = cancel.attach(session) else {
-        return Err(ImportError::Cancelled { committed: 0 });
-    };
-    for statement in &resolved.plan.statements {
-        run_one(session, statement)
-            .await
-            .map_err(|message| ImportError::Statement {
-                statement: first_line(statement),
-                message,
-            })?;
+    // The cancel reaches the session only while a step that can take long runs (the plan's
+    // statements here, each batch's rows in `load`), never while the import begins, commits or
+    // rolls back its transaction: there a cancel only sets the flag the import checks right
+    // after. A cancel that interrupts a transaction's own statement can leave the engine in a
+    // transaction the driver does not know of (SQL Server's descriptor, SDB-448), or commit
+    // rows the import then counts as rolled back.
+    {
+        let Some(_attached) = cancel.attach(session) else {
+            return Err(ImportError::Cancelled { committed: 0 });
+        };
+        for statement in &resolved.plan.statements {
+            run_one(session, statement)
+                .await
+                .map_err(|message| ImportError::Statement {
+                    statement: first_line(statement),
+                    message,
+                })?;
+        }
     }
     let normalizer = Normalizer {
         kinds: resolved.kinds.clone(),
@@ -874,11 +882,8 @@ async fn load(
             taken += length;
             let count = length as u64;
             if !open {
+                // Not cancellable (see `run_import`): a cancel meanwhile is seen below.
                 if let Err(message) = run_one(session, begin).await {
-                    // The session's cancel also stops what the import runs itself.
-                    if cancel.is_cancelled() {
-                        return Err(ImportError::Cancelled { committed });
-                    }
                     return Err(ImportError::Statement {
                         statement: begin.into(),
                         message,
@@ -886,10 +891,16 @@ async fn load(
                 }
                 open = true;
             }
+            // Only the rows' load is bound to the cancel; one that came already stops here.
+            let Some(attached) = cancel.attach(session) else {
+                rollback(open).await;
+                return Err(ImportError::Cancelled { committed });
+            };
             let inserted = session
                 .connection()
                 .insert_rows(&resolved.target, part)
                 .await;
+            drop(attached);
             if let Err(e) = inserted {
                 rollback(open).await;
                 if cancel.is_cancelled() {
@@ -909,22 +920,16 @@ async fn load(
                     rollback(open).await;
                     return Err(ImportError::Cancelled { committed });
                 }
-                let done = commit(
+                // Not cancellable either: a commit that fails is a failure, rolled back, with what
+                // was committed before kept.
+                commit(
                     session,
                     &mut open,
                     read,
                     &mut committed,
                     &mut in_transaction,
                 )
-                .await;
-                // A commit the cancel stopped was rolled back: what was committed before stays.
-                if let Err(e) = done {
-                    return Err(if cancel.is_cancelled() {
-                        ImportError::Cancelled { committed }
-                    } else {
-                        e
-                    });
-                }
+                .await?;
             }
             if reported.elapsed() >= PROGRESS_EVERY {
                 progress(ImportProgress { read, committed });

@@ -290,6 +290,12 @@ pub(crate) struct SessionCancel {
 }
 
 impl SessionCancel {
+    /// Counts a cancel in flight, so the session's next statement waits for it, until the
+    /// returned guard is dropped ([`crate::JobCancel::cancel`] holds it across its cancel).
+    pub(crate) fn in_flight(&self) -> CancelInFlight {
+        self.cancel_gate.enter()
+    }
+
     pub(crate) async fn cancel(&self) -> Result<(), DriverError> {
         let _in_flight = self.cancel_gate.enter();
         self.runs.cancel();
@@ -1605,7 +1611,7 @@ impl CancelGate {
     }
 }
 
-struct CancelInFlight(Arc<tokio::sync::watch::Sender<usize>>);
+pub(crate) struct CancelInFlight(Arc<tokio::sync::watch::Sender<usize>>);
 
 impl Drop for CancelInFlight {
     fn drop(&mut self) {
