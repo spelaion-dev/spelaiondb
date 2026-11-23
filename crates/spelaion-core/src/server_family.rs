@@ -253,17 +253,21 @@ impl ServerFamily {
     }
 
     /// `BEGIN` / `START TRANSACTION` opens a transaction at all. False only where it was checked
-    /// that it is accepted and opens nothing: a ROLLBACK undoes no write (CrateDB, GreptimeDB,
-    /// StarRocks). Such a session is not followed as a transaction: no manual commit, Commit or
-    /// Rollback is offered on it (SDB-310, SDB-304). Other servers that do not
+    /// that it is accepted and opens nothing: a ROLLBACK undoes no write (CrateDB, where
+    /// `ROLLBACK` is even a syntax error; GreptimeDB; StarRocks; RisingWave, whose read-write
+    /// `BEGIN` answers that no transaction is started, checked with 3.1). Such a session is not
+    /// followed as a transaction: no manual commit, Commit or Rollback is offered on it
+    /// (SDB-310, SDB-304). Other servers that do not
     /// [`enforce_transactions`](Self::enforces_transactions) keep theirs, which may still hold.
     pub fn opens_transactions(&self) -> bool {
         match self {
-            ServerFamily::CrateDb | ServerFamily::GreptimeDb | ServerFamily::StarRocks => false,
+            ServerFamily::CrateDb
+            | ServerFamily::GreptimeDb
+            | ServerFamily::StarRocks
+            | ServerFamily::RisingWave => false,
             ServerFamily::PostgreSql
             | ServerFamily::CockroachDb
             | ServerFamily::YugabyteDb
-            | ServerFamily::RisingWave
             | ServerFamily::Materialize
             | ServerFamily::Unchecked(_)
             | ServerFamily::MySql
@@ -702,14 +706,15 @@ mod tests {
     /// Only servers checked to open nothing on `START TRANSACTION` are not followed.
     #[test]
     fn only_checked_servers_open_no_transactions() {
-        for family in [CrateDb, GreptimeDb, StarRocks] {
+        for family in [CrateDb, GreptimeDb, StarRocks, RisingWave] {
             assert!(!family.opens_transactions(), "{family:?}");
+            // A server that opens no transaction never holds an atomic write either.
+            assert!(!family.enforces_transactions(), "{family:?}");
         }
         for family in [
             PostgreSql,
             CockroachDb,
             YugabyteDb,
-            RisingWave,
             Materialize,
             Unchecked("Redshift".into()),
             MySql,

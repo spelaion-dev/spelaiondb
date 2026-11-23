@@ -17,8 +17,10 @@
   server that speaks another engine's protocol is a kind of that engine's connection there
   (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169, and so is
   RisingWave, SDB-302, which gets no agents: a view hides its table functions that reach
-  other servers from the classifier, ADR-020's 2026-11-23 note; and Materialize, SDB-303,
-  which gets no agents either: its read-only transaction lets DDL through; TiDB, OceanBase
+  other servers from the classifier, ADR-020's 2026-11-23 note; Materialize, SDB-303, which
+  gets no agents either: its read-only transaction lets DDL through; and CrateDB, SDB-304,
+  which has no transactions: like RisingWave, its editor sessions follow none, ADR-031's
+  2026-11-23 note; TiDB, OceanBase
   and SingleStore are MySQL connections, SDB-170, and so is GreptimeDB, SDB-344, whose rows the
   MySQL plugin keys by primary key and time index, and an append-only table by nothing, and
   StarRocks, SDB-310, whose primary keys the plugin reads from `information_schema.columns`
@@ -32,7 +34,8 @@
   its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350;
   StarRocks, a MySQL connection in the picker whose comment is only its release and commit, by
   asking its own `current_version()`, SDB-310). `ServerFamily::opens_transactions` is false where
-  `START TRANSACTION` and `autocommit = 0` open nothing (CrateDB, GreptimeDB, StarRocks): the
+  `START TRANSACTION` and `autocommit = 0` open nothing (CrateDB, GreptimeDB, StarRocks, and
+  RisingWave's read-write `BEGIN`, SDB-304): the
   session does not follow transactions there, so manual commit is refused rather than offered.
   On a SQL Server connection it tells only Babelfish apart (`@@VERSION`, SDB-313, ADR-020's
   note): its transactions hold, but its T-SQL reaches PostgreSQL's functions past SQL Server's

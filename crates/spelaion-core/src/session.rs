@@ -683,7 +683,10 @@ impl Session {
     /// Makes this an editor session that follows its transaction, under its connection type's
     /// safeguards: auto-commit unless the type asks for manual commit, and smart commit when it
     /// asks for it (ADR-031). An engine that cannot tell whether a transaction is open stays in
-    /// auto-commit and says so ([`TransactionStatus::supported`]).
+    /// auto-commit and says so ([`TransactionStatus::supported`]). So does a server that
+    /// accepts `BEGIN` and writes at once anyway ([`crate::ServerFamily::opens_transactions`]:
+    /// CrateDB, RisingWave…), where manual commit would only seem to hold changes back and
+    /// Rollback would undo nothing (SDB-310, SDB-304).
     pub async fn follow_transactions(&self, safeguards: &Safeguards) -> TransactionStatus {
         let _running = self.control.lock().await;
         self.cancel_gate.settled().await;

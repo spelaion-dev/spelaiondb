@@ -662,7 +662,7 @@
     "autoCommitLocked": "Hay una transacción abierta: confírmala o deshazla antes de activar auto-commit.",
     "smartCommitHint": "Smart commit (del tipo de la conexión): la primera sentencia que cambia datos pasa esta pestaña a confirmación manual hasta que hagas Commit o Rollback.",
     "smart": "smart",
-    "unsupported": "Solo auto-commit: esta conexión no puede decir si hay una transacción abierta.",
+    "unsupported": "Solo auto-commit: esta conexión no puede decir si hay una transacción abierta, o su servidor no mantiene transacciones.",
     "open": "TX abierta",
     "openCount": "TX abierta · {{count}}",
     "openHint": "Hay una transacción abierta en esta pestaña: sus cambios no son visibles para otros hasta que la confirmes.",
