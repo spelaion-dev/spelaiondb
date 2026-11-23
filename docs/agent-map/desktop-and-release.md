@@ -89,7 +89,9 @@
   `SPELAION_NO_UPDATES` switches them off, as the smoke test does). Update artifacts are signed only in the release workflow
   (`tauri.release.conf.json`, secret `TAURI_SIGNING_PRIVATE_KEY`); never commit a private key.
   Installers: `npx tauri build` (NSIS + MSI on Windows). Releases: pushing a tag `vX.Y.Z`
-  runs `.github/workflows/release.yml` (installers for every OS, the `spelaiondb` CLI, notes from
+  runs `.github/workflows/release.yml` (installers for every OS, the `spelaiondb` CLI built once
+  per platform by that platform's app job, which ships it inside the app and uploads its archive,
+  SDB-129, so a change to the CLI's packaging goes in both app jobs, notes from
   `docs/releases/vX.Y.Z.md` plus every commit since the previous tag, from
   `scripts/release-notes.sh`, so commit subjects must read well in a changelog); the tag must
   match the version in `Cargo.toml` and `tauri.conf.json`. Pushing a branch `release-test/<x>`
