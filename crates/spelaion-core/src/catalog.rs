@@ -78,6 +78,27 @@ const fn planned(
     }
 }
 
+/// SQL Server Express LocalDB (SDB-312, ADR-068): a SQL Server connection whose host names the
+/// instance, reached through its pipe on this machine. It has no port and starts with the
+/// Windows account (no user). Only Windows has it: elsewhere it is listed, saying so, and cannot
+/// be picked.
+fn localdb() -> EngineInfo {
+    EngineInfo {
+        id: "localdb",
+        name: if cfg!(windows) {
+            "SQL Server LocalDB"
+        } else {
+            "SQL Server LocalDB (Windows only)"
+        },
+        category: EngineCategory::Relational,
+        access: EngineAccess::Network,
+        default_port: None,
+        engine: cfg!(windows).then_some(Engine::Sqlserver),
+        default_user: None,
+        default_database: None,
+    }
+}
+
 /// A server that speaks `engine`'s protocol, checked against it (SDB-169).
 const fn kind_of(
     engine: Engine,
@@ -171,6 +192,7 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             None,
         ),
         supported(Engine::Sqlserver, "SQL Server", Relational, Network),
+        localdb(),
         supported(Engine::Oracle, "Oracle", Relational, Network),
         // SQLite's SQL over HTTP: libSQL's server and Turso (ADR-058).
         supported(Engine::Libsql, "libSQL / Turso", Relational, Network),
@@ -343,7 +365,13 @@ mod tests {
                 if info.access == EngineAccess::Folder {
                     assert_eq!((info.id, engine), ("file-folder", Engine::Duckdb));
                 } else if info.is_kind() {
-                    assert!(info.default_port.is_some(), "{}", info.id);
+                    // LocalDB is reached through a pipe, not a port (ADR-068).
+                    assert_eq!(
+                        info.default_port.is_some(),
+                        info.id != "localdb",
+                        "{}",
+                        info.id
+                    );
                 } else {
                     assert_eq!(info.default_port, engine.default_port());
                     assert_eq!((info.default_user, info.default_database), (None, None));
@@ -389,6 +417,11 @@ mod tests {
                 (e.id, e.engine, e.default_port)
             })
             .collect();
+        // LocalDB only exists on Windows (ADR-068): elsewhere it is listed but cannot be picked.
+        let localdb = catalog.iter().find(|e| e.id == "localdb").unwrap();
+        assert_eq!(localdb.engine.is_some(), cfg!(windows));
+        assert_eq!(localdb.name.contains("Windows only"), !cfg!(windows));
+        let kinds: Vec<_> = kinds.into_iter().filter(|k| k.0 != "localdb").collect();
         assert_eq!(
             kinds,
             [
