@@ -2,7 +2,7 @@
 //! transaction, and a session the server ended shows as lost. Skipped without
 //! `SPELAION_TEST_PG` / `SPELAION_TEST_MYSQL` / `SPELAION_TEST_MARIADB`.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -89,6 +89,7 @@ async fn lost_within(session: &Session, limit: Duration) -> Option<String> {
 /// it; without them it is lost, and the session says so.
 #[tokio::test]
 async fn keep_alives_outlast_the_servers_idle_timeout() {
+    let _turn = crate::serial::file_turn(module_path!());
     for var in ["SPELAION_TEST_MYSQL", "SPELAION_TEST_MARIADB"] {
         let Some(params) = params(var) else { continue };
         let driver = if var.ends_with("MARIADB") {
@@ -119,6 +120,7 @@ async fn keep_alives_outlast_the_servers_idle_timeout() {
 /// locks are not held all night by them.
 #[tokio::test]
 async fn no_keep_alive_is_sent_inside_a_transaction() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(params) = params("SPELAION_TEST_PG") else {
         return;
     };
@@ -168,6 +170,7 @@ async fn no_keep_alive_is_sent_inside_a_transaction() {
 /// A session the server ended is noticed by the next keep-alive, without any query.
 #[tokio::test]
 async fn keep_alives_notice_a_session_the_server_ended() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(params) = params("SPELAION_TEST_PG") else {
         return;
     };
@@ -202,6 +205,7 @@ async fn keep_alives_notice_a_session_the_server_ended() {
 /// leaves the session lost at once, not at the next statement.
 #[tokio::test]
 async fn a_statement_that_ends_the_session_marks_it_lost() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(params) = params("SPELAION_TEST_PG") else {
         return;
     };

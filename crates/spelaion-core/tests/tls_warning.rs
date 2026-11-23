@@ -66,6 +66,7 @@ fn connection(engine: &str, host: &str, extra: &str) -> String {
 
 #[test]
 fn the_warning_follows_the_mode_the_host_and_the_route() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new();
     fx.write(
         "user/tunnels/bastion.toml",

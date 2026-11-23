@@ -17,12 +17,15 @@ import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { SnippetSettings } from "./SnippetSettings";
+import { ShortcutSettings } from "./ShortcutSettings";
 import { ScreenBoundary } from "./ScreenBoundary";
+import { Icon } from "./Icons";
 import { copyDiagnostics, openIssuePage } from "../diagnostics";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
+import { commandShortcut, keyText } from "../shortcuts";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map" | "shortcuts";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map", "shortcuts"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -45,8 +48,8 @@ export function SettingsDialog({ onClose }: { onClose(): void }) {
       <div className="modal wizard settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div className="wizard-header">
           <h2 id="settings-title">{t("title")}</h2>
-          <button className="ghost" aria-label={t("close")} onClick={onClose}>
-            ×
+          <button className="ghost" aria-label={t("close")} title={t("close")} onClick={onClose}>
+            <Icon name="x" />
           </button>
         </div>
         <ScreenBoundary screen={`settings ${category}`}>
@@ -84,6 +87,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "editor" && <EditorSettings />}
         {category === "snippets" && <SnippetSettings />}
         {category === "map" && <MapSettings />}
+        {category === "shortcuts" && <ShortcutSettings />}
       </section>
     </div>
   );
@@ -201,7 +205,7 @@ function EditorSettings() {
             {zooms.map((zoom) => <option key={zoom} value={zoom}>{t("appearance.percent", { value: zoom })}</option>)}
           </select>
         </label>
-        <p className="muted small">{t("editor.zoomHint")}</p>
+        <p className="muted small">{t("editor.zoomHint", { zoomIn: commandShortcut("editor.zoomIn"), zoomOut: commandShortcut("editor.zoomOut"), zoomReset: commandShortcut("editor.zoomReset") })}</p>
         {(["lineNumbers", "wordWrap"] as const).map((key) => <label className="check" key={key}><input type="checkbox" name={`editor-${key}`} checked={preferences[key]} onChange={(e) => void setEditor({ ...preferences, [key]: e.target.checked })} />{t(`editor.${key}`)}</label>)}
       </fieldset>
       <fieldset disabled={busy} className="settings-choice">
@@ -212,7 +216,7 @@ function EditorSettings() {
           </select>
         </label>)}
       </fieldset>
-      <p className="muted small">{t("editor.snippets")}</p>
+      <p className="muted small">{t("editor.snippets", { next: keyText("snippetNext"), previous: keyText("snippetPrevious") })}</p>
       <p className="muted small">{t("editor.restoreHint")}</p>
       <label className="check">
         <input type="checkbox" name="reconnectOnStart" checked={reconnect} disabled={busy} onChange={(e) => void setReconnect(e.target.checked)} />

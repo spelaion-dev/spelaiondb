@@ -56,6 +56,9 @@ pub enum HistoryError {
     /// An editor snippet or the template of new scripts was refused (SDB-384).
     #[error("{0}")]
     EditorSnippet(crate::editor_snippets::SnippetError),
+    /// A change to the keyboard shortcuts was refused (SDB-447).
+    #[error("{0}")]
+    Shortcut(crate::shortcuts::ShortcutError),
 }
 
 /// Longest name of a saved query, in characters.
@@ -193,6 +196,14 @@ enum Request {
     },
     GetScriptTemplate {
         reply: Reply<String>,
+    },
+    GetShortcuts {
+        reply: Reply<Vec<spelaion_store::ShortcutOverride>>,
+    },
+    /// The reply is why the changes were refused, if they were.
+    SetShortcuts {
+        overrides: Vec<spelaion_store::ShortcutOverride>,
+        reply: Reply<Option<crate::shortcuts::ShortcutError>>,
     },
     SetScriptTemplate {
         template: String,
@@ -498,6 +509,13 @@ impl QueryHistory {
                         }
                         Request::GetScriptTemplate { reply } => {
                             let _ = reply.send(crate::editor_snippets::new_script_template(&store));
+                        }
+                        Request::GetShortcuts { reply } => {
+                            let _ = reply.send(crate::shortcuts::shortcut_overrides(&store));
+                        }
+                        Request::SetShortcuts { overrides, reply } => {
+                            let _ = reply
+                                .send(crate::shortcuts::set_shortcut_overrides(&store, &overrides));
                         }
                         Request::SetScriptTemplate { template, reply } => {
                             let _ = reply.send(refusal(
@@ -1016,6 +1034,29 @@ impl QueryHistory {
     pub async fn delete_editor_snippet(&self, name: String) -> Result<bool, HistoryError> {
         self.request(|reply| Request::DeleteEditorSnippet { name, reply })
             .await
+    }
+
+    /// The user's changes to the keyboard shortcuts (SDB-447): only the differences from the
+    /// app's defaults, and only those that pass the core's check.
+    pub async fn shortcut_overrides(
+        &self,
+    ) -> Result<Vec<spelaion_store::ShortcutOverride>, HistoryError> {
+        self.request(|reply| Request::GetShortcuts { reply }).await
+    }
+
+    /// Replaces the user's changes to the keyboard shortcuts, all of them or none. The core
+    /// checks every one (`crate::shortcuts::check_shortcut`) and refuses otherwise.
+    pub async fn set_shortcut_overrides(
+        &self,
+        overrides: Vec<spelaion_store::ShortcutOverride>,
+    ) -> Result<(), HistoryError> {
+        match self
+            .request(|reply| Request::SetShortcuts { overrides, reply })
+            .await?
+        {
+            None => Ok(()),
+            Some(refused) => Err(HistoryError::Shortcut(refused)),
+        }
     }
 
     /// The text a new script starts with; empty when there is none.

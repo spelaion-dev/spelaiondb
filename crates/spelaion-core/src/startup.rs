@@ -72,7 +72,8 @@ impl StartupFailure {
             | HistoryError::UnsupportedTheme
             | HistoryError::InvalidSnippetName
             | HistoryError::NamePattern(_)
-            | HistoryError::EditorSnippet(_) => None,
+            | HistoryError::EditorSnippet(_)
+            | HistoryError::Shortcut(_) => None,
         };
         let text = error.to_string();
         // "local store: …" would repeat what the dialog's first words say.

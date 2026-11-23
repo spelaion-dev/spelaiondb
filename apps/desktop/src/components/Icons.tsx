@@ -1,73 +1,178 @@
-// Outline icons drawn like Lucide's (docs/ui-guidelines.md: a 24px grid, a 2px round stroke,
-// `currentColor`), shown at 16px. Lucide itself (ISC) is not a dependency yet: these follow its
-// shapes, so they can be swapped for `lucide-react` without changing how they look.
+// The app's one icon set, Lucide (`lucide-react`, ISC), behind one component (SDB-73,
+// docs/ui-guidelines.md): 16px with Lucide's own stroke, 20px in the activity bar, in
+// `currentColor`, hidden from assistive technology (the button around it carries the name).
+// Each icon is imported on its own, so only the ones listed here reach the bundle.
 
-type IconName = "x" | "plus" | "pin" | "maximize" | "minimize" | "folderOpen" | "link" | "arrowUpRight" | "sigma" | "chevronRight" | "plan" | "chart" | "minus" | "scan" | "refresh" | "group" | "chevronLeft" | "chevronsLeft" | "chevronsRight" | "transpose" | "database" | "shieldAlert";
+import {
+  Activity,
+  AlignLeft,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpRight,
+  Bookmark,
+  ChartColumn,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsLeft,
+  ChevronsRight,
+  Circle,
+  CircleX,
+  Columns3,
+  CopyPlus,
+  Cpu,
+  Database,
+  FilePlus2,
+  FileText,
+  Folder,
+  FolderOpen,
+  GitFork,
+  History,
+  Info,
+  KeyRound,
+  Layers,
+  Link,
+  Link2,
+  List,
+  ListVideo,
+  LoaderCircle,
+  type LucideIcon,
+  Maximize2,
+  Menu,
+  Minimize2,
+  Minus,
+  Network,
+  PanelRight,
+  Pin,
+  Play,
+  Plug,
+  Plus,
+  RectangleVertical,
+  RefreshCw,
+  Redo2,
+  RotateCcw,
+  Rows3,
+  Save,
+  Scan,
+  Search,
+  Settings,
+  ShieldAlert,
+  Sigma,
+  SlidersHorizontal,
+  Square,
+  SquarePlus,
+  Star,
+  Table,
+  TableProperties,
+  Terminal,
+  Trash2,
+  TriangleAlert,
+  Undo2,
+  Workflow,
+  X,
+  Zap,
+} from "lucide-react";
 
-export const PATHS: Record<IconName, string[]> = {
-  chevronRight: ["m9 6 6 6-6 6"],
-  chevronLeft: ["m15 18-6-6 6-6"],
-  shieldAlert: [
-    "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
-    "M12 8v4",
-    "M12 16h.01",
-  ],
-  chevronsLeft: ["m11 17-5-5 5-5", "m18 17-5-5 5-5"],
-  chevronsRight: ["m6 17 5-5-5-5", "m13 17 5-5-5-5"],
-  // Lucide's table-properties: a record shown as name and value columns.
-  transpose: ["M15 3v18", "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M21 9H3", "M21 15H3"],
-  refresh: [
-    "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8",
-    "M21 3v5h-5",
-    "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16",
-    "M8 16H3v5",
-  ],
-  chart: ["M3 3v16a2 2 0 0 0 2 2h16", "M18 17V9", "M13 17V5", "M8 17v-3"],
-  plan: ["M5 3h8v6H5z", "M5 15h8v6H5z", "M17 9h5v6h-5z", "M9 9v6", "M13 6h3v6h1"],
-  x: ["M18 6 6 18", "m6 6 12 12"],
-  link: [
-    "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
-    "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
-  ],
+/** The icons the app uses, by what they mean here. */
+const ICONS = {
+  x: X,
+  plus: Plus,
+  minus: Minus,
+  pin: Pin,
+  maximize: Maximize2,
+  minimize: Minimize2,
+  folderOpen: FolderOpen,
+  link: Link,
+  arrowUpRight: ArrowUpRight,
+  sigma: Sigma,
+  chevronRight: ChevronRight,
+  chevronLeft: ChevronLeft,
+  chevronsLeft: ChevronsLeft,
+  chevronsRight: ChevronsRight,
+  // A query plan: steps in a tree.
+  plan: Network,
+  chart: ChartColumn,
+  scan: Scan,
+  refresh: RefreshCw,
+  // Rows stacked into groups.
+  group: Layers,
+  // A record shown as name and value columns.
+  transpose: TableProperties,
+  // The neutral mark of an engine without a licensed one (SDB-363).
+  database: Database,
+  shieldAlert: ShieldAlert,
+  star: Star,
+  // A step's state: waiting, running, done, failed, cancelled (`minus` and `x` too).
+  waiting: Circle,
+  running: LoaderCircle,
+  check: Check,
+  stopped: Square,
+  arrowUp: ArrowUp,
+  arrowDown: ArrowDown,
+  // The activity bar's views (the explorer is `database`).
+  processes: Activity,
+  search: Search,
+  history: History,
+  saved: Bookmark,
+  mcp: Cpu,
+  settings: Settings,
+  // A tab's kind: a query, a SQL file, table data, a table's details, an ER diagram.
+  query: Terminal,
+  file: FileText,
+  table: Table,
+  details: Info,
+  diagram: Workflow,
+  // The editor's action column (cancel is `stopped`, filled).
+  run: Play,
+  runScript: ListVideo,
+  runOptions: SlidersHorizontal,
+  menu: Menu,
+  format: AlignLeft,
+  save: Save,
+  saveAs: FilePlus2,
+  warning: TriangleAlert,
+  // The explorer: an expander, its header's tools and its nodes (a table is `table`, a node's
+  // properties `details`).
+  chevronDown: ChevronDown,
+  collapseAll: ChevronsDownUp,
+  plug: Plug,
+  folder: Folder,
+  columns: Columns3,
+  column: RectangleVertical,
+  key: KeyRound,
+  foreignKey: Link2,
+  indexes: List,
+  trigger: Zap,
+  partitions: Rows3,
+  dependencies: GitFork,
+  // A table data tab's edits, and the result's side panel (the cell viewer).
+  addRow: SquarePlus,
+  duplicateRow: CopyPlus,
+  delete: Trash2,
+  revert: RotateCcw,
+  undo: Undo2,
+  redo: Redo2,
+  discard: CircleX,
+  sidePanel: PanelRight,
+} satisfies Record<string, LucideIcon>;
+
+export type IconName = keyof typeof ICONS;
+
+/** Lucide's arrows as paths on its 24px grid, for the result grid's canvas, which draws a
+ *  foreign key's mark and a column's sort direction itself and cannot hold a component. */
+export const PATHS = {
   arrowUpRight: ["M7 7h10v10", "M7 17 17 7"],
-  sigma: ["M18 7V5a1 1 0 0 0-1-1H6.5a.5.5 0 0 0-.4.8l4.5 6a2 2 0 0 1 0 2.4l-4.5 6a.5.5 0 0 0 .4.8H17a1 1 0 0 0 1-1v-2"],
-  plus: ["M5 12h14", "M12 5v14"],
-  // Lucide's "layers": rows stacked into groups.
-  group: [
-    "M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z",
-    "M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12",
-    "M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17",
-  ],
-  minus: ["M5 12h14"],
-  // Lucide's "database": the neutral mark of an engine without a licensed one (SDB-363).
-  database: ["M3 5a9 3 0 1 0 18 0a9 3 0 1 0-18 0", "M3 5v14a9 3 0 0 0 18 0V5", "M3 12a9 3 0 0 0 18 0"],
-  scan: ["M3 7V5a2 2 0 0 1 2-2h2", "M17 3h2a2 2 0 0 1 2 2v2", "M21 17v2a2 2 0 0 1-2 2h-2", "M7 21H5a2 2 0 0 1-2-2v-2"],
-  pin: [
-    "M12 17v5",
-    "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z",
-  ],
-  maximize: ["M15 3h6v6", "M9 21H3v-6", "M21 3l-7 7", "M3 21l7-7"],
-  minimize: ["M4 14h6v6", "M20 10h-6V4", "M14 10l7-7", "M3 21l7-7"],
-  folderOpen: [
-    "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
-  ],
+  // A column's sort direction in the grid's header, drawn on the same canvas.
+  arrowUp: ["m5 12 7-7 7 7", "M12 19V5"],
+  arrowDown: ["M12 5v14", "m19 12-7 7-7-7"],
 };
 
-export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
-  return (
-    <svg
-      className="icon"
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {PATHS[name].map((d) => <path key={d} d={d} />)}
-    </svg>
-  );
+/** One icon. `filled` fills its outline, for a toggle that is on (a default's star). The size is
+ *  16, or 20 in the activity bar (a place's CSS may draw it smaller, as a result tab's 12px pin).
+ *  `className` adds a place's own class (a tab's kind takes the tab's colour) to `icon`. */
+export function Icon({ name, size = 16, filled = false, className }: { name: IconName; size?: 16 | 20; filled?: boolean; className?: string }) {
+  const Shape = ICONS[name];
+  return <Shape className={className ? `icon ${className}` : "icon"} size={size} fill={filled ? "currentColor" : "none"} aria-hidden="true" focusable="false" />;
 }

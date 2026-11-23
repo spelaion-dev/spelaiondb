@@ -28,6 +28,7 @@ test("CSS declarations use the two theme blocks, with narrow exceptions for bran
     }
     .engine-postgres { background: #336791; }
     :root[data-theme="dark"] .sql-editor .sql-keyword { color: #c792ea; }
+    [hidden] { display: none !important; }
   `);
   assert.deepEqual(cssViolations(css), []);
 });
@@ -50,10 +51,12 @@ test("CSS catches values in shorthands, fallbacks, nested rules and additional r
     .engine-postgres { font-weight: bold; }
     :root[data-theme="dark"] .sql-editor .sql-keyword { border-radius: 1px; }
     :root { --other: #eee; }
+    [hidden] { display: block !important; }
+    .hidden, [hidden] { display: none !important; }
   `);
   assert.deepEqual(rules(cssViolations(css)), [
     "color", "color", "font size", "font weight", "radius", "shadow", "z-index", "font weight",
-    "font weight", "!important", "font weight", "radius", "color",
+    "font weight", "!important", "font weight", "radius", "color", "!important", "!important",
   ]);
 });
 

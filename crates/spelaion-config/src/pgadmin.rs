@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use crate::datagrip::shown;
+use crate::draft::SessionDraft;
 use crate::import::{ImportedConnection, ImportedPassword, ImportedSsh, ImportedTls};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
@@ -694,6 +695,7 @@ fn connection_of(id: &str, map: &Map<String, Value>, origin: Origin) -> Imported
         ssh: if importable { ssh } else { None },
         proxy: None,
         tls,
+        session: SessionDraft::default(),
         unmapped,
     }
 }

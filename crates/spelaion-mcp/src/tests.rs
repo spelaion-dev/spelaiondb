@@ -163,6 +163,83 @@ fn personal(read_only_flag: bool) -> Personal {
 
 const INSERT: &str = "insert into notes (body) values ('from an agent')";
 
+/// `explain_query` names, in its description and in its `structured` argument's, exactly the
+/// engines agents can ask for a structured plan on: those whose plans the core reads and whose
+/// connections agents see (SDB-103). An engine missing from either fails here.
+#[test]
+fn explain_query_names_every_engine_with_structured_plans() {
+    let p = personal(false);
+    let tool = p
+        .server
+        .tool_router
+        .get("explain_query")
+        .expect("the tool")
+        .clone();
+    let description = tool.description.as_deref().expect("a description");
+    let structured = tool.input_schema["properties"]["structured"]["description"]
+        .as_str()
+        .expect("the argument's description");
+    for text in [description, structured] {
+        assert!(!text.contains(PLAN_ENGINES), "{text}");
+    }
+    let expected: Vec<&str> = Engine::ALL
+        .into_iter()
+        .filter(|&e| spelaion_core::plan::reads_plans(e) && e.has_read_barrier())
+        .map(Engine::label)
+        .collect();
+    assert!(expected.contains(&"SQLite") && expected.contains(&"DuckDB"));
+    // The names between `structured=true on ` and ` for the same`, split as a sentence lists them.
+    let named = |text: &str, before: &str, after: &str| -> Vec<String> {
+        let start = text.find(before).expect(before) + before.len();
+        let end = start + text[start..].find(after).expect(after);
+        text[start..end]
+            .replace(" or ", ", ")
+            .split(", ")
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(
+        named(description, "structured=true on ", " for the same"),
+        expected
+    );
+    assert_eq!(named(structured, "plan tree on ", "; omitted"), expected);
+}
+
+/// `structured=true` on a SQLite connection: the core's tree of the plan's steps, as on the
+/// desktop (SDB-103).
+#[tokio::test]
+async fn structured_plans_run_on_a_sqlite_connection() {
+    let p = personal(false);
+    let result = p
+        .server
+        .explain(
+            &call("explain_query"),
+            ExplainArgs {
+                connection: "~/notes".into(),
+                sql: Some("select body from notes where id = 1".into()),
+                structured: Some(true),
+                output_format: None,
+                plan_id: None,
+                offset: None,
+                limit: Some(50),
+                release: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!refused(&result), "{}", body(&result));
+    let json: serde_json::Value = serde_json::from_str(&body(&result)).unwrap();
+    assert_eq!(json["summary"]["engine"], "sqlite");
+    assert_eq!(json["summary"]["analyzed"], false);
+    let nodes = json["page"]["nodes"].as_array().expect("nodes");
+    assert!(!nodes.is_empty(), "{json}");
+    assert!(
+        nodes.iter().any(|n| n.to_string().contains("notes")),
+        "{json}"
+    );
+    assert_eq!(rows(&p.db), 1);
+}
+
 #[tokio::test]
 async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning() {
     let Ok(address) = std::env::var("SPELAION_TEST_PG") else {
@@ -1939,4 +2016,115 @@ async fn a_tool_call_that_panics_answers_an_error_and_the_server_keeps_working()
     assert!(listed(&server).await.contains("~/notes"));
     let after = query(&server, "~/notes", "select count(*) from notes").await;
     assert!(!refused(&after), "{}", body(&after));
+}
+
+/// The catalog tools' answers stop within the limit and say how to ask for the rest (SDB-120),
+/// on a database of a few thousand tables.
+#[tokio::test]
+async fn catalog_answers_on_thousands_of_tables_stay_within_the_limit() {
+    let p = personal(false);
+    {
+        let conn = rusqlite::Connection::open(&p.db).unwrap();
+        let mut ddl = String::from("begin;");
+        for i in 0..3_000 {
+            ddl.push_str(&format!(
+                "create table customer_account_history_{i:04} (id integer primary key, note text);"
+            ));
+        }
+        // A default of any length, over several lines, as a catalog can hold.
+        ddl.push_str(&format!(
+            "create table defaults (body text default ('{}\n- fake_column text'));commit;",
+            "d".repeat(10_000)
+        ));
+        conn.execute_batch(&ddl).unwrap();
+    }
+    let structured = |result: &CallToolResult| result.structured_content.clone().unwrap();
+
+    let access = p.server.begin().await;
+    let all = p
+        .server
+        .list_objects_inner(
+            &access,
+            Parameters(ListObjectsArgs {
+                connection: "~/notes".into(),
+                schema: Some("main".into()),
+                filter: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let text = body(&all);
+    assert!(text.len() <= format::MAX_RESPONSE, "{}", text.len());
+    let facts = structured(&all);
+    assert_eq!(facts["complete"], false);
+    assert_eq!(facts["narrow_with"], "filter");
+    let omitted = facts["omitted"].as_u64().unwrap();
+    assert!(omitted > 0);
+    assert_eq!(facts["shown"].as_u64().unwrap() + omitted, 3_002);
+    assert_eq!(
+        text.lines().last().unwrap(),
+        format!(
+            "… {omitted} more objects are not listed: narrow with the filter argument (part of the name)."
+        )
+    );
+
+    // The filter returns the ones left out.
+    let narrowed = p
+        .server
+        .list_objects_inner(
+            &access,
+            Parameters(ListObjectsArgs {
+                connection: "~/notes".into(),
+                schema: Some("main".into()),
+                filter: Some("HISTORY_29".into()),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(structured(&narrowed)["complete"], true);
+    assert_eq!(body(&narrowed).lines().count(), 100);
+    assert!(body(&narrowed).contains("- customer_account_history_2999 (Table"));
+
+    let search = p
+        .server
+        .search_schema_inner(
+            &access,
+            Parameters(SearchArgs {
+                connection: "~/notes".into(),
+                query: "a".into(),
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(body(&search).len() <= format::MAX_RESPONSE);
+    assert_eq!(structured(&search)["narrow_with"], "query");
+    assert!(
+        body(&search)
+            .lines()
+            .last()
+            .unwrap()
+            .ends_with("search with a longer query.")
+    );
+
+    let described = p
+        .server
+        .describe_table_inner(
+            &access,
+            Parameters(DescribeArgs {
+                connection: "~/notes".into(),
+                schema: "main".into(),
+                table: "defaults".into(),
+            }),
+        )
+        .await
+        .unwrap();
+    let text = body(&described);
+    assert_eq!(structured(&described)["complete"], true, "{text}");
+    let column = text
+        .lines()
+        .find(|line| line.starts_with("- body "))
+        .unwrap();
+    assert!(column.ends_with('…'), "{column}");
+    assert!(column.chars().count() < 260, "{}", column.len());
+    assert!(!text.contains("fake_column"), "{text}");
 }

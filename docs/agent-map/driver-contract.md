@@ -35,7 +35,9 @@
   for only there. `Dialect::copy_data` is the data that belongs to a statement and follows it
   in the script (PostgreSQL's `COPY … FROM STDIN` rows up to a line `\.`, SDB-162): the
   splitter skips it and `code_ranges` leaves it out, so it is never a statement, a placeholder
-  or the guard's to read.
+  or the guard's to read. A psql meta-command line, which PostgreSQL's splitter reads as a
+  statement of its own, is code as a whole in its `code_ranges`, with no strings or comments
+  in it (SDB-436): a quote there never hides the next statement's placeholder.
   `thread_cancel` is the cancel of the engines that run on a thread of their own (DuckDB, local
   SQLite): their interrupt only reaches the statement running at that moment, so a cancel is
   remembered for everything sent before it (a queued statement never starts, a running one is

@@ -26,8 +26,8 @@ use spelaion_driver_api::{
 };
 use spelaion_ssh::KnownHosts;
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{cleaning_up, run_cleanup};
 
 fn server() -> Option<(String, u16)> {
@@ -126,6 +126,7 @@ fn rejected<T: std::fmt::Debug>(result: Result<T, ReadError>, sql: &str) {
 /// it was typed.
 #[tokio::test]
 async fn a_bound_value_with_a_backslash_stays_inside_its_literal() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session_as("spelaion", "spelaion").await else {
         return;
     };
@@ -184,6 +185,7 @@ async fn a_bound_value_with_a_backslash_stays_inside_its_literal() {
 /// check of the core ever sees, is refused by the server too.
 #[tokio::test]
 async fn agents_reads_make_the_session_read_only_in_the_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session_as("spelaion", "spelaion").await else {
         return;
     };
@@ -320,6 +322,7 @@ async fn agents_reads_make_the_session_read_only_in_the_engine() {
 /// the stopped one (`SESSION_IS_LOCKED`). Many times over, since that is a race.
 #[tokio::test]
 async fn a_statement_right_after_a_capped_read_finds_the_session_free() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session_as("spelaion", "spelaion").await else {
         return;
     };
@@ -341,6 +344,7 @@ async fn a_statement_right_after_a_capped_read_finds_the_session_free() {
 /// query runs as written and every row is there.
 #[tokio::test]
 async fn a_query_is_not_paged_by_a_primary_key_rows_share() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session_as("spelaion", "spelaion").await else {
         return;
     };
@@ -395,6 +399,7 @@ async fn a_query_is_not_paged_by_a_primary_key_rows_share() {
 /// be set again) reads as any other: the barrier is already there.
 #[tokio::test]
 async fn agents_read_as_a_user_the_server_keeps_read_only() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(admin) = session_as("spelaion", "spelaion").await else {
         return;
     };
@@ -463,6 +468,7 @@ fn folder(label: &str) -> PathBuf {
 /// writes never reach the server through the export path.
 #[tokio::test]
 async fn exports_stream_rows_from_a_read_only_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = session_as("spelaion", "spelaion").await else {
         return;
     };
@@ -601,6 +607,7 @@ fn keys() -> PathBuf {
 /// itself, so a write that gets past the core's checks is refused by the server.
 #[tokio::test]
 async fn a_read_only_connection_is_read_only_in_the_server() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server() else { return };
     let ws = Workspace::new("clickhouse-read-only");
     ws.write(
@@ -637,6 +644,7 @@ async fn a_read_only_connection_is_read_only_in_the_server() {
 /// and the core opened the tunnel (ADR-041: a plugin opens none).
 #[tokio::test]
 async fn clickhouse_through_two_bastions() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }

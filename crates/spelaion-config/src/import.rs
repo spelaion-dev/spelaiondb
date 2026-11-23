@@ -56,6 +56,16 @@ impl ImportClient {
     }
 }
 
+/// Whether a reader reads the passwords a client saved in its own files (DBeaver's credentials,
+/// HeidiSQL's obfuscated passwords, Beekeeper Studio's encrypted ones). The list of sources only
+/// counts connections, so it never does (SDB-446); a password in the system keychain is never
+/// read by a reader either way (only [`read_stored_passwords`], on import, with consent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavedSecrets {
+    Read,
+    Skip,
+}
+
 /// One connection read from another client, as far as SpelaionDB can use it.
 #[derive(Debug, Clone)]
 pub struct ImportedConnection {
@@ -87,6 +97,11 @@ pub struct ImportedConnection {
     pub proxy: Option<ImportedProxy>,
     /// TLS settings; `None` keeps SpelaionDB's default.
     pub tls: Option<ImportedTls>,
+    /// What the client runs on every new session (ADR-037, SDB-104): its startup SQL, as the
+    /// client keeps it. The user's own file, but checked before it is shown or saved: where
+    /// the read-only barrier applies, a statement that may not run there is taken out and
+    /// listed in `unmapped` (`spelaion_core::vet_imported_setup`).
+    pub session: SessionDraft,
     /// What the client had that SpelaionDB does not import, as `what: value` lines for the
     /// preview: nothing is dropped silently.
     pub unmapped: Vec<String>,
@@ -494,7 +509,8 @@ pub fn import_plan(
             keepalive: (!file).then_some(ConnectionFile::SUGGESTED_KEEPALIVE),
             connect_timeout: None,
             statement_timeout: None,
-            session: SessionDraft::default(),
+            // The client's startup SQL, already checked (`spelaion_core::vet_imported_setup`).
+            session: connection.session.clone(),
             mcp_exposed: false,
             mcp_writes: false,
             masking: Default::default(),
@@ -510,9 +526,10 @@ pub fn import_plan(
 
 /// The draft that replaces `existing` with an imported connection: what the client has
 /// (engine, address, user, password, TLS, tunnel) comes from `plan`; the existing name,
-/// folder and everything the client has no say on (session setup, timeouts, agents' access,
-/// Kubernetes) stay. A read-only connection stays read-only, and a description, tags or type
-/// the client does not give are kept.
+/// folder and everything the client has no say on (timeouts, agents' access, Kubernetes) stay.
+/// A read-only connection stays read-only, and a description, tags, type or session setup the
+/// client does not give are kept: the client's session setup replaces the existing one only
+/// when it has one (SDB-104).
 pub fn replacement_draft(existing: &ConnectionEntry, plan: &ConnectionDraft) -> ConnectionDraft {
     let mut draft = ConnectionDraft::from_entry(existing);
     if draft.engine != plan.engine || plan.engine_kind.is_some() {
@@ -543,6 +560,9 @@ pub fn replacement_draft(existing: &ConnectionEntry, plan: &ConnectionDraft) -> 
     }
     if !plan.env.is_empty() {
         draft.env = plan.env.clone();
+    }
+    if plan.session != SessionDraft::default() {
+        draft.session = plan.session.clone();
     }
     draft
 }

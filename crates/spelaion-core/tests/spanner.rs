@@ -241,6 +241,7 @@ fn unique(prefix: &str) -> String {
 /// across statements is followed, and one the core opens in manual commit too.
 #[tokio::test]
 async fn a_script_runs_statement_by_statement_with_its_transaction() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("spanner-script").await else {
         return;
     };
@@ -307,6 +308,7 @@ async fn a_script_runs_statement_by_statement_with_its_transaction() {
 /// The server's error stops the script at its statement, and the session goes on.
 #[tokio::test]
 async fn an_error_stops_at_its_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("spanner-error").await else {
         return;
     };
@@ -328,6 +330,7 @@ async fn an_error_stops_at_its_statement() {
 /// writes for it are unqualified.
 #[tokio::test]
 async fn the_default_schema_is_named_default_and_left_out_of_names() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((_ws, open)) = direct("spanner-explorer").await else {
         return;
     };
@@ -366,6 +369,7 @@ async fn the_default_schema_is_named_default_and_left_out_of_names() {
 
 #[test]
 fn the_guard_asks_before_what_spanner_would_lose() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = spelaion_dialect::for_engine("spanner").expect("GoogleSQL");
     let plain = Safeguards::default();
     let production = Safeguards {
@@ -398,6 +402,7 @@ fn the_guard_asks_before_what_spanner_would_lose() {
 
 #[test]
 fn spanner_has_no_read_only_mode_nor_agents() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("spanner-no-barrier");
     ws.write(
         ".spelaion/connections/ro.toml",
@@ -427,6 +432,7 @@ fn spanner_has_no_read_only_mode_nor_agents() {
 /// Through the two bastions of `testing/docker`: the plugin connects to the tunnel's local end.
 #[tokio::test]
 async fn spanner_through_two_bastions() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }
@@ -457,6 +463,7 @@ async fn spanner_through_two_bastions() {
 /// end; the plugin reads no proxy from the environment, so it never goes around it.
 #[tokio::test]
 async fn spanner_through_a_socks_proxy() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }

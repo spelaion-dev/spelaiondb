@@ -14,8 +14,8 @@ use spelaion_core::{
 };
 use spelaion_driver_api::{ConnectParams, Driver, ExecEvent, ExecOptions, Secret, TlsMode};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
 
 const SMART: Safeguards = Safeguards {
@@ -223,6 +223,7 @@ async fn count(engine: &Engine, session: &Session, table: &str) -> String {
 /// further, as the app hands it to the window before it asks the stream for more.
 #[tokio::test]
 async fn a_finished_run_leaves_its_session_free_before_its_stream_ends() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let session = &engine.a;
         let name = engine.name;
@@ -277,6 +278,7 @@ async fn a_finished_run_leaves_its_session_free_before_its_stream_ends() {
 
 #[tokio::test]
 async fn manual_commit_commit_and_rollback_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         let table = unique("tx_manual");
@@ -378,6 +380,7 @@ async fn manual_commit_commit_and_rollback_on_every_engine() {
 
 #[tokio::test]
 async fn smart_commit_switches_to_manual_on_the_first_write() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         let table = unique("tx_smart");
@@ -459,6 +462,7 @@ async fn smart_commit_switches_to_manual_on_the_first_write() {
 
 #[tokio::test]
 async fn schema_metadata_keeps_user_transaction_counts_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         let table = unique("tx_metadata");
@@ -521,6 +525,7 @@ async fn schema_metadata_keeps_user_transaction_counts_on_every_engine() {
 
 #[tokio::test]
 async fn postgres_smart_commit_schema_refresh_does_not_add_a_second_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(params) = server("SPELAION_TEST_PG", "spelaion", "spelaion") else {
         return;
     };
@@ -552,6 +557,7 @@ async fn postgres_smart_commit_schema_refresh_does_not_add_a_second_statement() 
 
 #[tokio::test]
 async fn statements_that_end_a_transaction_keep_the_badge_true() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let name = engine.name;
         let table = unique("tx_end");
@@ -662,6 +668,7 @@ async fn statements_that_end_a_transaction_keep_the_badge_true() {
 
 #[tokio::test]
 async fn myisam_rollback_says_its_changes_stayed() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         if !matches!(engine.name, "mysql" | "mariadb") {
             continue;
@@ -700,6 +707,7 @@ async fn myisam_rollback_says_its_changes_stayed() {
 
 #[tokio::test]
 async fn a_lost_session_remembers_its_open_transaction() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let kill = match engine.name {
             "postgres" => "select pg_terminate_backend({id})",
@@ -749,6 +757,7 @@ async fn a_lost_session_remembers_its_open_transaction() {
 
 #[tokio::test]
 async fn table_edits_refuse_a_session_with_an_open_transaction() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dir = std::env::temp_dir().join(unique("spelaion-tx-edit"));
     // What an earlier run left behind: the system gives a process id again.
     let _ = std::fs::remove_dir_all(&dir);
@@ -780,6 +789,7 @@ async fn table_edits_refuse_a_session_with_an_open_transaction() {
 
 #[tokio::test]
 async fn sessions_that_do_not_follow_transactions_run_as_before() {
+    let _turn = crate::serial::file_turn(module_path!());
     // Agents' sessions and table data tabs never call `follow_transactions`.
     let driver = engines::sqlite();
     let session = connect(

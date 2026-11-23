@@ -5,7 +5,7 @@
 //! PostgreSQL plugin; `pg_dump` runs from the test server's own image with `docker run` (or
 //! from `SPELAION_TEST_DB_TOOLS`, a folder), as `tests/backup.rs` does.
 
-mod engines;
+use crate::engines;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -180,6 +180,7 @@ create view pairs as select c.id, c.note, e.t from child c left join every_type 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_plain_pg_dump_runs_through_the_session_and_dumps_again_identically() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = server() else { return };
     let (source, target) = (
         format!("sdb162_src_{}", std::process::id()),
@@ -240,6 +241,7 @@ fn big_copy(table: &str, rows: usize) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_million_rows_stream_and_a_cancel_half_way_leaves_nothing() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = server() else { return };
     let database = format!("sdb162_big_{}", std::process::id());
     fresh_database(&server, &database).await;
@@ -316,6 +318,7 @@ for each row when (new.id = 500001) execute function wait_at_halfway();
 
 #[tokio::test(flavor = "multi_thread")]
 async fn in_the_users_transaction_and_on_a_read_only_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = server() else { return };
     let database = format!("sdb162_tx_{}", std::process::id());
     fresh_database(&server, &database).await;
@@ -363,12 +366,31 @@ async fn in_the_users_transaction_and_on_a_read_only_session() {
         "{failed:?}"
     );
     assert_eq!(value(&writer, "select count(*) from small").await, "2");
+
+    // psql's `\copy` is a meta-command, not a COPY (SDB-437): it is refused before anything is
+    // sent, and the lines after it are never loaded as its data.
+    let events: Vec<CoreEvent> = writer
+        .run_script("\\copy small (id, v) from stdin;\n;\n6\tf\n\\.\n")
+        .collect()
+        .await;
+    let failed = events.iter().find_map(|e| match e {
+        CoreEvent::StatementFailed { index: 0, error } => Some(error.message.clone()),
+        _ => None,
+    });
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("psql command")),
+        "{events:?}"
+    );
+    assert_eq!(value(&writer, "select count(*) from small").await, "2");
     drop((writer, reader));
     drop_database(&server, &database).await;
 }
 
 #[test]
 fn the_guard_reads_the_copy_like_an_insert_and_never_its_data() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = spelaion_dialect::for_engine("postgres").unwrap();
     // The data holds what would be risky SQL: none of it is read.
     let script = "COPY t (a) FROM stdin;\ndrop table t;\ndelete from t\n\\.\nselect 1;";

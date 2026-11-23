@@ -3,13 +3,13 @@
 //! in the keychain. Temporary directories and a fake secret backend: the real keychain is
 //! never touched.
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture, personal, team};
 use spelaion_config::{
     ConnectionDraft, Engine, ImportClient, ImportedConnection, ImportedPassword, ImportedProxy,
-    ImportedSsh, ImportedTls, KeychainItem, PasswordChoice, Source, TargetFolder, TlsModeConfig,
-    add_connection, connection_account, find_duplicate, import_names, import_plan,
+    ImportedSsh, ImportedTls, KeychainItem, PasswordChoice, SessionDraft, Source, TargetFolder,
+    TlsModeConfig, add_connection, connection_account, find_duplicate, import_names, import_plan,
     read_stored_passwords, replacement_draft, update_connection,
 };
 use spelaion_driver_api::Secret;
@@ -48,6 +48,7 @@ fn imported(name: &str) -> ImportedConnection {
         ssh: None,
         proxy: None,
         tls: None,
+        session: SessionDraft::default(),
         unmapped: Vec::new(),
     }
 }
@@ -58,6 +59,7 @@ fn top_level() -> TargetFolder {
 
 #[test]
 fn duplicates_are_found_by_name_or_by_the_database_they_reach() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("import-dup");
     fx.write("user/connections/orders.toml", ORDERS);
     fx.write(
@@ -112,6 +114,7 @@ fn duplicates_are_found_by_name_or_by_the_database_they_reach() {
 
 #[test]
 fn a_copy_takes_the_clients_name_after_its_own() {
+    let _turn = crate::serial::file_turn(module_path!());
     let names: Vec<String> = import_names("Orders", ImportClient::Datagrip)
         .take(3)
         .collect();
@@ -124,6 +127,7 @@ fn a_copy_takes_the_clients_name_after_its_own() {
 
 #[test]
 fn the_target_folder_holds_the_clients_folders_or_replaces_them() {
+    let _turn = crate::serial::file_turn(module_path!());
     let keep = TargetFolder {
         folder: "Imported/DataGrip".into(),
         keep_client_folders: true,
@@ -165,6 +169,7 @@ fn the_target_folder_holds_the_clients_folders_or_replaces_them() {
 
 #[test]
 fn tls_and_read_only_come_with_the_connection_but_not_to_a_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut connection = imported("Orders");
     connection.read_only = true;
     connection.tls = Some(ImportedTls {
@@ -218,6 +223,7 @@ fn tls_and_read_only_come_with_the_connection_but_not_to_a_file() {
 
 #[test]
 fn replacing_takes_the_clients_settings_and_keeps_everything_else() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("import-replace");
     fx.write("user/connections/orders.toml", ORDERS);
     let config = fx.config();
@@ -296,6 +302,7 @@ fn replacing_takes_the_clients_settings_and_keeps_everything_else() {
 
 #[test]
 fn passwords_in_another_apps_keychain_are_read_only_when_asked_and_never_written_to_files() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("import-keychain");
     let config = fx.config();
     let backend = FakeBackend::default();
@@ -384,6 +391,7 @@ fn passwords_in_another_apps_keychain_are_read_only_when_asked_and_never_written
 
 #[test]
 fn a_password_can_be_saved_even_if_only_a_network_profile_has_one() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut connection = imported("Behind bastion");
     assert!(!connection.has_importable_password());
     connection.ssh = Some(ImportedSsh {
@@ -416,6 +424,7 @@ fn a_password_can_be_saved_even_if_only_a_network_profile_has_one() {
 
 #[test]
 fn an_ssh_key_tunnel_becomes_a_network_profile_without_a_password() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut connection = imported("Behind bastion");
     connection.host = "postgres".into();
     connection.ssh = Some(ImportedSsh {

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useShallow } from "zustand/react/shallow";
 import { ExportDialog } from "./components/ExportDialog";
 import { BackupDialog } from "./components/BackupDialog";
 import { ImportDialog } from "./components/ImportDialog";
@@ -21,13 +22,14 @@ import { SettingsDialog } from "./components/Settings";
 import { watchPlugins } from "./plugins";
 import { ReleaseNotesDialog } from "./components/ReleaseNotesDialog";
 import { SnippetsPanel } from "./components/SnippetsPanel";
-import { Sidebar, refreshConnections } from "./components/Sidebar";
+import { ExplorerDialogHost, Sidebar, refreshConnections } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
 import { ErDiagramView } from "./components/ErDiagram";
 import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest } from "./connect";
-import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./commandRegistry";
+import { commandSpec, globalCommandFor, type CommandId } from "./commandRegistry";
+import { commandShortcut, commandTitle } from "./shortcuts";
 import { activeContext, isCommandId, runCommand } from "./commands";
 import { commands, events } from "./api";
 import { usePreferences } from "./preferences";
@@ -49,7 +51,9 @@ const ACTIVITY_WIDTH = 48;
 export default function App() {
   useModalFocus();
   const { t } = useTranslation(["app", "shell", "settings", "editor"]);
-  const tabs = useApp((s) => s.tabs);
+  // Only the tabs' ids: a change inside one tab (its run, its connection) re-renders that tab's
+  // panel, never the whole window (SDB-110).
+  const tabIds = useApp(useShallow((s) => s.tabs.map((tab) => tab.id)));
   const activeTab = useApp((s) => s.activeTab);
   const historyOpen = useApp((s) => s.historyOpen);
   const snippetsOpen = useApp((s) => s.snippetsOpen);
@@ -75,7 +79,7 @@ export default function App() {
   // Opening or switching a query tab (from history, a shortcut…) leaves the MCP page.
   useEffect(() => {
     setSidebarSection((section) => (section === "mcp" ? "connections" : section));
-  }, [activeTab, tabs.length]);
+  }, [activeTab, tabIds.length]);
   const selectedProcessConnection = connections.find((connection) => connection.id === processConnection);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
@@ -229,7 +233,7 @@ export default function App() {
         <TabBar hidden={sidebarSection === "processes" || sidebarSection === "mcp"} />
         <div className="workspace-content">
           <div className="editor-workspace" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
-            {tabs.length === 0 ? (
+            {tabIds.length === 0 ? (
               <div className="welcome">
                 <p className="welcome-eyebrow">{t("welcomeEyebrow")}</p>
                 <h1>SpelaionDB</h1>
@@ -239,18 +243,12 @@ export default function App() {
                   <WelcomeButton command="connection.add" />
                   <WelcomeButton command="file.open" />
                 </div>
-                <p className="welcome-shortcut">{t("newQueryShortcut")}</p>
-                <p className="welcome-shortcut">{t("commands.paletteHint", { shortcut: commandSpec("palette.show").shortcut })}</p>
+                <p className="welcome-shortcut">{t("newQueryShortcut", { shortcut: commandShortcut("tab.new") })}</p>
+                <p className="welcome-shortcut">{t("commands.paletteHint", { shortcut: commandShortcut("palette.show") })}</p>
               </div>
             ) : (
-              tabs.map((t) => (
-                // All mounted (the editor keeps its state); only the active one is visible.
-                <div key={t.id} className="tab-panel" hidden={t.id !== activeTab}>
-                  <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
-                    {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
-                  </ScreenBoundary>
-                </div>
-              ))
+              // All mounted (the editor keeps its state); only the active one is visible.
+              tabIds.map((id) => <TabPanel key={id} id={id} active={id === activeTab} />)
             )}
           </div>
           {sidebarSection === "processes" && (selectedProcessConnection
@@ -262,7 +260,7 @@ export default function App() {
         </div>
       </main>
       {connectionDialog && (
-        <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : connectionDialog.openImportMenu ? "import" : "add"} dialog={connectionDialog} />
+        <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : connectionDialog.imports ? "import" : "add"} dialog={connectionDialog} />
       )}
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
       {movingConnection && <MoveConnection key={movingConnection.id} connection={movingConnection} />}
@@ -271,6 +269,7 @@ export default function App() {
         <OpenObjectDialog initialConnection={openObject.connectionId} onClose={() => useApp.getState().setOpenObject(null)} />
       )}
       {paletteOpen && <CommandPalette onClose={() => useApp.getState().setPaletteOpen(false)} />}
+      <ExplorerDialogHost />
       <ExportDialog />
       <ImportDialog />
       <BackupDialog />
@@ -280,12 +279,26 @@ export default function App() {
   );
 }
 
+/** One tab's panel. It reads its own tab, and is memoized on its id and visibility, so a change
+ *  to one tab (a run's progress, its connection) re-renders only that tab (SDB-110). */
+const TabPanel = memo(function TabPanel({ id, active }: { id: string; active: boolean }) {
+  const t = useApp((s) => s.tabs.find((tab) => tab.id === id));
+  if (!t) return null;
+  return (
+    <div className="tab-panel" hidden={!active}>
+      <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
+        {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
+      </ScreenBoundary>
+    </div>
+  );
+});
+
 /** A welcome screen action: a command of the registry, named as in the palette. */
 function WelcomeButton({ command, primary = false }: { command: CommandId; primary?: boolean }) {
   const { t } = useTranslation();
   const spec = commandSpec(command);
   return (
-    <button className={primary ? "primary" : undefined} data-command={command} title={withShortcut(t(spec.label), spec)} onClick={() => runCommand(command, activeContext("menu"))}>
+    <button className={primary ? "primary" : undefined} data-command={command} title={commandTitle(t(spec.label), command)} onClick={() => runCommand(command, activeContext("menu"))}>
       {t(spec.label)}
     </button>
   );

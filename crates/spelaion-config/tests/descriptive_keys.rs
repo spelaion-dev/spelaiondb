@@ -2,7 +2,7 @@
 //! duplicating, copying and pasting, and changing its engine. Temporary directories and a fake secret backend (the
 //! real keychain is never touched).
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture, personal};
 use spelaion_config::{
@@ -14,6 +14,7 @@ const DESCRIPTION: &str = "Orders of the EU shop.\nAsk #data first.";
 
 #[test]
 fn descriptions_survive_duplicates_copies_and_engine_changes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("descriptive-keys");
     fx.write("user/connections/orders.toml", DESCRIBED);
     let config = fx.config();
@@ -82,6 +83,7 @@ fn tags_of(fx: &Fixture, id: &spelaion_config::ConnectionId) -> Vec<String> {
 
 #[test]
 fn tags_survive_duplicates_copies_and_engine_changes() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tagged-copies");
     fx.write("user/connections/billing.toml", TAGGED);
     let config = fx.config();
@@ -149,6 +151,7 @@ const DESCRIBED_TYPED_TAGGED: &str = "schema_version = 1\nname = \"Ledger\"\ndes
 
 #[test]
 fn the_type_description_and_tags_travel_together() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("typed-described-tagged");
     fx.write("user/connections/ledger.toml", DESCRIBED_TYPED_TAGGED);
     let config = fx.config();

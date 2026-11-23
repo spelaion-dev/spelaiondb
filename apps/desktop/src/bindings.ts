@@ -146,6 +146,21 @@ export const commands = {
 	/**  The user's own editor snippets (SDB-384), by name. */
 	editorSnippets: () => typedError<EditorSnippetItem[], string>(__TAURI_INVOKE("editor_snippets")),
 	/**
+	 *  The user's changes to the keyboard shortcuts (SDB-447): only the differences from the
+	 *  registry's defaults.
+	 */
+	shortcutOverrides: () => typedError<ShortcutOverrideItem_Serialize[], string>(__TAURI_INVOKE("shortcut_overrides")),
+	/**
+	 *  Replaces the user's changes to the keyboard shortcuts, all of them or none. The core
+	 *  refuses keys a command may not take (ADR-064).
+	 */
+	setShortcutOverrides: (overrides: ShortcutOverrideItem_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("set_shortcut_overrides", { overrides })),
+	/**
+	 *  Why some keys cannot be a command's shortcut, or `None` when they can (ADR-064): the
+	 *  dialog that takes new keys says it as they are pressed.
+	 */
+	checkShortcut: (keys: string) => __TAURI_INVOKE<string | null>("check_shortcut", { keys }),
+	/**
 	 *  Saves an editor snippet, replacing the one of the same name. The core refuses one that is
 	 *  too long, holds hidden characters or has a name that is not an identifier.
 	 */
@@ -545,15 +560,16 @@ export const commands = {
 	/**  What a relation uses and what uses it; `None` when the engine cannot tell (SDB-393). */
 	objectDependencies: (session: string, schema: string, table: string) => typedError<DependenciesItem_Serialize | null, string>(__TAURI_INVOKE("object_dependencies", { session, schema, table })),
 	/**
-	 *  Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
-	 *  of `schema.table`): the core finds the key in the catalog again, reads the row's typed
-	 *  values and writes the filter of the table data tab it leads to.
+	 *  Follows a foreign key from the row at `row` of `result`: a table data tab's page of
+	 *  `schema.table`, or a query's result the core matched to that table (SDB-93). The core
+	 *  checks the result's table, finds the key in the catalog again, reads the row's typed values
+	 *  and writes the filter of the table data tab it leads to.
 	 */
 	followKey: (session: string, result: number, row: number, schema: string, table: string, key: KeyRefItem) => typedError<KeyTargetItem, string>(__TAURI_INVOKE("follow_key", { session, result, row, schema, table, key })),
 	/**
-	 *  The references panel of a table data tab: every foreign key of the row at `row` (the
-	 *  table's own and those that point to it), each with up to `limit` of the rows it leads to,
-	 *  read in turn on the tab's session.
+	 *  The references panel of a table data tab, or of a query's result matched to one table
+	 *  (SDB-93): every foreign key of the row at `row` (the table's own and those that point to
+	 *  it), each with up to `limit` of the rows it leads to, read in turn on the tab's session.
 	 */
 	rowReferences: (session: string, result: number, row: number, schema: string, table: string, limit: number) => typedError<RowReferenceItem_Serialize[], string>(__TAURI_INVOKE("row_references", { session, result, row, schema, table, limit })),
 	/**
@@ -904,6 +920,12 @@ export const commands = {
 	 *  says so instead of failing.
 	 */
 	scanConnections: (client: string, path: string | null, filePassword: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword })),
+	/**
+	 *  What a client has on this computer, for the import's list (SDB-446): counted by the core
+	 *  without reading any saved password, keychain or encrypted export, off the UI thread. The page
+	 *  asks for every client at once and fills each row as it answers.
+	 */
+	clientImportSource: (client: string, path: string | null) => typedError<ClientSourceItem, string>(__TAURI_INVOKE("client_import_source", { client, path })),
 	/**  The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015). */
 	kubeContexts: (form: KubernetesDraftItem, editor: KubeEditor_Deserialize) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form, editor })),
 	/**  The namespaces of the chosen context. */
@@ -1121,6 +1143,11 @@ export const commands = {
 	joinSql: (session: string, tables: TableRefItem[], inner: boolean) => typedError<string, string>(__TAURI_INVOKE("join_sql", { session, tables, inner })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
+	/**
+	 *  The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
+	 *  none: the core matches the rows to one table, on a read-only connection too.
+	 */
+	queryKeyTable: (session: string, result: number, sql: string) => typedError<KeyTableItem | null, string>(__TAURI_INVOKE("query_key_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
 	/**  An editor tab's transaction, as the core last read it (ADR-031). */
@@ -1493,6 +1520,8 @@ export type CellViewItem_Deserialize = {
 	limit: number | null,
 	/**  The value read as a geometry, for the map view (ADR-045). */
 	geometry?: GeoItem_Deserialize | null,
+	/**  Why a value that is a geometry is not drawn on the map (SDB-213). */
+	mapNote?: MapNote | null,
 };
 
 /**
@@ -1517,6 +1546,8 @@ export type CellViewItem_Serialize = {
 	limit: number | null,
 	/**  The value read as a geometry, for the map view (ADR-045). */
 	geometry: GeoItem_Serialize | null,
+	/**  Why a value that is a geometry is not drawn on the map (SDB-213). */
+	mapNote: MapNote | null,
 };
 
 /**  `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file. */
@@ -1614,6 +1645,22 @@ export type ChoicePickerItem = {
 
 export type ChoiceSourceItem = "enum" | "set" | "check";
 
+/**
+ *  What the import's list shows for a client before it is picked (SDB-446), as the core decided
+ *  it (`ImportSourceState`). A folder or file the test chose stands for the client's own place.
+ */
+export type ClientSourceItem = 
+/**  Connections found where the client keeps them: how many, and where. */
+{ kind: "found"; place: string; count: number } | 
+/**  The client keeps nothing where it would on this computer. */
+{ kind: "notFound" } | 
+/**  Nothing this computer reads on its own: an export file is needed. */
+{ kind: "needsFile" } | 
+/**  An encrypted export: counted once opened with its password. */
+{ kind: "encrypted"; place: string } | 
+/**  Reading failed: why (the other clients are not held). */
+{ kind: "failed"; reason: string };
+
 /**  The clipboard form of a connection: no secrets, nothing that runs a program. */
 export type ClipboardConnectionItem = {
 	text: string,
@@ -1692,6 +1739,8 @@ export type ColumnMapItem_Deserialize = {
 	rowsRead: number,
 	nulls: number,
 	unreadable: number,
+	/**  SQL Server values of a type the plugin did not name, with an SRID: not drawn (SDB-213). */
+	typeUnknown: number,
 	tooBig: number,
 	truncated: boolean,
 	/**  The most shapes a column's map holds. */
@@ -1708,6 +1757,8 @@ export type ColumnMapItem_Serialize = {
 	rowsRead: number,
 	nulls: number,
 	unreadable: number,
+	/**  SQL Server values of a type the plugin did not name, with an SRID: not drawn (SDB-213). */
+	typeUnknown: number,
 	tooBig: number,
 	truncated: boolean,
 	/**  The most shapes a column's map holds. */
@@ -3129,7 +3180,11 @@ export type GeoFormat =
 /**  SpatiaLite's own blob. */
 "spatialite" | 
 /**  A GeoPackage geometry: its header, then WKB. */
-"geoPackage";
+"geoPackage" | 
+/**  SQL Server's `geometry` or `geography`, in its CLR serialization (MS-SSCLRT). */
+"sqlServer" | 
+/**  Well-known text, or PostGIS's extended form with `SRID=…;` before it. */
+"wkt";
 
 /**
  *  A cell or a column read as geometry, for the map (ADR-045): GeoJSON from the core, never
@@ -3409,6 +3464,11 @@ export type ImportItem_Deserialize = {
 	 */
 	existingPersonal?: ExistingItem | null,
 	existingProject?: ExistingItem | null,
+	/**
+	 *  The session setup it brings (SQL run on every new session, ADR-037), already checked by
+	 *  the core; empty for none.
+	 */
+	setup: string,
 	/**  What the client has that SpelaionDB does not import. */
 	unmapped: string[],
 };
@@ -3447,6 +3507,11 @@ export type ImportItem_Serialize = {
 	 */
 	existingPersonal: ExistingItem | null,
 	existingProject: ExistingItem | null,
+	/**
+	 *  The session setup it brings (SQL run on every new session, ADR-037), already checked by
+	 *  the core; empty for none.
+	 */
+	setup: string,
 	/**  What the client has that SpelaionDB does not import. */
 	unmapped: string[],
 };
@@ -3518,6 +3583,11 @@ export type ImportReport = {
 	skipped: ImportSkip[],
 	/**  Connections imported without the password the client kept in the keychain, and why. */
 	passwordErrors: ImportSkip[],
+	/**
+	 *  Imported or replaced connections that brought setup statements (SDB-99): SQL that runs on
+	 *  every new session, which the user should know about.
+	 */
+	withSetup: string[],
 };
 
 /**  The user's choices; the core writes every statement from them. */
@@ -3730,6 +3800,12 @@ export type KeyRefItem = {
 	direction: KeyDirectionItem,
 	schema: string,
 	table: string,
+	name: string,
+};
+
+/**  The table whose foreign keys a query's result follows (SDB-93), as the core matched it. */
+export type KeyTableItem = {
+	schema: string,
 	name: string,
 };
 
@@ -4023,6 +4099,15 @@ export type MapCrs =
  *  drawn as they are on a plain background, never over tiles.
  */
 "plane";
+
+/**  Why a value that is a geometry is not drawn on the map. */
+export type MapNote = 
+/**
+ *  A SQL Server spatial value with an SRID in a column the driver did not name (`udt`):
+ *  it may be geometry (x first) or geography (latitude first), and is not guessed. A
+ *  SQL Server plugin that names the column's type draws it.
+ */
+"sqlServerTypeUnknown";
 
 /**  The map view's background (ADR-045): tiles from the user's server, off by default. */
 export type MapPreferencesItem = {
@@ -6181,6 +6266,30 @@ export type SessionLost_Serialize = {
 	 *  (ADR-031).
 	 */
 	openTransaction: boolean,
+};
+
+/**
+ *  One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
+ *  app's registry and the keys it now has, as the registry writes them, or none.
+ */
+export type ShortcutOverrideItem = ShortcutOverrideItem_Serialize | ShortcutOverrideItem_Deserialize;
+
+/**
+ *  One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
+ *  app's registry and the keys it now has, as the registry writes them, or none.
+ */
+export type ShortcutOverrideItem_Deserialize = {
+	command: string,
+	keys?: string | null,
+};
+
+/**
+ *  One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
+ *  app's registry and the keys it now has, as the registry writes them, or none.
+ */
+export type ShortcutOverrideItem_Serialize = {
+	command: string,
+	keys: string | null,
 };
 
 /**

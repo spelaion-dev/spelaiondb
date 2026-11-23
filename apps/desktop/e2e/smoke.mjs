@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 import { commandLines, requestClose } from "./processes.mjs";
+import { webviewPage } from "./cdpPage.mjs";
 
 if (process.platform === "linux") {
   console.error("smoke.mjs drives WebView2 over CDP; on Linux run node e2e/smoke-linux.mjs (AGENTS.md)");
@@ -150,6 +151,10 @@ function startApp(extraEnv = {}, extraArgs = []) {
       SPELAION_PGADMIN_DIR: join(userDir, "no-pgadmin"),
       // The Beekeeper Studio import never opens the user's app.db: this folder has none.
       SPELAION_BEEKEEPER_DIR: join(userDir, "no-beekeeper"),
+      // The list of clients to import from (SDB-446) looks at every client at once: never the
+      // user's DBeaver workspace, nor HeidiSQL's sessions in the user's registry.
+      SPELAION_DBEAVER_DIR: join(userDir, "no-dbeaver"),
+      SPELAION_HEIDISQL_REGISTRY: "off",
     },
     windowsHide: true,
     stdio: "inherit",
@@ -273,7 +278,8 @@ function testKubectls() {
  *  the focus, as it would in a window the user is working in: focus and blur events, `:focus`
  *  and `document.hasFocus()` behave as they do for a user. */
 async function appPage() {
-  const page = browser.contexts()[0].pages()[0];
+  // Every start (the first and each restart) waits for WebView2's context and page.
+  const page = await webviewPage(browser);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
   watchContentSecurityPolicy(page);
@@ -357,7 +363,20 @@ try {
   browser = await connect();
   let page = await appPage();
   page.setDefaultTimeout(30_000);
-  const shot = (name) => page.screenshot({ path: join(shots, `${name}.png`) });
+  // A screenshot waits for the page's running transitions and finite animations (at most
+  // 500 ms) first: a step that has just switched the theme would otherwise catch the 120 ms
+  // colour transitions half way, with grey text on a grey surface. Endless ones (spinners) are
+  // not waited for.
+  const settled = () => page.evaluate((cap) => Promise.race([
+    Promise.all(document.getAnimations()
+      .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+      .map((animation) => animation.finished.catch(() => {}))),
+    new Promise((done) => setTimeout(done, cap)),
+  ]), 500);
+  const shot = async (name) => {
+    await settled();
+    await page.screenshot({ path: join(shots, `${name}.png`) });
+  };
   // SPELAION_E2E_UNTIL=<the start of a step's text>: the run stops as a pass when the step
   // after that one begins, to repeat one step without the whole run.
   let untilReached = false;
@@ -466,7 +485,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14, shortcuts: 15 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -1101,6 +1120,17 @@ try {
   await panel.getByRole("menuitem", { name: "Copy as SQL INSERT" }).click();
   const tuples = json.map((row) => `('${row.country.replaceAll("'", "''")}')`).join(",\n  ");
   assert.equal(await copied(6), `INSERT INTO table_name (country) VALUES ${tuples};\n`);
+  {
+    // The same copy from the command palette, on the selection still there (SDB-441).
+    await page.keyboard.press("Control+Shift+P");
+    const commandPalette = page.getByRole("dialog", { name: "Command palette" });
+    await commandPalette.getByRole("combobox").fill("selected cells as an in list");
+    const first = commandPalette.getByRole("listbox", { name: "Commands and objects" }).getByRole("option").first();
+    assert.equal(await first.locator(".palette-label").innerText(), "Table data: Copy the selected cells as an IN list");
+    await page.keyboard.press("Enter");
+    await commandPalette.waitFor({ state: "detached" });
+    assert.match(await copied(7), /^\('[^']+', '[^']+', '[^']+'\)$/);
+  }
 
   step("copy special: a custom delimiter, quote, row delimiter and row numbers, kept as the copy defaults (SDB-388)");
   {
@@ -1136,7 +1166,7 @@ try {
     }, themeBefore);
     await dialog.getByRole("button", { name: "Copy", exact: true }).click();
     await dialog.waitFor({ state: "detached" });
-    const lines = (await copied(7)).split("\r\n");
+    const lines = (await copied(8)).split("\r\n");
     assert.deepEqual(lines[0].split("~"), ["#", "country", "orders"]);
     assert.equal(lines.length, 4, lines.join("|"));
     assert.equal(lines[1].split("~")[0], "1");
@@ -1159,7 +1189,7 @@ try {
     await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
     await panel.getByRole("menuitem", { name: "Copy as SQL UPDATE" }).click();
     await panel.getByRole("status").filter({ hasText: "Could not copy as UPDATE: the result is not a plain SELECT of one table" }).waitFor();
-    assert.equal(await page.evaluate(() => window.__copied.length), 7);
+    assert.equal(await page.evaluate(() => window.__copied.length), 8);
   }
 
   step("export: the loaded result, every row run again with CSV options, and a selection");
@@ -1961,6 +1991,7 @@ try {
     // as device pixels): the whole window, as it is on screen, comes from CDP itself.
     const cdp = await page.context().newCDPSession(page);
     const windowShot = async (name) => {
+      await settled();
       const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
       writeFileSync(join(shots, `${name}.png`), Buffer.from(data, "base64"));
     };
@@ -2266,7 +2297,10 @@ try {
       return active !== null && active !== old && /^1 row(?! \(loading\))/.test(status) && tab?.querySelector(".editor-action-cancel") === null;
     }, before);
   };
-  const firstCell = async () => {
+  // The first cell of the grid shown, copied with Ctrl+C. A grid replaced by a new result
+  // between the click and the key copies nothing: the loops that wait for a value pass a short
+  // `timeout`, get "" and try again, instead of failing on the first copy that never came.
+  const firstCell = async (timeout = 30_000) => {
     const grid = panel.locator(".grid-scroller");
     await grid.waitFor();
     let box = await grid.boundingBox();
@@ -2277,7 +2311,10 @@ try {
     const before = await page.evaluate(() => window.__copied.length);
     await page.mouse.click(box.x + 80, box.y + 34 + 12);
     await page.keyboard.press("Control+c");
-    return (await copied(before + 1)).trimEnd();
+    const arrived = await page
+      .waitForFunction((n) => window.__copied.length > n, before, { timeout })
+      .then(() => true, () => false);
+    return arrived ? (await page.evaluate(() => window.__copied[window.__copied.length - 1])).trimEnd() : "";
   };
   const sqlEditor = panel.locator(".cm-content");
   await sqlEditor.click();
@@ -2319,7 +2356,7 @@ try {
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   let selected = "";
   for (let i = 0; i < 20 && selected !== "second;"; i++) {
-    selected = await firstCell();
+    selected = await firstCell(3_000);
     if (selected !== "second;") await page.waitForTimeout(250);
   }
   assert.equal(selected, "second;");
@@ -2333,7 +2370,7 @@ try {
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   selected = "";
   for (let i = 0; i < 20 && selected !== "first"; i++) {
-    selected = await firstCell();
+    selected = await firstCell(3_000);
     if (selected !== "first") await page.waitForTimeout(250);
   }
   assert.equal(selected, "first");
@@ -2360,7 +2397,7 @@ try {
     const cellIs = async (expected) => {
       let cell = "";
       for (let i = 0; i < 20 && cell !== expected; i++) {
-        cell = await firstCell();
+        cell = await firstCell(3_000);
         if (cell !== expected) await page.waitForTimeout(250);
       }
       assert.equal(cell, expected);
@@ -2498,14 +2535,16 @@ try {
     const cellIs = async (expected) => {
       let cell = "";
       for (let i = 0; i < 20 && cell !== expected; i++) {
-        cell = await firstCell();
+        cell = await firstCell(3_000);
         if (cell !== expected) await page.waitForTimeout(250);
       }
       assert.equal(cell, expected);
     };
     const variables = page.getByRole("dialog", { name: "Variables", exact: true });
     const openVariables = async () => {
+      // In the editor menu's Run submenu (SDB-438).
       await actions.getByRole("button", { name: "Editor actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Run ▸", exact: true }).click();
       await page.getByRole("menuitem", { name: "Variables…", exact: true }).click();
       await variables.waitFor();
     };
@@ -2618,7 +2657,7 @@ try {
   const firstCellIs = async (value) => {
     let cell = "";
     for (let i = 0; i < 20 && cell !== value; i++) {
-      cell = await firstCell();
+      cell = await firstCell(3_000);
       if (cell !== value) await page.waitForTimeout(250);
     }
     assert.equal(cell, value);
@@ -2686,6 +2725,7 @@ try {
   await sqlEditor.click();
   await page.keyboard.press("Control+End");
   await actions.getByRole("button", { name: "Editor actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Run ▸", exact: true }).click();
   const fromCursor = page.getByRole("menuitem", { name: "Run from the cursor to the end", exact: true });
   assert.equal(await fromCursor.locator(".menu-shortcut").innerText(), "Ctrl+Alt+Enter");
   await fromCursor.click();
@@ -3000,8 +3040,10 @@ try {
   {
     const menu = page.getByRole("menu", { name: "Editor actions" });
     const editorText = async (text) => { await page.waitForFunction((expected) => [...document.querySelectorAll('.tab-panel:not([hidden]) .cm-content .cm-line')].map((line) => line.textContent).join("\n") === expected, text); };
-    const menuAction = async (name) => {
+    // An item of the editor menu, or of one of its submenus (SDB-438), opened with a click.
+    const menuAction = async (name, submenu) => {
       await panel.getByRole("button", { name: "Editor actions", exact: true }).click();
+      if (submenu) await menu.getByRole("menuitem", { name: `${submenu} ▸`, exact: true }).click();
       await menu.getByRole("menuitem", { name, exact: true }).click();
     };
     await replaceQuery(panel, "select 'before' as value;");
@@ -3020,7 +3062,7 @@ try {
     await page.waitForFunction(() => getSelection().toString() === "id");
     await replaceQuery(panel, "select 'α;β' as value;\nselect 2;");
     await page.keyboard.press("Control+Home");
-    await menuAction("Select current statement");
+    await menuAction("Select current statement", "Selection");
     await page.waitForFunction(() => getSelection().toString() === "select 'α;β' as value");
     const before = await page.evaluate(() => window.__copied.length);
     await menuAction("Copy current statement");
@@ -3035,17 +3077,17 @@ try {
     await menuAction("Toggle line comment");
     await editorText("select id from orders");
     await page.keyboard.press("Control+A");
-    await menuAction("Toggle block comment");
+    await menuAction("Toggle block comment", "Selection");
     assert.match(await sqlEditor.innerText(), /^\/\*/);
     await page.keyboard.press("Control+z");
     await page.keyboard.press("Control+A");
-    await menuAction("Convert to upper case");
+    await menuAction("Convert to upper case", "Selection");
     await editorText("SELECT ID FROM ORDERS");
-    await menuAction("Convert to lower case");
+    await menuAction("Convert to lower case", "Selection");
     await editorText("select id from orders");
     await replaceQuery(panel, "O'Reilly\n漢字\n");
     await page.keyboard.press("Control+A");
-    await menuAction("Lines to quoted list");
+    await menuAction("Lines to quoted list", "Selection");
     await editorText("'O''Reilly', '漢字', ''");
     await page.keyboard.press("Control+z");
     await editorText("O'Reilly\n漢字\n");
@@ -3054,13 +3096,13 @@ try {
     await editorText("()");
     await replaceQuery(panel, "SELECT (\n  SELECT 1\n);");
     await page.keyboard.press("Control+Home");
-    await menuAction("Fold selection");
+    await menuAction("Fold selection", "Selection");
     await panel.locator(".cm-foldPlaceholder").waitFor();
-    await menuAction("Unfold selection");
+    await menuAction("Unfold selection", "Selection");
     await panel.locator(".cm-foldPlaceholder").waitFor({ state: "detached" });
     await replaceQuery(panel, "(select 1)");
     await page.keyboard.press("Control+Home");
-    await menuAction("Go to matching bracket");
+    await menuAction("Go to matching bracket", "Go to");
     await page.keyboard.insertText("X");
     await editorText("(select 1)X");
     await replaceQuery(panel, "orders orders orders");
@@ -3091,12 +3133,40 @@ try {
       await page.keyboard.press("ArrowRight");
     }
     await setTheme("light", "light");
-    await sqlEditor.focus();
+    // The whole menu from the keyboard (SDB-438): its last rows are the View and Session
+    // submenus; Right opens one with its first item focused, Left closes it, and Enter on an item
+    // of the Go to submenu runs it.
+    await replaceQuery(panel, "select 1;\nselect 2;");
+    await page.keyboard.press("Control+Home");
     await page.keyboard.press("Shift+F10");
     await menu.waitFor();
+    const focusedItem = () => page.evaluate(() => document.activeElement.getAttribute("data-command") ?? document.activeElement.textContent);
     await page.keyboard.press("End");
-    // The last item is the editor's zoom (SDB-389), after the snippets.
-    assert.equal(await page.evaluate(() => document.activeElement.textContent.includes("Reset the editor's zoom")), true);
+    assert.equal(await focusedItem(), "Session ▸");
+    await page.keyboard.press("ArrowUp");
+    assert.equal(await focusedItem(), "View ▸");
+    await page.keyboard.press("ArrowRight");
+    const viewMenu = page.getByRole("menu", { name: "View", exact: true });
+    await viewMenu.waitFor();
+    assert.equal(await focusedItem(), "editor.wordWrap");
+    await page.keyboard.press("End");
+    // The editor's zoom (SDB-389) ends the View submenu.
+    assert.equal(await focusedItem(), "editor.zoomReset");
+    await shot("sdb-438-editor-menu-submenu");
+    await page.keyboard.press("ArrowLeft");
+    await viewMenu.waitFor({ state: "detached" });
+    assert.equal(await focusedItem(), "View ▸");
+    await page.keyboard.press("ArrowUp");
+    assert.equal(await focusedItem(), "Go to ▸");
+    await page.keyboard.press("Enter");
+    await page.getByRole("menu", { name: "Go to", exact: true }).waitFor();
+    assert.equal(await focusedItem(), "editor.nextStatement");
+    await page.keyboard.press("Enter");
+    await menu.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .cm-activeLine")?.textContent === "select 2;");
+    assert.equal(await sqlEditor.evaluate((el) => el === document.activeElement), true);
+    await page.keyboard.press("Shift+F10");
+    await menu.waitFor();
     await page.keyboard.press("Escape");
     assert.equal(await sqlEditor.evaluate((el) => el === document.activeElement), true);
     await withSettings("editor", async (settings) => {
@@ -3400,6 +3470,66 @@ try {
     await replaceQuery(panel, "select 'unterminated");
   }
 
+  step("Settings › Keyboard shortcuts lists every command and finds one by its name or by its keys (SDB-447)");
+  await withSettings("shortcuts", async (settings) => {
+    const rows = settings.locator(".shortcut-table tr[data-command]");
+    assert.ok((await rows.count()) > 50, "every command is listed");
+    const search = settings.getByRole("searchbox", { name: "Search commands" });
+    await search.fill("ctrl + enter");
+    const run = settings.locator('tr[data-command="editor.run"]');
+    await run.waitFor();
+    assert.equal(await run.locator(".shortcut-keys").innerText(), "Ctrl+Enter");
+    assert.equal(await settings.locator('tr[data-command="tab.new"]').count(), 0, "other keys are hidden");
+    await search.fill("reopen closed");
+    assert.equal(await settings.locator('tr[data-command="tab.reopen"] .shortcut-keys').innerText(), "Ctrl+Shift+T");
+    await search.fill("no command is called this");
+    await settings.getByText("No command matches.").waitFor();
+  });
+  {
+    // Run script gets other keys: they run it and the old ones stop, the palette shows them at
+    // once, and Reset gives it its default again. The other steps keep the defaults.
+    const resultTab = (name) => panel.locator(".result-tabs button", { hasText: name });
+    await withSettings("shortcuts", async (settings) => {
+      await settings.getByRole("searchbox", { name: "Search commands" }).fill("run script");
+      await settings.getByRole("button", { name: "Change the keys of Run script" }).click();
+      const dialog = page.getByRole("dialog", { name: "Keys for Run script" });
+      await dialog.waitFor();
+      await page.keyboard.press("Control+t");
+      await dialog.getByText("Ctrl+T already runs New query.").waitFor();
+      await page.keyboard.press("q");
+      await dialog.getByText("These keys type or edit text: add Ctrl or Alt").waitFor();
+      await page.keyboard.press("Control+Alt+F9");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await dialog.waitFor({ state: "detached" });
+      const row = settings.locator('tr[data-command="editor.runScript"]');
+      assert.equal(await row.locator(".shortcut-keys").innerText(), "Ctrl+Alt+F9");
+      await row.getByText("Changed").waitFor();
+      await shot("05f-shortcut-changed");
+    });
+    await replaceQuery(panel, "-- shortcut 447\nselect 447");
+    await page.keyboard.press("Control+Alt+F9");
+    await resultTab("shortcut 447").waitFor();
+    await replaceQuery(panel, "-- old keys\nselect 1");
+    await page.keyboard.press("Control+Shift+Enter");
+    await page.waitForTimeout(500);
+    assert.equal(await resultTab("old keys").count(), 0, "the old keys no longer run the script");
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("run script");
+    assert.equal(await palette.locator('[data-command="editor.runScript"] .menu-shortcut').innerText(), "Ctrl+Alt+F9");
+    await page.keyboard.press("Escape");
+    await palette.waitFor({ state: "detached" });
+    await withSettings("shortcuts", async (settings) => {
+      await settings.getByRole("searchbox", { name: "Search commands" }).fill("run script");
+      await settings.getByRole("button", { name: "Give Run script its default keys again" }).click();
+      await settings.locator('tr[data-command="editor.runScript"] .shortcut-keys', { hasText: "Ctrl+Shift+Enter" }).waitFor();
+    });
+    await sqlEditor.click();
+    await page.keyboard.press("Control+Shift+Enter");
+    await resultTab("old keys").waitFor();
+    await replaceQuery(panel, "select 'unterminated");
+  }
+
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");
   const queryTabCount = await page.locator(".tabbar .tab").count();
   await sqlEditor.click();
@@ -3591,6 +3721,45 @@ try {
     await shown.locator(".editor-pane").waitFor({ state: "hidden" });
     await shown.getByRole("button", { name: "Restore the editor (Ctrl+Alt+M)" }).click();
     await shown.locator(".editor-pane").waitFor({ state: "visible" });
+    // Each tab item reads its own tab (SDB-110): with the copy running, two new tabs open and the
+    // newest is dragged in front of the copy; the copy keeps its spinner, the moved tab its dot.
+    const tabNamed = (name) => tabs.filter({ has: page.locator(".tab-label").getByText(name, { exact: true }) });
+    const runningCopy = tabNamed("Orders report (copy)");
+    await replaceQuery(shown, "with recursive spin(i) as (select 1 union all select i + 1 from spin) select count(*) from spin;");
+    await run(shown);
+    await runningCopy.locator(".tab-running").waitFor();
+    const beforeNew = await tabs.count();
+    const newQuery = page.getByRole("button", { name: "New query (Ctrl+T)" });
+    await newQuery.click();
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 1, beforeNew);
+    const firstNew = await activeLabel();
+    await newQuery.click();
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 2, beforeNew);
+    const moved = await activeLabel();
+    const order = await labels();
+    const copyAt = order.indexOf("Orders report (copy)");
+    await dragTab(order.indexOf(moved), copyAt, "left", tabs.nth(copyAt).and(page.locator(".drop-before")));
+    await page.mouse.up();
+    await page.locator(".tabbar .tab.dragging").waitFor({ state: "detached" });
+    const reordered = await labels();
+    assert.equal(reordered.indexOf(moved), copyAt, reordered.join(" | "));
+    assert.equal(reordered.indexOf("Orders report (copy)"), copyAt + 1, reordered.join(" | "));
+    assert.equal(await activeLabel(), moved);
+    await runningCopy.locator(".tab-running").waitFor();
+    await tabNamed(moved).locator(".dot").waitFor();
+    assert.equal(await tabNamed(moved).locator(".tab-running").count(), 0);
+    await shot("sdb-110-tab-reorder-running");
+    // The two new tabs closed, the copy's run cancelled: as the steps below expect.
+    for (const name of [moved, firstNew]) {
+      await tabNamed(name).hover();
+      await tabNamed(name).locator("button.close").click();
+      await tabNamed(name).waitFor({ state: "detached" });
+    }
+    assert.equal(await tabs.count(), beforeNew);
+    await runningCopy.click();
+    await shown.getByRole("button", { name: "Cancel", exact: true }).click();
+    await runningCopy.locator(".tab-running").waitFor({ state: "detached" });
+    await runningCopy.locator(".dot-connected").waitFor();
     // Back as it was for the next steps: the copy closed, the original unpinned.
     await page.keyboard.press("Control+w");
     await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, beforeCopy);
@@ -3817,7 +3986,7 @@ try {
       await overview.getByRole("button", { name: "Refresh" }).click();
       const addedRow = overview.getByText("smoke_added", { exact: true }).locator("xpath=..");
       await addedRow.getByRole("button", { name: "Drop…" }).click();
-      const dropAdded = page.getByRole("dialog", { name: "Drop smoke_added" });
+      const dropAdded = page.getByRole("dialog", { name: "Drop smoke_added?" });
       await dropAdded.getByRole("button", { name: "Cancel" }).waitFor();
       assert.ok(await dropAdded.getByRole("button", { name: "Cancel" }).evaluate((button) => document.activeElement === button), "destructive confirmation starts on Cancel");
       await dropAdded.getByLabel("SQL that will run").filter({ hasText: "DROP COLUMN smoke_added" }).waitFor();
@@ -4192,8 +4361,12 @@ try {
   assert.equal(await idColumn.getAttribute("aria-selected"), "false");
   // Drop: the core's SQL first, without "Cascade" on SQLite, which has none.
   await amountColumn.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Drop…" }).click();
-  const dropColumn = page.getByRole("dialog", { name: "Drop renamed_probe.amount" });
+  // The explorer's menus show each item's key beside it, as the tab menu does (SDB-85).
+  const dropItem = page.getByRole("menuitem", { name: "Drop…" });
+  assert.equal(await dropItem.locator(".menu-shortcut").innerText(), "Delete");
+  assert.equal(await dropItem.getAttribute("aria-keyshortcuts"), "Delete");
+  await dropItem.click();
+  const dropColumn = page.getByRole("dialog", { name: "Drop renamed_probe.amount?" });
   await dropColumn.getByLabel("SQL that will run").filter({ hasText: "ALTER TABLE renamed_probe DROP COLUMN amount;" }).waitFor();
   assert.equal(await dropColumn.locator('input[name="cascade"]').count(), 0);
   await dropColumn.getByRole("button", { name: "Drop", exact: true }).click();
@@ -4201,7 +4374,7 @@ try {
   await renamedProbe.locator(".twisty").click();
   await renamedProbe.focus();
   await page.keyboard.press("Delete");
-  const dropTable = page.getByRole("dialog", { name: "Drop renamed_probe" });
+  const dropTable = page.getByRole("dialog", { name: "Drop renamed_probe?" });
   await dropTable.getByLabel("SQL that will run").filter({ hasText: "DROP TABLE renamed_probe;" }).waitFor();
   await shot("05h-drop-dialog");
   await dropTable.getByRole("button", { name: "Drop", exact: true }).click();
@@ -4232,7 +4405,7 @@ try {
   assert.equal(await tablesFolder.locator(".muted").innerText(), "4");
   await formTable.focus();
   await page.keyboard.press("Delete");
-  const dropFormTable = page.getByRole("dialog", { name: "Drop smoke_form_table" });
+  const dropFormTable = page.getByRole("dialog", { name: "Drop smoke_form_table?" });
   await dropFormTable.getByRole("button", { name: "Drop", exact: true }).click();
   await formTable.waitFor({ state: "detached" });
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
@@ -4291,7 +4464,11 @@ try {
   await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
   // Enter lists the object's actions; Escape goes back to the search as it was.
   await page.keyboard.press("Enter");
-  assert.deepEqual(await paletteLabels(), ["Open data", "Open structure", "New console", "ER diagram of related tables", "Copy name", "Copy qualified name", "Show in explorer"]);
+  // The table's explorer menu, through the same functions (SDB-92), and the palette's own.
+  const tableActions = await paletteLabels();
+  assert.deepEqual(tableActions.slice(0, 9), ["Open data", "Open structure", "New console", "Open as SQL", "Export…", "Import data…", "ER diagram of related tables", "Copy name", "Copy qualified name"]);
+  for (const label of ["Duplicate table…", "Rename…", "Drop…", "Generate DDL", "Generate SELECT"]) assert.ok(tableActions.includes(label), `${label} in ${tableActions.join(", ")}`);
+  assert.equal(tableActions.at(-1), "Show in explorer");
   await shot("sdb-18-palette-actions");
   await page.keyboard.press("Escape");
   assert.equal(await paletteBox.inputValue(), "ord");
@@ -4302,6 +4479,39 @@ try {
   await page.keyboard.press("Enter");
   await palette.waitFor({ state: "detached" });
   assert.equal(await copied(copiedBeforePalette + 1), "orders");
+  {
+    // Generate DDL from the palette opens the same SQL preview as the explorer's menu.
+    await page.keyboard.press("Control+Shift+P");
+    await paletteBox.fill("ord");
+    await paletteResults.locator(".palette-item", { hasText: "big_orders" }).waitFor();
+    await page.keyboard.press("Enter");
+    await paletteBox.fill("generate ddl");
+    assert.equal((await paletteLabels())[0], "Generate DDL");
+    await page.keyboard.press("Enter");
+    const ddl = page.getByRole("dialog", { name: "Generated SQL" });
+    await page.waitForFunction(() => /CREATE TABLE/i.test(document.querySelector('[role="dialog"][aria-label="Generated SQL"] textarea')?.value ?? ""));
+    await palette.waitFor({ state: "detached" });
+    await ddl.getByRole("button", { name: "Close" }).click();
+    await ddl.waitFor({ state: "detached" });
+  }
+  {
+    // A schema the explorer read is a palette object too, with its menu's actions (SDB-441).
+    await page.keyboard.press("Control+Shift+P");
+    await paletteBox.fill("main");
+    const schemaEntry = paletteResults.locator(".palette-item", { has: page.locator(".palette-detail", { hasText: /^Schema · Shop \(SQLite\)$/ }) });
+    await schemaEntry.waitFor();
+    await schemaEntry.click();
+    const schemaActions = await paletteLabels();
+    assert.equal(schemaActions[0], "New console");
+    for (const label of ["Copy name", "Copy qualified name"]) assert.ok(schemaActions.includes(label), `${label} in ${schemaActions.join(", ")}`);
+    assert.equal(schemaActions.at(-1), "Show in explorer");
+    await paletteBox.fill("copy name");
+    assert.equal((await paletteLabels())[0], "Copy name");
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Enter");
+    await palette.waitFor({ state: "detached" });
+    assert.equal(await copied(before + 1), "main");
+  }
   {
     // Copy diagnostic info (SDB-398): the version and the engines in use are there; no
     // connection's name, host, user or file, and no path of this computer.
@@ -4662,7 +4872,9 @@ try {
     await range.filter({ hasText: "rows 49,501–50,000 of 50,000" }).waitFor();
     await pages.getByText("of 100", { exact: true }).waitFor();
     assert.equal(await pageNumber.inputValue(), "100");
-    await pages.getByRole("button", { name: "First page" }).click();
+    // The range shows the asked-for page at once, while the page itself is still read: wait
+    // for its grid, or the focus and Ctrl+G below go to the grid it replaces and are lost.
+    await tablePageReloadedBy(() => pages.getByRole("button", { name: "First page" }).click());
     await range.filter({ hasText: "rows 1–500 of 50,000" }).waitFor();
     // Go to row 1,234 (Ctrl+G): the page that holds it is read and the row is selected; the
     // grid numbers the table's rows, not the page's.
@@ -4768,7 +4980,9 @@ try {
     await page.mouse.click(grid.x + 52 + 20, grid.y + 34 + 12, { button: "right" });
     await openSubmenu(panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }));
     await panel.getByText("Added to the table's WHERE").waitFor();
-    await panel.getByRole("menuitem", { name: "id = 50000", exact: true }).click();
+    // The filtered page replaces the grid: the right-click below waits for the new one, or it
+    // opens a menu on the grid going away and the menu goes with it.
+    await tablePageReloadedBy(() => panel.getByRole("menuitem", { name: "id = 50000", exact: true }).click());
     await range.filter({ hasText: "rows 1–1" }).waitFor();
     assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), "id = 50000");
     let box = null;
@@ -5118,6 +5332,25 @@ try {
       await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n - 1, open);
     }
     assert.equal(await page.locator(".tabbar .tab", { hasText: "customer" }).count(), 0);
+
+    // A query of one table follows the same keys (SDB-93): the core matched its rows to orders.
+    panel = await newQuery("Shop (SQLite)", "select * from orders where id = 1;");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await panel.getByRole("button", { name: "References panel" }).waitFor();
+    box = await gridBox();
+    widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
+    await page.keyboard.press("Control+Enter");
+    await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor();
+    assert.match(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), /^id = \d+$/);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    // The customer's tab, then the query's.
+    for (let i = 0; i < 2; i++) {
+      const open = await page.locator(".tabbar .tab").count();
+      await page.keyboard.press("Control+w");
+      await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n - 1, open);
+    }
 
     // The table details' References: the keys of other tables that point to customer.
     await customerNode.locator(".twisty").click();
@@ -5689,9 +5922,15 @@ try {
   await page.getByRole("button", { name: "Saved queries", exact: true }).click();
   await markerEntry.getByText("Organize", { exact: true }).click();
   await markerEntry.getByRole("button", { name: "Delete", exact: true }).click();
-  const deleteSaved = page.getByRole("dialog", { name: "Delete “Marker query”?" });
+  // The shared delete confirmation (SDB-89): it names the target, Cancel has the focus, Escape
+  // cancels, and the danger button says what it does.
+  const deleteSaved = page.getByRole("dialog", { name: "Delete saved query?" });
+  await deleteSaved.getByText("Marker query will be removed from this computer.", { exact: false }).waitFor();
   assert.equal(await deleteSaved.getByRole("button", { name: "Cancel" }).evaluate((button) => button === document.activeElement), true);
-  await deleteSaved.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await deleteSaved.waitFor({ state: "detached" });
+  await markerEntry.getByRole("button", { name: "Delete", exact: true }).click();
+  await deleteSaved.getByRole("button", { name: "Delete saved query", exact: true }).click();
   await snippets.getByText("No saved queries yet.", { exact: false }).waitFor();
   await page.getByRole("button", { name: "Close saved queries" }).click();
 
@@ -6464,7 +6703,7 @@ try {
     await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor();
     await (await connectionMenu("PG session setup")).getByRole("menuitem", { name: "Delete…" }).click();
     const deleteSetup = page.getByRole("dialog", { name: "Delete connection?" });
-    await deleteSetup.getByRole("button", { name: "Delete", exact: true }).click();
+    await deleteSetup.getByRole("button", { name: "Delete connection", exact: true }).click();
     await deleteSetup.waitFor({ state: "detached" });
     await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor({ state: "detached" });
   }
@@ -7693,7 +7932,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     for (const spec of recorded) {
       await (await connectionMenu(spec.name)).getByRole("menuitem", { name: "Delete…" }).click();
       const dialog = page.getByRole("dialog", { name: "Delete connection?" });
-      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+      await dialog.getByRole("button", { name: "Delete connection", exact: true }).click();
       await dialog.waitFor({ state: "detached" });
     }
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
@@ -7710,9 +7949,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     }));
     await page.evaluate((dir) => (window.__spelaionImportDirs = { dbeaver: dir }), source);
     await wizard.getByRole("button", { name: "Import connections from another client…" }).click();
-    await wizard.getByRole("menuitem", { name: "DBeaver", exact: true }).click();
+    await wizard.getByRole("button", { name: "Import from DBeaver", exact: true }).click();
     const preview = wizard.getByRole("listitem").filter({ hasText: "CockroachDB import fixture" });
     assert.equal(await preview.locator("img.engine-icon").evaluate(element => element.outerHTML), recorded[0].mark);
+    // Back to the list of clients, then back to the engines.
+    await wizard.getByRole("button", { name: "Back", exact: true }).click();
+    await wizard.getByRole("list", { name: "Clients to import from" }).waitFor();
     await wizard.getByRole("button", { name: "Back", exact: true }).click();
     await page.evaluate(() => delete window.__spelaionImportDirs);
   }
@@ -7772,7 +8014,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await tagBox.press("Enter");
   await tagBox.fill("DEMO");
   await tagBox.press("Enter");
-  assert.deepEqual(await wizard.locator(".tag-chip").allTextContents(), ["demo×", "Testing×"]);
+  assert.deepEqual(await wizard.locator(".tag-chip").allTextContents(), ["demo", "Testing"]);
   // Enter in the tag box added a tag: it did not submit the form.
   await wizard.getByRole("heading", { name: "New SQLite connection" }).waitFor();
   await wizard.getByRole("button", { name: "Test connection" }).click();
@@ -8662,7 +8904,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Delete the repository copy (the clipboard keeps its text), then paste it back.
   await (await connectionMenu("MariaDB (copy)")).getByRole("menuitem", { name: "Delete…" }).click();
   const deleteCopy = page.getByRole("dialog", { name: "Delete connection?" });
-  await deleteCopy.getByRole("button", { name: "Delete", exact: true }).click();
+  await deleteCopy.getByRole("button", { name: "Delete connection", exact: true }).click();
   await deleteCopy.waitFor({ state: "detached" });
   await copyRow.waitFor({ state: "detached" });
   assert.ok(!existsSync(mysqlCopyFile));
@@ -8725,7 +8967,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   for (const name of ["MariaDB (copy) (copy)", "MariaDB (copy)"]) {
     await (await connectionMenu(name)).getByRole("menuitem", { name: "Delete…" }).click();
     const confirmDelete = page.getByRole("dialog", { name: "Delete connection?" });
-    await confirmDelete.getByRole("button", { name: "Delete", exact: true }).click();
+    await confirmDelete.getByRole("button", { name: "Delete connection", exact: true }).click();
     await confirmDelete.waitFor({ state: "detached" });
   }
   await page.locator(".connection-row", { hasText: "MariaDB (copy)" }).waitFor({ state: "detached" });
@@ -8811,7 +9053,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   });
   await (await connectionMenu("Masked shop")).getByRole("menuitem", { name: "Delete…" }).click();
   const confirmMaskedDelete = page.getByRole("dialog", { name: "Delete connection?" });
-  await confirmMaskedDelete.getByRole("button", { name: "Delete", exact: true }).click();
+  await confirmMaskedDelete.getByRole("button", { name: "Delete connection", exact: true }).click();
   await confirmMaskedDelete.waitFor({ state: "detached" });
 
   step("connection types: made in Settings, picked in the form, a tinted badge in the sidebar and the editor, asking before any run");
@@ -9046,8 +9288,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("Port", { exact: true }).fill(String(silent.address().port));
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await log.locator(".step.running", { hasText: "Log in to postgres" }).waitFor();
-  await log.getByRole("button", { name: "Stop" }).click();
-  await wizard.locator(".test-result", { hasText: "Stopped" }).waitFor();
+  await log.getByRole("button", { name: "Cancel test", exact: true }).click();
+  await wizard.locator(".test-result", { hasText: "Cancelled" }).waitFor();
   await log.locator(".step.stopped", { hasText: "Log in to postgres" }).waitFor();
   // Reaching the address opened and closed one connection; the stopped login's is closed too.
   assert.ok(silentSockets.length >= 2, `connections: ${silentSockets.length}`);
@@ -9089,8 +9331,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await editTunnel.getByLabel("Give up after (unanswered)").inputValue(), "5");
   assert.equal(await editTunnel.getByLabel("Connect timeout (seconds)").inputValue(), "20");
   await editTunnel.getByRole("button", { name: "Delete profile" }).click();
-  await editTunnel.getByRole("button", { name: "Click again to delete" }).click();
-  await editTunnel.locator(".test-result", { hasText: "PG through wizard tunnel" }).waitFor();
+  // The confirmation lists the connections the core counts (SDB-89) and offers only Cancel.
+  const deleteUsedTunnel = page.getByRole("dialog", { name: "Delete network profile?" });
+  await deleteUsedTunnel.getByRole("listitem").filter({ hasText: "PG through wizard tunnel" }).waitFor();
+  assert.ok(await deleteUsedTunnel.getByRole("button", { name: "Delete profile" }).isDisabled());
+  await deleteUsedTunnel.getByRole("button", { name: "Cancel" }).click();
+  await deleteUsedTunnel.waitFor({ state: "detached" });
   await editTunnel.getByRole("button", { name: "Cancel" }).click();
   await editTunnel.waitFor({ state: "detached" });
   await wizard.getByRole("button", { name: "Cancel" }).click();
@@ -9102,6 +9348,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const dialog = page.getByRole("dialog", { name: "Proxy password" });
     await dialog.waitFor();
     assert.match(await dialog.innerText(), /proxyuser@127\.0\.0\.1/);
+    // The answer is named by what it does (SDB-90), never OK.
+    await dialog.getByRole("button", { name: "Sign in to proxy", exact: true }).waitFor();
     await dialog.locator("input").fill("proxy-pass");
     await dialog.locator("input").press("Enter");
     await dialog.waitFor({ state: "detached" });
@@ -9176,7 +9424,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const editSpare = page.getByRole("dialog", { name: "Edit network profile spare-route" });
     assert.equal(await editSpare.getByLabel("Hop 1 Host").inputValue(), "spare.example");
     await editSpare.getByRole("button", { name: "Delete profile" }).click();
-    await editSpare.getByRole("button", { name: "Click again to delete" }).click();
+    const deleteSpare = page.getByRole("dialog", { name: "Delete network profile?" });
+    await deleteSpare.getByText("No connection uses it.").waitFor();
+    await deleteSpare.getByRole("button", { name: "Delete profile" }).click();
     await editSpare.waitFor({ state: "detached" });
     await row.waitFor({ state: "detached" });
 
@@ -9218,7 +9468,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const managedNode = await editAws.getByLabel("Managed node").elementHandle();
     await page.waitForFunction((input) => input.value === "i-0123456789abcdef0", managedNode);
     await editAws.getByRole("button", { name: "Delete profile" }).click();
-    await editAws.getByRole("button", { name: "Click again to delete" }).click();
+    const deleteAws = page.getByRole("dialog", { name: "Delete network profile?" });
+    await deleteAws.getByText("No connection uses it.").waitFor();
+    await deleteAws.getByRole("button", { name: "Delete profile" }).click();
     await editAws.waitFor({ state: "detached" });
     await awsRow.waitFor({ state: "detached" });
   });
@@ -9434,7 +9686,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const confirm = page.getByRole("dialog", { name: "Delete connection?" });
   await confirm.getByText("only this computer is affected").waitFor();
   await shot("13b-delete-connection");
-  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+  await confirm.getByRole("button", { name: "Delete connection", exact: true }).click();
   await confirm.waitFor({ state: "detached" });
   await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor({ state: "detached" });
   assert.ok(!existsSync(join(userDir, "connections", "shop-copy.toml")));
@@ -9477,19 +9729,29 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     writeFileSync(join(dbeaverDir, "credentials-config.json"), Buffer.concat([iv, cipher.update(credentials), cipher.final()]));
     await page.evaluate((dir) => (window.__spelaionImportDirs = { dbeaver: dir }), join(userDir, "dbeaver"));
 
-    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
-    const imports = page.getByRole("button", { name: "Import connections from another client…" });
-    await imports.press("Enter");
-    const menu = page.getByRole("menu", { name: "Import connections from another client…" });
-    await menu.getByRole("menuitem", { name: "DBeaver", exact: true }).waitFor();
-    await page.keyboard.press("ArrowDown");
-    assert.ok(await menu.getByRole("menuitem", { name: "DataGrip", exact: true }).evaluate(el => el === document.activeElement));
+    // From the sidebar (SDB-446): the Add button's arrow opens the other ways in; its menu item
+    // opens the list of clients, each with what the core found of it on this computer.
+    const moreWays = page.getByRole("button", { name: "More ways to add connections" });
+    await moreWays.press("Enter");
+    const addMenu = page.getByRole("menu", { name: "More ways to add connections" });
+    const importItem = addMenu.getByRole("menuitem", { name: "Import connections from another client…" });
+    assert.ok(await importItem.evaluate(el => el === document.activeElement));
     await page.keyboard.press("Escape");
-    await menu.waitFor({ state: "detached" });
-    assert.ok(await imports.evaluate(el => el === document.activeElement));
-    await page.keyboard.press("Enter");
-    await page.keyboard.press("Enter");
+    await addMenu.waitFor({ state: "detached" });
+    assert.ok(await moreWays.evaluate(el => el === document.activeElement));
+    await moreWays.click();
+    await importItem.click();
     const importer = page.locator(".modal.wizard");
+    await importer.getByRole("heading", { name: "Import connections" }).waitFor();
+    const clients = importer.getByRole("list", { name: "Clients to import from" });
+    const dbeaverRow = clients.getByRole("listitem", { name: "DBeaver" });
+    await dbeaverRow.getByText("4 connections found", { exact: true }).waitFor();
+    // Clients with connections come first; one that is not here says so, and can still be chosen.
+    await clients.getByRole("listitem", { name: "Beekeeper Studio" }).getByText("Not found on this computer").waitFor();
+    await clients.getByRole("listitem", { name: "Beekeeper Studio" }).getByRole("button", { name: "Choose folder…" }).waitFor();
+    assert.equal(await clients.getByRole("listitem").first().getAttribute("aria-label"), "DBeaver");
+    await shot("13b-import-sources");
+    await dbeaverRow.getByRole("button", { name: "Import from DBeaver" }).click();
     await importer.getByRole("heading", { name: "Import from DBeaver" }).waitFor();
     const list = importer.getByRole("list", { name: "DBeaver connections" });
     await list.getByRole("listitem").nth(3).waitFor();
@@ -9535,7 +9797,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate((dir) => (window.__spelaionImportDirs = { datagrip: dir }), datagripProject);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     await page.getByRole("button", { name: "Import connections from another client…" }).click();
-    await page.getByRole("menuitem", { name: "DataGrip", exact: true }).click();
+    await page.getByRole("button", { name: "Import from DataGrip", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from DataGrip" }).waitFor();
     const list = importer.getByRole("list", { name: "DataGrip connections" });
@@ -9592,7 +9854,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate((file) => (window.__spelaionImportDirs = { tableplus: file }), exportFile);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     await page.getByRole("button", { name: "Import connections from another client…" }).click();
-    await page.getByRole("menuitem", { name: "TablePlus", exact: true }).click();
+    // The list does not open the encrypted export to count it (SDB-446).
+    await page.getByRole("listitem", { name: "TablePlus" }).getByText("An encrypted export", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "Import from TablePlus", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from TablePlus" }).waitFor();
     // The export is encrypted: nothing is listed until its password opens it.
@@ -9610,6 +9874,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // Its production tag is our Production type; the password it exported comes along.
     await item("Orders PG").locator(".conn-import-detail").filter({ hasText: "TLS verify-ca · prod · password saved" }).waitFor();
     await item("PG via bastion").getByText("SSH spelaion@127.0.0.1:2221").waitFor();
+    // Its bootstrap commands are the connection's setup statements, shown before importing and
+    // checked by the core (SDB-104): this one only sets the search path, so it passes on
+    // Production.
+    // Shown open, verbatim, before anything is imported.
+    await item("Orders PG").getByText("Setup statements: run on every new session").waitFor();
+    await item("Orders PG").getByText("SET search_path TO app, public;", { exact: true }).waitFor();
     // The SSH key's contents are never kept: the preview says what to do instead.
     await item("PG via bastion").getByText("setting is not imported", { exact: false }).click();
     await item("PG via bastion").getByText("carries the private key itself", { exact: false }).waitFor();
@@ -9635,6 +9905,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.ok(orders, files.join(", "));
     const text = readFileSync(join(userDir, "connections", "tableplus", String(orders)), "utf8");
     assert.match(text, /env = "prod"/);
+    assert.match(text, /SET search_path TO app, public;/);
     for (const file of files) {
       assert.doesNotMatch(readFileSync(join(userDir, "connections", "tableplus", String(file)), "utf8"), /fake-password-123/);
     }
@@ -9647,7 +9918,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate((file) => (window.__spelaionImportDirs = { heidisql: file }), exportFile);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     await page.getByRole("button", { name: "Import connections from another client…" }).click();
-    await page.getByRole("menuitem", { name: "HeidiSQL", exact: true }).click();
+    await page.getByRole("button", { name: "Import from HeidiSQL", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from HeidiSQL" }).waitFor();
     const list = importer.getByRole("list", { name: "HeidiSQL connections" });
@@ -9678,7 +9949,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // SPELAION_WORKBENCH_DIR is Workbench's folder here: nothing to pick.
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     await page.getByRole("button", { name: "Import connections from another client…" }).click();
-    await page.getByRole("menuitem", { name: "MySQL Workbench", exact: true }).click();
+    await page.getByRole("button", { name: "Import from MySQL Workbench", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from MySQL Workbench" }).waitFor();
     const list = importer.getByRole("list", { name: "MySQL Workbench connections" });
@@ -9724,8 +9995,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const palette = page.getByRole("dialog", { name: "Command palette" });
     await palette.getByRole("combobox").fill("Import connections from another client");
     await palette.getByRole("option", { name: /Import connections from another client/ }).click();
-    const menu = page.getByRole("menu", { name: "Import connections from another client…" });
-    await menu.getByRole("menuitem", { name: "pgAdmin", exact: true }).click();
+    // The palette's command opens the same list of clients (SDB-446).
+    await page.getByRole("button", { name: "Import from pgAdmin", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from pgAdmin" }).waitFor();
     // An export file can be picked instead of pgAdmin's own database.
@@ -9793,7 +10064,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate((dir) => (window.__spelaionImportDirs = { beekeeper: dir }), dataDir);
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     await page.getByRole("button", { name: "Import connections from another client…" }).click();
-    await page.getByRole("menuitem", { name: "Beekeeper Studio", exact: true }).click();
+    await page.getByRole("button", { name: "Import from Beekeeper Studio", exact: true }).click();
     const importer = page.locator(".modal.wizard");
     await importer.getByRole("heading", { name: "Import from Beekeeper Studio" }).waitFor();
     const list = importer.getByRole("list", { name: "Beekeeper Studio connections" });
@@ -10216,11 +10487,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByText("Calls of the smoke-agent session", { exact: false }).waitFor();
   await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
   // Clear: confirmed, done by the core, and recorded.
-  await mcp.getByRole("button", { name: "Clear", exact: true }).click();
+  await mcp.getByRole("button", { name: "Clear log…", exact: true }).click();
   const clearDialog = page.getByRole("dialog", { name: "Clear the MCP activity?" });
   await clearDialog.getByRole("button", { name: "Cancel" }).click();
   await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
-  await mcp.getByRole("button", { name: "Clear", exact: true }).click();
+  await mcp.getByRole("button", { name: "Clear log…", exact: true }).click();
   await clearDialog.getByRole("button", { name: "Clear the log" }).click();
   await mcp.getByText("4 events cleared.").waitFor();
   await mcp.getByRole("status").filter({ hasText: "1 event" }).waitFor();

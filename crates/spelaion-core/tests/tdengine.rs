@@ -6,7 +6,7 @@
 //! password `taosdata`) and TDengine's plugin (pinned, or `SPELAION_DEV_PLUGIN_TDENGINE`).
 //! Without them it is skipped, which does not count as tested.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -86,6 +86,7 @@ fn cell(results: &ResultStore, id: ResultId, name: &str) -> String {
 
 #[tokio::test]
 async fn a_script_of_tdengine_sql_runs_each_statement_in_the_sessions_database() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, results)) = session().await else {
         return;
     };
@@ -115,6 +116,7 @@ async fn a_script_of_tdengine_sql_runs_each_statement_in_the_sessions_database()
 
 #[tokio::test]
 async fn use_is_refused_in_place_and_never_sent() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((session, _results)) = session().await else {
         return;
     };
@@ -140,6 +142,7 @@ async fn use_is_refused_in_place_and_never_sent() {
 
 #[test]
 fn the_guard_reads_tdengine_sql_with_its_own_lists() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = spelaion_dialect::for_engine("tdengine").expect("TDengine SQL");
     let plain = Safeguards::default();
     let production = Safeguards {

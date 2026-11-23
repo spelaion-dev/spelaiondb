@@ -17,8 +17,9 @@ import { RowCache, type ValueKind } from "../grid/rowCache";
 import { printableGridKey } from "../gridTyping";
 import { formatsValues, useDisplayFormat } from "../displayFormat";
 import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
-import { GRID_COMMAND_EVENT, useDialogs, type FilterMode, type ResultMeta, type SortState } from "../store";
-import { commandSpec, matchesShortcut } from "../commandRegistry";
+import { GRID_COMMAND_EVENT, useDialogs, type FilterMode, type GridCommand, type ResultMeta, type SortState } from "../store";
+import { commandKeys, commandSpec, KEYS, matchesShortcut, type KeyId } from "../commandRegistry";
+import { commandShortcut, keyText, shortcutText, withShortcut } from "../shortcuts";
 import { useExport } from "./ExportDialog";
 import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
 import { Icon, PATHS } from "./Icons";
@@ -30,7 +31,8 @@ import { CopySpecialDialog } from "./CopySpecialDialog";
 import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES, PageControls } from "./TableDataBar";
-import { MENU_MARGIN, placeMenu } from "../menuPlacement";
+import { placeMenu } from "../menuPlacement";
+import { Submenu } from "./Submenu";
 import { ended, partialText } from "../resultEnd";
 import { errorText, type Loaded } from "../dialogState";
 
@@ -54,16 +56,80 @@ const MIN_RESIZE = 48;
 const MAX_RESIZE = 2000;
 /** Pixels on each side of a header edge that grab it. */
 const EDGE = 4;
-// Regular UI text is easier to scan across dense rows; the header remains distinct.
-let DATA_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
-let ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
+/** The size of the grid's values in pixels, the user's setting (SDB-385). */
+let GRID_FONT_PX = 12;
 /** Sets the size of the grid's values, in pixels; a row is that plus the usual room. */
 function setGridFont(size: number) {
-  const px = Math.min(20, Math.max(10, Math.round(size) || 12));
-  ROW_H = px + 12;
-  DATA_FONT = `400 ${px}px "Segoe UI", system-ui, sans-serif`;
-  ROW_NUMBER_FONT = `400 ${Math.min(px, 13)}px "Segoe UI", system-ui, sans-serif`;
+  GRID_FONT_PX = Math.min(20, Math.max(10, Math.round(size) || 12));
+  ROW_H = GRID_FONT_PX + 12;
 }
+
+/** What the canvas draws with, from the theme's tokens (SDB-75). */
+interface GridTheme {
+  bg: string;
+  stripe: string;
+  line: string;
+  header: string;
+  text: string;
+  muted: string;
+  select: string;
+  accent: string;
+  vNumber: string;
+  vDate: string;
+  vBool: string;
+  vText: string;
+  vNull: string;
+  /** An edited cell, the cells a search found and the one it is on, and a row to delete. */
+  edited: string;
+  found: string;
+  foundCurrent: string;
+  deleted: string;
+  /** The column's name, and the line under it. */
+  headerFont: string;
+  typeFont: string;
+  /** The values' family; their size is the user's (`GRID_FONT_PX`). */
+  family: string;
+  /** The row numbers never grow past this size, in pixels. */
+  rowNumberMax: number;
+}
+let gridTheme: { key: string; theme: GridTheme } | null = null;
+/** The theme's tokens, read once and again only when the theme or the interface size changes:
+ *  never per frame (a computed style per frame costs a style pass while scrolling). The key is
+ *  read on every draw, but it touches no style. */
+function currentGridTheme(): GridTheme {
+  const key = `${document.documentElement.dataset.theme ?? ""}|${window.devicePixelRatio || 1}`;
+  if (gridTheme?.key === key) return gridTheme.theme;
+  const style = getComputedStyle(document.documentElement);
+  const token = (name: string) => style.getPropertyValue(name).trim();
+  const family = token("--font-ui");
+  const theme: GridTheme = {
+    bg: token("--grid-bg"),
+    stripe: token("--grid-stripe"),
+    line: token("--grid-line"),
+    header: token("--grid-header"),
+    text: token("--grid-text"),
+    muted: token("--muted"),
+    select: token("--accent-soft"),
+    accent: token("--accent"),
+    vNumber: token("--value-number"),
+    vDate: token("--value-date"),
+    vBool: token("--value-bool"),
+    vText: token("--value-text"),
+    vNull: token("--value-null"),
+    edited: token("--grid-edited"),
+    found: token("--grid-found"),
+    foundCurrent: token("--grid-found-current"),
+    deleted: token("--grid-deleted"),
+    headerFont: `600 ${token("--text-sm")} ${family}`,
+    typeFont: `400 ${token("--text-xs")} ${family}`,
+    family,
+    rowNumberMax: parseFloat(token("--text-md")) || GRID_FONT_PX,
+  };
+  gridTheme = { key, theme };
+  return theme;
+}
+const dataFont = (theme: GridTheme) => `400 ${GRID_FONT_PX}px ${theme.family}`;
+const rowNumberFont = (theme: GridTheme) => `400 ${Math.min(GRID_FONT_PX, theme.rowNumberMax)}px ${theme.family}`;
 /** The token that colors each kind of value (SDB-385), when the user asks for it. */
 const KIND_TOKEN: Partial<Record<ValueKind, "vNumber" | "vDate" | "vBool" | "vText">> = {
   number: "vNumber",
@@ -80,8 +146,6 @@ function kindOf(logical: string): ValueKind {
   if (logical === "date" || logical === "time" || logical === "timestamp" || logical === "timestamptz" || logical === "bool" || logical === "text") return logical;
   return "other";
 }
-const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
-const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
 const NUMERIC = new Set(["int", "float", "decimal"]);
 /** Texts of a boolean cell, as each engine's text reads (`t`, `true`, a `bit`'s `1`). */
 const BOOL_TRUE = new Set(["t", "true", "1"]);
@@ -91,21 +155,33 @@ const CHECK = 12;
 const KEY_ICON = 12;
 const KEY_GAP = 4;
 /** The grid's own key for following a foreign key (Ctrl+click does it too). */
-const FOLLOW_SHORTCUT = "Ctrl+Enter";
-let keyIconPaths: Path2D[] | null = null;
+const FOLLOW_SHORTCUT = KEYS.followReference.shortcut;
+/** A column's sort direction in its header: Lucide's arrow at this size, then its place among
+ *  several sort keys. */
+const SORT_ICON = 12;
+const pathCache = new Map<keyof typeof PATHS, Path2D[]>();
 
-/** Lucide's arrow-up-right at `KEY_ICON` pixels, its top-left corner at (x, y). */
-function drawKeyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
-  keyIconPaths ??= PATHS.arrowUpRight.map((d) => new Path2D(d));
+/** One of Lucide's icons from `PATHS` at `size` pixels, its top-left corner at (x, y). */
+function drawPaths(ctx: CanvasRenderingContext2D, name: keyof typeof PATHS, x: number, y: number, size: number, color: string) {
+  let paths = pathCache.get(name);
+  if (!paths) {
+    paths = PATHS[name].map((d) => new Path2D(d));
+    pathCache.set(name, paths);
+  }
   ctx.save();
   ctx.translate(x, y);
-  ctx.scale(KEY_ICON / 24, KEY_ICON / 24);
+  ctx.scale(size / 24, size / 24);
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (const path of keyIconPaths) ctx.stroke(path);
+  for (const path of paths) ctx.stroke(path);
   ctx.restore();
+}
+
+/** Lucide's arrow-up-right at `KEY_ICON` pixels, its top-left corner at (x, y). */
+function drawKeyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  drawPaths(ctx, "arrowUpRight", x, y, KEY_ICON, color);
 }
 
 interface Cell {
@@ -143,9 +219,9 @@ const inside = (b: Bounds, row: number, col: number) => row >= b.r0 && row <= b.
 /** The copy defaults "Copy special…" opens with (SDB-388), as the core keeps them. */
 const loadCopyDefaults = (): Promise<CopySpecialItem> => call(commands.copyDefaults());
 
-const COPY_ITEMS: { key: string; format: TextFormat; header: boolean }[] = [
-  { key: "copy", format: "tsv", header: false },
-  { key: "copyWithHeaders", format: "tsv", header: true },
+const COPY_ITEMS: { key: string; format: TextFormat; header: boolean; shortcut?: KeyId }[] = [
+  { key: "copy", format: "tsv", header: false, shortcut: "copy" },
+  { key: "copyWithHeaders", format: "tsv", header: true, shortcut: "copyWithHeaders" },
   { key: "copyCsv", format: "csv", header: true },
   { key: "copyJson", format: "json", header: false },
   { key: "copyMarkdown", format: "markdown", header: true },
@@ -166,10 +242,6 @@ function fit(ctx: CanvasRenderingContext2D, text: string, max: number): string {
     else hi = mid - 1;
   }
   return sample.slice(0, lo) + "…";
-}
-
-function cssVar(style: CSSStyleDeclaration, name: string): string {
-  return style.getPropertyValue(name).trim() || "#888";
 }
 
 /** Pending edits of a table data tab, as the core holds them (ADR-044): drawn over the page
@@ -212,19 +284,15 @@ export interface GridEditing {
 }
 
 /** The grid's own keys for pending edits (undo and redo are app commands, `commandRegistry.ts`). */
-const UNDO_SHORTCUT = commandSpec("edits.undo").shortcut ?? "";
-const REDO_SHORTCUT = commandSpec("edits.redo").shortcut ?? "";
-const FILL_DOWN_SHORTCUT = "Ctrl+D";
-const PASTE_SHORTCUT = "Ctrl+V";
-const SET_NULL_SHORTCUT = "Ctrl+Alt+N";
-const REVERT_SHORTCUT = "Ctrl+Alt+Z";
+const undoKeys = () => commandKeys(commandSpec("edits.undo")) ?? "";
+const redoKeys = () => commandKeys(commandSpec("edits.redo")) ?? "";
+const FILL_DOWN_SHORTCUT = KEYS.fillDown.shortcut;
+const PASTE_SHORTCUT = KEYS.pasteCells.shortcut;
+const SET_NULL_SHORTCUT = KEYS.setNull.shortcut;
+const REVERT_SHORTCUT = KEYS.revertRows.shortcut;
 /** "Go to row" (SDB-386): an app command the grid handles, as undo and redo. */
-const GO_TO_ROW_SHORTCUT = commandSpec("results.goToRow").shortcut ?? "";
+const goToRowKeys = () => commandKeys(commandSpec("results.goToRow")) ?? "";
 
-const EDITED_BG = "rgba(250, 204, 21, 0.30)";
-/** Cells the search found, and the one it is on. */
-const FOUND_BG = "rgba(234, 179, 8, 0.28)";
-const FOUND_CURRENT_BG = "rgba(234, 88, 12, 0.45)";
 /** Ways of copying column names, in menu order (qualified only with a known table). */
 const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
   { style: "plain", key: "copyNamesPlain" },
@@ -232,20 +300,6 @@ const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
   { style: "qualified", key: "copyNamesQualified" },
   { style: "list", key: "copyNamesList" },
 ];
-const DELETED_BG = "rgba(239, 68, 68, 0.20)";
-
-function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "redo" | "revert" | "save" | "cancel" }) {
-  return <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {name === "add" && <><rect x="3" y="4" width="14" height="12" rx="1" /><path d="M10 7v6M7 10h6" /></>}
-    {name === "duplicate" && <><rect x="7" y="6" width="10" height="11" rx="1" /><path d="M13 6V3H3v11h4M12 9v5M9.5 11.5h5" /></>}
-    {name === "delete" && <><path d="M4 6h12M7 6V4h6v2M6 6l1 10h6l1-10M9 9v4M11 9v4" /></>}
-    {name === "undo" && <><path d="M7 6 3.5 9.5 7 13M4 9.5h7.5a4 4 0 0 1 0 8H10" /></>}
-    {name === "redo" && <><path d="M13 6l3.5 3.5L13 13M16 9.5H8.5a4 4 0 0 0 0 8H10" /></>}
-    {name === "revert" && <><path d="M3.5 4v4h4" /><path d="M4 8a6.5 6.5 0 1 1-.5 4" /></>}
-    {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4zM6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
-    {name === "cancel" && <><circle cx="10" cy="10" r="7" /><path d="m7 7 6 6M13 7l-6 6" /></>}
-  </svg>;
-}
 
 /** SQL spelling of each column filter operator, as SQLyog shows them. */
 const OPS: { op: FilterOpItem; sql: string }[] = [
@@ -291,7 +345,7 @@ export function ResultGrid({
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
-  tableData, columnComments,
+  tableData, keyTable, columnComments,
   onHiddenColumns,
   onChart,
   refresh,
@@ -336,6 +390,9 @@ export function ResultGrid({
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
    *  can be followed to new table data tabs of `connectionId`. */
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+  /** The table whose foreign keys the rows follow, both ways (SDB-11): a table data tab's own, or
+   *  the one table the core matched a query's result to (SDB-93). */
+  keyTable?: { schema: string; name: string; connectionId: string | null };
   /** The comments of the columns, by name, where they are known (a table's data): shown in
    *  the header when the user asks for it. */
   columnComments?: Record<string, string>;
@@ -425,23 +482,23 @@ export function ResultGrid({
   const [freed, setFreed] = useState<number | null>(null);
   const dragging = useRef(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
-  /** A table data tab's foreign keys: its own and those of other tables that point to it. */
+  /** The foreign keys of the rows' table (`keyTable`): its own and those of other tables that point to it. */
   const [keys, setKeys] = useState<TableKeyItem[]>([]);
-  const keySchema = tableData?.schema;
-  const keyTable = tableData?.name;
+  const keySchema = keyTable?.schema;
+  const keyTableName = keyTable?.name;
   useEffect(() => {
-    if (keySchema === undefined || keyTable === undefined) {
+    if (keySchema === undefined || keyTableName === undefined) {
       setKeys((current) => (current.length === 0 ? current : []));
       return;
     }
     let active = true;
-    call(commands.tableKeys(session, keySchema, keyTable))
+    call(commands.tableKeys(session, keySchema, keyTableName))
       .then((found) => active && setKeys(found))
       .catch(() => active && setKeys([]));
     return () => {
       active = false;
     };
-  }, [session, keySchema, keyTable]);
+  }, [session, keySchema, keyTableName]);
   /** The result's columns that are part of a key of the table, with those keys. */
   const keyColumns = useMemo(() => {
     const byColumn = new Map<number, TableKeyItem[]>();
@@ -460,7 +517,7 @@ export function ResultGrid({
     }
     return byColumn;
   }, [keys, result.columns]);
-  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references", "calc", "group"] : ["cell", "row", "calc", "group"];
+  const viewerModes: ViewerMode[] = keyTable && keys.length > 0 ? ["cell", "row", "references", "calc", "group"] : ["cell", "row", "calc", "group"];
   const shownMode: ViewerMode = viewerModes.includes(viewerMode) ? viewerMode : "cell";
   const referencesShown = viewer && shownMode === "references";
   const calcShown = viewer && shownMode === "calc";
@@ -702,10 +759,11 @@ export function ResultGrid({
   const automatic = useMemo(() => {
     const ctx = document.createElement("canvas").getContext("2d");
     if (!ctx) return result.columns.map(() => 140);
+    const theme = currentGridTheme();
     return result.columns.map((c) => {
-      ctx.font = HEADER_FONT;
+      ctx.font = theme.headerFont;
       const name = ctx.measureText(c.name).width;
-      ctx.font = TYPE_FONT;
+      ctx.font = theme.typeFont;
       const type = ctx.measureText(c.nativeType).width;
       const base = NUMERIC.has(c.logical) ? 96 : 132;
       return Math.round(Math.min(MAX_COL, Math.max(MIN_COL, name + PAD * 2 + 8, type + PAD * 2, base)));
@@ -771,7 +829,7 @@ export function ResultGrid({
     const describe = (value: string | null) => {
       const text = value === null ? "NULL" : value.length > 500 ? t("results.accessibleTruncated", { value: value.slice(0, 500) }) : value;
       expose(t("results.accessibleCell", { row, column: column.name, type: column.nativeType, value: text }) +
-        (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: FOLLOW_SHORTCUT })}` : ""));
+        (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: shortcutText(FOLLOW_SHORTCUT) })}` : ""));
     };
     const key = `${activeRow}:${activeColumn}`;
     if (activeEdits && key in activeEdits) describe(activeEdits[key] ?? null);
@@ -803,22 +861,7 @@ export function ResultGrid({
     }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const style = getComputedStyle(scroller);
-    const c = {
-      bg: cssVar(style, "--grid-bg"),
-      stripe: cssVar(style, "--grid-stripe"),
-      line: cssVar(style, "--grid-line"),
-      header: cssVar(style, "--grid-header"),
-      text: cssVar(style, "--grid-text"),
-      muted: cssVar(style, "--muted"),
-      select: cssVar(style, "--accent-soft"),
-      accent: cssVar(style, "--accent"),
-      vNumber: cssVar(style, "--value-number"),
-      vDate: cssVar(style, "--value-date"),
-      vBool: cssVar(style, "--value-bool"),
-      vText: cssVar(style, "--value-text"),
-      vNull: cssVar(style, "--value-null"),
-    };
+    const c = currentGridTheme();
     const left = scroller.scrollLeft;
     const top = contentTop(scroller);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -842,7 +885,7 @@ export function ResultGrid({
         ctx.fillRect(x, y, w, ROW_H);
       }
       if (findCache?.has(row, col)) {
-        ctx.fillStyle = findCurrent && findCurrent.row === row && findCurrent.col === col ? FOUND_CURRENT_BG : FOUND_BG;
+        ctx.fillStyle = findCurrent && findCurrent.row === row && findCurrent.col === col ? c.foundCurrent : c.found;
         ctx.fillRect(x, y, w, ROW_H);
       }
       if (selection && selection.focus.row === row && selection.focus.col === col) {
@@ -852,7 +895,7 @@ export function ResultGrid({
       const editKey = `${row}:${col}`;
       const edited = editing !== undefined && editKey in editing.cells;
       if (edited) {
-        ctx.fillStyle = EDITED_BG;
+        ctx.fillStyle = c.edited;
         ctx.fillRect(x, y, w, ROW_H);
       }
       const value = edited ? (editing?.cells[editKey] ?? null) : cache.get(row, col);
@@ -921,7 +964,7 @@ export function ResultGrid({
     };
 
     // Cells.
-    ctx.font = DATA_FONT;
+    ctx.font = dataFont(c);
     for (let row = first; row < last; row++) {
       const y = HEADER_H + row * ROW_H - top;
       const striped = gridLook.zebra && row % 2 === 1;
@@ -931,7 +974,7 @@ export function ResultGrid({
       }
       const deleted = deletedRows.has(row);
       if (deleted) {
-        ctx.fillStyle = DELETED_BG;
+        ctx.fillStyle = c.deleted;
         ctx.fillRect(rowNumW, y, size.w, ROW_H);
       }
       for (let col = firstCol; col < widths.length; col++) {
@@ -949,7 +992,7 @@ export function ResultGrid({
           ctx.fillRect(rowNumW, y, frozenW, ROW_H);
         }
         if (deleted) {
-          ctx.fillStyle = DELETED_BG;
+          ctx.fillStyle = c.deleted;
           ctx.fillRect(rowNumW, y, frozenW, ROW_H);
         }
         drawCell(row, frozenCol, rowNumW, y, frozenW);
@@ -977,7 +1020,7 @@ export function ResultGrid({
     // Row number column (fixed on the left).
     ctx.fillStyle = c.header;
     ctx.fillRect(0, HEADER_H, rowNumW, size.h);
-    ctx.font = ROW_NUMBER_FONT;
+    ctx.font = rowNumberFont(c);
     ctx.textAlign = "right";
     for (let row = first; row < last; row++) {
       const y = HEADER_H + row * ROW_H - top;
@@ -1001,12 +1044,14 @@ export function ResultGrid({
         ctx.fillStyle = c.select;
         ctx.fillRect(x, 0, w, HEADER_H);
       }
-      ctx.font = HEADER_FONT;
+      ctx.font = c.headerFont;
       ctx.fillStyle = c.text;
       // The column's place in the sort: its direction and, with several keys, its position.
       const place = sortShown.findIndex((key) => key.column === col);
-      const mark = place < 0 ? "" : `${sortShown[place]?.descending ? "▼" : "▲"}${sortShown.length > 1 ? place + 1 : ""}`;
-      const markW = mark ? Math.ceil(ctx.measureText(mark).width) + 4 : 0;
+      const sorted = place >= 0;
+      const position = sorted && sortShown.length > 1 ? String(place + 1) : "";
+      const positionW = position ? Math.ceil(ctx.measureText(position).width) + 2 : 0;
+      const markW = sorted ? SORT_ICON + positionW + 4 : 0;
       // Under the name (SDB-385): the type, that it is masked, the zone its values are shown
       // in and the column's comment, each when it is asked for and known.
       const zone = cache.column(col)?.zone;
@@ -1020,13 +1065,18 @@ export function ResultGrid({
       ].filter((part) => part !== "").join(" · ");
       const nameY = typeLine ? 13 : HEADER_H / 2;
       ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - markW), x + PAD, nameY);
-      if (mark) {
-        ctx.fillStyle = c.accent;
-        ctx.textAlign = "right";
-        ctx.fillText(mark, x + w - PAD, nameY);
-        ctx.textAlign = "left";
+      if (sorted) {
+        const right = x + w - PAD;
+        if (position) {
+          ctx.fillStyle = c.accent;
+          ctx.textAlign = "right";
+          ctx.fillText(position, right, nameY);
+          ctx.textAlign = "left";
+        }
+        const arrow = sortShown[place]?.descending ? "arrowDown" : "arrowUp";
+        drawPaths(ctx, arrow, right - positionW - SORT_ICON, nameY - SORT_ICON / 2, SORT_ICON, c.accent);
       }
-      ctx.font = TYPE_FONT;
+      ctx.font = c.typeFont;
       ctx.fillStyle = c.muted;
       if (typeLine) ctx.fillText(fit(ctx, typeLine, w - PAD * 2), x + PAD, 26);
       ctx.fillStyle = c.line;
@@ -1147,15 +1197,17 @@ export function ResultGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.goToRow?.seq, result.id]);
 
-  // "Go to row" from the command palette, for this result's grid.
+  // "Go to row" and the selection's copies and export from the command palette, for this
+  // result's grid (SDB-386, SDB-441): done by `runGridCommand`, with the selection of now.
+  const gridCommandHandler = useRef<(command: GridCommand) => void>(() => undefined);
   useEffect(() => {
     const onCommand = (e: Event) => {
-      const detail = (e as CustomEvent<{ result: number; command: "goToRow" }>).detail;
-      if (detail.result === result.id && detail.command === "goToRow" && result.rows > 0) setRowJump(true);
+      const detail = (e as CustomEvent<{ result: number; command: GridCommand }>).detail;
+      if (detail.result === result.id) gridCommandHandler.current(detail.command);
     };
     window.addEventListener(GRID_COMMAND_EVENT, onCommand);
     return () => window.removeEventListener(GRID_COMMAND_EVENT, onCommand);
-  }, [result.id, result.rows]);
+  }, [result.id]);
 
   // The rows the results' Transpose button shows: the selected ones, or the current one.
   useEffect(() => {
@@ -1210,15 +1262,15 @@ export function ResultGrid({
    *  reads the row's values and writes the filter of the table data tab it opens. */
   async function followKey(cell: Cell, key: TableKeyItem | undefined = keyColumns.get(cell.col)?.[0]) {
     setMenu(null);
-    if (!tableData?.connectionId || !key) return;
+    if (!keyTable?.connectionId || !key) return;
     try {
-      const target = await call(commands.followKey(session, result.id, cell.row, tableData.schema, tableData.name, {
+      const target = await call(commands.followKey(session, result.id, cell.row, keyTable.schema, keyTable.name, {
         direction: key.direction,
         schema: key.schema,
         table: key.table,
         name: key.name,
       }));
-      openTableData(tableData.connectionId, session, target.schema, target.table, target.filter);
+      openTableData(keyTable.connectionId, session, target.schema, target.table, target.filter);
     } catch (e) {
       setNotice({ text: t("references.followFailed", { detail: e instanceof Error ? e.message : String(e) }), error: true });
     }
@@ -1276,7 +1328,7 @@ export function ResultGrid({
 
   /** Opens a table data tab where a key of the references panel leads (its filter is the core's). */
   function openTarget(target: KeyTargetItem) {
-    if (tableData?.connectionId) openTableData(tableData.connectionId, session, target.schema, target.table, target.filter);
+    if (keyTable?.connectionId) openTableData(keyTable.connectionId, session, target.schema, target.table, target.filter);
   }
 
   /** The next shown column `delta` steps away (stopping at the first and the last). */
@@ -1564,12 +1616,13 @@ export function ResultGrid({
   function fitWidth(col: number): number {
     const ctx = canvasRef.current?.getContext("2d");
     const meta = result.columns[col];
+    const theme = currentGridTheme();
     if (!ctx || !meta) return widths[col] ?? MIN_RESIZE;
-    ctx.font = HEADER_FONT;
+    ctx.font = theme.headerFont;
     let widest = ctx.measureText(meta.name).width + 14;
-    ctx.font = TYPE_FONT;
+    ctx.font = theme.typeFont;
     widest = Math.max(widest, ctx.measureText(meta.nativeType).width);
-    ctx.font = DATA_FONT;
+    ctx.font = dataFont(theme);
     const scroller = scrollerRef.current;
     const first = scroller ? Math.floor(contentTop(scroller) / ROW_H) : 0;
     const last = Math.min(result.rows, first + Math.ceil((size.h || 600) / ROW_H) + 1);
@@ -1825,6 +1878,45 @@ export function ResultGrid({
     ? { kind: "table", schema: tableData.schema, name: tableData.name }
     : result.sql ? { kind: "query", sql: result.sql } : null;
 
+  /** A command from the palette: what the grid's menu does, on the selection of now. Without a
+   *  selection, or where the menu would not offer it, the grid says why. */
+  function runGridCommand(command: GridCommand) {
+    if (command.kind === "goToRow") {
+      if (result.rows > 0) setRowJump(true);
+      return;
+    }
+    if (!selection) {
+      setNotice({ text: t("results.selectFirst"), error: true });
+      return;
+    }
+    switch (command.kind) {
+      case "copy":
+        void copy(command.format, command.header);
+        return;
+      case "copySpecial":
+        setCopySpecial(selectedRange());
+        return;
+      case "copyUpdates":
+        if (updateSource) void copyUpdates();
+        else setNotice({ text: t("results.copyUpdatesRefused", { reason: t("results.noUpdateSource") }), error: true });
+        return;
+      case "exportSelection": {
+        if (selection.rows || !ended(result)) {
+          setNotice({ text: t("results.exportSelectionBlock"), error: true });
+          return;
+        }
+        const b = bounds(selection);
+        useExport.getState().open({ kind: "selection", session, result, range: { firstRow: b.r0, rows: b.r1 - b.r0 + 1, columns: shownIn(b) } });
+        return;
+      }
+      default: {
+        const unknown: never = command;
+        return unknown;
+      }
+    }
+  }
+  gridCommandHandler.current = runGridCommand;
+
   async function copyUpdates() {
     setMenu(null);
     const range = selectedRange();
@@ -1929,7 +2021,7 @@ export function ResultGrid({
       setJump("");
       return;
     }
-    if (matchesShortcut(e, GO_TO_ROW_SHORTCUT) && result.rows > 0) {
+    if (matchesShortcut(e, goToRowKeys()) && result.rows > 0) {
       e.preventDefault();
       setRowJump(true);
       return;
@@ -2164,11 +2256,11 @@ export function ResultGrid({
       e.preventDefault();
       e.stopPropagation();
       if (selection) editing.onDelete(selectedRows());
-    } else if (matchesShortcut(e, UNDO_SHORTCUT)) {
+    } else if (matchesShortcut(e, undoKeys())) {
       e.preventDefault();
       e.stopPropagation();
       editing.onUndo();
-    } else if (matchesShortcut(e, REDO_SHORTCUT) || (mod && e.shiftKey && !e.altKey && key === "z")) {
+    } else if (matchesShortcut(e, redoKeys()) || (redoKeys() === commandSpec("edits.redo").shortcut && mod && e.shiftKey && !e.altKey && key === "z")) {
       e.preventDefault();
       e.stopPropagation();
       editing.onRedo();
@@ -2228,7 +2320,7 @@ export function ResultGrid({
               disabled={hasPendingEdits}
               onClick={() => void applyColumnFilters((result.columnFilters ?? []).filter((_, j) => j !== i))}
             >
-              ×
+              <Icon name="x" />
             </button>
           </span>
         ))}
@@ -2396,7 +2488,7 @@ export function ResultGrid({
         className="grid-select-all"
         style={{ width: rowNumW, height: HEADER_H }}
         aria-label={t("results.selectAll")}
-        title={`${t("results.selectAll")} (Ctrl+A)`}
+        title={withShortcut(t("results.selectAll"), keyText("selectAll"))}
         disabled={!result.rows || !visibleCols.length}
         onClick={() => {
           scrollerRef.current?.focus({ preventScroll: true });
@@ -2437,13 +2529,13 @@ export function ResultGrid({
             <button role="menuitem" onClick={() => openGroup(menu.header ?? 0)}>
               {t("group.byColumn")}
             </button>
-            <GridSubmenu label={t("results.copyNamesMenu")}>
+            <Submenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
                 <button key={n.style} role="menuitem" onClick={() => void copyNames(headerColumns(menu.header ?? 0), n.style)}>
                   {t(`results.${n.key}`)}
                 </button>
               ))}
-            </GridSubmenu>
+            </Submenu>
             <button role="menuitem" onClick={() => void copyColumnInList(menu.header ?? 0)}>
               {t("results.copyColumnInList")}
             </button>
@@ -2473,16 +2565,16 @@ export function ResultGrid({
                   if (menu.cell) void startEdit(menu.cell);
                 }}
               >
-                {t("edit.editCell")}
+                {t("edit.editCell", { shortcut: keyText("editCell") })}
               </button>
               <button role="menuitem" onClick={() => void setSelectedValue()}>
                 {t("edit.setValue")}
               </button>
               <button role="menuitem" onClick={() => void pasteFromMenu()}>
-                <span>{t("edit.paste")}</span><span className="menu-shortcut">{PASTE_SHORTCUT}</span>
+                <span>{t("edit.paste")}</span><span className="menu-shortcut">{shortcutText(PASTE_SHORTCUT)}</span>
               </button>
               <button role="menuitem" onClick={() => bulkEdit({ kind: "fillDown" })}>
-                <span>{t("edit.fillDown")}</span><span className="menu-shortcut">{FILL_DOWN_SHORTCUT}</span>
+                <span>{t("edit.fillDown")}</span><span className="menu-shortcut">{shortcutText(FILL_DOWN_SHORTCUT)}</span>
               </button>
               <button
                 role="menuitem"
@@ -2491,9 +2583,9 @@ export function ResultGrid({
                   setSelectedNull();
                 }}
               >
-                <span>{t("edit.setNull")}</span><span className="menu-shortcut">{SET_NULL_SHORTCUT}</span>
+                <span>{t("edit.setNull")}</span><span className="menu-shortcut">{shortcutText(SET_NULL_SHORTCUT)}</span>
               </button>
-              <GridSubmenu label={t("edit.changeCells")}>
+              <Submenu label={t("edit.changeCells")}>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "trim" })}>{t("edit.trim")}</button>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "upperCase" })}>{t("edit.upperCase")}</button>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "lowerCase" })}>{t("edit.lowerCase")}</button>
@@ -2501,7 +2593,7 @@ export function ResultGrid({
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "set", value: { kind: "default" } })}>{t("edit.setDefault")}</button>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "newUuid" })}>{t("edit.newUuid")}</button>
                 <button role="menuitem" onClick={() => bulkEdit({ kind: "now" })}>{t("edit.now")}</button>
-              </GridSubmenu>
+              </Submenu>
               <hr />
               <button
                 role="menuitem"
@@ -2511,7 +2603,7 @@ export function ResultGrid({
                   editing.onUndo();
                 }}
               >
-                <span>{t("edit.undo")}</span><span className="menu-shortcut">{UNDO_SHORTCUT}</span>
+                <span>{t("edit.undo")}</span><span className="menu-shortcut">{shortcutText(undoKeys())}</span>
               </button>
               <button
                 role="menuitem"
@@ -2521,7 +2613,7 @@ export function ResultGrid({
                   editing.onRedo();
                 }}
               >
-                <span>{t("edit.redo")}</span><span className="menu-shortcut">{REDO_SHORTCUT}</span>
+                <span>{t("edit.redo")}</span><span className="menu-shortcut">{shortcutText(redoKeys())}</span>
               </button>
               <button
                 role="menuitem"
@@ -2530,7 +2622,7 @@ export function ResultGrid({
                   editing.onDelete(selectedRows());
                 }}
               >
-                {t("edit.deleteRows", { count: selectedRows().length })}
+                {t("edit.deleteRows", { count: selectedRows().length, shortcut: keyText("deleteRows") })}
               </button>
               {selectedRows().some((r) => editing.deleted.includes(r) || Object.keys(editing.cells).some((k) => k.startsWith(`${r}:`))) && (
                 <button
@@ -2540,7 +2632,7 @@ export function ResultGrid({
                     editing.onRevert(selectedRows());
                   }}
                 >
-                  <span>{t("edit.revert")}</span><span className="menu-shortcut">{REVERT_SHORTCUT}</span>
+                  <span>{t("edit.revert")}</span><span className="menu-shortcut">{shortcutText(REVERT_SHORTCUT)}</span>
                 </button>
               )}
               <hr />
@@ -2566,7 +2658,7 @@ export function ResultGrid({
               openCellViewer();
             }}
           >
-            {t("viewer.open")}
+            {t("viewer.open", { shortcut: keyText("cellViewer") })}
           </button>
           {menu.cell && (
             <button
@@ -2630,10 +2722,10 @@ export function ResultGrid({
           {menu.cell && (keyColumns.get(menu.cell.col) ?? []).map((key) => (
             <button key={`key:${key.schema}.${key.table}:${key.name}`} role="menuitem" onClick={() => menu.cell && void followKey(menu.cell, key)}>
               {t("references.openReferenced", { table: key.table })}
-              <span className="menu-shortcut">{FOLLOW_SHORTCUT}</span>
+              <span className="menu-shortcut">{shortcutText(FOLLOW_SHORTCUT)}</span>
             </button>
           ))}
-          {tableData && keys.length > 0 && (
+          {keyTable && keys.length > 0 && (
             <button
               role="menuitem"
               onClick={() => {
@@ -2646,10 +2738,10 @@ export function ResultGrid({
             </button>
           )}
           <hr />
-          <GridSubmenu label={t("results.copyMenu")}>
+          <Submenu label={t("results.copyMenu")}>
             {COPY_ITEMS.map((item) => (
               <button key={item.key} role="menuitem" onClick={() => void copy(item.format, item.header)}>
-                {t(`results.${item.key}`)}
+                {t(`results.${item.key}`, { shortcut: item.shortcut ? keyText(item.shortcut) : "" })}
               </button>
             ))}
             {displayFormats && (
@@ -2665,7 +2757,7 @@ export function ResultGrid({
             <button role="menuitem" onClick={() => { setMenu(null); setCopySpecial(selectedRange()); }}>
               {t("results.copySpecial")}
             </button>
-          </GridSubmenu>
+          </Submenu>
           {selection && !selection.rows && ended(result) && (
             <button
               role="menuitem"
@@ -2684,13 +2776,13 @@ export function ResultGrid({
             </button>
           )}
           {selection && (
-            <GridSubmenu label={t("results.copyNamesMenu")}>
+            <Submenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
                 <button key={n.style} role="menuitem" onClick={() => void copyNames(shownIn(bounds(selection)), n.style)}>
                   {t(`results.${n.key}`)}
                 </button>
               ))}
-            </GridSubmenu>
+            </Submenu>
           )}
           {menu.cell && !(editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) && (
             <>
@@ -2739,6 +2831,8 @@ export function ResultGrid({
             top: HEADER_H + cellEditor.row * ROW_H - contentTop(),
             width: widths[cellEditor.col] ?? MIN_COL,
             height: ROW_H,
+            // The values' size, the user's setting: what is typed matches the cell it replaces.
+            fontSize: GRID_FONT_PX,
           }}
           value={cellEditor.value}
           onChange={(e) => setCellEditor({ ...cellEditor, value: e.target.value, dirty: true })}
@@ -2891,24 +2985,24 @@ export function ResultGrid({
       <div className="result-editing">
         {editing && editing.inserts.length > 0 && <div className="pending-rows" aria-label={t("edit.newRows")}>
           {editing.inserts.map((values, index) => <div className="pending-row" key={index}>
-            <span className="pending-row-mark">+</span>
+            <Icon name="plus" className="pending-row-mark" />
             <button className="ghost small pending-row-values" title={t("edit.editNewRow")} disabled={editing.busy || sorting} onClick={() => setInserting({ values, index })}>{values.length ? values.map(({ column, value }) => `${result.columns[column]?.name ?? column}: ${value === null ? "NULL" : value}`).join(" · ") : t("edit.defaultRow")}</button>
-            <button className="ghost small" aria-label={t("edit.removeNewRow", { number: index + 1 })} disabled={editing.busy || sorting} onClick={() => editing.onRemoveInsert(index)}>×</button>
+            <button className="ghost small" aria-label={t("edit.removeNewRow", { number: index + 1 })} title={t("edit.removeNewRow", { number: index + 1 })} disabled={editing.busy || sorting} onClick={() => editing.onRemoveInsert(index)}><Icon name="x" /></button>
           </div>)}
         </div>}
         <div className="result-edit-toolbar" role="toolbar" aria-label={t(editing ? "edit.toolbar" : "queryPaging.label")}>
           {editing && <>
             <div className="result-row-actions" role="group" aria-label={t("edit.toolbar")}>
-              <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !ended(result)} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDuplicate")} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /><span>{t("edit.duplicateAction")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDelete")} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /><span>{t("edit.deleteAction")}</span></button>
-              <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="revert" /><span>{t("edit.revertAction")}</span></button>
+              <button className="ghost" title={t("edit.shortcutAdd", { shortcut: keyText("addRow") })} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !ended(result)} onClick={() => setInserting({ values: [] })}><Icon name="addRow" /><span>{t("edit.addRow")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDuplicate", { shortcut: keyText("duplicateRow") })} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><Icon name="duplicateRow" /><span>{t("edit.duplicateAction")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDelete", { shortcut: keyText("deleteSelectedRows") })} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><Icon name="delete" /><span>{t("edit.deleteAction")}</span></button>
+              <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><Icon name="revert" /><span>{t("edit.revertAction")}</span></button>
             </div>
             <div className="result-commit-actions" role="group" aria-label={t("edit.pendingActions")}>
-              <button className="ghost" title={`${t("edit.undo")} (${UNDO_SHORTCUT})`} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><EditIcon name="undo" /></button>
-              <button className="ghost" title={`${t("edit.redo")} (${REDO_SHORTCUT})`} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><EditIcon name="redo" /></button>
-              <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave")} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /><span>{t("edit.saveChanges")}</span></button>
-              <button className="ghost" title={t("edit.shortcutDiscard")} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><EditIcon name="cancel" /><span>{t("edit.discard")}</span></button>
+              <button className="ghost" title={withShortcut(t("edit.undo"), commandShortcut("edits.undo"))} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><Icon name="undo" /></button>
+              <button className="ghost" title={withShortcut(t("edit.redo"), commandShortcut("edits.redo"))} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><Icon name="redo" /></button>
+              <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave", { shortcut: keyText("saveEdits") })} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><Icon name="save" /><span>{t("edit.saveChanges")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDiscard", { shortcut: keyText("discardEdits") })} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><Icon name="discard" /><span>{t("edit.discard")}</span></button>
             </div>
             <span className={`small result-edit-count${hasPendingEdits ? " has-pending" : " muted"}`} role="status">
               {hasPendingEdits ? t("edit.counts", { inserted: editing.inserts.length, deleted: editing.deleted.length, updated: updatedRows }) : t("edit.noPending")}
@@ -3023,13 +3117,13 @@ export function ResultGrid({
           scrollerRef.current?.focus();
         }}
       />
-    ) : referencesShown && tableData && result.rows > 0 ? (
+    ) : referencesShown && keyTable && result.rows > 0 ? (
       <ReferencesPanel
         session={session}
         resultId={result.id}
         row={Math.min(selection?.focus.row ?? 0, result.rows - 1)}
-        schema={tableData.schema}
-        table={tableData.name}
+        schema={keyTable.schema}
+        table={keyTable.name}
         modes={<ViewerModes modes={viewerModes} mode={shownMode} onMode={(mode) => { setViewerMode(mode); scrollerRef.current?.focus(); }} />}
         onOpen={openTarget}
         onClose={() => {
@@ -3083,7 +3177,7 @@ export function ResultGrid({
       <aside className="cell-viewer" aria-label={t("viewer.title")}>
         <header>
           <div className="cell-viewer-title"><strong>{t("viewer.title")}</strong></div>
-          <button className="ghost" aria-label={t("viewer.close")} onClick={() => setViewer(false)}>×</button>
+          <button className="ghost" aria-label={t("viewer.close", { shortcut: keyText("close") })} title={t("viewer.close", { shortcut: keyText("close") })} onClick={() => setViewer(false)}><Icon name="x" /></button>
         </header>
         <p className="muted small">{t("viewer.selectCell")}</p>
       </aside>
@@ -3103,11 +3197,9 @@ export function ResultGrid({
           else setViewer(!viewer);
         }}
       >
-        <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <rect x="3" y="3.5" width="14" height="13" rx="1.5" /><path d="M11.5 4v12M5.5 7h3.5M5.5 10h3.5M5.5 13h2" />
-        </svg>
+        <Icon name="sidePanel" />
       </button>
-      {tableData && keys.length > 0 && (
+      {keyTable && keys.length > 0 && (
         <button
           type="button"
           className={`result-side-action ${referencesShown ? "active" : ""}`}
@@ -3123,7 +3215,7 @@ export function ResultGrid({
             }
           }}
         >
-          <Icon name="link" size={18} />
+          <Icon name="link" />
         </button>
       )}
       <button
@@ -3138,7 +3230,7 @@ export function ResultGrid({
           else openCalc();
         }}
       >
-        <Icon name="sigma" size={18} />
+        <Icon name="sigma" />
       </button>
       <button
         type="button"
@@ -3152,7 +3244,7 @@ export function ResultGrid({
           else openGroup();
         }}
       >
-        <Icon name="group" size={18} />
+        <Icon name="group" />
       </button>
     </div>
     {headerGhost && (
@@ -3291,7 +3383,7 @@ function HeaderMenuItems(props: {
   };
   return (
     <>
-      <button role="menuitem" onClick={props.onSelect}>{t("results.selectColumn")}</button>
+      <button role="menuitem" onClick={props.onSelect}>{t("results.selectColumn", { gesture: keyText("selectColumn") })}</button>
       <button role="menuitem" onClick={props.onFit}>{t("results.fitColumn")}</button>
       <hr />
       <button role="menuitem" disabled={!props.canHide} onClick={props.onHide}>
@@ -3314,8 +3406,8 @@ function HeaderMenuItems(props: {
       <button role="menuitem" disabled={props.masked} title={noSortHint} onClick={() => props.onSort([{ column: props.column, descending: true }])}>{t("results.sortDesc")}</button>
       {others.length > 0 && (
         <>
-          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint")} onClick={() => props.onSort(then(false))}>{t("results.sortThenAsc")}</button>
-          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint")} onClick={() => props.onSort(then(true))}>{t("results.sortThenDesc")}</button>
+          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint", { gesture: keyText("sortThen") })} onClick={() => props.onSort(then(false))}>{t("results.sortThenAsc")}</button>
+          <button role="menuitem" disabled={props.masked} title={noSortHint ?? t("results.sortThenHint", { gesture: keyText("sortThen") })} onClick={() => props.onSort(then(true))}>{t("results.sortThenDesc")}</button>
         </>
       )}
       {props.sort.length > 0 && <button role="menuitem" onClick={() => props.onSort([])}>{t("results.sortClear")}</button>}
@@ -3396,80 +3488,6 @@ function ColumnChooser(props: {
   );
 }
 
-/** How long the pointer rests on a submenu's item before the submenu opens, and how long an
- *  open submenu stays once the pointer has left it. A pointer going diagonally into an open
- *  submenu crosses other items of the menu on the way: they neither close it nor open theirs. */
-const SUBMENU_OPEN_DELAY = 150;
-const SUBMENU_CLOSE_DELAY = 400;
-
-/** The grid submenu open now: opening another one closes it at once. */
-let openSubmenu: { close(): void } | null = null;
-
-/** A context submenu that stays inside the window, even near its edges. */
-function GridSubmenu({ label, children }: { label: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const submenu = useRef<HTMLDivElement>(null);
-  const timer = useRef<number | null>(null);
-  const clearTimer = () => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = null;
-  };
-  const self = useRef({ close: () => {} });
-  self.current.close = () => {
-    clearTimer();
-    if (openSubmenu === self.current) openSubmenu = null;
-    setOpen(false);
-  };
-  const show = () => {
-    clearTimer();
-    if (openSubmenu !== self.current) openSubmenu?.close();
-    openSubmenu = self.current;
-    setOpen(true);
-  };
-  useEffect(() => () => self.current.close(), []);
-  useLayoutEffect(() => {
-    if (!open || !trigger.current || !submenu.current) return;
-    const position = () => {
-      if (!trigger.current || !submenu.current) return;
-      const anchor = trigger.current.getBoundingClientRect();
-      const width = submenu.current.getBoundingClientRect().width;
-      const right = anchor.right;
-      const x = right + width <= window.innerWidth - MENU_MARGIN ? right : anchor.left - width;
-      placeMenu(submenu.current, x, anchor.top);
-    };
-    position();
-    // It follows its item when the menu or the submenu changes size (items added while open).
-    const resized = new ResizeObserver(position);
-    resized.observe(submenu.current);
-    const parent = trigger.current.closest(".grid-menu");
-    if (parent) resized.observe(parent);
-    window.addEventListener("resize", position);
-    window.addEventListener("scroll", position, true);
-    return () => {
-      resized.disconnect();
-      window.removeEventListener("resize", position);
-      window.removeEventListener("scroll", position, true);
-    };
-  }, [open, children]);
-  return (
-    <div className="grid-submenu" onMouseEnter={() => {
-      clearTimer();
-      if (!open) timer.current = window.setTimeout(show, SUBMENU_OPEN_DELAY);
-    }} onMouseLeave={(e) => {
-      clearTimer();
-      if (open && !e.currentTarget.contains(document.activeElement)) timer.current = window.setTimeout(() => self.current.close(), SUBMENU_CLOSE_DELAY);
-    }} onFocus={show} onBlur={(e) => {
-      if (!e.currentTarget.contains(e.relatedTarget)) self.current.close();
-    }}>
-      <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open}>
-        {label} ▸
-      </button>
-      {open && <div ref={submenu} className="grid-menu grid-child-menu" role="menu" aria-label={label}>{children}</div>}
-    </div>
-  );
-}
-
 /** Filters for the cell on which the context menu was opened. */
 function FilterSubmenu(props: {
   cell: Cell;
@@ -3501,7 +3519,7 @@ function FilterSubmenu(props: {
             { column, op: "isNotNull" as const, value: "" },
           ];
   return (
-    <GridSubmenu label={t("results.filterMenu")}>
+    <Submenu label={t("results.filterMenu")}>
         {props.server && <p className="grid-menu-note muted small">{t("results.filterInServer")}</p>}
         {items.map((filter) => (
           <button key={filter.op} role="menuitem" onClick={() => props.onAdd(filter)}>
@@ -3517,7 +3535,7 @@ function FilterSubmenu(props: {
             {t("results.resetFilters")}
           </button>
         )}
-    </GridSubmenu>
+    </Submenu>
   );
 }
 

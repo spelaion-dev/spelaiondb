@@ -6,7 +6,7 @@
 //! read that takes hours. Needs `SPELAION_TEST_MYSQL` and `SPELAION_TEST_MARIADB` (each
 //! skipped without its variable), through the MySQL plugin.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -114,6 +114,7 @@ impl Connection for NumberingFake {
 /// once, as soon as the statement has started: it then stops it, and is not sent a third time.
 #[tokio::test]
 async fn a_cancel_that_reached_the_engine_before_its_statement_is_sent_again_once() {
+    let _turn = crate::serial::file_turn(module_path!());
     let engine = Arc::new(Numbering::default());
     let fake = NumberingFake(
         engine.clone(),
@@ -241,6 +242,7 @@ fn servers() -> Vec<(&'static str, &'static str, Arc<dyn Driver>)> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancel_at_and_during_the_start_of_a_long_read_stops_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     cancel_after(&[1, 5, 20, 100, 1_000]).await;
 }
 
@@ -253,6 +255,7 @@ async fn a_cancel_at_and_during_the_start_of_a_long_read_stops_it() {
 /// passed 84 and 86 runs of 100.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancel_right_after_run_stops_a_long_read() {
+    let _turn = crate::serial::file_turn(module_path!());
     cancel_after(&[0]).await;
 }
 
@@ -292,6 +295,7 @@ async fn cancel_after(delays: &[u64]) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancel_with_nothing_running_does_not_touch_the_next_statement() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, var, driver) in servers() {
         let Some(session) = session(var, driver).await else {
             continue;

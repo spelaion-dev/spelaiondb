@@ -45,6 +45,7 @@ const ENGINES: usize = 29;
 
 #[test]
 fn every_engine_is_listed_once() {
+    let _turn = crate::serial::file_turn(module_path!());
     assert_eq!(Engine::ALL.len(), ENGINES);
     for (index, engine) in Engine::ALL.iter().enumerate() {
         assert_eq!(position(*engine), index, "{engine:?}");
@@ -53,6 +54,7 @@ fn every_engine_is_listed_once() {
 
 #[test]
 fn every_engine_is_named_by_its_text() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in Engine::ALL {
         assert_eq!(Engine::parse(engine.as_str()), Some(engine), "{engine:?}");
     }
@@ -64,6 +66,7 @@ fn every_engine_is_named_by_its_text() {
 
 #[test]
 fn an_unknown_name_is_no_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for name in ["", "Postgres", "postgresql", "snowflake", " mysql"] {
         assert_eq!(Engine::parse(name), None, "{name:?}");
     }

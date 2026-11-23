@@ -3,7 +3,7 @@
 //! one of the IDE's SSH configurations, TLS with certificate files, and a password saved in
 //! DataGrip's KeePass database, which is never read.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 
@@ -39,6 +39,7 @@ const KEEPASS: &str = "Password: if DataGrip saved one, it is in its KeePass dat
 
 #[test]
 fn every_engine_comes_with_its_address_and_user() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let names: Vec<&str> = all.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(
@@ -134,6 +135,7 @@ fn every_engine_comes_with_its_address_and_user() {
 
 #[test]
 fn tls_comes_with_its_certificate_files() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let tls = named(&all, "Orders PG").tls.clone().unwrap();
     assert_eq!(tls.mode, TlsModeConfig::Require);
@@ -161,6 +163,7 @@ fn tls_comes_with_its_certificate_files() {
 
 #[test]
 fn the_ssh_tunnel_comes_from_the_ides_ssh_configuration() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let bastion = named(&all, "PG via bastion");
     let ssh = bastion.ssh.clone().unwrap();
@@ -197,6 +200,7 @@ fn the_ssh_tunnel_comes_from_the_ides_ssh_configuration() {
 
 #[test]
 fn a_password_in_datagrips_keepass_is_not_read_and_the_preview_says_so() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     // `security.xml` was never written: DataGrip's default, KeePass on Windows, the system
     // keychain elsewhere.
@@ -248,6 +252,7 @@ fn a_password_in_datagrips_keepass_is_not_read_and_the_preview_says_so() {
 
 #[test]
 fn every_connection_becomes_a_connection_file_and_the_bastion_a_network_profile() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("datagrip-import");
     let backend = FakeBackend::default();
     let folder = TargetFolder {

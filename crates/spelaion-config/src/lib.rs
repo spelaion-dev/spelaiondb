@@ -25,6 +25,7 @@ pub mod engine_options;
 mod error;
 mod heidisql;
 mod import;
+mod import_sources;
 mod linux_dirs;
 mod load;
 mod masking;
@@ -69,8 +70,12 @@ pub use error::{ConfigError, ProblemKind, ResolveError};
 pub use heidisql::{HeidiSqlError, heidisql_has_registry, read_heidisql, read_heidisql_registry};
 pub use import::{
     DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedPassword, ImportedProxy,
-    ImportedSsh, ImportedTls, KeychainItem, TargetFolder, find_duplicate, import_names,
-    import_plan, read_stored_passwords, replacement_draft,
+    ImportedSsh, ImportedTls, KeychainItem, SavedSecrets, TargetFolder, find_duplicate,
+    import_names, import_plan, read_stored_passwords, replacement_draft,
+};
+pub use import_sources::{
+    IMPORT_CLIENTS, ImportPlaces, ImportRead, ImportReadError, ImportSourceState, import_source,
+    read_import,
 };
 pub use load::{
     CONNECTION_TYPES_FILE, Config, ConnectionEntry, ConnectionId, PlainTextError, Source,

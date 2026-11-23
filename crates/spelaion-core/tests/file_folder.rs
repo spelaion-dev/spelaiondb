@@ -3,7 +3,7 @@
 //! read nor anything written to it, whatever the user runs. Needs nothing external besides the
 //! DuckDB plugin (`SPELAION_DEV_PLUGIN_DUCKDB` or the pinned build).
 
-mod engines;
+use crate::engines;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -197,6 +197,7 @@ async fn direct(conn: &dyn Connection, sql: &str) -> (Vec<String>, Vec<Vec<Strin
 
 #[tokio::test]
 async fn a_folder_opens_as_a_view_of_each_file_with_duckdbs_types() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("views");
     ws.write(
         "data/sales/orders.csv",
@@ -308,6 +309,7 @@ async fn a_folder_opens_as_a_view_of_each_file_with_duckdbs_types() {
 
 #[tokio::test]
 async fn nothing_outside_the_folder_is_read_and_nothing_is_written_to_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("escape");
     ws.write("data/sales/orders.csv", "id\n1\n");
     // A sibling whose name starts with the folder's, and a file next to the folder.
@@ -375,6 +377,7 @@ async fn plain_database(path: &Path) {
 
 #[tokio::test]
 async fn a_folder_that_is_not_one_does_not_open() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("missing");
     ws.write("data/sales.csv", "id\n1\n");
     for (id, database) in [("file", "data/sales.csv"), ("missing", "data/nowhere")] {
@@ -394,6 +397,7 @@ async fn a_folder_that_is_not_one_does_not_open() {
 
 #[test]
 fn file_folder_is_only_a_duckdb_folder_with_nothing_that_changes_its_session() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (toml, expected) in [
         (
             "engine = \"sqlite\"\ndatabase = \"data\"\nfile_folder = true\n",

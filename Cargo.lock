@@ -1330,7 +1330,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.9",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2024,9 +2024,9 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -5711,7 +5711,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-cli"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5728,7 +5728,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-config"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "aes 0.8.4",
  "apple-native-keyring-store",
@@ -5757,7 +5757,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -5795,7 +5795,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-desktop"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5823,7 +5823,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-desktop-macros"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5832,7 +5832,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-dialect"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "proptest",
  "serde_json",
@@ -5841,7 +5841,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-api"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5854,7 +5854,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-sqlite"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5870,7 +5870,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-https"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "rcgen",
@@ -5883,7 +5883,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-mcp"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -5902,7 +5902,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-fetch"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "spelaion-core",
@@ -5911,7 +5911,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-host"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5927,7 +5927,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-protocol"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "serde",
@@ -5938,7 +5938,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-sdk"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5952,7 +5952,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-sqlite-schema"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "spelaion-dialect",
@@ -5962,7 +5962,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-ssh"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -5980,7 +5980,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-store"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
@@ -5988,7 +5988,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-test-plugin"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -7168,9 +7168,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",

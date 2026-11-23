@@ -19,7 +19,7 @@ kubectl --kubeconfig testing/k8s/kubeconfig -n spelaion-test rollout status depl
 Then run the tests with the variable pointing at the kubeconfig (an absolute path):
 
 ```bash
-SPELAION_TEST_K8S="$PWD/testing/k8s/kubeconfig" cargo test -p spelaion-core --test kube
+SPELAION_TEST_K8S="$PWD/testing/k8s/kubeconfig" cargo test -p spelaion-core kube::
 ```
 
 The smoke test (`apps/desktop/e2e/smoke.mjs`) also runs its Kubernetes step when the variable

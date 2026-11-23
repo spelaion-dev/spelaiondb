@@ -6,7 +6,7 @@
 //! committed and its own batch rolled back, and refuses read-only connections and unconfirmed
 //! plans.
 
-mod engines;
+use crate::engines;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -556,6 +556,7 @@ fn server(var: &str) -> Option<(String, u16)> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn postgres_imports() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_PG") else {
         return;
     };
@@ -583,6 +584,7 @@ async fn postgres_imports() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mysql_and_mariadb_import() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (var, driver, label) in [
         ("SPELAION_TEST_MYSQL", engines::mysql(), "MySQL"),
         ("SPELAION_TEST_MARIADB", engines::mariadb(), "MariaDB"),
@@ -615,6 +617,7 @@ async fn mysql_and_mariadb_import() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sqlserver_imports() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
         return;
     };
@@ -666,6 +669,7 @@ fn folder(label: &str) -> PathBuf {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn duckdb_imports() {
+    let _turn = crate::serial::file_turn(module_path!());
     let path = folder("duckdb").join("import.duckdb");
     engines::create_database(spelaion_config::Engine::Duckdb, &path).await;
     let driver = engines::duckdb();
@@ -691,6 +695,7 @@ async fn duckdb_imports() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sqlite_imports() {
+    let _turn = crate::serial::file_turn(module_path!());
     let path = folder("sqlite").join("import.db");
     std::fs::File::create(&path).unwrap();
     let driver = engines::sqlite();
@@ -716,6 +721,7 @@ async fn sqlite_imports() {
 
 #[tokio::test]
 async fn unicode_csv_values_are_previewed_and_imported_unchanged() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dir = folder("unicode");
     let db = dir.join("unicode.db");
     let csv = dir.join("unicode.csv");
@@ -787,6 +793,7 @@ async fn unicode_csv_values_are_previewed_and_imported_unchanged() {
 /// Pasted text (a Markdown table) into a new SQLite table, and a view that is not a target.
 #[tokio::test]
 async fn pasted_tables_and_views() {
+    let _turn = crate::serial::file_turn(module_path!());
     let path = folder("paste").join("paste.db");
     std::fs::File::create(&path).unwrap();
     let driver = engines::sqlite();

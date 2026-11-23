@@ -74,6 +74,7 @@ mod session;
 mod session_read_only;
 mod session_setup;
 pub mod session_source;
+mod shortcuts;
 mod shown;
 mod sort;
 mod sql_file;
@@ -81,6 +82,7 @@ mod sql_mode;
 mod startup;
 mod table_data;
 mod table_filters;
+mod table_pages;
 mod table_stats;
 mod temporal;
 #[cfg(all(test, unix))]
@@ -133,7 +135,7 @@ pub use display::{
 pub use edit::{
     CellInput, EditError, EditTarget, RowChange, UpdateCopyError, UpdateSource, UpdateTable,
     apply_edits, check_edit_policy, edit_statements, editable_query_source, editable_query_table,
-    update_copy_table,
+    result_edit_table, update_copy_table,
 };
 pub use editor_snippets::{
     MAX_SCRIPT_TEMPLATE, MAX_SNIPPET_BODY, MAX_SNIPPET_DESCRIPTION, MAX_SNIPPET_NAME, MAX_SNIPPETS,
@@ -164,7 +166,8 @@ pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use geometry::{
     Bounds, ColumnMap, Dimensions, GeoFormat, GeoValue, Geometry, MAP_MAX_POINTS, MAP_MAX_SHAPES,
-    MapCrs, MapError, MapShape, Position, column_map, is_geometry_type, map_crs, read_geometry,
+    MapCrs, MapError, MapNote, MapShape, Position, column_map, is_geometry_type, map_crs,
+    read_cell_geometry, read_geometry,
 };
 pub use group::{
     GROUP_KEY_CHARS, Group, GroupCounts, GroupError, GroupFiltered, GroupRequest,
@@ -229,16 +232,16 @@ pub use query_page::{
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use references::{
     FollowError, KeyDirection, KeyRef, KeyRows, KeyTarget, MAX_PREVIEW_ROWS, PREVIEW_CHARS,
-    ReferenceOutcome, RowReference, TableKey, find_key, follow, key_rows, read_references,
-    reference_targets, table_keys,
+    ReferenceOutcome, RowReference, TableKey, check_key_table, find_key, follow, key_rows,
+    query_key_table, read_references, reference_targets, table_keys,
 };
 pub use result_tabs::{
     DEFAULT_RESULT_TABS, MAX_RESULT_NAME, MAX_RESULT_TABS, Placed, Placement, ResultTab,
     ResultTabs, ResultTabsError, RunResults, statement_title,
 };
 pub use results::{
-    PartialReason, ResultEnd, ResultFreed, ResultId, ResultSource, ResultStore, RevealError,
-    RevealedCell, StoredResult,
+    PartialReason, ResultEnd, ResultFreed, ResultId, ResultSource, ResultStore, ResultTable,
+    RevealError, RevealedCell, StoredResult,
 };
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{
@@ -253,9 +256,11 @@ pub use session::{
 pub use session_read_only::{SessionReadOnlyError, set_session_read_only};
 pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
-    isolation_statement, read_only_statement, setup_is_restricted,
+    isolation_statement, read_only_statement, setup_is_restricted, vet_imported_setup,
 };
+pub use shortcuts::{MAX_SHORTCUT_LENGTH, MAX_SHORTCUT_OVERRIDES, ShortcutError, check_shortcut};
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};
+pub use spelaion_store::ShortcutOverride;
 pub use spelaion_store::{
     AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
     HistoryOutcome, HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,

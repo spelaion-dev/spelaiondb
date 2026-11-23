@@ -55,12 +55,19 @@ type Scan =
 /** Importing the chosen connections. */
 type Importing = { kind: "idle" } | { kind: "importing" } | { kind: "failed"; message: string };
 
-export function ConnectionImport(props: { client: ImportClientId; onBack(): void; onDone(): void }) {
+export function ConnectionImport(props: {
+  client: ImportClientId;
+  /** A folder or export file chosen on the client's row of the list (SDB-446); else where the
+   *  client keeps its connections. */
+  initialDir?: string | null;
+  onBack(): void;
+  onDone(): void;
+}) {
   const { t } = useTranslation("connections");
   const clientInfo = IMPORT_CLIENTS.find((c) => c.id === props.client);
   const client = clientInfo?.label ?? props.client;
   const hasWorkspace = useApp((s) => Boolean(s.workspace?.workspace));
-  const [dir, setDir] = useState<string | null>(window.__spelaionImportDirs?.[props.client] ?? null);
+  const [dir, setDir] = useState<string | null>(props.initialDir ?? window.__spelaionImportDirs?.[props.client] ?? null);
   const [scan, setScan] = useState<Scan>({ kind: "reading" });
   const found = scan.kind === "found" ? scan : null;
   const locked = scan.kind === "locked" ? scan : null;
@@ -162,11 +169,15 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
         {done > 0 && (
           <ul className="conn-import-report">
             {report.imported.map((name) => (
-              <li key={`i-${name}`}>{name}</li>
+              <li key={`i-${name}`}>
+                {name}
+                {report.withSetup.includes(name) && <span className="muted small"> · {t("importer.setupTag")}</span>}
+              </li>
             ))}
             {report.replaced.map((name) => (
               <li key={`r-${name}`}>
                 {name} <span className="muted small">· {t("importer.replacedTag")}</span>
+                {report.withSetup.includes(name) && <span className="muted small"> · {t("importer.setupTag")}</span>}
               </li>
             ))}
           </ul>
@@ -331,6 +342,14 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
                         <option value="replace">{t("importer.replace", { name: existing.name })}</option>
                       </select>
                     </div>
+                  )}
+                  {c.setup && (
+                    // Open: every statement that will run on each new session is shown before
+                    // importing, also where the core did not have to check it (SDB-104).
+                    <details className="conn-import-unmapped" open>
+                      <summary className="small">{t("importer.setup")}</summary>
+                      <pre className="small mono">{c.setup}</pre>
+                    </details>
                   )}
                   {c.unmapped.length > 0 && (
                     <details className="conn-import-unmapped">

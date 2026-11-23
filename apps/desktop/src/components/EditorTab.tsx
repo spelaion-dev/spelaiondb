@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import { startJob, type Job } from "../jobs";
-import type { EditableTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
+import type { EditableTableItem, KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
@@ -32,7 +32,7 @@ import { EditorActionsButton } from "./EditorMenu";
 import { SqlEditor, type NameAction, type RunLabel, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { ScriptOutline } from "./ScriptOutline";
 import type { ResolvedName } from "../sqlCompletion";
-import { commandSpec } from "../commandRegistry";
+import { commandShortcut } from "../shortcuts";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
@@ -59,19 +59,6 @@ function emptyPending(): PendingEdits {
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-function EditorActionIcon({ name }: { name: "run" | "script" | "format" | "save" | "saveAs" | "cancel" }) {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      {name === "run" && <path d="M6.5 3.8v12.4l9-6.2z" fill="currentColor" stroke="none" />}
-      {name === "script" && <><path d="M3.5 4h9M3.5 7.5h6M3.5 11h4M3.5 14.5h4" /><path d="M11 9.5v6l4.5-3z" fill="currentColor" stroke="none" /></>}
-      {name === "format" && <><path d="M4 4.5h12M4 8h8M7 11.5h9M7 15h6" /><path d="M4 11v4" /></>}
-      {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4z" /><path d="M6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
-      {name === "saveAs" && <><path d="M5 3.5h6.5L15 7v9.5H5z" /><path d="M11.5 3.5V7H15M8 12.5h4M10 10.5v4" /></>}
-      {name === "cancel" && <rect x="5" y="5" width="10" height="10" rx="1" fill="currentColor" stroke="none" />}
-    </svg>
-  );
 }
 
 function translated(text: Translation, t: TFunction<"editor">, numbers: Intl.NumberFormat): string {
@@ -276,6 +263,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [primaryKey, setPrimaryKey] = useState<string[] | null>(null);
   const [columnComments, setColumnComments] = useState<Record<string, string>>({});
   const [queryTable, setQueryTable] = useState<(EditableTableItem & { result: number }) | null>(null);
+  /** The one table a query's result was matched to, whose foreign keys it follows (SDB-93). */
+  const [queryKeyTable, setQueryKeyTable] = useState<(KeyTableItem & { result: number }) | null>(null);
   const [queryChecked, setQueryChecked] = useState<number | null>(null);
   /** Its edits are being applied: kept once, for the store, this render and a second click. */
   const saving = useFlag();
@@ -289,7 +278,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
     updateTab(tab.id, { pendingEdits: pendingCount > 0, savingEdits });
   }, [tab.id, pendingCount, savingEdits, updateTab]);
 
-  // A query is editable only when the core can resolve its entire result to one table.
+  // A query follows foreign keys, and is editable, only when the core can resolve its entire
+  // result to one table: first the table (read-only connections too), then whether it may be
+  // edited, which only a result with a table can be.
   useEffect(() => {
     if (tab.table || tabStatus !== "connected" || running) return;
     const result = tab.run?.results.find((item) => item.id === tab.run?.activeResult);
@@ -297,22 +288,40 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const request = result?.run === undefined ? undefined : runTexts.current.get(result.run);
     if (!result || !ended(result) || !request || request.results !== 1) return;
     let active = true;
-    call(commands.editableQueryTable(tab.id, result.id, request.text))
-      .then((table) => { if (active) { setQueryTable(table ? { ...table, result: result.id } : null); setQueryChecked(result.id); } })
-      .catch(() => { if (active) setQueryChecked(result.id); });
+    void (async () => {
+      try {
+        const keyTable = await call(commands.queryKeyTable(tab.id, result.id, request.text));
+        if (!active) return;
+        setQueryKeyTable(keyTable ? { ...keyTable, result: result.id } : null);
+        const table = keyTable ? await call(commands.editableQueryTable(tab.id, result.id, request.text)) : null;
+        if (!active) return;
+        setQueryTable(table ? { ...table, result: result.id } : null);
+      } catch {
+        // Neither: the result stays a plain, read-only result.
+      }
+      if (active) setQueryChecked(result.id);
+    })();
     return () => { active = false; };
   }, [tab.id, tab.table, tabStatus, running, tab.run?.results, tab.run?.activeResult]);
   // Rows read through a session that is gone (lost, disconnected, another connection) are not
-  // editable: the check above asks again once connected, and the core refuses them anyway
-  // (SDB-137).
+  // editable and follow no keys: the check above asks again once connected, and the core
+  // refuses them anyway (SDB-137).
   useEffect(() => {
-    if (tabStatus !== "connected") setQueryTable(null);
+    if (tabStatus !== "connected") {
+      setQueryTable(null);
+      setQueryKeyTable(null);
+    }
   }, [tabStatus]);
 
   const activeResult = tab.run?.results.find((result) => result.id === tab.run?.activeResult);
   const editTarget = tab.table
     ? (primaryKey?.length && !connection?.readOnly ? { ...tab.table, primaryKey } : null)
     : (queryTable && queryTable.result === activeResult?.id ? queryTable : null);
+  /** The table whose foreign keys the active result follows: a table data tab's own, or the
+   *  one table the core matched a query's result to (SDB-93). */
+  const keyTable = tab.table
+    ? { schema: tab.table.schema, name: tab.table.name, connectionId: tab.connectionId }
+    : (queryKeyTable && queryKeyTable.result === activeResult?.id ? { schema: queryKeyTable.schema, name: queryKeyTable.name, connectionId: tab.connectionId } : undefined);
 
   // A page shown again (another result tab, a tab restored) shows the edits its core holds.
   const activeResultId = activeResult && ended(activeResult) ? activeResult.id : null;
@@ -945,6 +954,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
         case "zoomReset":
           editor.current?.action(command);
           break;
+        case "cut":
+        case "copy":
+        case "paste":
+        case "selectAll":
+          editor.current?.clipboard(command);
+          break;
         case "cancel":
           void sessionCommand.current.cancel();
           break;
@@ -1560,7 +1575,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   };
   const maximized = !tab.table && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
-  const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults")} title={t(maximized ? "restoreResults" : "maximizeResults")} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
+  const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} title={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
       <span className="sr-only" role="status">{runStatusLine}</span>
@@ -1703,34 +1718,34 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
           <div className="editor-actions" role="toolbar" aria-label={t("editorActions")}>
             {running ? (
               <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} disabled={cancelRequested} onClick={() => void cancelRun()}>
-                <EditorActionIcon name="cancel" />
+                <Icon name="stopped" filled />
               </button>
             ) : (
-              <button className="editor-action editor-action-run" data-run-target={runLabel?.kind ?? ""} aria-label={runName} title={`${runPicks ? t("runSelectionPickHint", { count: runLabel?.statements }) : runName} (${commandSpec("editor.run").shortcut})`} disabled={historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
-                <EditorActionIcon name="run" />
+              <button className="editor-action editor-action-run" data-run-target={runLabel?.kind ?? ""} aria-label={runName} title={`${runPicks ? t("runSelectionPickHint", { count: runLabel?.statements }) : runName} (${commandShortcut("editor.run")})`} disabled={historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
+                <Icon name="run" filled />
               </button>
             )}
-            <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
-              <EditorActionIcon name="script" />
+            <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint", { shortcut: commandShortcut("editor.runScript") })} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
+              <Icon name="runScript" />
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
             <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
-            <EditorActionsButton />
+            <EditorActionsButton runName={runName} />
             <span className="editor-actions-divider" aria-hidden="true" />
-            <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
-              <EditorActionIcon name="format" />
+            <button className="editor-action" aria-label={t("format")} title={t("formatHint", { shortcut: commandShortcut("editor.format") })} onClick={() => editor.current?.format()}>
+              <Icon name="format" />
             </button>
             {tab.file ? (
-              <button className="editor-action" aria-label={t("files.saveFile")} title={t("files.saveFileHint")} onClick={() => void saveTab(tab.id)}>
-                <EditorActionIcon name="save" />
+              <button className="editor-action" aria-label={t("files.saveFile")} title={t("files.saveFileHint", { shortcut: commandShortcut("file.save") })} onClick={() => void saveTab(tab.id)}>
+                <Icon name="save" />
               </button>
             ) : (
-              <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
-                <EditorActionIcon name="save" />
+              <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint", { shortcut: commandShortcut("file.save") })} onClick={() => void saveQuery()}>
+                <Icon name="save" />
               </button>
             )}
-            <button className="editor-action" aria-label={t("files.saveAs")} title={t("files.saveAsHint")} onClick={() => void saveTabAs(tab.id)}>
-              <EditorActionIcon name="saveAs" />
+            <button className="editor-action" aria-label={t("files.saveAs")} title={t("files.saveAsHint", { shortcut: commandShortcut("file.saveAs") })} onClick={() => void saveTabAs(tab.id)}>
+              <Icon name="saveAs" />
             </button>
           </div>
           <SqlEditor
@@ -1751,6 +1766,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             onOutline={() => setOutlineOpen((open) => !open)}
             error={editorError}
             cursorAtEnd={tab.fromTemplate}
+            runName={runName}
           />
           {outlineOpen && (
             <ScriptOutline
@@ -1802,6 +1818,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             serverSort={tab.table ? { sort: tab.table.sort ?? NO_TABLE_SORT, onSort: (sort) => void sortTable(sort) } : undefined}
             onQuerySort={tab.table ? undefined : sortQuery}
             tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0, all: undefined, total: undefined }), connectionId: tab.connectionId } : undefined}
+            keyTable={keyTable}
             editing={editing}
             columnComments={tab.table ? columnComments : undefined}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
@@ -1892,6 +1909,7 @@ function Results({
   serverSort,
   onQuerySort,
   tableData,
+  keyTable,
   editing,
   columnComments,
   readOnlyHint,
@@ -1930,6 +1948,8 @@ function Results({
   /** Reads a paged query again from the server in a sort's order (see `ResultGrid`). */
   onQuerySort?(result: number, sort: SortState[]): Promise<boolean>;
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+  /** The table whose foreign keys the result follows (SDB-93). */
+  keyTable?: { schema: string; name: string; connectionId: string | null };
   editing?: GridEditing;
   columnComments?: Record<string, string>;
   readOnlyHint?: boolean;
@@ -1972,15 +1992,15 @@ function Results({
     <button
       className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
       aria-pressed={maximize.maximized}
-      aria-label={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
-      title={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
+      aria-label={maximize.maximized ? t("restoreResults", { shortcut: commandShortcut("results.maximize") }) : t("maximizeResults", { shortcut: commandShortcut("results.maximize") })}
+      title={maximize.maximized ? t("restoreResults", { shortcut: commandShortcut("results.maximize") }) : t("maximizeResults", { shortcut: commandShortcut("results.maximize") })}
       onClick={maximize.onToggle}
     >
       <Icon name={maximize.maximized ? "minimize" : "maximize"} />
     </button>
   );
   // Nothing to show yet: the button only brings the editor back if it was hidden.
-  if (!run) return <div className="empty">{t("results.empty")}{maximize?.maximized && maximizeButton}</div>;
+  if (!run) return <div className="empty">{t("results.empty", { shortcut: commandShortcut("editor.run") })}{maximize?.maximized && maximizeButton}</div>;
   const active = run.results.find((r) => r.id === run.activeResult) ?? null;
   const canRefresh = !!active && (!!table || !!active.refreshable);
   const showMessages = active === null;
@@ -1999,7 +2019,8 @@ function Results({
           results={run.results}
           activeResult={run.activeResult}
           session={table ? null : session}
-          messages={`${t("results.messages")}${run.messages.some((m) => m.kind === "error") ? " ⚠" : ""}`}
+          messages={t("results.messages")}
+          messagesError={run.messages.some((m) => m.kind === "error")}
           onSelect={onSelect}
         />
         {active && <div className="result-tools">
@@ -2092,6 +2113,7 @@ function Results({
             serverSort={serverSort}
             onQuerySort={onQuerySort ? (sort) => onQuerySort(active.id, sort) : undefined}
             tableData={tableData}
+            keyTable={keyTable}
             columnComments={columnComments}
             editing={filteringResult === active.id || restoringView ? undefined : editing}
             restoringView={restoringView}

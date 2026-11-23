@@ -69,6 +69,7 @@ fn personal(path: &str) -> ConnectionId {
 
 #[tokio::test]
 async fn after_a_saved_edit_a_session_made_from_an_open_one_uses_the_saved_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let folder = Folder::new("edit");
     let db = folder
         .base
@@ -172,6 +173,7 @@ async fn after_a_saved_edit_a_session_made_from_an_open_one_uses_the_saved_file(
 
 #[test]
 fn the_typed_password_goes_only_to_the_same_login_on_the_same_route() {
+    let _turn = crate::serial::file_turn(module_path!());
     let folder = Folder::new("password");
     folder.write(
         "tunnels/jump.toml",

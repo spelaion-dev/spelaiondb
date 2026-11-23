@@ -6,6 +6,10 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BUILT_IN_SNIPPETS } from "../editorSnippets";
 import { useSnippets } from "../snippetStore";
+import { keyText } from "../shortcuts";
+
+/** The keys that expand a snippet and move between its fields, in words. */
+const snippetKeys = () => ({ next: keyText("snippetNext"), previous: keyText("snippetPrevious") });
 
 interface Draft {
   /** The snippet being edited, by its saved name; `null` for a new one. */
@@ -74,7 +78,7 @@ export function SnippetSettings() {
 
   return (
     <>
-      <p className="muted small">{t("snippets.hint")}</p>
+      <p className="muted small">{t("snippets.hint", snippetKeys())}</p>
       {loadError && <p className="notice error" role="alert">{t("snippets.loadFailed", { reason: loadError })}</p>}
       <fieldset className="settings-choice">
         <legend>{t("snippets.yours")}</legend>
@@ -107,7 +111,7 @@ export function SnippetSettings() {
             <label className="field">
               <span>{t("snippets.name")}</span>
               <input name="snippetName" value={draft.name} maxLength={limits?.name} spellCheck={false} autoFocus onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-              <span className="muted small">{t("snippets.nameHint")}</span>
+              <span className="muted small">{t("snippets.nameHint", snippetKeys())}</span>
             </label>
             <label className="field">
               <span>{t("snippets.description")}</span>
@@ -116,7 +120,7 @@ export function SnippetSettings() {
             <label className="field">
               <span>{t("snippets.text")}</span>
               <textarea name="snippetBody" className="snippet-text" rows={6} value={draft.body} spellCheck={false} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
-              <span className="muted small">{t("snippets.textHint")}</span>
+              <span className="muted small">{t("snippets.textHint", snippetKeys())}</span>
             </label>
             {failure && <p className="notice error" role="alert">{failure}</p>}
             <div className="snippet-actions">

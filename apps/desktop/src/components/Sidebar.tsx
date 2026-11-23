@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
 import { chooseFolder, workspaceParent } from "../dialogs";
 import { Trans, useTranslation } from "react-i18next";
 import {
@@ -25,7 +26,6 @@ import {
   type SchemaObjectKindItem,
   type ServerObjectItem,
   type ServerObjectKindItem,
-  type SqlTemplateItem,
   type TableDetails,
   type PartitioningItem,
   type TableKeyItem,
@@ -38,7 +38,6 @@ import {
   openSession,
   newQueryOnConnection,
   SCHEMAS_REFRESHED_EVENT,
-  SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
 import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInfo";
 import { connectionMatch } from "../connectionSearch";
@@ -47,9 +46,7 @@ import { sortByName } from "../explorerSort";
 import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
-import { connectionOpen, explorerSessionOpen, isConnected, isRunning, statusName } from "../tabState";
-import { useExport } from "./ExportDialog";
-import { useImport } from "./ImportDialog";
+import { connectedConnections, explorerSessionOpen, isConnected, isRunning, statusName } from "../tabState";
 import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
 import { useRunFile } from "./RunFileDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
@@ -60,7 +57,7 @@ import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./Explorer
 import { EngineIcon } from "./EngineIcon";
 import { useFittingMarks } from "../connectionMarks";
 import { tlsWarningText } from "../tlsWarning";
-import { Icon } from "./Icons";
+import { Icon, type IconName } from "./Icons";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { DuplicateTableDialog } from "./DuplicateTableDialog";
 import { StructureDialog } from "./StructureDialog";
@@ -71,12 +68,56 @@ import type { MaintenanceKindItem, PrincipalActionsItem, PrincipalKindItem, Prin
 import { MaintenanceDialog } from "./MaintenanceDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
-import { openDiagram } from "../diagramTabs";
 import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 import { ObjectMenu } from "./ObjectMenu";
 import { MissingPlugin } from "./MissingPlugin";
 import { FolderMenuButton } from "./FolderMenu";
 import { folderSwitchBlocked, switchFolder } from "../folders";
+import { ariaKeyShortcuts, commandShortcut, keyText, shortcutText } from "../shortcuts";
+import { matchesShortcut } from "../commandRegistry";
+import {
+  canEditRoutineSource,
+  canGenerateCall,
+  canRenameRelation,
+  canRunRoutine,
+  changedSchema,
+  createInSchema,
+  dropRelation,
+  dropSchema,
+  dropSchemaObject,
+  duplicateTable,
+  editRoutineSource,
+  editViewSource,
+  exportRelations,
+  forgetExplorerSession,
+  importIntoNewTable,
+  importIntoTable,
+  isPlainTable,
+  knownObjectActions,
+  loadObjectActions,
+  openGeneratedSql,
+  openObjectDefinition,
+  openRelationDdl,
+  openRelationDiagram,
+  openRelationRows,
+  openRelationSql,
+  openRoutineCall,
+  openSchemaDiagram,
+  openSqlTab,
+  relationBookmark,
+  relationTemplates,
+  reloadBookmarks,
+  renameRelation,
+  sameBookmark,
+  schemaBookmark,
+  schemaCreateKinds,
+  schemaEditorTab,
+  schemaObjectBookmark,
+  setEditorSchema,
+  templatesOf,
+  toggleBookmark,
+  useExplorerDialog,
+} from "../explorerActions";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -110,9 +151,34 @@ function useOnChange(value: unknown, action: () => void) {
   }, [value]);
 }
 
+/**
+ * An explorer row's own keys (docs/ui-guidelines.md, "Explorer row"): the handlers below match
+ * them, and the row's menus show them beside their items (SDB-85).
+ */
+const EXPLORER_SHORTCUTS = {
+  refresh: "F5",
+  rename: "F2",
+  drop: "Delete",
+  copyNames: "Ctrl+C",
+  copyQualifiedNames: "Ctrl+Shift+C",
+} as const;
+
+/**
+ * A menu item with its shortcut right-aligned, as in the tab menu. Its accessible name stays its
+ * label, and assistive technology gets the keys as `aria-keyshortcuts`.
+ */
+function ShortcutMenuItem({ label, shortcut, className, action, onClick }: { label: string; shortcut: string; className?: string; action?: string; onClick(): void }) {
+  return (
+    <button role="menuitem" className={className} data-action={action} aria-label={label} aria-keyshortcuts={ariaKeyShortcuts(shortcut)} onClick={onClick}>
+      <span>{label}</span>
+      <span className="menu-shortcut">{shortcutText(shortcut)}</span>
+    </button>
+  );
+}
+
 /** F5 on a row refreshes what that row shows (and not the rows around it). */
 function isRefreshKey(e: React.KeyboardEvent): boolean {
-  if (e.key !== "F5") return false;
+  if (!matchesShortcut(e, EXPLORER_SHORTCUTS.refresh)) return false;
   e.preventDefault();
   e.stopPropagation();
   return true;
@@ -144,6 +210,71 @@ function useContextMenu() {
 
 /** Fired on `window` to put the keyboard in the explorer's quick filter (Ctrl+Shift+F). */
 export const FOCUS_EXPLORER_FILTER_EVENT = "spelaion-focus-explorer-filter";
+
+/**
+ * The explorer header's Add connection, a split button (docs/ui-guidelines.md): the main part
+ * adds a connection, the arrow beside it opens the other ways in, "Import connections from
+ * another client…" (SDB-446), which opens the list of clients with what each one has here.
+ */
+function AddConnectionButton() {
+  const { t } = useTranslation(["shell", "connections"]);
+  const [menu, setMenu] = useContextMenu();
+  const arrow = useRef<HTMLButtonElement>(null);
+  const item = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (menu) item.current?.focus();
+  }, [menu]);
+  const open = () => {
+    const rect = arrow.current?.getBoundingClientRect();
+    if (rect) setMenu({ x: rect.left, y: rect.bottom });
+  };
+  return (
+    <span className="split-button">
+      <button
+        className="ghost add-connection"
+        onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
+        aria-label={t("connections:add")}
+        title={t("connections:add")}
+      >
+        <Icon name="plus" />
+      </button>
+      <button
+        ref={arrow}
+        className="ghost split-button-arrow"
+        aria-label={t("connections:moreWaysToAdd")}
+        title={t("connections:moreWaysToAdd")}
+        aria-haspopup="menu"
+        aria-expanded={menu !== null}
+        onClick={() => (menu ? setMenu(null) : open())}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !menu) {
+            e.preventDefault();
+            open();
+          }
+        }}
+      >
+        <Icon name="chevronDown" />
+      </button>
+      {menu && (
+        <ObjectMenu at={menu} label={t("connections:moreWaysToAdd")}>
+          <button
+            ref={item}
+            role="menuitem"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") arrow.current?.focus();
+            }}
+            onClick={() => {
+              setMenu(null);
+              useApp.getState().setConnectionDialog({ kind: "add", imports: true });
+            }}
+          >
+            {t("connections:importer.open")}
+          </button>
+        </ObjectMenu>
+      )}
+    </span>
+  );
+}
 
 /** Tags shown next to a connection's name; the others are only in its tooltip. */
 const VISIBLE_TAGS = 2;
@@ -205,7 +336,7 @@ function matchesFilter(name: string, filter: string): boolean {
 }
 
 /** A separate submenu, positioned outside the scrollable explorer menu. */
-function GenerateMenu({ children, label }: { children: ReactNode; label?: string }) {
+function GenerateMenu({ children, label, action }: { children: ReactNode; label?: string; action?: string }) {
   const { t } = useTranslation("shell");
   const title = label ?? t("generateSql");
   const [open, setOpen] = useState(false);
@@ -234,7 +365,7 @@ function GenerateMenu({ children, label }: { children: ReactNode; label?: string
     }} onBlur={(e) => {
       if (!e.currentTarget.contains(e.relatedTarget) && !submenu.current?.contains(e.relatedTarget)) setOpen(false);
     }}>
-      <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}>
+      <button ref={trigger} role="menuitem" data-action={action} aria-haspopup="menu" aria-expanded={open} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}>
         {title} ▸
       </button>
       {open && createPortal(
@@ -261,7 +392,7 @@ function MaintenanceMenu({ session, target, onPick }: { session: string; target:
   }, [session, key]);
   if (kinds.length === 0) return null;
   return (
-    <GenerateMenu label={t("maintenance.menu")}>
+    <GenerateMenu label={t("maintenance.menu")} action="maintenance">
       {kinds.map((kind) => (
         <button key={kind} role="menuitem" onClick={() => onPick(kind)}>
           {t("maintenance.menuItem", { action: t(`maintenance.kinds.${kind}`) })}
@@ -303,34 +434,6 @@ function GeneratedSqlDialog({ initialSql, onClose }: { initialSql: string; onClo
   );
 }
 
-/** A plug: "Show only connected connections". */
-function PlugIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5V21" />
-    </svg>
-  );
-}
-
-/** Two chain links: "Link with editor". */
-function LinkIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
-    </svg>
-  );
-}
-
-/** The magnifying glass of the quick filter. */
-function SearchIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false">
-      <circle cx="10.5" cy="10.5" r="6" />
-      <path d="M15 15l5 5" />
-    </svg>
-  );
-}
-
 /** Whether the explorer's filters go into the catalog queries (Settings → Explorer). */
 const serverSide = () => usePreferences.getState().explorer.serverSideFilters;
 
@@ -343,57 +446,18 @@ function useSortByName() {
     sortByName(items, name, { sortAlphabetically, sortIgnoreCase }, i18n.language);
 }
 
-/** What a table's menu can generate, per session: the engine does not change while it is open. */
-const tableTemplates = new Map<string, Promise<SqlTemplateItem[]>>();
-/** The lists already answered, so a menu opens with the engine's own and does not change. */
-const knownTemplates = new Map<string, SqlTemplateItem[]>();
-function templatesOf(session: string): Promise<SqlTemplateItem[]> {
-  let templates = tableTemplates.get(session);
-  if (!templates) {
-    templates = call(commands.tableTemplates(session)).then(
-      (list) => {
-        knownTemplates.set(session, list);
-        return list;
-      },
-      (e: unknown) => {
-        tableTemplates.delete(session);
-        throw e;
-      },
-    );
-    tableTemplates.set(session, templates);
-  }
-  return templates;
-}
-function forgetTemplates(session: string) {
-  tableTemplates.delete(session);
-  knownTemplates.delete(session);
-  objectActions.delete(session);
-  pendingObjectActions.delete(session);
-}
-
 /** What the core lets the explorer do on a session's engine (ADR-026), asked once per session
- *  (`enabled` once it is open). */
-const objectActions = new Map<string, ObjectActionsItem>();
-const pendingObjectActions = new Map<string, Promise<ObjectActionsItem>>();
+ *  (`enabled` once it is open); the answer is kept in `explorerActions.ts`. */
 function useObjectActions(session: string, enabled = true): ObjectActionsItem | undefined {
-  const [actions, setActions] = useState(() => objectActions.get(session));
+  const [actions, setActions] = useState(() => knownObjectActions(session));
   useEffect(() => {
     if (actions || !enabled) return;
     let current = true;
-    let pending = pendingObjectActions.get(session);
-    if (!pending) {
-      pending = call(commands.objectActions(session));
-      pendingObjectActions.set(session, pending);
-    }
-    void pending
+    loadObjectActions(session)
       .then((answer) => {
-        if (pendingObjectActions.get(session) === pending) {
-          objectActions.set(session, answer);
-          pendingObjectActions.delete(session);
-        }
         if (current) setActions(answer);
       })
-      .catch(() => { if (pendingObjectActions.get(session) === pending) pendingObjectActions.delete(session); });
+      .catch(() => undefined);
     return () => {
       current = false;
     };
@@ -401,20 +465,11 @@ function useObjectActions(session: string, enabled = true): ObjectActionsItem | 
   return actions;
 }
 
-/** SQL written by the core, in a new tab of the connection (on the schema's database where the
- *  engine has one per schema): nothing runs. */
 /** Opens the backup or restore dialog of a connection the explorer has open (ADR-049). */
 function openBackup(connection: ConnectionItem, session: string, mode: "backup" | "restore") {
   const family = backupFamily(connection.engine);
   if (!family) return;
   useBackup.getState().open({ session, connectionId: connection.id, connectionName: connection.name, family, mode });
-}
-
-function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string, run = false) {
-  const tab = useApp.getState().addTab(connectionId, sql);
-  // "Run…": the tab runs its script once connected, asking the call's parameters first.
-  if (run) useApp.getState().updateTab(tab, { runOnOpen: true });
-  connectTabFromExplorer(tab, session, schema === undefined ? undefined : explorerDatabase(connectionId, schema));
 }
 
 /** "New table", "New view"…: the core's statement, to finish in a new tab (ADR-026). */
@@ -433,7 +488,7 @@ const CREATE_FOLDERS: Partial<Record<SchemaFolder, CreateKindItem>> = {
 
 /** Delete drops the focused object (after its dialog), as in DBeaver. */
 function isDropKey(e: React.KeyboardEvent): boolean {
-  if (e.key !== "Delete" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
+  if (!matchesShortcut(e, EXPLORER_SHORTCUTS.drop)) return false;
   e.preventDefault();
   e.stopPropagation();
   return true;
@@ -443,9 +498,7 @@ function isDropKey(e: React.KeyboardEvent): boolean {
 function DropMenuItem({ onClick }: { onClick(): void }) {
   const { t } = useTranslation("shell");
   return (
-    <button role="menuitem" className="danger-text" title="Delete" onClick={onClick}>
-      {t("objectChange.dropMenu")}
-    </button>
+    <ShortcutMenuItem className="danger-text" action="drop" label={t("objectChange.dropMenu")} shortcut={EXPLORER_SHORTCUTS.drop} onClick={onClick} />
   );
 }
 
@@ -481,6 +534,83 @@ function DropDialog({
       onDone={onDone}
     />
   );
+}
+
+/**
+ * The dialogs a table's or a view's actions open, from its menu in the explorer or from the
+ * command palette (`explorerActions.ts`, SDB-92): the same dialog either way, with the core's
+ * SQL shown before anything runs (ADR-026).
+ */
+export function ExplorerDialogHost() {
+  const { t } = useTranslation("shell");
+  const dialog = useExplorerDialog((s) => s.dialog);
+  const close = useExplorerDialog((s) => s.close);
+  if (!dialog) return null;
+  switch (dialog.kind) {
+    case "sql":
+      return <GeneratedSqlDialog key={dialog.sql} initialSql={dialog.sql} onClose={close} />;
+    case "rename": {
+      const { session, connectionId, object, onDone } = dialog;
+      return (
+        <ObjectChangeDialog
+          session={session}
+          connectionId={connectionId}
+          schema={object.schema}
+          title={t("objectChange.renameTitle", { name: object.name })}
+          confirmLabel={t("objectChange.rename")}
+          rename={{ current: object.name }}
+          change={({ newName }) => ({
+            action: "rename",
+            target: { kind: "relation", schema: object.schema, name: object.name, relation: object.kind },
+            newName,
+          })}
+          onClose={close}
+          onDone={() => {
+            close();
+            changedSchema(connectionId, onDone);
+          }}
+        />
+      );
+    }
+    case "drop": {
+      const { session, connectionId, schema, name, target, onDone } = dialog;
+      return (
+        <DropDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          name={name}
+          target={target}
+          onClose={close}
+          onDone={() => {
+            close();
+            changedSchema(connectionId, onDone);
+          }}
+        />
+      );
+    }
+    case "duplicate":
+      return <DuplicateTableDialog session={dialog.session} connectionId={dialog.connectionId} schema={dialog.object.schema} name={dialog.object.name} onClose={close} />;
+    case "createTable": {
+      const { session, connectionId, schema, onDone } = dialog;
+      return (
+        <CreateTableDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          onClose={close}
+          onDone={() => {
+            close();
+            changedSchema(connectionId, onDone);
+          }}
+        />
+      );
+    }
+    default: {
+      const unknown: never = dialog;
+      return unknown;
+    }
+  }
 }
 
 /**
@@ -556,7 +686,7 @@ function DetailRow({ label, icon, onOpen }: { label: string; icon: TreeIconKind;
         className="row leaf-row"
         role="button"
         tabIndex={0}
-        title={t("tableDetails.openHint")}
+        title={t("tableDetails.openHint", { shortcut: keyText("openOverview") })}
         onClick={onOpen}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -676,14 +806,6 @@ function useRevealedRow(matches: (reveal: ExplorerReveal) => boolean) {
   return { row, revealed: revealed ? " revealed" : "" };
 }
 
-/** The bookmarks are read again (after a change, or another workspace). */
-async function reloadBookmarks() {
-  useApp.getState().setBookmarks(await call(commands.listBookmarks()));
-}
-
-const sameBookmark = (a: BookmarkItem, b: BookmarkItem) =>
-  a.connection === b.connection && a.schema === b.schema && a.name === b.name && a.kind === b.kind && a.detail === b.detail;
-
 /** Whether an object is bookmarked (ADR-026). */
 function useBookmarked(bookmark: BookmarkItem): boolean {
   return useApp((s) => s.bookmarks.some((b) => sameBookmark(b, bookmark)));
@@ -696,11 +818,10 @@ function BookmarkMenuItem({ bookmark, close, onError }: { bookmark: BookmarkItem
   return (
     <button
       role="menuitem"
+      data-action="bookmark"
       onClick={() => {
         close();
-        call(bookmarked ? commands.removeBookmark(bookmark) : commands.addBookmark(bookmark))
-          .then(reloadBookmarks)
-          .catch((e: unknown) => onError(errorText(e)));
+        toggleBookmark(bookmark).catch((e: unknown) => onError(errorText(e)));
       }}
     >
       {t(bookmarked ? "removeBookmark" : "addBookmark")}
@@ -827,9 +948,7 @@ function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
             {t("showInExplorer")}
           </button>
           <hr />
-          <button role="menuitem" title="Delete" onClick={remove}>
-            {t("removeBookmark")}
-          </button>
+          <ShortcutMenuItem label={t("removeBookmark")} shortcut={EXPLORER_SHORTCUTS.drop} onClick={remove} />
         </ObjectMenu>
       )}
       {error && (
@@ -843,7 +962,7 @@ function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
 
 /** F2 renames the focused object, as in DBeaver. */
 function isRenameKey(e: React.KeyboardEvent): boolean {
-  if (e.key !== "F2" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
+  if (!matchesShortcut(e, EXPLORER_SHORTCUTS.rename)) return false;
   e.preventDefault();
   e.stopPropagation();
   return true;
@@ -867,10 +986,11 @@ function handleCopyKey(
   paths: () => ObjectPathItem[],
   onError: (message: string) => void,
 ): boolean {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== "c") return false;
+  const qualified = matchesShortcut(e, EXPLORER_SHORTCUTS.copyQualifiedNames);
+  if (!qualified && !matchesShortcut(e, EXPLORER_SHORTCUTS.copyNames)) return false;
   e.preventDefault();
   e.stopPropagation();
-  copyNames(session, paths(), e.shiftKey).catch((err: unknown) => onError(errorText(err)));
+  copyNames(session, paths(), qualified).catch((err: unknown) => onError(errorText(err)));
   return true;
 }
 
@@ -895,12 +1015,18 @@ function CopyMenuItems({
   };
   return (
     <>
-      <button role="menuitem" onClick={() => copy(false)} title="Ctrl+C">
-        {several ? t("copyNames", { count }) : t("copyName")}
-      </button>
-      <button role="menuitem" onClick={() => copy(true)} title="Ctrl+Shift+C">
-        {several ? t("copyQualifiedNames", { count }) : t("copyQualifiedName")}
-      </button>
+      <ShortcutMenuItem
+        action="copyName"
+        label={several ? t("copyNames", { count }) : t("copyName")}
+        shortcut={EXPLORER_SHORTCUTS.copyNames}
+        onClick={() => copy(false)}
+      />
+      <ShortcutMenuItem
+        action="copyQualifiedName"
+        label={several ? t("copyQualifiedNames", { count }) : t("copyQualifiedName")}
+        shortcut={EXPLORER_SHORTCUTS.copyQualifiedNames}
+        onClick={() => copy(true)}
+      />
     </>
   );
 }
@@ -929,6 +1055,7 @@ function FilterMenuItems({
       <hr />
       <button
         role="menuitem"
+        data-action="hide"
         onClick={() => {
           close();
           onFilterName(kind, names, "hide");
@@ -938,6 +1065,7 @@ function FilterMenuItems({
       </button>
       <button
         role="menuitem"
+        data-action="showOnly"
         onClick={() => {
           close();
           onFilterName(kind, names, "showOnly");
@@ -1010,23 +1138,25 @@ const SERVER_FOLDERS = ["roles", "users", "logins", "tablespaces", "extensions"]
 
 type TreeIconKind = "folder" | "table" | "view" | "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers" | "column" | "properties" | "partitions" | "dependencies";
 
+/** Each explorer node's icon: a table and a view share one, as they did. */
+const TREE_ICONS: Record<TreeIconKind, IconName> = {
+  folder: "folder",
+  table: "table",
+  view: "table",
+  columns: "columns",
+  constraints: "key",
+  foreignKeys: "foreignKey",
+  indexes: "indexes",
+  triggers: "trigger",
+  column: "column",
+  properties: "details",
+  partitions: "partitions",
+  dependencies: "dependencies",
+};
+
 /** Small, neutral line icons distinguish explorer nodes without competing with their labels. */
 function TreeIcon({ kind }: { kind: TreeIconKind }) {
-  return (
-    <svg className={`tree-icon tree-icon-${kind}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      {kind === "folder" && <path d="M1.8 4.1h4l1.3 1.4h7v6.8H1.8z" />}
-      {(kind === "table" || kind === "view") && <><rect x="2" y="2.5" width="12" height="11" rx="1" /><path d="M2 6.2h12M6 6.2v7.3M10 6.2v7.3" /></>}
-      {kind === "columns" && <><rect x="2.2" y="2.5" width="11.6" height="11" rx="1" /><path d="M6 3v10M10 3v10" /></>}
-      {kind === "column" && <><rect x="4" y="2" width="8" height="12" rx="1" /><path d="M4 6h8M4 10h8" /></>}
-      {kind === "constraints" && <><circle cx="6" cy="6" r="2.5" /><path d="m7.8 7.8 4.9 4.9m-1.5-1.5 1.4-1.4m-3 0 1.4-1.4" /></>}
-      {kind === "foreignKeys" && <><path d="M6.5 10.8 5.3 12a2.5 2.5 0 0 1-3.5-3.5l2.3-2.3a2.5 2.5 0 0 1 3.5 0M9.5 5.2 10.7 4a2.5 2.5 0 0 1 3.5 3.5l-2.3 2.3a2.5 2.5 0 0 1-3.5 0M5.9 10.1l4.2-4.2" /></>}
-      {kind === "indexes" && <><path d="M3 3.5h10M3 8h10M3 12.5h10" /><circle cx="5" cy="3.5" r="1" fill="var(--panel)" /><circle cx="10" cy="8" r="1" fill="var(--panel)" /><circle cx="6.5" cy="12.5" r="1" fill="var(--panel)" /></>}
-      {kind === "triggers" && <path d="M8.9 1.8 3.7 8h3.7l-.4 6.2L12.4 7H8.7z" />}
-      {kind === "properties" && <><circle cx="8" cy="8" r="6" /><path d="M8 7.3v4M8 4.9v.1" /></>}
-      {kind === "partitions" && <><rect x="2" y="2.5" width="12" height="11" rx="1" /><path d="M2 6.2h12M2 9.8h12" /></>}
-      {kind === "dependencies" && <><circle cx="4" cy="4" r="1.8" /><circle cx="12" cy="12" r="1.8" /><path d="m5.3 5.3 5.4 5.4M10.7 7.4v3.3H7.4" /></>}
-    </svg>
-  );
+  return <Icon name={TREE_ICONS[kind]} className={`tree-icon tree-icon-${kind}`} />;
 }
 
 function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[number] {
@@ -1170,7 +1300,7 @@ function Folder({
         }}
         onClick={() => { if (!onOpenView) setOpen(!open); }}
         onDoubleClick={onOpenView}
-        title={onOpenView ? t("tableDetails.openHint") : undefined}
+        title={onOpenView ? t("tableDetails.openHint", { shortcut: keyText("openOverview") }) : undefined}
         role="button"
         tabIndex={0}
         aria-expanded={open}
@@ -1193,7 +1323,7 @@ function Folder({
           onClick={onOpenView ? (e) => { e.stopPropagation(); setOpen(!open); } : undefined}
           onDoubleClick={onOpenView ? (e) => e.stopPropagation() : undefined}
         >
-          {open ? "▾" : "▸"}
+          <Icon name={open ? "chevronDown" : "chevronRight"} />
         </span>
         <TreeIcon kind={icon} />
         <span className="label">{label}</span>
@@ -1300,14 +1430,18 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const explorer = usePreferences((s) => s.explorer);
   useEffect(() => setClosedFilteredFolders(new Set()), [filterText, activeTags.join("\u0000"), explorer.connectedOnly]);
   const explorerConnected = useApp((s) => s.explorerConnected);
-  const tabs = useApp((s) => s.tabs);
+  // What the tree needs from the tabs, as plain values: a tab's run never re-renders the
+  // explorer (SDB-110).
+  const tabConnections = useApp(useShallow((s) => connectedConnections(s.tabs)));
   /** Opened in the explorer or used by a connected tab. */
-  const connected = (c: ConnectionItem) => connectionOpen(tabs, explorerConnected, c.id);
+  const connected = (c: ConnectionItem) => explorerSessionOpen(explorerConnected, c.id) || tabConnections.includes(c.id);
   // "Link with editor": the active tab's connection, schema and table, shown in the tree.
-  const activeTab = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab) ?? null);
-  const linked = activeTab
-    ? [activeTab.id, activeTab.connectionId, statusName(activeTab), isRunning(activeTab), activeTab.table?.schema, activeTab.table?.name].join("|")
-    : "";
+  const linked = useApp((s) => {
+    const activeTab = s.tabs.find((tab) => tab.id === s.activeTab);
+    return activeTab
+      ? [activeTab.id, activeTab.connectionId, statusName(activeTab), isRunning(activeTab), activeTab.table?.schema, activeTab.table?.name].join("|")
+      : "";
+  });
   useEffect(() => {
     const tab = useApp.getState().tabs.find((t) => t.id === useApp.getState().activeTab);
     if (!explorer.linkWithEditor || !tab?.connectionId) return;
@@ -1475,7 +1609,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
               return next;
             })}
           >
-            <svg className="connection-folder-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true"><path d="M1.8 4.1h4l1.3 1.4h7v6.8H1.8z" strokeLinejoin="round" /></svg>
+            <Icon name={expanded ? "chevronDown" : "chevronRight"} />
+            <Icon name="folder" className="connection-folder-icon" />
             <span
               className={`group-segment${dropClass(folder.personal, folder.path)}`}
               data-drop-folder={folder.path}
@@ -1509,7 +1644,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         <div className="sidebar-tools">
           <span className="sidebar-section-title">{t("connections")}</span>
           <button className="ghost icon-button" type="button" aria-label={t("collapseAllFolders")} title={t("collapseAllFolders")} onClick={collapseFolders} disabled={folderKeys.length === 0}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" aria-hidden="true"><rect x="3.5" y="4.5" width="9" height="9" rx="1" /><path d="M6 9h4M2 10.5V3a1 1 0 0 1 1-1h7.5" strokeLinecap="round" /></svg>
+            <Icon name="collapseAll" />
           </button>
           <button
             className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
@@ -1522,7 +1657,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             aria-pressed={explorer.linkWithEditor}
             title={t("linkWithEditorHint")}
           >
-            <LinkIcon />
+            <Icon name="link" />
           </button>
           <button
             className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
@@ -1534,7 +1669,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             aria-pressed={explorer.connectedOnly}
             title={t("connectedOnly")}
           >
-            <PlugIcon />
+            <Icon name="plug" />
           </button>
           <button
             className={`ghost icon-button${filter !== null ? " active" : ""}`}
@@ -1547,18 +1682,11 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             }}
             aria-label={t("quickFilter")}
             aria-pressed={filter !== null}
-            title={t("quickFilterHint")}
+            title={t("quickFilterHint", { shortcut: commandShortcut("view.explorerFilter") })}
           >
-            <SearchIcon />
+            <Icon name="search" />
           </button>
-          <button
-            className="ghost add-connection"
-            onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
-            aria-label={t("connections:add")}
-            title={t("connections:add")}
-          >
-            +
-          </button>
+          <AddConnectionButton />
         </div>
       </div>
       {filter !== null && (
@@ -1634,16 +1762,16 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       {moveError && (
         <div className="banner" role="alert">
           {moveError}
-          <button className="ghost small" aria-label={t("connections:close")} onClick={() => setMoveError(null)}>
-            ×
+          <button className="ghost small" aria-label={t("connections:close")} title={t("connections:close")} onClick={() => setMoveError(null)}>
+            <Icon name="x" />
           </button>
         </div>
       )}
       {pasteError && (
         <div className="banner" role="alert">
           {pasteError}
-          <button className="ghost small" aria-label={t("connections:close")} onClick={() => setPasteError(null)}>
-            ×
+          <button className="ghost small" aria-label={t("connections:close")} title={t("connections:close")} onClick={() => setPasteError(null)}>
+            <Icon name="x" />
           </button>
         </div>
       )}
@@ -1831,7 +1959,7 @@ function ConnectionNode({
   async function load() {
     // The connection may have been edited to point to another engine; asked again now, so
     // tables' menus have the list before they open.
-    forgetTemplates(session);
+    forgetExplorerSession(session);
     const filter = await call(commands.getExplorerFilter(connection.id));
     setFilters(filter);
     // Without its roles or logins the connection still shows its schemas.
@@ -1931,8 +2059,9 @@ function ConnectionNode({
           onClick={() => void toggle()}
           aria-expanded={open}
           aria-label={t("toggleConnection", { connection: connection.name })}
+          title={t("toggleConnection", { connection: connection.name })}
         >
-          {open ? "▾" : "▸"}
+          <Icon name={open ? "chevronDown" : "chevronRight"} />
         </button>
         <EngineIcon engine={connection.engineMark} fallback={connection.engine} />
         <span
@@ -1956,7 +2085,7 @@ function ConnectionNode({
             {connection.tlsWarning && (
               // Its TLS does not check the server (SDB-395): the core decided it.
               <span className="tls-mark" role="img" aria-label={tlsWarningText(t, connection.tlsWarning)} title={tlsWarningText(t, connection.tlsWarning)}>
-                <Icon name="shieldAlert" size={14} />
+                <Icon name="shieldAlert" />
               </span>
             )}
             {connection.tunnel && (
@@ -2147,21 +2276,17 @@ function SchemaNode({
   const sql = useApp((s) => s.connections.find((c) => c.id === connectionId)?.sql ?? true);
   /** Redis's "collections" are its keys (ADR-056). */
   const keys = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine === "redis");
-  const [dropping, setDropping] = useState(false);
-  /** The create table form (ADR-047); other kinds open their statement in a tab. */
-  const [creatingTable, setCreatingTable] = useState(false);
-  const create = (kind: CreateKindItem) => {
-    if (kind === "table") setCreatingTable(true);
-    else openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
+  /** The editor tab "Set as the editor's schema" applies to (`explorerActions.ts`). */
+  const editorTab = useApp(() => schemaEditorTab(connectionId));
+  /** A menu item's action, shared with the palette (`explorerActions.ts`): a failure is shown
+   *  under the row. */
+  const act = (action: () => unknown) => {
+    setMenu(null);
+    setError(null);
+    void Promise.resolve()
+      .then(action)
+      .catch((e: unknown) => setError(errorText(e)));
   };
-  /** The editor tab "Set as the editor's schema" applies to: the active query tab, connected to
-   *  this connection and idle. */
-  const editorTab = useApp((s) => {
-    const tab = s.tabs.find((t) => t.id === s.activeTab);
-    return tab && !tab.table && tab.connectionId === connectionId && isConnected(tab) && !isRunning(tab)
-      ? tab.id
-      : null;
-  });
 
   async function load() {
     setError(null);
@@ -2177,7 +2302,7 @@ function SchemaNode({
       setOthers(rest);
       setObjects(relations);
       // The command palette lists what the tree has read (SDB-18).
-      useCatalog.getState().publish({ connectionId, schema, relations, others: rest });
+      useCatalog.getState().publish({ connectionId, schema, relations, others: rest, filter: objectFilter });
     } catch (e) {
       setError(errorText(e));
     }
@@ -2282,7 +2407,7 @@ function SchemaNode({
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => [{ schema: "", names: [schema] }], setError)) return;
           if (isDropKey(e)) {
-            if (actions?.dropSchemas) setDropping(true);
+            if (actions?.dropSchemas) act(() => dropSchema(connectionId, session, schema, onRefreshAll));
             return;
           }
           if (e.key === "Enter" || e.key === " ") {
@@ -2291,7 +2416,7 @@ function SchemaNode({
           }
         }}
       >
-        <span className="twisty">{open ? "▾" : "▸"}</span>
+        <span className="twisty"><Icon name={open ? "chevronDown" : "chevronRight"} /></span>
         <TreeIcon kind="folder" />
         <span className="label">{schema}</span>
         <BookmarkStar bookmark={{ connection: connectionId, schema, name: "", kind: "schema", detail: "" }} />
@@ -2309,78 +2434,41 @@ function SchemaNode({
             close={() => setMenu(null)}
             onError={setError}
           />
-          <BookmarkMenuItem
-            bookmark={{ connection: connectionId, schema, name: "", kind: "schema", detail: "" }}
-            close={() => setMenu(null)}
-            onError={setError}
-          />
+          <BookmarkMenuItem bookmark={schemaBookmark(connectionId, schema)} close={() => setMenu(null)} onError={setError} />
           {actions?.activeSchema && (
             <button
               role="menuitem"
+              data-action="setActiveSchema"
               disabled={editorTab === null}
               title={editorTab === null ? t("activeSchemaHint") : undefined}
-              onClick={() => {
-                setMenu(null);
-                if (editorTab) {
-                  window.dispatchEvent(new CustomEvent(SET_ACTIVE_SCHEMA_EVENT, { detail: { tabId: editorTab, schema } }));
-                }
-              }}
+              onClick={() => act(() => editorTab && setEditorSchema(editorTab, schema))}
             >
               {t("setActiveSchema")}
             </button>
           )}
           <hr />
-          <button role="menuitem" onClick={refresh}>
-            {t("refreshSchema")}
-          </button>
-          <button
-            role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              onRefreshAll();
-            }}
-          >
+          <ShortcutMenuItem action="refresh" label={t("refreshSchema")} shortcut={EXPLORER_SHORTCUTS.refresh} onClick={refresh} />
+          <button role="menuitem" data-action="refreshAll" onClick={() => act(onRefreshAll)}>
             {t("refreshAllSchemas")}
           </button>
           <FilterMenuItems kind="schemas" names={[schema]} onFilterName={onFilterName} close={() => setMenu(null)} />
           {sql && (
             <>
               <hr />
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  useImport.getState().open({ session, connectionId, schema, table: null, text: null });
-                }}
-              >
+              <button role="menuitem" data-action="importNewTable" onClick={() => act(() => importIntoNewTable(connectionId, session, schema))}>
                 {t("importNewTable")}
               </button>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  openDiagram(connectionId, { kind: "schema", schema, filter: objectFilter }, session);
-                }}
-              >
+              <button role="menuitem" data-action="erDiagram" onClick={() => act(() => openSchemaDiagram(connectionId, session, schema, objectFilter))}>
                 {t("diagram.menuSchema")}
               </button>
             </>
           )}
-          {actions && actions.create.some((kind) => kind !== "schema") && <hr />}
-          {actions?.create
-            .filter((kind) => kind !== "schema")
-            .map((kind) => (
-              <button
-                key={kind}
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  create(kind);
-                }}
-              >
-                {t(`create.${kind}`)}
-              </button>
-            ))}
+          {schemaCreateKinds(actions).length > 0 && <hr />}
+          {schemaCreateKinds(actions).map((kind) => (
+            <button key={kind} role="menuitem" data-action={`create:${kind}`} onClick={() => act(() => createInSchema(connectionId, session, schema, kind, refresh))}>
+              {t(`create.${kind}`)}
+            </button>
+          ))}
           <MaintenanceMenu
             session={session}
             target={{ kind: "schema", name: schema }}
@@ -2392,12 +2480,7 @@ function SchemaNode({
           {actions?.dropSchemas && (
             <>
               <hr />
-              <DropMenuItem
-                onClick={() => {
-                  setMenu(null);
-                  setDropping(true);
-                }}
-              />
+              <DropMenuItem onClick={() => act(() => dropSchema(connectionId, session, schema, onRefreshAll))} />
             </>
           )}
         </ObjectMenu>
@@ -2412,32 +2495,6 @@ function SchemaNode({
           target={{ kind: "schema", name: schema }}
           kind={maintaining}
           onClose={() => setMaintaining(null)}
-        />
-      )}
-      {creatingTable && (
-        <CreateTableDialog
-          session={session}
-          connectionId={connectionId}
-          schema={schema}
-          onClose={() => setCreatingTable(false)}
-          onDone={() => {
-            setCreatingTable(false);
-            refresh();
-          }}
-        />
-      )}
-      {dropping && (
-        <DropDialog
-          session={session}
-          connectionId={connectionId}
-          schema={schema}
-          name={schema}
-          target={{ kind: "schema", name: schema }}
-          onClose={() => setDropping(false)}
-          onDone={() => {
-            setDropping(false);
-            onRefreshAll();
-          }}
         />
       )}
       {open && (
@@ -2469,7 +2526,7 @@ function SchemaNode({
                       return kind && actions?.create.includes(kind)
                         ? {
                             label: t(`create.${kind}`),
-                            run: () => create(kind),
+                            run: () => act(() => createInSchema(connectionId, session, schema, kind, refresh)),
                           }
                         : undefined;
                     })()}
@@ -2538,7 +2595,6 @@ function ObjectNode({
   onFilterName: FilterName;
 }) {
   const { t, i18n } = useTranslation("shell");
-  const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
   /** Foreign keys of other tables that point to this one; none when they cannot be read. */
@@ -2551,14 +2607,20 @@ function ObjectNode({
   /** Exact count asked from the menu ("counting" while it runs). */
   const [count, setCount] = useState<number | "counting" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState(false);
-  const [dropping, setDropping] = useState(false);
-  const [generatedSql, setGeneratedSql] = useState<string | null>(null);
   /** The maintenance action whose dialog is open (SDB-392). */
   const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
   const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
-  /** "Duplicate table…" is open (SDB-394). */
-  const [duplicating, setDuplicating] = useState(false);
+  /** Runs one of the shared actions (`explorerActions.ts`) from this row's menu: closes it, and
+   *  says what went wrong under the row. */
+  const act = (action: () => unknown) => {
+    setMenu(null);
+    setError(null);
+    void Promise.resolve()
+      .then(action)
+      .catch((e: unknown) => setError(errorText(e)));
+  };
+  const rename = () => renameRelation(connectionId, session, object, onSchemaChanged);
+  const drop = () => dropRelation(connectionId, session, object, onSchemaChanged);
   const openDetails = (kind: TableDetailKind) => {
     const app = useApp.getState();
     const existing = app.tabs.some((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
@@ -2617,66 +2679,14 @@ function ObjectNode({
   }
   useOnChange(generation, reloadDetails);
 
-  /** Preview the core's SQL; Open as SQL still opens an editor tab. */
-  async function openSql(template: SqlTemplateItem, inEditor = false) {
-    setMenu(null);
-    try {
-      setError(null);
-      const sql = await call(commands.tableSql(session, object.schema, object.name, template));
-      if (inEditor) {
-        const tab = addTab(connectionId, sql);
-        connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
-      } else setGeneratedSql(sql);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
   /** Tables and views chosen with Ctrl+click in this session, this one among them or not. */
   const selection = useApp((s) => s.explorerSelection).filter((o) => o.session === session);
   const chosen = selection.some((o) => o.schema === object.schema && o.name === object.name);
   /** A SELECT joining the chosen tables on their foreign keys. */
-  async function openJoin(inner: boolean) {
-    setMenu(null);
-    try {
-      setError(null);
-      const sql = await call(
-        commands.joinSql(
-          session,
-          selection.map((o) => ({ schema: o.schema, name: o.name })),
-          inner,
-        ),
-      );
-      setGeneratedSql(sql);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  /** "Edit source": the core writes the view as the statement that replaces it (ADR-047). */
-  async function openSource() {
-    setMenu(null);
-    try {
-      setError(null);
-      openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "view", schema: object.schema, name: object.name })));
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  /** "Generate DDL": the driver writes the CREATE statement. */
-  async function openDdl() {
-    setMenu(null);
-    try {
-      setError(null);
-      setGeneratedSql(await call(commands.relationDefinition(session, object.schema, object.name)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
+  const openJoin = (inner: boolean) =>
+    act(async () => openGeneratedSql(await call(commands.joinSql(session, selection.map((o) => ({ schema: o.schema, name: o.name })), inner))));
   /** Pages of the table in a table data tab (double-click or "View rows"). */
-  const preview = () => {
-    setMenu(null);
-    const tab = useApp.getState().addTableTab(connectionId, object.schema, object.name);
-    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
-  };
+  const preview = () => act(() => openRelationRows(connectionId, session, object));
   async function countRows() {
     setMenu(null);
     setError(null);
@@ -2691,24 +2701,24 @@ function ObjectNode({
     }
   }
   const view = object.kind.includes("view");
-  const canRename = !view || actions?.renameViews === true;
-  const [tableMenu, setTableMenu] = useState<SqlTemplateItem[] | undefined>(() => knownTemplates.get(session));
+  const canRename = canRenameRelation(object, actions);
+  // The engine's list of statements, asked once the menu opens; until it answers, what every
+  // engine has (`relationTemplates`).
+  const [, setTemplatesKnown] = useState(false);
   useEffect(() => {
-    if (!menu || view || tableMenu) return;
+    if (!menu || view) return;
     let current = true;
     void templatesOf(session)
-      .then((list) => {
-        if (current) setTableMenu(list);
+      .then(() => {
+        if (current) setTemplatesKnown(true);
       })
       .catch(() => undefined);
     return () => {
       current = false;
     };
-  }, [menu, view, session, tableMenu]);
-  // Until the engine's list arrives, only what every engine has.
-  const templates: SqlTemplateItem[] = view ? ["select"] : (tableMenu ?? ["select", "insert", "update", "delete"]);
-  // A relation's kind comes from the driver as text; the core refuses one it does not know.
-  const bookmark: BookmarkItem = { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind as BookmarkItem["kind"], detail: "" };
+  }, [menu, view, session]);
+  const templates = relationTemplates(session, object);
+  const bookmark = relationBookmark(connectionId, object);
   /** What "Copy" takes: every table chosen with Ctrl+click, or this one. */
   const copyPaths: ObjectPathItem[] = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, names: [o.name] }));
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
@@ -2745,11 +2755,11 @@ function ObjectNode({
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => copyPaths, setError)) return;
           if (isRenameKey(e)) {
-            if (canRename) setRenaming(true);
+            if (canRename) rename();
             return;
           }
           if (isDropKey(e)) {
-            setDropping(true);
+            drop();
             return;
           }
           if (e.key === "Enter" || e.key === " ") {
@@ -2767,7 +2777,7 @@ function ObjectNode({
           }}
           onDoubleClick={(e) => e.stopPropagation()}
         >
-          {open ? "▾" : "▸"}
+          <Icon name={open ? "chevronDown" : "chevronRight"} />
         </span>
         <span title={t(`kinds.${object.kind}`)}><TreeIcon kind={view ? "view" : "table"} /></span>
         <span className="label">{object.name}</span>
@@ -2788,46 +2798,40 @@ function ObjectNode({
       </div>
       {menu && (
         <ObjectMenu at={menu} className="explorer-relation-menu">
-          <button role="menuitem" onClick={preview}>
+          {/* Each item's `data-action` is the id of the same action in the command palette
+              (`relationActions` in commands.ts); scripts/commands.test.mjs compares them. */}
+          <button role="menuitem" data-action="openData" onClick={preview}>
             {t("sql.preview")}
           </button>
-          <button role="menuitem" onClick={() => void openSql("preview", true)}>
+          <button role="menuitem" data-action="openAsSql" onClick={() => act(() => openRelationSql(connectionId, session, object, "preview", true))}>
             {t("sql.openAsSql")}
           </button>
-          <button role="menuitem" onClick={() => void countRows()}>
+          <button role="menuitem" data-action="countRows" onClick={() => void countRows()}>
             {t("sql.count")}
           </button>
           <button
             role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              const tables = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, name: o.name }));
-              useExport.getState().open({ kind: "tables", session, connectionId, tables });
-            }}
+            data-action="export"
+            onClick={() => act(() => exportRelations(connectionId, session, (chosen ? selection : [object]).map((o) => ({ schema: o.schema, name: o.name }))))}
           >
             {chosen && selection.length > 1
               ? t("exportTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
               : t("exportTable")}
           </button>
           {!view && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                useImport.getState().open({ session, connectionId, schema: object.schema, table: object.name, text: null });
-              }}
-            >
+            <button role="menuitem" data-action="import" onClick={() => act(() => importIntoTable(connectionId, session, object))}>
               {t("importData")}
             </button>
           )}
           {!view && (
             <button
               role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                const tables = chosen && selection.length > 1 ? selection.map((o) => ({ schema: o.schema, name: o.name })) : null;
-                openDiagram(connectionId, tables ? { kind: "tables", tables } : { kind: "focus", schema: object.schema, table: object.name }, session);
-              }}
+              data-action="erDiagram"
+              onClick={() =>
+                act(() =>
+                  openRelationDiagram(connectionId, session, object, chosen && selection.length > 1 ? selection.map((o) => ({ schema: o.schema, name: o.name })) : null),
+                )
+              }
             >
               {chosen && selection.length > 1
                 ? t("diagram.menuTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
@@ -2835,45 +2839,21 @@ function ObjectNode({
             </button>
           )}
           {object.kind === "view" && (
-            <button role="menuitem" onClick={() => void openSource()}>
+            <button role="menuitem" data-action="editSource" onClick={() => act(() => editViewSource(connectionId, session, object))}>
               {t("editSource")}
             </button>
           )}
-          <button role="menuitem" onClick={refresh}>
-            {t("refresh")}
-          </button>
+          <ShortcutMenuItem action="refresh" label={t("refresh")} shortcut={EXPLORER_SHORTCUTS.refresh} onClick={refresh} />
           <hr />
           <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
           <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
-          {!view && object.kind !== "collection" && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                setDuplicating(true);
-              }}
-            >
+          {isPlainTable(object) && (
+            <button role="menuitem" data-action="duplicate" onClick={() => act(() => duplicateTable(connectionId, session, object))}>
               {t("duplicate.menu")}
             </button>
           )}
-          {canRename && (
-            <button
-              role="menuitem"
-              title="F2"
-              onClick={() => {
-                setMenu(null);
-                setRenaming(true);
-              }}
-            >
-              {t("objectChange.renameMenu")}
-            </button>
-          )}
-          <DropMenuItem
-            onClick={() => {
-              setMenu(null);
-              setDropping(true);
-            }}
-          />
+          {canRename && <ShortcutMenuItem action="rename" label={t("objectChange.renameMenu")} shortcut={EXPLORER_SHORTCUTS.rename} onClick={() => act(rename)} />}
+          <DropMenuItem onClick={() => act(drop)} />
           <FilterMenuItems
             kind="objects"
             names={chosen ? selection.map((o) => o.name) : [object.name]}
@@ -2884,22 +2864,23 @@ function ObjectNode({
           <GenerateMenu>
             {chosen && selection.length > 1 && (
               <>
-                <button role="menuitem" onClick={() => void openJoin(false)}>
+                <button role="menuitem" data-action="join" onClick={() => openJoin(false)}>
                   {t("sql.join", { count: selection.length.toLocaleString(i18n.language) })}
                 </button>
-                <button role="menuitem" onClick={() => void openJoin(true)}>
+                <button role="menuitem" data-action="innerJoin" onClick={() => openJoin(true)}>
                   {t("sql.innerJoin", { count: selection.length.toLocaleString(i18n.language) })}
                 </button>
               </>
             )}
-            <button role="menuitem" onClick={() => void openDdl()}>
+            <button role="menuitem" data-action="generateDdl" onClick={() => act(() => openRelationDdl(session, object))}>
               {t("generateDdl")}
             </button>
             {templates.map((template) => (
               <button
                 key={template}
                 role="menuitem"
-                onClick={() => void openSql(template)}
+                data-action={`generate:${template}`}
+                onClick={() => act(() => openRelationSql(connectionId, session, object, template))}
               >
                 {t(`sql.${template}`)}
               </button>
@@ -2921,7 +2902,6 @@ function ObjectNode({
         </p>
       )}
       {open && loadingDetails && <div className="children muted small" role="status">{t("loadingDetails")}</div>}
-      {generatedSql !== null && <GeneratedSqlDialog initialSql={generatedSql} onClose={() => setGeneratedSql(null)} />}
       {maintaining && (
         <MaintenanceDialog
           session={session}
@@ -2932,43 +2912,6 @@ function ObjectNode({
           target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
           kind={maintaining}
           onClose={() => setMaintaining(null)}
-        />
-      )}
-      {duplicating && (
-        <DuplicateTableDialog session={session} connectionId={connectionId} schema={object.schema} name={object.name} onClose={() => setDuplicating(false)} />
-      )}
-      {renaming && (
-        <ObjectChangeDialog
-          session={session}
-          connectionId={connectionId}
-          schema={object.schema}
-          title={t("objectChange.renameTitle", { name: object.name })}
-          confirmLabel={t("objectChange.rename")}
-          rename={{ current: object.name }}
-          change={({ newName }) => ({
-            action: "rename",
-            target: { kind: "relation", schema: object.schema, name: object.name, relation: object.kind },
-            newName,
-          })}
-          onClose={() => setRenaming(false)}
-          onDone={() => {
-            setRenaming(false);
-            onSchemaChanged();
-          }}
-        />
-      )}
-      {dropping && (
-        <DropDialog
-          session={session}
-          connectionId={connectionId}
-          schema={object.schema}
-          name={object.name}
-          target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
-          onClose={() => setDropping(false)}
-          onDone={() => {
-            setDropping(false);
-            onSchemaChanged();
-          }}
         />
       )}
       {open && details && (
@@ -3185,18 +3128,18 @@ function ColumnRow({
       {menu && (
         <ObjectMenu at={menu}>
           <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
-          <button
-            role="menuitem"
-            title="F2"
+          <ShortcutMenuItem
+            action="rename"
+            label={t("objectChange.renameMenu")}
+            shortcut={EXPLORER_SHORTCUTS.rename}
             onClick={() => {
               setMenu(null);
               setRenaming(true);
             }}
-          >
-            {t("objectChange.renameMenu")}
-          </button>
+          />
           <button
             role="menuitem"
+            data-action="editColumn"
             onClick={() => {
               setMenu(null);
               setEditing(indexColumns);
@@ -3215,7 +3158,7 @@ function ColumnRow({
           {actions?.newIndex
             .filter((kind) => kind !== "primaryKey" || !hasPrimaryKey)
             .map((kind) => (
-              <button key={kind} role="menuitem" onClick={() => void openNewIndex(kind)}>
+              <button key={kind} role="menuitem" data-action={`newIndex:${kind}`} onClick={() => void openNewIndex(kind)}>
                 {t(`newIndex.${kind}`, { columns: indexColumns.join(", ") })}
               </button>
             ))}
@@ -3340,7 +3283,7 @@ function IndexNode({
       </div>
       {menu && (
         <ObjectMenu at={menu}>
-          <button role="menuitem" onClick={openDefinition}>
+          <button role="menuitem" data-action="openDefinition" onClick={openDefinition}>
             {t("openDefinition")}
           </button>
           <hr />
@@ -3392,54 +3335,24 @@ function SchemaObjectNode({
   onFilterName: FilterName;
 }) {
   const { t } = useTranslation("shell");
-  const addTab = useApp((s) => s.addTab);
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
-  const [dropping, setDropping] = useState(false);
   const actions = useObjectActions(session);
   const { row, revealed } = useRevealedRow(
     (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
   );
-  const bookmark: BookmarkItem = {
-    connection: connectionId,
-    schema: object.schema,
-    name: object.name,
-    kind: object.kind,
-    detail: object.detail ?? "",
+  const bookmark = schemaObjectBookmark(connectionId, object);
+  /** A menu item's action, shared with the palette (`explorerActions.ts`, SDB-441): a failure is
+   *  shown under the row. */
+  const act = (action: () => unknown) => {
+    setMenu(null);
+    setError(null);
+    void Promise.resolve()
+      .then(action)
+      .catch((e: unknown) => setError(errorText(e)));
   };
-
-  /** The driver writes the DDL; it opens in a new tab and nothing runs. */
-  async function openDefinition() {
-    setMenu(null);
-    setError(null);
-    try {
-      const tab = addTab(connectionId, await call(commands.objectDefinition(session, object)));
-      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  /** "Generate call": the routine's call, written by the driver, in a new tab; "Run…" also runs
-   *  it there, so the editor asks its parameters and its usual barriers apply (ADR-047). */
-  async function openCall(run = false) {
-    setMenu(null);
-    setError(null);
-    try {
-      openSqlTab(connectionId, session, object.schema, await call(commands.procedureCall(session, object)), run);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  /** "Edit source": the core writes the routine as the statement that replaces it (ADR-047). */
-  async function openSource() {
-    setMenu(null);
-    setError(null);
-    try {
-      openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "routine", object })));
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
+  const openDefinition = () => act(() => openObjectDefinition(connectionId, session, object));
+  const drop = () => act(() => dropSchemaObject(connectionId, session, object, onSchemaChanged));
 
   const routine =
     object.kind === "function" || object.kind === "procedure" || object.kind === "aggregate";
@@ -3458,7 +3371,7 @@ function SchemaObjectNode({
       <div
         ref={row}
         className={`row leaf-row${revealed}`}
-        onDoubleClick={() => void openDefinition()}
+        onDoubleClick={openDefinition}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
@@ -3470,12 +3383,12 @@ function SchemaObjectNode({
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => [{ schema: object.schema, names: [object.name] }], setError)) return;
           if (isDropKey(e)) {
-            setDropping(true);
+            drop();
             return;
           }
           if (e.key === "Enter") {
             e.preventDefault();
-            void openDefinition();
+            openDefinition();
           }
         }}
       >
@@ -3491,21 +3404,21 @@ function SchemaObjectNode({
       </div>
       {menu && (
         <ObjectMenu at={menu}>
-          <button role="menuitem" onClick={() => void openDefinition()}>
+          <button role="menuitem" data-action="openDefinition" onClick={openDefinition}>
             {t("openDefinition")}
           </button>
-          {(object.kind === "procedure" || object.kind === "function") && actions?.routineSource && (
-            <button role="menuitem" onClick={() => void openSource()}>
+          {canEditRoutineSource(object, actions) && (
+            <button role="menuitem" data-action="editSource" onClick={() => act(() => editRoutineSource(connectionId, session, object))}>
               {t("editSource")}
             </button>
           )}
-          {(object.kind === "procedure" || object.kind === "function") && actions?.routineCalls && (
-            <button role="menuitem" onClick={() => void openCall(true)}>
+          {canRunRoutine(object, actions) && (
+            <button role="menuitem" data-action="runRoutine" onClick={() => act(() => openRoutineCall(connectionId, session, object, true))}>
               {t("runRoutine")}
             </button>
           )}
-          {(object.kind === "procedure" || (object.kind === "function" && actions?.routineCalls)) && (
-            <button role="menuitem" onClick={() => void openCall()}>
+          {canGenerateCall(object, actions) && (
+            <button role="menuitem" data-action="generateCall" onClick={() => act(() => openRoutineCall(connectionId, session, object))}>
               {t("generateCall")}
             </button>
           )}
@@ -3517,28 +3430,9 @@ function SchemaObjectNode({
             onError={setError}
           />
           <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
-          <DropMenuItem
-            onClick={() => {
-              setMenu(null);
-              setDropping(true);
-            }}
-          />
+          <DropMenuItem onClick={drop} />
           <FilterMenuItems kind="objects" names={[object.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </ObjectMenu>
-      )}
-      {dropping && (
-        <DropDialog
-          session={session}
-          connectionId={connectionId}
-          schema={object.schema}
-          name={object.name}
-          target={{ kind: "schemaObject", object }}
-          onClose={() => setDropping(false)}
-          onDone={() => {
-            setDropping(false);
-            onSchemaChanged();
-          }}
-        />
       )}
       {error && (
         <p className="error small" role="alert">

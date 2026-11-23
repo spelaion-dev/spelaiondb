@@ -151,6 +151,7 @@ async fn value(open: &OpenConnection, sql: &str) -> String {
 /// theirs until a `/` line, and each runs on the server as one statement.
 #[tokio::test]
 async fn scripts_with_plsql_blocks_run_as_sqlplus_reads_them() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server() else { return };
     let ws = Workspace::new("oracle-scripts");
     ws.write(
@@ -190,6 +191,7 @@ async fn scripts_with_plsql_blocks_run_as_sqlplus_reads_them() {
 /// opens one, `ROLLBACK` ends it, and closing then needs no confirmation.
 #[tokio::test]
 async fn the_transaction_is_read_from_the_driver() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server() else { return };
     let ws = Workspace::new("oracle-transactions");
     ws.write(
@@ -228,6 +230,7 @@ async fn the_transaction_is_read_from_the_driver() {
 /// tests that try to get around it, so neither the configuration nor `[mcp]` turns them on.
 #[test]
 fn oracle_has_no_read_only_mode_nor_agents_yet() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("oracle-no-barrier");
     ws.write(
         ".spelaion/connections/ro.toml",
@@ -262,6 +265,7 @@ fn oracle_has_no_read_only_mode_nor_agents_yet() {
 /// tunnel).
 #[tokio::test]
 async fn oracle_through_two_bastions_with_tls_verified_by_name() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }

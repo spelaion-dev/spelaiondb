@@ -19,7 +19,23 @@
   registered once in `src/commandRegistry.ts` and run through `src/commands.ts`: the tab and
   file menus, the activity bar, the global shortcuts and the command palette
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
-  menus against it. The palette's objects are only what the explorer already read (`catalog.ts`).
+  menus against it. The user can change a command's keys (SDB-447, ADR-064): read a command's
+  keys with `commandKeys` (the user's or the default), never its `shortcut` alone, and bind the
+  SQL editor's keys through `editorKeyBindings` (`editorActions.ts`). The user's changes come
+  from the core (`shortcutPreferences.ts`), which checks the keys; the registry judges clashes
+  by place (`shortcutClash`). The palette's objects are only what the explorer already read
+  (`catalog.ts`).
+  A table's or a view's actions live in `src/explorerActions.ts` (SDB-92): its explorer menu
+  (`ObjectNode` in `Sidebar.tsx`, each item marked with `data-action`) and the palette's
+  `relationActions` call the same functions, Rename…, Drop…, Duplicate table… and generated SQL
+  open the same dialogs (`ExplorerDialogHost`), and the test compares the two lists. A new item
+  in that menu goes in both, or in the test's list of menu-only items with its reason. The same
+  holds for a schema's menu (`SchemaNode`, `schemaActions`) and a routine's, sequence's or
+  trigger's (`SchemaObjectNode`, `schemaObjectActions`, SDB-441); a column's and an index's menus
+  (`ColumnRow`, `IndexNode`) are compared too, all menu-only, since the palette does not list
+  them. Every item of those menus carries its action (`data-action`), or the test fails. The
+  palette's commands on the active result's selection send a `GridCommand` (`store.ts`) to its
+  grid, which runs it like its menu (`runGridCommand` in `ResultGrid.tsx`).
   In the SQL editor, completion, Ctrl+click and hover resolve a name with one reader of the
   statement (`src/sqlCompletion.ts`: `completeSql` and `resolveName`, tested by
   `scripts/sql-completion.test.mjs` and `scripts/sql-names.test.mjs`) over the catalog the tab
@@ -82,6 +98,11 @@
   `spelaiondb` with its pinned hash). Its jobs only read the repository, never name a secret and
   build without update artifacts (`tauri.rehearsal.conf.json`); only the tagged jobs have
   `contents: write`. Pushing such a branch is a maintainer's step, never an agent's.
+- `docs/code-signing-policy.md` (ADR-063, SignPath Foundation's terms) lists what is signed,
+  who builds and approves, and every system the app contacts by itself. A change that makes
+  the app or `spelaiondb` contact a new host, or contact one at another moment, updates its
+  privacy section in the same pull request. `scripts/release-notes.sh` ends every release's
+  notes with a link to it; keep that line.
 - Lifecycles in the app (ADR-060): `src-tauri` hands on the core's state types, and the page
   reads them from `bindings.ts`; it does not rebuild a state from events or derive it from
   flags. A state that exists only in the page (a dialog's phase, a value being loaded) is a
@@ -105,6 +126,12 @@
   use", "open for the explorer", "a question is open"); `scripts/tab-state.test.mjs` fails the
   build when a file other than `tabState.ts` or `store.ts` reads the raw fields or writes a
   connection state by hand.
+  SDB-110: a run's progress changes its tab several times a second, so nothing that is always
+  mounted subscribes to `s.tabs` itself. `App` and `TabBar` take the tabs' ids
+  (`useShallow`), each `TabPanel` and `TabItem` reads its own tab (the item only the plain values
+  it shows), and the explorer reads `connectedConnections` and a string of the active tab. A run
+  update then re-renders only that tab's panel: measure a change here by counting renders with
+  several tabs open, as SDB-110's pull request did.
   An editor tab's run state reaches the page as the `runChanged` event (`RunStateItem`,
   forwarded by `forward_run` only while the session is the tab's, SDB-370) and is kept as the
   tab's `runState`: the status line says "Paused at statement 3" and "Cancelling…" from it
@@ -132,5 +159,11 @@
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.
   `node scripts/check-ui-tokens.mjs --print-baseline` prints the current counts for comparison.
+  Its only `!important` exemption is `[hidden] { display: none !important }`.
   Pull request CI compares the counts with the base commit so an entry can only decrease.
-  `scripts/contrast.test.mjs` checks text, icon and focus token pairs in both themes.
+  `scripts/contrast.test.mjs` checks text, icon and focus token pairs in both themes, and the
+  grid's translucent highlights blended over its rows.
+- The grid's canvas reads its colors and fonts through `currentGridTheme()` in
+  `ResultGrid.tsx`: one computed style per theme and device pixel ratio, cached under that key,
+  never one per frame. A new color or font the canvas draws with goes into that object, read
+  from a token defined in both themes.

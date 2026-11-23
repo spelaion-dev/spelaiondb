@@ -134,11 +134,6 @@ fn check_shape(label: &str, dialect: &dyn Dialect, script: &str) -> Result<(), T
             label
         );
         last_end = span.end;
-        // A psql meta-command is given data it does not have, for now: see
-        // `a_psql_meta_command_has_no_copy_data`.
-        if text.starts_with('\\') {
-            continue;
-        }
         if let Some(data) = dialect.copy_data(script, span) {
             prop_assert!(
                 span.end <= data.start && data.start <= data.end && data.end <= script.len(),
@@ -811,9 +806,8 @@ fn unicode_white_space_alone_is_no_statement() {
 /// script is a `;`, `copy_data` still gives it the text after that `;` as its data, over the
 /// statements the splitter reads there. The session asks for `copy_data` before it refuses a
 /// meta-command, so it sends the `\copy` line to the server as a `COPY` (which refuses it) and
-/// also runs that text as SQL.
+/// also runs that text as SQL. Fixed by SDB-437.
 #[test]
-#[ignore = "found by SDB-156's property tests: copy_data gives data to a psql meta-command; its fix gets its own Plane item"]
 fn a_psql_meta_command_has_no_copy_data() {
     let dialect = dialect("postgres");
     let script = "\\copy t from stdin;\n;\nselect 1";
@@ -826,9 +820,9 @@ fn a_psql_meta_command_has_no_copy_data() {
 /// meta-command line (`\echo it's`) as one statement of its own, which the session refuses,
 /// and the SQL after it as SQL. `code_ranges` reads that line as SQL: its `'` opens a string
 /// that hides the next statement's `:x` from the placeholder scanner (the statement is then
-/// sent with `:x` in it), and a comment's text can become code. Same family as SDB-135.
+/// sent with `:x` in it), and a comment's text can become code. Same family as SDB-135; fixed
+/// by SDB-436.
 #[test]
-#[ignore = "found by SDB-156's property tests: PostgreSQL code ranges read psql meta-command lines as SQL; its fix gets its own Plane item"]
 fn postgres_code_ranges_read_meta_command_lines_as_the_splitter_does() {
     let dialect = dialect("postgres");
     let script = "\\echo it's\nselect :x";
@@ -854,11 +848,6 @@ proptest! {
         for (label, dialect) in every_dialect() {
             check_shape(&label, dialect.as_ref(), &script)?;
             if dialect.reads_requests() {
-                continue;
-            }
-            // PostgreSQL's code ranges do not know psql's meta-command lines yet: see
-            // `postgres_code_ranges_read_meta_command_lines_as_the_splitter_does`.
-            if label == "postgres" && script.lines().any(|l| l.trim_start().starts_with('\\')) {
                 continue;
             }
             let lost = left_out(&label, dialect.as_ref(), &script);
@@ -925,7 +914,13 @@ fn pg_piece() -> BoxedStrategy<PgPiece> {
         1 => prop::collection::vec(data_line, 0..4).prop_map(|lines| {
             PgPiece::Copy(lines.into_iter().map(|l| l + "\n").collect())
         }),
-        1 => prop::sample::select(vec!["\\set x 1", "\\connect other", "\\restrict abc", "\\unrestrict abc"])
+        1 => prop::sample::select(vec![
+            "\\set x 1",
+            "\\connect other",
+            "\\restrict abc",
+            "\\unrestrict abc",
+            "\\copy t from stdin;",
+        ])
             .prop_map(|m| PgPiece::Meta(m.to_string())),
     ]
     .boxed()

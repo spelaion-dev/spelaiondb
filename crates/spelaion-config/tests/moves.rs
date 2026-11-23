@@ -2,7 +2,7 @@
 //! (the real keychain is never touched). The repository cases try to get around trust
 //! (ADR-022): a move must never make a changed or new connection usable.
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture, personal, team};
 use spelaion_config::{
@@ -40,6 +40,7 @@ fn changed(result: Result<(), ResolveError>) -> spelaion_config::ItemChange {
 
 #[test]
 fn a_personal_connection_moves_between_nested_folders_with_its_password() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("move-personal");
     fx.write("user/connections/prod/eu/orders.toml", ORDERS);
     let backend = FakeBackend::default();
@@ -117,6 +118,7 @@ fn a_personal_connection_moves_between_nested_folders_with_its_password() {
 
 #[test]
 fn a_move_never_replaces_a_file_nor_moves_one_changed_on_disk() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("move-refused");
     fx.write("user/connections/orders.toml", ORDERS);
     fx.write("user/connections/prod/orders.toml", LOCAL);
@@ -199,6 +201,7 @@ fn a_move_never_replaces_a_file_nor_moves_one_changed_on_disk() {
 
 #[test]
 fn a_moved_repository_connection_as_trusted_stays_trusted() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("move-trusted");
     fx.write("repo/.spelaion/connections/eu/orders.toml", ORDERS);
     fx.write("repo/.spelaion/connections/local.toml", LOCAL);
@@ -248,6 +251,7 @@ fn a_moved_repository_connection_as_trusted_stays_trusted() {
 
 #[test]
 fn a_move_never_makes_a_changed_or_new_repository_connection_usable() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("move-untrusted-change");
     fx.write("repo/.spelaion/connections/eu/orders.toml", ORDERS);
     fx.write("repo/.spelaion/connections/old/gone.toml", LOCAL);
@@ -300,6 +304,7 @@ fn a_move_never_makes_a_changed_or_new_repository_connection_usable() {
 
 #[test]
 fn a_trusted_pin_leaves_the_old_path_with_the_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("move-old-path");
     fx.write("repo/.spelaion/connections/eu/orders.toml", ORDERS);
     let backend = FakeBackend::default();
@@ -319,6 +324,7 @@ fn a_trusted_pin_leaves_the_old_path_with_the_file() {
 
 #[test]
 fn an_untrusted_repository_connection_moves_but_stays_untrusted() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("move-untrusted");
     fx.write("repo/.spelaion/connections/eu/orders.toml", ORDERS);
     let backend = FakeBackend::default();

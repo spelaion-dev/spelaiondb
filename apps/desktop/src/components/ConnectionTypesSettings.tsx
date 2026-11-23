@@ -3,9 +3,11 @@
 // core keeps every safeguard another layer turns on, so the form shows those as fixed.
 
 import { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { call, commands, type ConnectionTypeDraft, type ConnectionTypeItem } from "../api";
 import type { ToneItem } from "../bindings";
+import { useApp } from "../store";
+import { ConfirmDelete } from "./ConfirmDelete";
 import { refreshConnections } from "./Sidebar";
 import { TypeBadge } from "./TypeBadge";
 
@@ -41,6 +43,8 @@ export function ConnectionTypesSettings() {
   const [types, setTypes] = useState<ConnectionTypeItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
+  const [removing, setRemoving] = useState<ConnectionTypeItem | null>(null);
+  const connections = useApp((s) => s.connections);
 
   function refresh() {
     call(commands.listConnectionTypes())
@@ -59,13 +63,11 @@ export function ConnectionTypesSettings() {
     await refreshConnections().catch(() => undefined);
   }
 
+  /** Called by the confirmation (SDB-89); a failure is shown there. */
   async function remove(type: ConnectionTypeItem) {
-    try {
-      await call(commands.deleteConnectionType(type.id));
-      await changed();
-    } catch (e) {
-      setError(message(e));
-    }
+    await call(commands.deleteConnectionType(type.id));
+    setRemoving(null);
+    await changed();
   }
 
   return (
@@ -84,7 +86,7 @@ export function ConnectionTypesSettings() {
               </div>
               <button onClick={() => setEditing({ id: type.id, isNew: false, base: type, draft: type.personal ?? EMPTY })}>{t("types.edit")}</button>
               {type.personal && (
-                <button className="ghost" onClick={() => void remove(type)}>
+                <button className="ghost" onClick={() => setRemoving(type)}>
                   {type.builtIn || type.team ? t("types.reset") : t("types.delete")}
                 </button>
               )}
@@ -94,7 +96,39 @@ export function ConnectionTypesSettings() {
       )}
       <button onClick={() => setEditing({ id: "", isNew: true, base: null, draft: { ...EMPTY, tone: "blue" } })}>{t("types.new")}</button>
       {editing && <TypeEditor editing={editing} onCancel={() => setEditing(null)} onSaved={() => void changed()} />}
+      {removing && (
+        <RemoveType type={removing} users={connections.filter((c) => c.kind?.id === removing.id).map((c) => c.name)} onConfirm={() => remove(removing)} onCancel={() => setRemoving(null)} />
+      )}
     </section>
+  );
+}
+
+/** Deleting a personal type, or resetting the personal changes to a built-in or team one. */
+function RemoveType({ type, users, onConfirm, onCancel }: { type: ConnectionTypeItem; users: string[]; onConfirm(): Promise<void>; onCancel(): void }) {
+  const { t } = useTranslation("settings");
+  // Only the user's own definition goes: a built-in or team type comes back as that layer has it.
+  const reset = type.builtIn || type.team;
+  const prefix = reset ? "types.reset" : "types.delete";
+  return (
+    <ConfirmDelete title={t(`${prefix}Title`)} action={t(`${prefix}Action`)} onConfirm={onConfirm} onCancel={onCancel}>
+      <p>
+        <Trans t={t} i18nKey={`${prefix}Explanation`} values={{ name: type.name, id: type.id, layer: t(type.builtIn ? "types.builtIn" : "types.team") }} components={{ strong: <strong />, code: <code /> }} />
+      </p>
+      {users.length === 0 ? (
+        <p className="muted small">{t("types.removeUnused")}</p>
+      ) : (
+        <>
+          <p>{t(reset ? "types.resetUsed" : "types.deleteUsed", { count: users.length })}</p>
+          <ul className="risk-list">
+            {users.map((name) => (
+              <li key={name}>
+                <strong>{name}</strong>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </ConfirmDelete>
   );
 }
 

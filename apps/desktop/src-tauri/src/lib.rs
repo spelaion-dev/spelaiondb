@@ -399,6 +399,41 @@ async fn editor_snippets(state: State<'_, AppState>) -> CmdResult<Vec<EditorSnip
         .map_err(|e| e.to_string())
 }
 
+/// The user's changes to the keyboard shortcuts (SDB-447): only the differences from the
+/// registry's defaults.
+#[command]
+async fn shortcut_overrides(state: State<'_, AppState>) -> CmdResult<Vec<ShortcutOverrideItem>> {
+    state
+        .history
+        .shortcut_overrides()
+        .await
+        .map(|overrides| overrides.into_iter().map(Into::into).collect())
+        .map_err(|e| e.to_string())
+}
+
+/// Replaces the user's changes to the keyboard shortcuts, all of them or none. The core
+/// refuses keys a command may not take (ADR-064).
+#[command]
+async fn set_shortcut_overrides(
+    overrides: Vec<ShortcutOverrideItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_shortcut_overrides(overrides.into_iter().map(Into::into).collect())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Why some keys cannot be a command's shortcut, or `None` when they can (ADR-064): the
+/// dialog that takes new keys says it as they are pressed.
+#[command]
+fn check_shortcut(keys: String) -> Option<String> {
+    spelaion_core::check_shortcut(&keys)
+        .err()
+        .map(|e| e.to_string())
+}
+
 /// Saves an editor snippet, replacing the one of the same name. The core refuses one that is
 /// too long, holds hidden characters or has a name that is not an identifier.
 #[command]
@@ -5066,6 +5101,24 @@ async fn editable_query_table(
     }))
 }
 
+/// The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
+/// none: the core matches the rows to one table, on a read-only connection too.
+#[command]
+async fn query_key_table(
+    session: String,
+    result: u32,
+    sql: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<KeyTableItem>> {
+    let open = state.session(&session).await?;
+    let table =
+        spelaion_core::query_key_table(&open.session, ResultId(result.into()), &sql).await?;
+    Ok(table.map(|table| KeyTableItem {
+        schema: table.object.schema,
+        name: table.object.name,
+    }))
+}
+
 /// SQL for a table written by the core with the engine's quoting (preview, SELECT, INSERT,
 /// UPDATE or DELETE with `:named` placeholders), to open in a new tab.
 #[command]
@@ -5283,9 +5336,10 @@ async fn referencing_keys(
         .collect())
 }
 
-/// Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
-/// of `schema.table`): the core finds the key in the catalog again, reads the row's typed
-/// values and writes the filter of the table data tab it leads to.
+/// Follows a foreign key from the row at `row` of `result`: a table data tab's page of
+/// `schema.table`, or a query's result the core matched to that table (SDB-93). The core
+/// checks the result's table, finds the key in the catalog again, reads the row's typed values
+/// and writes the filter of the table data tab it leads to.
 #[command]
 #[allow(clippy::too_many_arguments)]
 async fn follow_key(
@@ -5298,6 +5352,9 @@ async fn follow_key(
     state: State<'_, AppState>,
 ) -> CmdResult<KeyTargetItem> {
     let open = state.session(&session).await?;
+    spelaion_core::check_key_table(&open.session, ResultId(result.into()), &schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
     let key = spelaion_core::find_key(
         open.session.connection().as_ref(),
         &schema,
@@ -5316,9 +5373,9 @@ async fn follow_key(
         .map_err(|e| e.to_string())
 }
 
-/// The references panel of a table data tab: every foreign key of the row at `row` (the
-/// table's own and those that point to it), each with up to `limit` of the rows it leads to,
-/// read in turn on the tab's session.
+/// The references panel of a table data tab, or of a query's result matched to one table
+/// (SDB-93): every foreign key of the row at `row` (the table's own and those that point to
+/// it), each with up to `limit` of the rows it leads to, read in turn on the tab's session.
 #[command]
 #[allow(clippy::too_many_arguments)]
 async fn row_references(
@@ -5331,6 +5388,9 @@ async fn row_references(
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<RowReferenceItem>> {
     let open = state.session(&session).await?;
+    spelaion_core::check_key_table(&open.session, ResultId(result.into()), &schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
     let keys = spelaion_core::table_keys(open.session.connection().as_ref(), &schema, &table)
         .await
         .map_err(|e| e.to_string())?;
@@ -6026,19 +6086,12 @@ async fn table_edit_statements(
     schema: &str,
     name: &str,
 ) -> CmdResult<Vec<String>> {
-    // The primary key comes from the database, never from the UI.
-    let table = open
-        .session
-        .connection()
-        .describe_table(schema, name)
-        .await
-        .map_err(|e| e.to_string())?;
-    // Written only through this session, for rows it read in its current database (SDB-137).
-    let target = open
-        .session
-        .edit_target()
-        .await
-        .map_err(|e| e.to_string())?;
+    // The core decides the session and table (SDB-137, SDB-433); the primary key comes from
+    // the database, never from the UI.
+    let (target, table) =
+        spelaion_core::result_edit_table(&open.session, ResultId(result.into()), schema, name)
+            .await
+            .map_err(|e| e.to_string())?;
     let stored = state
         .results
         .stored(ResultId(result.into()))
@@ -6114,22 +6167,15 @@ async fn load_file_statements(
     column: u32,
     path: String,
 ) -> CmdResult<Vec<String>> {
-    // The primary key comes from the database, never from the UI.
-    let table = open
-        .session
-        .connection()
-        .describe_table(schema, name)
-        .await
-        .map_err(|e| e.to_string())?;
+    // The core decides the session and table (SDB-137, SDB-433); the primary key comes from
+    // the database, never from the UI.
+    let (target, table) =
+        spelaion_core::result_edit_table(&open.session, ResultId(result.into()), schema, name)
+            .await
+            .map_err(|e| e.to_string())?;
     let stored = state
         .results
         .stored(ResultId(result.into()))
-        .map_err(|e| e.to_string())?;
-    // Written only through this session, for rows it read in its current database (SDB-137).
-    let target = open
-        .session
-        .edit_target()
-        .await
         .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
@@ -6265,6 +6311,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             get_editor_preferences,
             set_editor_preferences,
             editor_snippets,
+            shortcut_overrides,
+            set_shortcut_overrides,
+            check_shortcut,
             save_editor_snippet,
             delete_editor_snippet,
             new_script_template,
@@ -6444,6 +6493,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             variable_is_valid,
             parse_connection_url,
             connection_import::scan_connections,
+            connection_import::client_import_source,
             kube_contexts,
             kube_namespaces,
             kube_names,
@@ -6518,6 +6568,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             table_templates,
             join_sql,
             editable_query_table,
+            query_key_table,
             answer_interaction,
             transaction_status,
             set_auto_commit,

@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { OutlineItem } from "../bindings";
 import { byteToIndex } from "../text";
+import { Icon } from "./Icons";
 
 /** How long the text rests before the core is asked for the outline again. */
 const OUTLINE_DELAY_MS = 300;
@@ -50,7 +51,7 @@ export function ScriptOutline({ sql, engine, onShow, onClose }: {
     <aside className="script-outline" aria-label={t("outline.title")}>
       <div className="script-outline-head">
         <h3>{t("outline.title")}</h3>
-        <button type="button" className="ghost small" aria-label={t("outline.close")} title={t("outline.close")} onClick={onClose}>×</button>
+        <button type="button" className="ghost small" aria-label={t("outline.close")} title={t("outline.close")} onClick={onClose}><Icon name="x" /></button>
       </div>
       {failure ? (
         <div className="script-outline-note error" role="status">{t("outline.failed", { reason: failure })}</div>

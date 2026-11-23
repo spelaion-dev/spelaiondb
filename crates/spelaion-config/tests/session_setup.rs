@@ -2,7 +2,7 @@
 //! trust, written by the form, and left out of pasted text. Temporary directories and a fake
 //! secret backend (the real keychain is never touched).
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture, personal, team};
 use spelaion_config::{
@@ -25,6 +25,7 @@ fn problems(fx: &Fixture) -> String {
 
 #[test]
 fn the_session_table_loads_and_resolves() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("session-resolves");
     fx.write(
         "user/connections/orders.toml",
@@ -67,6 +68,7 @@ fn the_session_table_loads_and_resolves() {
 
 #[test]
 fn the_session_table_is_checked_against_the_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("session-checks");
     let cases = [
         ("postgres", "schema = \"\"", "cannot be empty"),
@@ -184,6 +186,7 @@ fn changed_fields(
 
 #[test]
 fn a_repository_connection_whose_setup_changed_is_refused_until_trusted_again() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("session-trust");
     let path = fx.write(
         "repo/.spelaion/connections/orders.toml",
@@ -259,6 +262,7 @@ fn a_repository_connection_whose_setup_changed_is_refused_until_trusted_again() 
 
 #[test]
 fn a_connection_trusted_before_the_session_table_stays_trusted_and_a_new_one_is_a_change() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("session-trust-old");
     let path = fx.write("repo/.spelaion/connections/orders.toml", BASE);
     let trust = fx.trusted();
@@ -285,6 +289,7 @@ fn a_connection_trusted_before_the_session_table_stays_trusted_and_a_new_one_is_
 
 #[test]
 fn the_form_reads_and_writes_only_the_session_keys_it_changed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("session-form");
     let path = fx.write(
         "user/connections/orders.toml",
@@ -347,6 +352,7 @@ fn the_form_reads_and_writes_only_the_session_keys_it_changed() {
 
 #[test]
 fn pasted_text_never_brings_setup_sql_along() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("session-paste");
     let backend = FakeBackend::default();
     // A connection someone sends: its setup would run on the user's server at every open.
@@ -398,6 +404,7 @@ fn pasted_text_never_brings_setup_sql_along() {
 
 #[test]
 fn changing_the_engine_drops_what_the_new_engine_cannot_set() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("session-engine");
     fx.write("user/connections/orders.toml", &format!("{BASE}{SESSION}"));
     let config = fx.config();

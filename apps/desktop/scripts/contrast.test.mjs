@@ -73,6 +73,9 @@ const textPairs = [
   ...["success", "warning", "danger", "info"].map((name) => [`--${name}-fg`, `--${name}-soft`]),
   ["--accent-text", "--accent"],
   ["--danger-text", "--danger"],
+  // Solid connection-type and transaction badges (ADR-029).
+  ["--tone-neutral-text", "--tone-neutral"],
+  ...["green", "blue", "amber", "red"].map((tone) => ["--tone-text", `--tone-${tone}`]),
 ];
 
 const iconPairs = [
@@ -97,6 +100,38 @@ for (const [name, theme] of [["light", light], ["dark", dark]]) {
       }
     });
   }
+}
+
+/** A translucent token (`rgba(…)`) laid over an opaque surface, as the grid's canvas draws it. */
+function blended(theme, overlay, surface) {
+  const value = theme[overlay] ?? "";
+  const parts = /^rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*(0?\.\d+|1|0)\s*\)$/.exec(value);
+  assert.ok(parts, `${overlay} defines a translucent color: ${value}`);
+  const [r, g, b, alpha] = parts.slice(1).map(Number);
+  const base = tokenColor(theme, surface);
+  return "#" + [r, g, b].map((channel, i) => {
+    const under = parseInt(base.slice(1 + i * 2, 3 + i * 2), 16);
+    return Math.round(under * (1 - alpha) + channel * alpha).toString(16).padStart(2, "0");
+  }).join("");
+}
+
+// The grid's highlights (SDB-75) over its rows and striped rows: the cell's text, plain or
+// colored by its type, stays readable.
+const gridHighlights = ["--grid-edited", "--grid-found", "--grid-found-current", "--grid-deleted"];
+const gridTexts = ["--grid-text", "--value-number", "--value-date", "--value-bool", "--value-text", "--value-null"];
+for (const [name, theme] of [["light", light], ["dark", dark]]) {
+  test(`the grid's highlights keep its text at 4.5:1 in the ${name} theme`, () => {
+    for (const highlight of gridHighlights) {
+      for (const surface of ["--grid-bg", "--grid-stripe"]) {
+        const bg = blended(theme, highlight, surface);
+        for (const text of gridTexts) {
+          const fg = tokenColor(theme, text);
+          const ratio = contrast(fg, bg);
+          assert.ok(ratio >= 4.5, `${text} ${fg} on ${highlight} over ${surface} (${bg}) is ${ratio.toFixed(2)}:1`);
+        }
+      }
+    }
+  });
 }
 
 test("the connected status and the test's ok marks use --success, not a literal green", () => {

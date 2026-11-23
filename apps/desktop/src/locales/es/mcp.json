@@ -73,7 +73,7 @@
     "exportJson": "Exportar JSON",
     "exported_one": "{{count}} evento exportado a {{path}}.",
     "exported_other": "{{count}} eventos exportados a {{path}}.",
-    "clear": "Vaciar",
+    "clear": "Vaciar registro…",
     "clearTitle": "¿Vaciar la actividad MCP?",
     "clearBody": "Se borran de este equipo todas las llamadas registradas. Queda en él constancia de que se vació el registro, y de cuándo.",
     "clearConfirm": "Vaciar el registro",

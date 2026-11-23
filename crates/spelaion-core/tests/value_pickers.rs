@@ -7,7 +7,7 @@
 //! type zoos compare with each server's own. The foreign key picker searches a referenced
 //! table of a million rows a page at a time.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -275,6 +275,7 @@ fn temporal_columns(label: &str) -> &'static [(&'static str, &'static str)] {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn picked_dates_and_times_read_back_as_written_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     const TABLE: &str = "vp_times";
     for engine in engines().await {
         let label = engine.label;
@@ -356,6 +357,7 @@ async fn picked_dates_and_times_read_back_as_written_on_every_engine() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn allowed_values_come_from_the_catalog_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     const TABLE: &str = "vp_choices";
     for engine in engines().await {
         let label = engine.label;
@@ -535,6 +537,7 @@ fn million_rows(label: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_foreign_key_picks_from_a_million_rows_a_page_at_a_time() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in engines().await {
         let label = engine.label;
         let session = &engine.session;
@@ -634,6 +637,7 @@ async fn a_foreign_key_picks_from_a_million_rows_a_page_at_a_time() {
 
 #[test]
 fn the_key_search_is_a_checked_page_of_the_referenced_table() {
+    let _turn = crate::serial::file_turn(module_path!());
     let column = |name: &str, native: &str| ColumnInfo {
         name: name.into(),
         native_type: native.into(),

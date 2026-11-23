@@ -11,7 +11,7 @@
 //!   Mermaid's and DBML's own parsers (`npm run build`, so CI runs it). A text that changed
 //!   fails here until the fixtures are written again with `SPELAION_UPDATE_ER_FIXTURES=1`.
 
-mod engines;
+use crate::engines;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -234,6 +234,7 @@ fn relation<'a>(model: &'a ErModel, from: &str, to: &str) -> &'a spelaion_core::
 
 #[tokio::test]
 async fn schemas_tables_and_focus_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         create_schema(label, &session).await;
         let conn = session.connection();
@@ -411,6 +412,7 @@ fn big_schema() -> Vec<String> {
 
 #[tokio::test]
 async fn a_200_table_schema_is_laid_out_once() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = session(&*engines::sqlite(), memory()).await;
     run("sqlite", &session, &big_schema(), false).await;
     let conn = session.connection();
@@ -610,6 +612,7 @@ fn awkward_model() -> ErModel {
 
 #[test]
 fn awkward_names_are_written_as_text() {
+    let _turn = crate::serial::file_turn(module_path!());
     let model = awkward_model();
     assert_eq!(model.relations.len(), 6);
     let mermaid_text = mermaid(&model);

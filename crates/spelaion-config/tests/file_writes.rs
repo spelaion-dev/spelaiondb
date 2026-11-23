@@ -4,7 +4,7 @@
 //! nothing temporary is left behind, not even when several writes race.
 #![cfg(unix)]
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
@@ -78,6 +78,7 @@ fn edit_host(fx: &Fixture, id: &str, host: &str) {
 
 #[test]
 fn editing_a_connection_keeps_its_mode() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("writes-mode");
     for kept in [0o600, 0o640, 0o644] {
         let path = fx.write("user/connections/orders.toml", ORDERS);
@@ -93,6 +94,7 @@ fn editing_a_connection_keeps_its_mode() {
 
 #[test]
 fn editing_a_connection_through_a_link_edits_the_target() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("writes-link");
     let target = fx.write("dotfiles/spelaion/orders.toml", ORDERS);
     set_mode(&target, 0o600);
@@ -115,6 +117,7 @@ fn editing_a_connection_through_a_link_edits_the_target() {
 
 #[test]
 fn editing_a_tunnel_keeps_its_mode_and_its_link() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("writes-tunnel");
     let target = fx.write("dotfiles/bastion.toml", BASTION);
     set_mode(&target, 0o640);
@@ -144,6 +147,7 @@ fn editing_a_tunnel_keeps_its_mode_and_its_link() {
 
 #[test]
 fn personal_files_edited_through_links_stay_links_with_their_mode() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("writes-personal");
     let user_toml = fx.write("dotfiles/user.toml", "schema_version = 1\n# mine\n");
     set_mode(&user_toml, 0o644);
@@ -187,6 +191,7 @@ fn personal_files_edited_through_links_stay_links_with_their_mode() {
 
 #[test]
 fn new_files_get_the_mode_of_the_folder_they_live_in() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("writes-new");
     let backend = FakeBackend::default();
     // A connection to copy the form from.
@@ -235,6 +240,7 @@ fn new_files_get_the_mode_of_the_folder_they_live_in() {
 
 #[test]
 fn a_copy_and_a_move_keep_the_original_mode() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("writes-copy");
     let backend = FakeBackend::default();
     let path = fx.write("user/connections/orders.toml", ORDERS);
@@ -266,6 +272,7 @@ fn a_copy_and_a_move_keep_the_original_mode() {
 
 #[test]
 fn the_trust_store_keeps_its_mode_and_is_replaced_atomically() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("writes-trust");
     fx.write("repo/.spelaion/connections/orders.toml", ORDERS);
     let store = fx.user().join("trusted-workspaces.toml");
@@ -301,6 +308,7 @@ fn the_trust_store_keeps_its_mode_and_is_replaced_atomically() {
 
 #[test]
 fn concurrent_edits_of_one_file_never_share_a_temporary_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("writes-race");
     let path = fx.write("user/connections/orders.toml", ORDERS);
     std::thread::scope(|scope| {

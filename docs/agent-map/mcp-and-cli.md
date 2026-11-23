@@ -13,7 +13,11 @@
   `Liveness`, `open.rs`: its health, its tunnel, its connection, asked by both `Cached::usable`
   and a call that fails); the call that meets a lost session fails and is never
   retried, and the next call opens a new one. Query rows go out as JSON or TOON (`format.rs`); any change there
-  keeps every cell quoted so data cannot add rows or fields.
+  keeps every cell quoted so data cannot add rows or fields. The catalog tools' answers
+  (`list_objects`, `search_schema`, `describe_table`) are built in `catalog.rs` (SDB-120): their
+  lines stop within `format::MAX_RESPONSE` and end with an "N more" line, comments and defaults
+  are cut to one line (`format::one_line`), and the structured content is `{"complete",
+  "shown", "omitted", "narrow_with"}`, described in `catalog_limit!` and `docs/guide/mcp.md`.
   Every refusal and failure answers its sentence unchanged (clients may match on it) and, as
   `structuredContent`, `{"code", "retry"}` (SDB-374). The code and `retry` are decided in the
   core (`agent_state.rs`, `AgentFailure`) from the core's error types, never from text; the
@@ -26,6 +30,10 @@
   driver that only says why (its error is a `DriverError::Connection`), so `plugin_missing` is
   told from `Engines::plugin_unavailable`, not from the error. "Every agent is read-only" is
   `spelaion_core::all_agents_read_only`, asked by the server and by the app's MCP page.
+  `explain_query` names the engines `structured=true` works on from the core
+  (`plan::agent_plan_engines`: the plan reader's engines that agents see), filled in at start
+  in place of `{engines}` in its description and its `structured` argument (SDB-103); a test
+  fails if one is missing. Never write engine names there by hand.
   `spelaion-config::mcp_clients` finds each AI client's file and writes our entry there for the
   app's MCP page (ADR-033): only our entry changes, JSON edited as text at the spans it finds,
   Codex's TOML with `toml_edit`, a backup first, and only the change the user saw (its

@@ -3,7 +3,7 @@
 //! certificates when they load: SpelaionDB has no read barrier of its own for them, and the
 //! plugin logs in with a user and a password.
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture, personal};
 use spelaion_config::{Engine, Resolver};
@@ -32,6 +32,7 @@ fn base(engine: &str) -> String {
 
 #[test]
 fn hiveserver2_connections_load_and_resolve() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (engine, expected, default_port, _) in ENGINES {
         let fx = Fixture::new(&format!("{engine}-loads"));
         fx.write(
@@ -60,6 +61,7 @@ fn hiveserver2_connections_load_and_resolve() {
 
 #[test]
 fn read_only_is_refused_rather_than_promised_without_a_barrier() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (engine, _, _, label) in ENGINES {
         let fx = Fixture::new(&format!("{engine}-read-only"));
         fx.write(
@@ -82,6 +84,7 @@ fn read_only_is_refused_rather_than_promised_without_a_barrier() {
 
 #[test]
 fn client_certificates_are_refused() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (engine, _, _, _) in ENGINES {
         let fx = Fixture::new(&format!("{engine}-cert"));
         fx.write(

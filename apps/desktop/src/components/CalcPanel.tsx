@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type CellRange, type SelectionStatsItem } from "../api";
+import { keyText } from "../shortcuts";
 import { Icon } from "./Icons";
 
 /** How long a selection must stay before it is calculated (dragging and arrow keys go fast). */
@@ -105,7 +106,7 @@ export function CalcPanel(props: {
               </span>
             )}
           </div>
-          <button className="ghost cell-viewer-close" aria-label={t("calc.close")} title={t("calc.close")} onClick={props.onClose}><Icon name="x" /></button>
+          <button className="ghost cell-viewer-close" aria-label={t("calc.close", { shortcut: keyText("close") })} title={t("calc.close", { shortcut: keyText("close") })} onClick={props.onClose}><Icon name="x" /></button>
         </div>
         <div className="cell-viewer-controls">{props.modes}</div>
       </header>

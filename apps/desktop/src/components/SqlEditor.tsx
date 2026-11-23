@@ -7,16 +7,18 @@
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Compartment, countColumn, EditorSelection, EditorState, findColumn, Prec, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, lineNumbers } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, type KeyBinding, lineNumbers } from "@codemirror/view";
 import { sql } from "@codemirror/lang-sql";
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, foldCode, unfoldCode, indentUnit } from "@codemirror/language";
-import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess, selectAll } from "@codemirror/commands";
 import { tags } from "@lezer/highlight";
 import { closeLintPanel, lintKeymap, openLintPanel, setDiagnostics } from "@codemirror/lint";
 import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen } from "@codemirror/search";
 import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, snippetCompletion, nextSnippetField, prevSnippetField, acceptCompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { occurrenceOrigin, selectAllOccurrences, selectNextOccurrence } from "../editorOccurrences";
-import { EDITOR_ACTIONS, SNIPPET_COMMANDS, quotedLines, type EditorActionId } from "../editorActions";
+import { editorKey, editorKeyBindings, SNIPPET_COMMANDS, quotedLines, type EditorActionId } from "../editorActions";
+import { commandKeys, commandSpec, KEYS } from "../commandRegistry";
+import { useShortcuts } from "../shortcutPreferences";
 import { allSnippets, lowerKeywords, snippetBefore, snippetsStarting, type EditorSnippet } from "../editorSnippets";
 import { useSnippets } from "../snippetStore";
 import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
@@ -28,6 +30,9 @@ import { useDialogs } from "../dialogStore";
 import { EditorMenu } from "./EditorMenu";
 import { call, commands } from "../api";
 import { byteToIndex, indexToByte, wordEnd } from "../text";
+import { readClipboardText } from "../clipboardText";
+import type { ClipboardCommand } from "../store";
+import { commandShortcut, keyText } from "../shortcuts";
 
 export interface RunRequest {
   /** Text to run: a statement, the selection or everything. */
@@ -49,6 +54,8 @@ const RUN_LABEL_DELAY_MS = 120;
 /** What the toolbar can ask the editor to do. */
 export interface SqlEditorHandle {
   action(id: EditorActionId): void;
+  /** Cut, Copy, Paste and Select all from the editor's menu (SDB-438). */
+  clipboard(command: ClipboardCommand): void;
   format(): void;
   runCurrent(): void;
   runScript(): void;
@@ -89,6 +96,8 @@ interface Props {
   error: { index: number; message: string; source: object } | null;
   /** The editor opens with its cursor after the text instead of before it. */
   cursorAtEnd?: boolean;
+  /** Run's name, as the action column says it ("Run statement"), for the editor's menu. */
+  runName: string;
 }
 
 const theme = EditorView.theme({
@@ -281,7 +290,7 @@ function nameTooltip(name: ResolvedName, t: (key: string, values?: Record<string
   root.append(list);
   const more = table.details.length - HOVER_COLUMNS;
   if (more > 0) root.append(el("div", "sql-hover-note", t("names.moreColumns", { count: more })));
-  root.append(el("div", "sql-hover-note", t("names.openHint")));
+  root.append(el("div", "sql-hover-note", t("names.openHint", { gesture: keyText("openObjectByClick"), shortcut: commandShortcut("editor.openObject") })));
   return root;
 }
 
@@ -324,7 +333,7 @@ function editorPreferences(p: EditorPreferencesItem) {
   ];
 }
 
-export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, onName, onOutline, error, cursorAtEnd }: Props) {
+export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, onRunLabel, onName, onOutline, error, cursorAtEnd, runName }: Props) {
   const { t } = useTranslation("editor");
   const preferences = usePreferences((s) => s.editor);
   const settings = useRef(new Compartment());
@@ -333,6 +342,9 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const locale = useRef(new Compartment());
+  // The registry's commands' keys, rebuilt when the user changes one (SDB-447).
+  const commandKeymap = useRef(new Compartment());
+  const shortcutsRevision = useShortcuts((s) => s.revision);
   const callbacks = useRef({ onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t });
   callbacks.current = { onChange, onRun, onRunLabel, engine, onFormatError, onActionError, catalog, onName, onOutline, t };
   const failed = (e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e));
@@ -456,6 +468,34 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     }).catch((e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e)));
     return true;
   };
+  // The menu's Cut, Copy, Paste and Select all (SDB-438), as the keys do them: Cut and Copy take
+  // the selected text, or the cursor's whole line when nothing is selected; Paste reads the
+  // clipboard as the grid's menu does (`readClipboardText`) and puts its text in place of the
+  // selection. A clipboard that cannot be read or written says so in the editor's notice.
+  const clipboard = (v: EditorView, command: ClipboardCommand) => {
+    const failed = (e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e));
+    if (command === "selectAll") return selectAll(v);
+    if (command === "paste") {
+      readClipboardText()
+        .then((text) => { if (v.dom.isConnected) v.dispatch(v.state.replaceSelection(text), { scrollIntoView: true, userEvent: "input.paste" }); })
+        .catch(failed);
+      return true;
+    }
+    const { state } = v;
+    const whole = state.selection.ranges.every((range) => range.empty);
+    // Several cursors on one line take that line once.
+    const lines = [...new Set(state.selection.ranges.map((range) => state.doc.lineAt(range.head).number))];
+    const ranges = whole
+      ? lines.map((number) => { const line = state.doc.line(number); return { from: line.from, to: Math.min(line.to + 1, state.doc.length) }; })
+      : state.selection.ranges.filter((range) => !range.empty);
+    const text = ranges.map((range) => state.sliceDoc(range.from, range.to)).join(whole ? "" : state.lineBreak);
+    navigator.clipboard.writeText(text).then(() => {
+      if (command === "cut" && v.dom.isConnected && v.state.doc === state.doc) {
+        v.dispatch({ changes: ranges, scrollIntoView: true, userEvent: "delete.cut" });
+      }
+    }).catch(failed);
+    return true;
+  };
   // What the name at `pos` is, in the catalog the editor already has (the one completion
   // uses): nothing is asked of the database for a click or a hover.
   const nameAt = (v: EditorView, pos: number): ResolvedName | null => {
@@ -525,6 +565,26 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       case "insertSelect": case "insertInsert": case "insertUpdate": return insertNamed(v, SNIPPET_COMMANDS[id]);
     }
   };
+  /** The registry's editor commands as a keymap, with their keys now (SDB-447). */
+  const registryKeymap = () => {
+    const bindings: KeyBinding[] = editorKeyBindings().map(({ key, target }) => ({
+      key,
+      run: (v: EditorView) => {
+        switch (target.kind) {
+          case "action": return action(v, target.id);
+          case "run": return run(v);
+          case "runScript": return runAll(v);
+          case "format": return format(v);
+          default: { const never: never = target; return never; }
+        }
+      },
+    }));
+    // Zoom in also from the + key (its own on some layouts, the keypad's, Shift+=), while it
+    // keeps its default keys.
+    const zoomIn = commandSpec("editor.zoomIn");
+    if (commandKeys(zoomIn) === zoomIn.shortcut) bindings.push({ key: "Mod-+", run: (v) => action(v, "zoomIn") });
+    return keymap.of(bindings);
+  };
   const tab = (v: EditorView) => {
     if (nextSnippetField(v)) return true;
     const range = v.state.selection.main;
@@ -538,6 +598,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   };
   useImperativeHandle(handle, () => ({
     action: (id) => { if (view.current) { action(view.current, id); view.current.focus(); } },
+    clipboard: (command) => { if (view.current) { clipboard(view.current, command); view.current.focus(); } },
     format: () => {
       if (view.current) {
         format(view.current);
@@ -575,18 +636,15 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
         // A new script that starts with the user's template: typing goes on after it.
         selection: cursorAtEnd ? { anchor: value.length } : undefined,
         extensions: [
+          // The registry's commands first, with the user's keys (SDB-447), then the editor's
+          // own keys (`KEYS`), which no command can take.
+          Prec.highest(commandKeymap.current.of(registryKeymap())),
           Prec.highest(
             keymap.of([
-              { key: "Mod-d", run: selectNextOccurrence },
-              { key: "Mod-Shift-Enter", run: runAll },
-              { key: "Mod-Enter", run: (v) => run(v) },
-              { key: "Shift-Alt-f", run: format },
-              ...EDITOR_ACTIONS.map(({ id, key }) => ({ key, run: (v: EditorView) => action(v, id) })),
-              // Zoom in also from the + key (its own on some layouts, the keypad's, Shift+=).
-              { key: "Mod-+", run: (v) => action(v, "zoomIn") },
+              { key: editorKey(KEYS.selectNextOccurrence.shortcut), run: selectNextOccurrence },
               { key: "Enter", run: acceptCompletion },
-              { key: "Tab", run: tab },
-              { key: "Shift-Tab", run: (v) => prevSnippetField(v) || indentLess(v) },
+              { key: editorKey(KEYS.snippetNext.shortcut), run: tab },
+              { key: editorKey(KEYS.snippetPrevious.shortcut), run: (v) => prevSnippetField(v) || indentLess(v) },
             ]),
           ),
           settings.current.of(editorPreferences(preferences)),
@@ -666,6 +724,13 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   useEffect(() => {
     view.current?.dispatch({ effects: settings.current.reconfigure(editorPreferences(preferences)) });
   }, [preferences]);
+
+  // The user changed a shortcut (SDB-447): the keymap is the registry's keys again, so the new
+  // keys act at once and the old ones stop.
+  useEffect(() => {
+    view.current?.dispatch({ effects: commandKeymap.current.reconfigure(registryKeymap()) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shortcutsRevision]);
 
   // Text replaced from outside the editor (a file reloaded from disk, ADR-036): a new
   // `revision` makes the editor show `value`. Only then: a render that arrives late while the
@@ -793,6 +858,6 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
         const rect = host.current!.getBoundingClientRect(); setMenu({ x: rect.left, y: rect.top });
       }
     }} />
-    {menu && <EditorMenu {...menu} onClose={() => { setMenu(null); view.current?.focus(); }} />}
+    {menu && <EditorMenu {...menu} runName={runName} onClose={() => { setMenu(null); view.current?.focus(); }} />}
   </>;
 }

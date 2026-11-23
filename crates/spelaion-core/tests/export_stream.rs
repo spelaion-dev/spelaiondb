@@ -18,8 +18,8 @@ use spelaion_core::{
 };
 use spelaion_driver_api::{ConnectParams, Driver, ExecOptions, Secret, TlsMode, Value};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{cleaning_up, run_cleanup};
 
 /// Rows of the test table: more than two driver batches (10,000 rows each).
@@ -467,6 +467,7 @@ async fn exercise(engine: Engine) {
 
 #[tokio::test]
 async fn postgres_streams_exports() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_PG") else {
         eprintln!("SPELAION_TEST_PG not set: test skipped");
         return;
@@ -557,6 +558,7 @@ fn digits(alias: &str) -> String {
 
 #[tokio::test]
 async fn mysql_and_mariadb_stream_exports() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (var, driver) in [
         ("SPELAION_TEST_MYSQL", engines::mysql()),
         ("SPELAION_TEST_MARIADB", engines::mariadb()),
@@ -656,6 +658,7 @@ async fn mysql_and_mariadb_stream_exports() {
 
 #[tokio::test]
 async fn sqlserver_streams_exports() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_MSSQL") else {
         eprintln!("SPELAION_TEST_MSSQL not set: test skipped");
         return;
@@ -741,6 +744,7 @@ async fn sqlserver_streams_exports() {
 
 #[tokio::test]
 async fn duckdb_streams_exports() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dir = folder("duckdb-file");
     let path = dir.join("export.duckdb");
     engines::create_database(spelaion_config::Engine::Duckdb, &path).await;
@@ -794,6 +798,7 @@ async fn duckdb_streams_exports() {
 
 #[tokio::test]
 async fn sqlite_streams_exports() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dir = folder("sqlite-file");
     let path = dir.join("export.db");
     std::fs::File::create(&path).unwrap();
@@ -850,6 +855,7 @@ async fn sqlite_streams_exports() {
 /// not be in the file, and indeed the export's own session does not see them.
 #[tokio::test]
 async fn postgres_warns_that_an_open_transaction_is_not_exported() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_PG") else {
         eprintln!("SPELAION_TEST_PG not set: test skipped");
         return;
@@ -929,6 +935,7 @@ async fn postgres_warns_that_an_open_transaction_is_not_exported() {
 /// PostgreSQL and DuckDB, its database on MySQL and MariaDB.
 #[tokio::test]
 async fn the_export_session_follows_the_tabs_schema() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_PG") else {
         eprintln!("SPELAION_TEST_PG not set: test skipped");
         return;

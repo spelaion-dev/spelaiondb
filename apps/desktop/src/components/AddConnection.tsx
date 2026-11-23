@@ -32,12 +32,13 @@ import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
 import { saveHistoryPreference } from "../historyPreference";
 import { fieldList } from "../fieldNames";
-import { ObjectMenu } from "./ObjectMenu";
 import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
+import { ImportSources } from "./ImportSources";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 import { installText, openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
+import { keyText } from "../shortcuts";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -60,8 +61,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
    *  PostgreSQL connection, SDB-169): it names the form, the connection is `engine`'s. */
   const [kind, setKind] = useState<EngineItem | null>(null);
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
-  const [openImportMenu, setOpenImportMenu] = useState(dialog.kind === "add" && dialog.openImportMenu === true);
-  const [importing, setImporting] = useState<ImportClientId | null>(null);
+  const [importing, setImporting] = useState<Importing>(dialog.kind === "add" && dialog.imports === true ? { kind: "list" } : { kind: "none" });
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   /** Whether the keychain holds the edited connection's password (never its value). */
@@ -118,14 +118,16 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
             {engine && <EngineBadge engine={kind ?? engine} />}
             {editing
               ? t("editTitle", { name: initial?.name ?? editing })
-              : importing
-                ? t("importer.title", { client: IMPORT_CLIENTS.find((c) => c.id === importing)?.label })
-                : engine
+              : importing.kind === "list"
+                ? t("importer.sources.title")
+                : importing.kind === "client"
+                  ? t("importer.title", { client: IMPORT_CLIENTS.find((c) => c.id === importing.client)?.label })
+                  : engine
                   ? t("formTitle", { engine: (kind ?? engine).name })
                   : t("title")}
           </h2>
-          <button className="ghost" aria-label={t("close")} onClick={close}>
-            ×
+          <button className="ghost" aria-label={t("close")} title={t("close")} onClick={close}>
+            <Icon name="x" />
           </button>
         </div>
         {loadError ? (
@@ -159,8 +161,10 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
               />
             </>
           )
-        ) : importing ? (
-          <ConnectionImport client={importing} onBack={() => setImporting(null)} onDone={close} />
+        ) : importing.kind === "list" ? (
+          <ImportSources onPick={(client, path) => setImporting({ kind: "client", client, path })} onBack={() => setImporting({ kind: "none" })} />
+        ) : importing.kind === "client" ? (
+          <ConnectionImport client={importing.client} initialDir={importing.path} onBack={() => setImporting({ kind: "list" })} onDone={close} />
         ) : engine ? (
           <ConnectionForm
             engine={engine}
@@ -178,11 +182,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : (
           <EnginePicker
             engines={engines}
-            openImportMenu={openImportMenu}
-            onImport={(client) => {
-              setOpenImportMenu(false);
-              setImporting(client);
-            }}
+            onImport={() => setImporting({ kind: "list" })}
             onPick={(picked, fields) => {
               const base = connectionEngine(engines, picked);
               if (!base) return;
@@ -211,70 +211,13 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   );
 }
 
-function ImportMenu({ openInitially, onPick }: { openInitially: boolean; onPick(client: ImportClientId): void }) {
-  const { t } = useTranslation("connections");
-  const button = useRef<HTMLButtonElement>(null);
-  const row = useRef<HTMLDivElement>(null);
-  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
-  const items = () => Array.from(row.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? []);
-  const open = useCallback(() => {
-    const rect = button.current?.getBoundingClientRect();
-    if (rect) setAt({ x: rect.left, y: rect.bottom });
-  }, []);
-
-  useEffect(() => { if (openInitially) open(); }, [openInitially, open]);
-  useEffect(() => { if (at) items()[0]?.focus(); }, [at]);
-
-  return (
-    <div
-      ref={row}
-      className="import-row"
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget)) setAt(null);
-      }}
-      onKeyDown={(e) => {
-        if (!at) return;
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          setAt(null);
-          button.current?.focus();
-        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-          e.preventDefault();
-          const choices = items();
-          const current = choices.indexOf(document.activeElement as HTMLButtonElement);
-          const next = e.key === "ArrowDown" ? current + 1 : current < 0 ? choices.length - 1 : current - 1;
-          choices[(next + choices.length) % choices.length]?.focus();
-        }
-      }}
-    >
-      <button
-        ref={button}
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={at !== null}
-        onClick={() => at ? setAt(null) : open()}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown" && !at) {
-            e.preventDefault();
-            open();
-          }
-        }}
-      >
-        {t("importer.open")}
-      </button>
-      {at && (
-        <ObjectMenu at={at} label={t("importer.open")}>
-          {IMPORT_CLIENTS.map((client) => (
-            <button key={client.id} role="menuitem" type="button" tabIndex={-1} onClick={() => onPick(client.id)}>
-              {client.label}
-            </button>
-          ))}
-        </ObjectMenu>
-      )}
-    </div>
-  );
-}
+/** Which import view the dialog shows (SDB-446): none (adding a connection), the list of
+ *  clients, or one client's preview, from where it keeps its connections or a folder or file
+ *  chosen on its row. */
+type Importing =
+  | { kind: "none" }
+  | { kind: "list" }
+  | { kind: "client"; client: ImportClientId; path: string | null };
 
 function EngineBadge({ engine }: { engine: EngineItem }) {
   return (
@@ -291,14 +234,13 @@ function connectionEngine(engines: EngineItem[], picked: EngineItem): EngineItem
 
 function EnginePicker({
   engines,
-  openImportMenu,
   onPick,
   onImport,
 }: {
   engines: EngineItem[];
-  openImportMenu: boolean;
   onPick(engine: EngineItem, fields?: UrlFields): void;
-  onImport(client: ImportClientId): void;
+  /** Opens the list of clients to import connections from (SDB-446). */
+  onImport(): void;
 }) {
   const { t } = useTranslation("connections");
   const { t: settings, i18n } = useTranslation("settings");
@@ -362,7 +304,11 @@ function EnginePicker({
           {urlError}
         </p>
       )}
-      <ImportMenu openInitially={openImportMenu} onPick={onImport} />
+      <div className="import-row">
+        <button type="button" onClick={onImport}>
+          {t("importer.open")}
+        </button>
+      </div>
       <div className="engine-groups">
         {CATEGORIES.map((category) => {
           const items = visible.filter((e) => e.category === category);
@@ -735,7 +681,7 @@ function ConnectionForm(props: {
   const tlsNote = (warning: TlsWarningItem | null, className = "") =>
     warning && (
       <p className={`tls-warning small${className}`} role="status">
-        <Icon name="shieldAlert" size={14} />
+        <Icon name="shieldAlert" />
         <span>{tlsWarningText(t, warning)}</span>
       </p>
     );
@@ -1416,7 +1362,7 @@ function ConnectionForm(props: {
                 onChange={(tags) => update({ tags })}
               />
             </div>
-            <p className="muted small">{t("fields.tagsHint")}</p>
+            <p className="muted small">{t("fields.tagsHint", { enter: keyText("submit") })}</p>
           </fieldset>
           <fieldset>
             <legend>{t("sections.organization")}</legend>

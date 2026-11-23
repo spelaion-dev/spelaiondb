@@ -151,6 +151,7 @@ fn analyzed() -> ExplainOptions {
 
 #[tokio::test]
 async fn plans_use_connection_setup_context_without_reopening_or_replaying_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let setup = spelaion_config::ResolvedSession {
         schema: Some("public".into()),
         setup: Some("CREATE TEMP TABLE setup_plan(value int); INSERT INTO setup_plan VALUES (1); SET search_path=pg_temp".into()),
@@ -192,6 +193,7 @@ async fn plans_use_connection_setup_context_without_reopening_or_replaying_it() 
 
 #[tokio::test]
 async fn plans_honor_the_tabs_statement_timeout_override() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(open) = open(false).await else {
         return;
     };
@@ -225,6 +227,7 @@ async fn plans_honor_the_tabs_statement_timeout_override() {
 
 #[tokio::test]
 async fn plans_use_the_selected_session_context_and_underlying_transaction_intent() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(open) = open(false).await else {
         return;
     };
@@ -344,6 +347,7 @@ async fn plans_use_the_selected_session_context_and_underlying_transaction_inten
 
 #[tokio::test]
 async fn plans_readonly_is_captured_from_the_real_open_connection_and_never_executes_updates() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(open) = open(true).await else {
         return;
     };
@@ -415,6 +419,7 @@ async fn plans_readonly_is_captured_from_the_real_open_connection_and_never_exec
 
 #[tokio::test]
 async fn plans_require_execution_warning_and_reject_multiple_or_non_explainable_statements() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(open) = open(false).await else {
         return;
     };
@@ -470,6 +475,7 @@ async fn plans_require_execution_warning_and_reject_multiple_or_non_explainable_
 
 #[tokio::test]
 async fn plans_are_serialized_cancellable_and_record_explicit_runs_in_history() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(open) = open(false).await else {
         return;
     };

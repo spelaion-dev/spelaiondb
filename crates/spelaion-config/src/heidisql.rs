@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use spelaion_driver_api::Secret;
 
-use crate::import::{ImportedConnection, ImportedSsh, ImportedTls};
+use crate::draft::SessionDraft;
+use crate::import::{ImportedConnection, ImportedSsh, ImportedTls, SavedSecrets};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
@@ -99,6 +100,15 @@ fn parse_export(content: &str) -> Result<Sessions, HeidiSqlError> {
 
 /// Read an exported settings file. Passwords remain `Secret`s, never preview text.
 pub fn read_heidisql(path: &Path) -> Result<Vec<ImportedConnection>, HeidiSqlError> {
+    read_heidisql_with(path, SavedSecrets::Read)
+}
+
+/// [`read_heidisql`], with or without the saved passwords (never decoded with
+/// [`SavedSecrets::Skip`]).
+pub fn read_heidisql_with(
+    path: &Path,
+    secrets: SavedSecrets,
+) -> Result<Vec<ImportedConnection>, HeidiSqlError> {
     let file = std::fs::File::open(path).map_err(|e| HeidiSqlError::Unreadable {
         path: path.to_path_buf(),
         message: e.to_string(),
@@ -115,7 +125,21 @@ pub fn read_heidisql(path: &Path) -> Result<Vec<ImportedConnection>, HeidiSqlErr
     }
     let content = std::str::from_utf8(&bytes)
         .map_err(|_| HeidiSqlError::Invalid("settings file is not UTF-8"))?;
-    Ok(convert(parse_export(content)?))
+    Ok(convert(with_secrets(parse_export(content)?, secrets)))
+}
+
+/// The sessions as read, or without their passwords' fields, so none is decoded.
+fn with_secrets(mut sessions: Sessions, secrets: SavedSecrets) -> Sessions {
+    match secrets {
+        SavedSecrets::Read => sessions,
+        SavedSecrets::Skip => {
+            for fields in sessions.values_mut() {
+                fields.remove("password");
+                fields.remove("sshtunnelpassword");
+            }
+            sessions
+        }
+    }
 }
 
 /// Whether this system has HeidiSQL's registry sessions to read: only Windows does. Elsewhere
@@ -126,16 +150,25 @@ pub fn heidisql_has_registry() -> bool {
 }
 
 /// Read the classic HeidiSQL sessions in the current user's registry, only on explicit import.
-#[cfg(windows)]
 pub fn read_heidisql_registry() -> Result<Vec<ImportedConnection>, HeidiSqlError> {
+    read_heidisql_registry_with(SavedSecrets::Read)
+}
+
+/// [`read_heidisql_registry`], with or without the saved passwords.
+#[cfg(windows)]
+pub fn read_heidisql_registry_with(
+    secrets: SavedSecrets,
+) -> Result<Vec<ImportedConnection>, HeidiSqlError> {
     let root = windows_registry::CURRENT_USER
         .open(r"Software\HeidiSQL\Servers")
         .map_err(|e| HeidiSqlError::Registry(e.to_string()))?;
-    Ok(convert(registry_sessions(&root)?))
+    Ok(convert(with_secrets(registry_sessions(&root)?, secrets)))
 }
 
 #[cfg(not(windows))]
-pub fn read_heidisql_registry() -> Result<Vec<ImportedConnection>, HeidiSqlError> {
+pub fn read_heidisql_registry_with(
+    _secrets: SavedSecrets,
+) -> Result<Vec<ImportedConnection>, HeidiSqlError> {
     Err(HeidiSqlError::RegistryUnavailable)
 }
 
@@ -557,6 +590,7 @@ fn connection(path: String, fields: Fields) -> ImportedConnection {
         ssh,
         proxy: None,
         tls,
+        session: SessionDraft::default(),
         unmapped: warnings,
     }
 }

@@ -8,7 +8,7 @@
 //! - The settings viewer reads the server's settings (and MySQL's status counters).
 //! - Table statistics: sizes and a row estimate for a table, nothing for a view.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -339,6 +339,7 @@ async fn stats(label: &str, session: &Session, table: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn postgres_shows_who_blocks_whom() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_PG") else {
         return;
     };
@@ -356,6 +357,7 @@ async fn postgres_shows_who_blocks_whom() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mysql_shows_who_blocks_whom() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_MYSQL") else {
         return;
     };
@@ -380,6 +382,7 @@ async fn mysql_shows_who_blocks_whom() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mariadb_shows_who_blocks_whom() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_MARIADB") else {
         return;
     };
@@ -396,6 +399,7 @@ async fn mariadb_shows_who_blocks_whom() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sqlserver_shows_who_blocks_whom() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
         return;
     };
@@ -416,6 +420,7 @@ async fn sqlserver_shows_who_blocks_whom() {
 
 #[tokio::test]
 async fn embedded_engines_have_row_estimates_or_nothing() {
+    let _turn = crate::serial::file_turn(module_path!());
     let memory = ConnectParams {
         database: ":memory:".into(),
         ..Default::default()

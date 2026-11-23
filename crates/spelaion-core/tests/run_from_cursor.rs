@@ -179,6 +179,7 @@ fn assert_runs(
 
 #[test]
 fn from_the_cursor_to_the_end_on_every_dialect() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in Engine::ALL {
         let dialect = dialect_of(engine).unwrap_or_else(|| panic!("{engine:?} has no dialect"));
         for (number, case) in cases(dialect.name()).iter().enumerate() {
@@ -217,6 +218,7 @@ fn from_the_cursor_to_the_end_on_every_dialect() {
 
 #[test]
 fn the_picker_runs_only_the_statements_chosen_on_every_dialect() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in Engine::ALL {
         let dialect = dialect_of(engine).unwrap_or_else(|| panic!("{engine:?} has no dialect"));
         for (number, case) in cases(dialect.name()).iter().enumerate() {
@@ -243,6 +245,7 @@ fn the_picker_runs_only_the_statements_chosen_on_every_dialect() {
 
 #[test]
 fn a_statement_under_another_delimiter_is_not_run_as_its_pieces() {
+    let _turn = crate::serial::file_turn(module_path!());
     // The body's `;` would split it under the default delimiter: the text keeps the
     // `DELIMITER` lines, and the statement before it is written over.
     let dialect = dialect_of(Engine::Mysql).unwrap();
@@ -262,6 +265,7 @@ fn a_statement_under_another_delimiter_is_not_run_as_its_pieces() {
 /// plain statement is sent alone, at its own place in the script.
 #[test]
 fn ctrl_enter_runs_a_statement_under_another_delimiter_whole() {
+    let _turn = crate::serial::file_turn(module_path!());
     let dialect = dialect_of(Engine::Mysql).unwrap();
     let script = "select 0;\nDELIMITER $$\ncreate procedure p() begin select 1; select 2; end$$\nDELIMITER ;\nselect 3";
     let inside = script.find("select 2").unwrap();
@@ -300,6 +304,7 @@ fn ctrl_enter_runs_a_statement_under_another_delimiter_whole() {
 /// statement under the cursor.
 #[test]
 fn ctrl_enter_text_is_the_statement_under_the_cursor_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in Engine::ALL {
         let Some(dialect) = dialect_of(engine) else {
             continue;

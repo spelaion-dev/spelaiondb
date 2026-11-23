@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { chromium } from "playwright-core";
+import { webviewPage } from "./cdpPage.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const profile = mkdtempSync(join(tmpdir(), "spelaion-library-"));
@@ -24,7 +25,7 @@ try {
     catch { await new Promise((done) => setTimeout(done, 500)); }
   }
   assert.ok(browser, "native app opens its CDP port");
-  page = browser.contexts()[0].pages()[0]; page.setDefaultTimeout(30_000);
+  page = await webviewPage(browser); page.setDefaultTimeout(30_000);
   await page.locator(".activity-bar .settings-button").waitFor();
   await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("set_language", { language: "en" }));
   const db = new DatabaseSync(join(profile, "db/state.db"));
@@ -118,7 +119,8 @@ try {
     await page.waitForTimeout(250); await settled(saved);
     assert.equal(await saved.locator(".snippet-entry").count(), 1, "search matches SQL even when the name does not match");
     await daily.getByText("Organize", { exact: true }).click(); await daily.getByRole("button", { name: "Delete", exact: true }).click();
-    const deletion = page.getByRole("dialog", { name: "Delete “Daily revenue”?" });
+    const deletion = page.getByRole("dialog", { name: "Delete saved query?" });
+    await deletion.getByText("Daily revenue will be removed from this computer.", { exact: false }).waitFor();
     assert.ok(await deletion.getByRole("button", { name: "Cancel", exact: true }).evaluate((button) => document.activeElement === button));
     await page.keyboard.press("Escape"); await deletion.waitFor({ state: "detached" });
     assert.equal(await saved.locator(".snippet-entry").count(), 1, "Escape keeps the query");

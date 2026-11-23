@@ -5,7 +5,7 @@
 //! file. Passwords in TablePlus's own store are never read; the export's come with its password
 //! and only go to the keychain.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 
@@ -39,6 +39,7 @@ const PASSWORD: &str = "Password: if TablePlus saved one, it is in its own encry
 
 #[test]
 fn every_engine_comes_with_its_address_and_user() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let names: Vec<&str> = all.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(
@@ -144,6 +145,7 @@ fn every_engine_comes_with_its_address_and_user() {
 
 #[test]
 fn environment_tags_become_connection_types() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let env = |name: &str| named(&all, name).env.clone();
     assert_eq!(env("Orders PG"), "prod");
@@ -156,6 +158,7 @@ fn environment_tags_become_connection_types() {
 
 #[test]
 fn groups_become_folders() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     assert_eq!(named(&all, "Orders PG").folder, "Prod");
     assert!(
@@ -167,6 +170,7 @@ fn groups_become_folders() {
 
 #[test]
 fn tls_comes_with_its_mode_and_certificate_files() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let tls = named(&all, "Orders PG").tls.clone().unwrap();
     assert_eq!(tls.mode, TlsModeConfig::VerifyCa);
@@ -190,6 +194,7 @@ fn tls_comes_with_its_mode_and_certificate_files() {
 
 #[test]
 fn the_ssh_tunnel_uses_key_authentication_without_the_key_tableplus_keeps() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let bastion = named(&all, "PG via bastion");
     let ssh = bastion.ssh.clone().unwrap();
@@ -213,19 +218,17 @@ fn the_ssh_tunnel_uses_key_authentication_without_the_key_tableplus_keeps() {
 
 #[test]
 fn what_is_not_imported_is_listed_and_passwords_are_not_read() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read();
     let orders = named(&all, "Orders PG");
-    assert_eq!(
-        orders.unmapped,
-        [
-            PASSWORD,
-            "Bootstrap commands: 1 line(s) TablePlus runs after connecting (add them to the connection's session setup)"
-        ]
-    );
-    // The bootstrap SQL itself is not shown.
-    assert!(!orders.unmapped.iter().any(|u| u.contains("search_path")));
+    assert_eq!(orders.unmapped, [PASSWORD]);
+    // Its bootstrap commands are the connection's session setup (SDB-104), checked by the core
+    // before they are shown or saved (`spelaion-core`'s `tests/imported_setup.rs`).
+    assert_eq!(orders.session.setup, "SET search_path TO app, public;");
+    assert!(!orders.session.ignore_setup_errors);
     for name in ["Shop MySQL", "Shop MariaDB", "Reports MSSQL"] {
         assert_eq!(named(&all, name).unmapped, [PASSWORD], "{name}");
+        assert_eq!(named(&all, name).session.setup, "", "{name}");
     }
     // Files have no password.
     for name in ["Local file", "Analytics"] {
@@ -237,6 +240,7 @@ fn what_is_not_imported_is_listed_and_passwords_are_not_read() {
 
 #[test]
 fn every_connection_becomes_a_connection_file_and_the_bastion_a_network_profile() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tableplus-import");
     let backend = FakeBackend::default();
     let folder = TargetFolder {
@@ -273,6 +277,11 @@ fn every_connection_becomes_a_connection_file_and_the_bastion_a_network_profile(
         orders.contains("ca.crt") && orders.contains("client.key"),
         "{orders}"
     );
+    // Its bootstrap commands, as the connection's session setup (SDB-104).
+    assert!(
+        orders.contains("[session]") && orders.contains("SET search_path TO app, public;"),
+        "{orders}"
+    );
     let bastion = fx.read("user/connections/tableplus/pg-via-bastion.toml");
     assert!(
         bastion.contains("tunnel = \"spelaion-127-0-0-1\""),
@@ -302,6 +311,7 @@ fn read_export() -> Vec<ImportedConnection> {
 
 #[test]
 fn the_export_needs_its_password_and_refuses_a_wrong_one() {
+    let _turn = crate::serial::file_turn(module_path!());
     for password in [None, Some(Secret::new(""))] {
         let error = read_tableplus(&export_file(), password.as_ref()).unwrap_err();
         assert!(matches!(error, TableplusError::NeedsPassword(_)), "{error}");
@@ -319,6 +329,7 @@ fn the_export_needs_its_password_and_refuses_a_wrong_one() {
 
 #[test]
 fn a_changed_or_cut_export_is_refused_before_anything_is_read() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("tableplus-tampered");
     let original = std::fs::read(export_file()).unwrap();
     let password = Secret::new(EXPORT_PASSWORD);
@@ -361,6 +372,7 @@ fn a_changed_or_cut_export_is_refused_before_anything_is_read() {
 
 #[test]
 fn the_export_gives_the_same_connections_with_the_passwords_it_holds() {
+    let _turn = crate::serial::file_turn(module_path!());
     let storage = read();
     let export = read_export();
     let names = |all: &[ImportedConnection]| -> Vec<String> {
@@ -393,6 +405,7 @@ fn the_export_gives_the_same_connections_with_the_passwords_it_holds() {
         );
         assert_eq!(a.tls, b.tls, "{}", a.name);
         assert_eq!(a.ssh.is_some(), b.ssh.is_some(), "{}", a.name);
+        assert_eq!(a.session, b.session, "{}", a.name);
         // Nothing says a password was left in TablePlus's store: the export has them.
         assert!(
             !a.unmapped.iter().any(|u| u.starts_with("Password: ")),
@@ -458,6 +471,7 @@ fn the_export_gives_the_same_connections_with_the_passwords_it_holds() {
 
 #[test]
 fn exported_passwords_go_to_the_keychain_only_when_asked_and_never_to_a_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     for save in [true, false] {
         let fx = Fixture::new(&format!("tableplus-export-{save}"));
         let backend = FakeBackend::default();

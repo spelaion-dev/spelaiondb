@@ -6,7 +6,7 @@
 //! SpelaionDB cannot open. pgAdmin exports no passwords, and the ones it saves in its database
 //! are never read.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 
@@ -55,6 +55,7 @@ const PASSPHRASE: &str = "SSH: if the private key has a passphrase, it is asked 
 
 #[test]
 fn every_server_comes_with_its_address_user_and_maintenance_database() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read_export();
     let names: Vec<&str> = all.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(
@@ -92,6 +93,7 @@ fn every_server_comes_with_its_address_user_and_maintenance_database() {
 
 #[test]
 fn a_pg_service_server_is_listed_but_cannot_be_imported() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read_export();
     let service = named(&all, "Analytics service");
     let reason = service.engine.clone().unwrap_err();
@@ -107,6 +109,7 @@ fn a_pg_service_server_is_listed_but_cannot_be_imported() {
 
 #[test]
 fn server_groups_become_folders() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read_export();
     assert_eq!(named(&all, "Local PG").folder, "Servers");
     assert_eq!(named(&all, "Analytics service").folder, "Servers");
@@ -116,6 +119,7 @@ fn server_groups_become_folders() {
 
 #[test]
 fn tls_comes_with_its_mode_and_certificate_files() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read_export();
     let tls = named(&all, "Orders TLS").tls.clone().unwrap();
     assert_eq!(tls.mode, TlsModeConfig::VerifyCa);
@@ -129,6 +133,7 @@ fn tls_comes_with_its_mode_and_certificate_files() {
 
 #[test]
 fn the_comment_and_tags_come_along() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read_export();
     let orders = named(&all, "Orders TLS");
     assert_eq!(orders.description, "Orders of the EU shop");
@@ -139,6 +144,7 @@ fn the_comment_and_tags_come_along() {
 
 #[test]
 fn the_ssh_tunnel_becomes_a_one_hop_tunnel_with_its_identity_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read_export();
     let bastion = named(&all, "PG via bastion");
     let ssh = bastion.ssh.clone().unwrap();
@@ -156,6 +162,7 @@ fn the_ssh_tunnel_becomes_a_one_hop_tunnel_with_its_identity_file() {
 
 #[test]
 fn what_is_not_imported_is_listed_and_every_password_is_asked() {
+    let _turn = crate::serial::file_turn(module_path!());
     let all = read_export();
     assert_eq!(named(&all, "Local PG").unmapped, [NO_PASSWORD]);
     assert_eq!(
@@ -174,6 +181,7 @@ fn what_is_not_imported_is_listed_and_every_password_is_asked() {
 
 #[test]
 fn pgadmins_own_database_holds_the_same_servers() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pgadmin-db");
     let dir = database(&fx, "");
     let from_db = read_pgadmin(&dir).unwrap();
@@ -226,6 +234,7 @@ fn pgadmins_own_database_holds_the_same_servers() {
 
 #[test]
 fn passwords_pgadmin_saved_are_never_read_and_the_preview_says_so() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pgadmin-saved");
     let dir = database(
         &fx,
@@ -274,6 +283,7 @@ fn passwords_pgadmin_saved_are_never_read_and_the_preview_says_so() {
 
 #[test]
 fn every_server_becomes_a_connection_file_and_the_bastion_a_network_profile() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pgadmin-import");
     let backend = FakeBackend::default();
     let folder = TargetFolder {
@@ -340,6 +350,7 @@ fn read_text(fx: &Fixture, text: &str) -> Result<Vec<ImportedConnection>, Pgadmi
 
 #[test]
 fn unknown_settings_are_listed_and_secret_ones_show_their_name_only() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pgadmin-unknown");
     let all = read_text(
         &fx,
@@ -399,6 +410,7 @@ fn unknown_settings_are_listed_and_secret_ones_show_their_name_only() {
 
 #[test]
 fn servers_keep_pgadmins_order_and_older_exports_tls_keys_are_read() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pgadmin-order");
     let server = |name: &str| {
         format!(r#"{{"Name": "{name}", "Group": "Servers", "Host": "h", "Port": 5432}}"#)
@@ -424,6 +436,7 @@ fn servers_keep_pgadmins_order_and_older_exports_tls_keys_are_read() {
 
 #[test]
 fn socket_hosts_and_servers_without_a_host_are_not_imported() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pgadmin-socket");
     let all = read_text(
         &fx,
@@ -441,6 +454,7 @@ fn socket_hosts_and_servers_without_a_host_are_not_imported() {
 
 #[test]
 fn files_that_are_not_pgadmins_are_refused() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pgadmin-bad");
     for text in ["", "not json", "{\"servers\": {}}", "[1, 2]"] {
         let error = read_text(&fx, text).unwrap_err();
@@ -474,6 +488,7 @@ fn files_that_are_not_pgadmins_are_refused() {
 
 #[test]
 fn the_database_is_never_changed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pgadmin-readonly");
     let dir = database(&fx, "");
     let file = dir.join("pgadmin4.db");

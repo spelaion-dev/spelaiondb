@@ -12,6 +12,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
+import { webviewPage } from "./cdpPage.mjs";
 import { requestClose } from "./processes.mjs";
 
 if (process.platform !== "win32") {
@@ -58,7 +59,7 @@ try {
     catch { await new Promise((resolve) => setTimeout(resolve, 500)); }
   }
   assert.ok(browser, "the current Tauri app must expose its isolated debugging port");
-  const page = browser.contexts()[0].pages()[0];
+  const page = await webviewPage(browser);
   page.setDefaultTimeout(10_000);
   await (await page.context().newCDPSession(page)).send("Emulation.setFocusEmulationEnabled", { enabled: true });
   await page.locator(".activity-bar .settings-button").waitFor();

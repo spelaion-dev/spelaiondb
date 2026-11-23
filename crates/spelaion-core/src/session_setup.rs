@@ -123,6 +123,104 @@ pub fn check_file_setup(file: &ConnectionFile, safeguards: &Safeguards) -> Resul
     check_session_setup(dialect.as_ref(), dialect.name(), setup, restricted).map(|_| ())
 }
 
+/// The longest a statement is quoted in an import's "not imported" line.
+const QUOTED_STATEMENT: usize = 120;
+
+/// An imported connection's session setup (SDB-104), checked before it is shown or saved, as
+/// the connection form checks a typed one. Where the read-only barrier applies (a read-only
+/// connection, a type that confirms data changes, or a type that cannot be resolved, which
+/// may be one), every statement must pass [`classify_session_setup`]: one that does not is
+/// taken out of the setup and listed in the connection's `unmapped` lines with the reason,
+/// never dropped silently and never run. Elsewhere the setup is the user's own file and comes
+/// in whole. `kind` is the connection type the import's `env` resolves to.
+pub fn vet_imported_setup(
+    connection: &mut spelaion_config::ImportedConnection,
+    kind: &Result<Option<spelaion_config::ConnectionType>, spelaion_config::ResolveError>,
+) {
+    let setup = connection.session.setup.trim().to_string();
+    if setup.is_empty() {
+        return;
+    }
+    let restricted = connection.read_only
+        || match kind {
+            Ok(Some(kind)) => kind.safeguards.confirm_data_changes,
+            Ok(None) => false,
+            Err(_) => true,
+        };
+    if !restricted {
+        return;
+    }
+    let refuse_all = |connection: &mut spelaion_config::ImportedConnection, reason: &str| {
+        connection.unmapped.push(format!(
+            "Session setup: {} (not imported: {reason})",
+            quoted(&setup)
+        ));
+        connection.session.setup.clear();
+    };
+    // Fail closed: what cannot be checked is not imported.
+    let Ok(engine) = connection.engine else {
+        refuse_all(
+            connection,
+            "its engine is unknown, so its statements cannot be checked",
+        );
+        return;
+    };
+    let Some(dialect) = crate::dialect_of(engine) else {
+        refuse_all(
+            connection,
+            "its statements cannot be checked for this engine",
+        );
+        return;
+    };
+    // The refused statements are cut out of the text and everything else stays as written
+    // (separators, comments, batches), so no two kept statements can run together.
+    let mut kept = setup.clone();
+    let mut refused = Vec::new();
+    for span in dialect.split_statements(&setup).iter().rev() {
+        let statement = span.text(&setup);
+        if let Err(reason) = classify_session_setup(dialect.name(), statement) {
+            refused.push(format!(
+                "Session setup: {} (not imported: {reason})",
+                quoted(statement)
+            ));
+            kept.replace_range(span.start..span.end, "");
+        }
+    }
+    if refused.is_empty() {
+        return;
+    }
+    refused.reverse();
+    // What is left is checked again as a whole, as it would run; if it does not pass, none of
+    // it is imported.
+    let left = dialect.split_statements(&kept);
+    if check_session_setup(dialect.as_ref(), dialect.name(), &kept, true).is_err() {
+        refuse_all(connection, "what is left of it does not pass the check");
+        connection.unmapped.extend(refused);
+        connection.session.ignore_setup_errors = false;
+        return;
+    }
+    connection.session.setup = if left.is_empty() {
+        String::new()
+    } else {
+        kept.trim().to_string()
+    };
+    if connection.session.setup.is_empty() {
+        connection.session.ignore_setup_errors = false;
+    }
+    connection.unmapped.extend(refused);
+}
+
+/// A statement on one line for a list, cut at [`QUOTED_STATEMENT`] characters.
+fn quoted(statement: &str) -> String {
+    let line = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() > QUOTED_STATEMENT {
+        let cut: String = line.chars().take(QUOTED_STATEMENT).collect();
+        format!("`{cut}…`")
+    } else {
+        format!("`{line}`")
+    }
+}
+
 /// The statement that makes a read-only connection's session read-only in the engine itself
 /// (ADR-053), run before anything else when it opens: every transaction of the session is then
 /// read-only, so a function that writes behind a `SELECT` fails too. `None` where the engine has

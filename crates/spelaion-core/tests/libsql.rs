@@ -149,6 +149,7 @@ async fn value(open: &OpenConnection, sql: &str) -> String {
 /// the server (ADR-031).
 #[tokio::test]
 async fn scripts_and_transactions_run_as_on_sqlite() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server() else { return };
     let ws = Workspace::new("libsql-scripts");
     ws.write(
@@ -191,6 +192,7 @@ async fn scripts_and_transactions_run_as_on_sqlite() {
 /// ADR-058, point 4: no session barrier, so neither a read-only connection nor agents.
 #[test]
 fn libsql_has_no_read_only_mode_nor_agents_yet() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new("libsql-no-barrier");
     ws.write(
         ".spelaion/connections/ro.toml",
@@ -220,6 +222,7 @@ fn libsql_has_no_read_only_mode_nor_agents_yet() {
 /// Through the two bastions of `testing/docker`: the plugin connects to the tunnel's local end.
 #[tokio::test]
 async fn libsql_through_two_bastions() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }
@@ -254,6 +257,7 @@ async fn libsql_through_two_bastions() {
 /// end; the plugin reads no proxy from the environment, so it never goes around it.
 #[tokio::test]
 async fn libsql_through_a_socks_proxy() {
+    let _turn = crate::serial::file_turn(module_path!());
     if server().is_none() {
         return;
     }

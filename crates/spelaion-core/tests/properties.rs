@@ -229,6 +229,7 @@ proptest! {
     /// leaves none.
     #[test]
     fn any_text_has_placeholders_that_bind(script in any::<String>(), soup in text_of(":'\"`[]$-/*#\\ \nabxé=(),;", 40)) {
+        let _turn = crate::serial::file_turn(module_path!());
         for (label, dialect) in sql_dialects() {
             for script in [&script, &soup] {
                 let names = script_params(dialect.as_ref(), script);
@@ -248,6 +249,7 @@ proptest! {
     /// else (SDB-135).
     #[test]
     fn only_placeholders_in_code_are_found_and_bound((label, parts) in labelled_parts()) {
+        let _turn = crate::serial::file_turn(module_path!());
         let dialect = dialect_of(&label);
         let (script, names, bound) = assemble(&parts);
         prop_assert_eq!(script_params(dialect.as_ref(), &script), names.clone(), "{}: {:?}", label, script);
@@ -271,6 +273,7 @@ proptest! {
             text_of("'\"\\;:-/*` xé", 12).prop_map(|v| v + "\\"),
         ],
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let dialect = dialect_of(&label);
         let (script, names, _) = assemble(&parts);
         let script = format!("{script};\nselect 2");
@@ -291,6 +294,7 @@ proptest! {
 /// its literal early and the rest of the script was read inside a string.
 #[test]
 fn a_value_with_a_backslash_stays_inside_its_literal_everywhere() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut broken = Vec::new();
     for engine in [
         "clickhouse",
@@ -582,6 +586,7 @@ proptest! {
     /// (`classify_read_only`), not on a read-only connection.
     #[test]
     fn a_hidden_write_or_refused_function_is_never_a_read((engine, sql) in labelled_hidden()) {
+        let _turn = crate::serial::file_turn(module_path!());
         // As every caller does: by the dialect's name (MariaDB's is `mysql`).
         let dialect = dialect(engine);
         let name = dialect.name();
@@ -602,6 +607,7 @@ proptest! {
     fn a_destructive_statement_never_passes_the_guard_unasked(
         (engine, script) in Union::new(BARRIER_ENGINES.iter().map(|&e| hidden_destructive(e)))
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let dialect = dialect(engine);
         prop_assert!(
             check_script(dialect.as_ref(), &script, &Safeguards::default(), false).is_err(),
@@ -618,6 +624,7 @@ proptest! {
             text_of("selct dropup;'\"`[]-/*!M#$\\ \n()=,1é", 48),
         ],
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let dialect = dialect(engine);
         let _ = classify_read_only(dialect.name(), &sql);
         let _ = classify_read_only_connection(dialect.name(), &sql);
@@ -678,6 +685,7 @@ proptest! {
     fn any_pasted_text_previews_without_panicking(
         text in prop_oneof![any::<String>(), csv_text(), text_of("[]{}\":,|-\n\t 1aé", 60)],
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let source = ImportSource::Text(text);
         let _ = preview(&source, None, 50, "postgres");
         if let Ok(guessed) = guess_options(&source) {
@@ -700,6 +708,7 @@ proptest! {
         ],
         name in prop::sample::select(vec!["data.csv", "data.tsv", "data.json", "data.md", "data.xlsx"]),
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let path = temp_file(name, &bytes);
         let source = ImportSource::File(path.clone());
         let _ = preview(&source, None, 50, "postgres");
@@ -728,6 +737,7 @@ proptest! {
             prop::collection::vec(any::<u8>(), 0..256).prop_map(|b| [b"\xfe\xff".as_slice(), &b].concat()),
         ],
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         let path = temp_file("script.sql", &bytes);
         let _ = read_sql_file(&path);
         remove_temp(&path);
@@ -812,6 +822,7 @@ proptest! {
         statements in prop::collection::vec(sqlite_statement(), 1..6),
         sep in prop::sample::select(vec![";", ";\n", " ; ", ";\r\n-- next\n"]),
     ) {
+        let _turn = crate::serial::file_turn(module_path!());
         // Trigger names must differ.
         let mut seen = std::collections::HashSet::new();
         prop_assume!(statements.iter().filter(|s| s.starts_with("create trigger")).all(|s| seen.insert(s[..17].to_string())));

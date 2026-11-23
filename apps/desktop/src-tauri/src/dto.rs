@@ -1001,6 +1001,33 @@ impl From<EditorSnippetItem> for spelaion_core::EditorSnippet {
     }
 }
 
+/// One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
+/// app's registry and the keys it now has, as the registry writes them, or none.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutOverrideItem {
+    pub command: String,
+    pub keys: Option<String>,
+}
+
+impl From<spelaion_core::ShortcutOverride> for ShortcutOverrideItem {
+    fn from(change: spelaion_core::ShortcutOverride) -> Self {
+        Self {
+            command: change.command,
+            keys: change.keys,
+        }
+    }
+}
+
+impl From<ShortcutOverrideItem> for spelaion_core::ShortcutOverride {
+    fn from(change: ShortcutOverrideItem) -> Self {
+        Self {
+            command: change.command,
+            keys: change.keys,
+        }
+    }
+}
+
 /// The limits the core holds an editor snippet and the template of new scripts to, for the
 /// settings page to show (the core is what enforces them).
 #[derive(Debug, Clone, Copy, Serialize, Type)]
@@ -1188,6 +1215,8 @@ pub struct ColumnMapItem {
     pub rows_read: u32,
     pub nulls: u32,
     pub unreadable: u32,
+    /// SQL Server values of a type the plugin did not name, with an SRID: not drawn (SDB-213).
+    pub type_unknown: u32,
     pub too_big: u32,
     pub truncated: bool,
     /// The most shapes a column's map holds.
@@ -1213,6 +1242,7 @@ impl From<spelaion_core::ColumnMap> for ColumnMapItem {
             rows_read: count(map.rows_read),
             nulls: count(map.nulls),
             unreadable: count(map.unreadable),
+            type_unknown: count(map.type_unknown),
             too_big: count(map.too_big),
             truncated: map.truncated,
             max_shapes: count(spelaion_core::MAP_MAX_SHAPES),
@@ -3092,6 +3122,14 @@ pub struct EditableTableItem {
     pub schema: String,
     pub name: String,
     pub primary_key: Vec<String>,
+}
+
+/// The table whose foreign keys a query's result follows (SDB-93), as the core matched it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyTableItem {
+    pub schema: String,
+    pub name: String,
 }
 
 /// Where rows copied as UPDATE statements come from (SDB-388): a table data tab's table, or
@@ -5248,6 +5286,8 @@ pub struct CellViewItem {
     pub limit: f64,
     /// The value read as a geometry, for the map view (ADR-045).
     pub geometry: Option<GeoItem>,
+    /// Why a value that is a geometry is not drawn on the map (SDB-213).
+    pub map_note: Option<spelaion_core::MapNote>,
 }
 
 /// `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file.
@@ -5292,6 +5332,7 @@ impl From<spelaion_core::CellView> for CellViewItem {
             image_url,
             limit: spelaion_core::VIEW_LIMIT as f64,
             geometry: view.geometry.map(GeoItem::from),
+            map_note: view.map_note,
         }
     }
 }

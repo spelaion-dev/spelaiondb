@@ -8,7 +8,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RecentFileItem } from "../api";
 import { useCatalog } from "../catalog";
-import { commandSpec, paletteCommands, type CommandId } from "../commandRegistry";
+import { paletteCommands, type CommandId } from "../commandRegistry";
+import { commandShortcut, keyText } from "../shortcuts";
 import {
   activeContext,
   commandEnabled,
@@ -111,7 +112,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
             id,
             text: `${category}: ${t(commandLabel(id, context))}`,
             prefix: category.length + 2,
-            shortcut: commandSpec(id).shortcut,
+            shortcut: commandShortcut(id) || undefined,
           };
         }),
     [context, t],
@@ -130,6 +131,16 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
       const connectionName = names.get(schema.connectionId);
       // Only what the explorer shows now: a connection still connected there.
       if (connectionName === undefined || !connected.includes(schema.connectionId)) continue;
+      // A connection with one unnamed schema (SQLite's "main" is named) shows no schema row.
+      if (schema.schema !== "") {
+        entries.push({
+          kind: "object",
+          key: `schema:${schema.connectionId}:${schema.schema}`,
+          item: { kind: "schema", connectionId: schema.connectionId, schema: schema.schema, filter: schema.filter ?? null },
+          text: schema.schema,
+          detail: `${t("shell:kinds.schema")} · ${connectionName}`,
+        });
+      }
       for (const object of schema.relations) {
         entries.push({
           kind: "object",
@@ -333,8 +344,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
                 ? t("palette.noActions")
                 : t("palette.nothing")
               : chosen
-                ? t("palette.actionHint")
-                : t("palette.hint")}
+                ? t("palette.actionHint", { enter: keyText("submit"), escape: keyText("close") })
+                : t("palette.hint", { enter: keyText("submit") })}
         </p>
       </div>
     </div>

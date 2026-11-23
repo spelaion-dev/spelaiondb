@@ -14,8 +14,8 @@ use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultId, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{cleaning_up, run_cleanup};
 
 const ROWS: i64 = 3000;
@@ -215,6 +215,7 @@ async fn engines(table: &str, sqlite_file: &std::path::Path) -> Vec<Engine> {
 
 #[tokio::test]
 async fn pages_show_every_row_that_existed_throughout_exactly_once_while_others_write() {
+    let _turn = crate::serial::file_turn(module_path!());
     let table = format!("query_pages_{}", std::process::id());
     let dir = std::env::temp_dir().join(format!("spelaion-query-pages-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -425,6 +426,7 @@ fn rows_of(session: &Session, id: ResultId) -> Vec<Row> {
 /// hold NULLs and then the key, show every row once.
 #[tokio::test]
 async fn pages_sorted_by_columns_with_nulls_and_ties_show_every_row_once_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     use spelaion_core::{ColumnSort, SortKey, TablePage};
     let table = format!("sorted_pages_{}", std::process::id());
     let dir = std::env::temp_dir().join(format!("spelaion-sorted-pages-{}", std::process::id()));
@@ -707,6 +709,7 @@ async fn pages_sorted_by_columns_with_nulls_and_ties_show_every_row_once_on_ever
 /// order.
 #[tokio::test]
 async fn sqlserver_pages_by_a_varchar_key_follow_its_collation() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1") else {
         return;
     };

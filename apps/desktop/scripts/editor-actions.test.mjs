@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { EDITOR_ACTIONS, EDITOR_SNIPPETS, quotedLines } from "../src/editorActions.ts";
+import { EDITOR_SNIPPETS, editorKey, editorKeyBindings, editorKeyTarget, quotedLines } from "../src/editorActions.ts";
+import { COMMANDS } from "../src/commandRegistry.ts";
 import { EditorState } from "@codemirror/state";
 import { snippet, nextSnippetField, prevSnippetField } from "@codemirror/autocomplete";
 import { leadingCommas } from "../src/editorFormat.ts";
@@ -28,13 +29,25 @@ for (const [id, fields] of Object.entries({ insertSelect: ["columns", "table"], 
   });
 }
 test("editor shortcuts are unique and do not take an existing global shortcut", () => {
-  const keys = EDITOR_ACTIONS.map((action) => normalize(action.shortcut));
+  const bindings = editorKeyBindings();
+  const keys = bindings.map((binding) => normalize(binding.shortcut));
   assert.equal(new Set(keys).size, keys.length);
   const guidelines = readFileSync(new URL("../../../docs/ui-guidelines.md", import.meta.url), "utf8");
   const global = guidelines.split("| Anywhere |")[1].split("| SQL editor |")[0];
   const existing = global.match(/Ctrl(?:\+(?:Shift|Alt))?\+[^ ·|]+/g).map(normalize);
-  for (const key of keys) assert.ok(!existing.includes(key), `global shortcut conflict: ${key}`);
-  for (const action of EDITOR_ACTIONS) assert.equal(normalize(action.key), normalize(action.shortcut));
+  for (const binding of bindings) assert.ok(!existing.includes(normalize(binding.shortcut)), `global shortcut conflict: ${binding.shortcut}`);
+  for (const binding of bindings) assert.equal(normalize(binding.key), normalize(binding.shortcut));
+});
+
+test("the editor's keymap binds every editor command with keys but the clipboard, which the editor keeps (SDB-447)", () => {
+  for (const command of COMMANDS.filter((command) => command.scope === "editor")) {
+    if (command.fixedKeys) assert.equal(editorKeyTarget(command), null, command.id);
+    else assert.ok(editorKeyTarget(command), `${command.id} has nothing to run in the editor's keymap`);
+  }
+  assert.equal(editorKey("Ctrl+Shift+Enter"), "Mod-Shift-Enter");
+  assert.equal(editorKey("Shift+Alt+F"), "Shift-Alt-f");
+  assert.equal(editorKey("Ctrl+-"), "Mod--");
+  assert.equal(editorKey("Ctrl+Space"), "Mod-Space");
 });
 
 test("quoted lines preserve empty strings, Unicode, apostrophes and all line endings", () => {

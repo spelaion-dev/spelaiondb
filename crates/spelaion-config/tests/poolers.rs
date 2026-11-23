@@ -3,7 +3,7 @@
 //! has it, reaches the driver only as an engine option, is saved by the form touching only its
 //! key, and is part of what a trusted repository pins (ADR-022).
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture, personal, team};
 use spelaion_config::{
@@ -25,6 +25,7 @@ const MYSQL: &str = "schema_version = 1\nname = \"Proxy\"\nengine = \"mysql\"\nh
 
 #[test]
 fn a_pooler_mode_loads_on_postgres_and_reaches_the_driver_as_an_option() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pooler-loads");
     fx.write(
         "user/connections/pooled.toml",
@@ -60,6 +61,7 @@ fn a_pooler_mode_loads_on_postgres_and_reaches_the_driver_as_an_option() {
 
 #[test]
 fn a_pooler_is_refused_on_other_engines_and_transaction_mode_refuses_session_state() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("pooler-refused");
     fx.write(
         "user/connections/mysql.toml",
@@ -98,6 +100,7 @@ fn a_pooler_is_refused_on_other_engines_and_transaction_mode_refuses_session_sta
 
 #[test]
 fn the_cleartext_plugin_loads_only_on_mysql_and_mariadb() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("cleartext-loads");
     fx.write(
         "user/connections/proxy.toml",
@@ -141,6 +144,7 @@ fn the_cleartext_plugin_loads_only_on_mysql_and_mariadb() {
 
 #[test]
 fn the_databases_shown_are_bounded_and_only_where_an_engine_chooses_them() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("databases-loads");
     fx.write(
         "user/connections/proxy.toml",
@@ -188,6 +192,7 @@ fn the_databases_shown_are_bounded_and_only_where_an_engine_chooses_them() {
 
 #[test]
 fn the_form_writes_each_setting_alone_and_takes_it_out_again() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("sdb396-form");
     let text = format!("# Behind ProxySQL.\n{MYSQL}[tls]\nmode = \"verify-full\" # checked\n");
     let path = fx.write("user/connections/proxy.toml", &text);
@@ -240,6 +245,7 @@ fn the_form_writes_each_setting_alone_and_takes_it_out_again() {
 
 #[test]
 fn a_pulled_change_to_any_of_them_needs_the_repository_trusted_again() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (name, before, after) in [
         (
             "cleartext",

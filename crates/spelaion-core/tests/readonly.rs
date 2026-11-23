@@ -1,7 +1,7 @@
 //! Read-only mode (ADR-008) against a real PostgreSQL (`SPELAION_TEST_PG`) and SQLite. The
 //! other engines are in `agents_engines.rs`.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -65,6 +65,7 @@ async fn not_in_transaction(session: &Session) {
 
 #[tokio::test]
 async fn reads_are_capped_with_a_server_cursor() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = pg().await else { return };
     let started = Instant::now();
     let r = session
@@ -93,6 +94,7 @@ async fn reads_are_capped_with_a_server_cursor() {
 
 #[tokio::test]
 async fn explain_and_show_are_allowed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = pg().await else { return };
     let r = session
         .run_read_only("explain select * from big where id = 1", &limits(50))
@@ -113,6 +115,7 @@ async fn explain_and_show_are_allowed() {
 
 #[tokio::test]
 async fn writes_never_reach_the_server() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = pg().await else { return };
     for sql in [
         "delete from big",
@@ -137,6 +140,7 @@ async fn writes_never_reach_the_server() {
 
 #[tokio::test]
 async fn the_read_only_transaction_stops_what_the_parser_cannot_see() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = pg().await else { return };
     let seq = format!("spelaion_seq_{}", std::process::id());
     setup(&session, &format!("create sequence {seq}")).await;
@@ -156,6 +160,7 @@ async fn the_read_only_transaction_stops_what_the_parser_cannot_see() {
 
 #[tokio::test]
 async fn errors_and_timeouts_leave_the_session_clean() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = pg().await else { return };
     assert!(matches!(
         session.run_read_only("select 1 / 0", &limits(1)).await,
@@ -182,6 +187,7 @@ async fn errors_and_timeouts_leave_the_session_clean() {
 
 #[tokio::test]
 async fn sqlite_read_only_mode() {
+    let _turn = crate::serial::file_turn(module_path!());
     let path = std::env::temp_dir().join(format!("spelaion-readonly-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&path);
     {

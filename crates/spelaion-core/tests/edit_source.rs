@@ -10,7 +10,7 @@
 //! MariaDB, on the first session once `USE` moved it to the other database. Nothing is written
 //! anywhere until the first session, back in its database, applies the edit to its own table.
 
-mod engines;
+use crate::engines;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,7 +18,8 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_core::{
     CellEdit, CellInput, CoreEvent, EditError, PendingEdit, ResultId, ResultStore, Session,
-    apply_edits, edit_statements, editable_query_table, file_change,
+    TablePage, apply_edits, edit_statements, editable_query_table, file_change, result_edit_table,
+    table_page_sql_by_key,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
@@ -51,8 +52,8 @@ fn server(var: &str) -> Option<(String, u16)> {
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("spelaion-edit-source-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
+    std::fs::create_dir_all(path.parent().expect("a folder")).unwrap();
     let _ = std::fs::remove_file(&path);
     path
 }
@@ -82,9 +83,10 @@ fn login(host: &str, port: u16, user: &str, password: &str, database: &str) -> C
     }
 }
 
-async fn pairs() -> Vec<Pair> {
-    let duck_a = scratch("a.duckdb");
-    let duck_b = scratch("b.duckdb");
+/// `tag` keeps the files of tests that run at the same time apart.
+async fn pairs(tag: &str) -> Vec<Pair> {
+    let duck_a = scratch(&format!("{tag}/a.duckdb"));
+    let duck_b = scratch(&format!("{tag}/b.duckdb"));
     for path in [&duck_a, &duck_b] {
         engines::create_database(spelaion_config::Engine::Duckdb, path).await;
     }
@@ -92,8 +94,8 @@ async fn pairs() -> Vec<Pair> {
         Pair {
             label: "sqlite",
             driver: engines::sqlite(),
-            first: file(&empty_file("a.sqlite")),
-            second: file(&empty_file("b.sqlite")),
+            first: file(&empty_file(&format!("{tag}/a.sqlite"))),
+            second: file(&empty_file(&format!("{tag}/b.sqlite"))),
             schema: "main",
             prepare: vec![],
             switch: None,
@@ -252,9 +254,10 @@ async fn refused(
 
 #[tokio::test]
 async fn edits_are_written_only_where_the_rows_were_read() {
+    let _turn = crate::serial::file_turn(module_path!());
     let loaded = scratch("loaded.txt");
     std::fs::write(&loaded, "from a file").unwrap();
-    for pair in pairs().await {
+    for pair in pairs("source").await {
         let label = pair.label;
         let store = Arc::new(ResultStore::new());
         let first = session(&pair, &pair.first, &store).await;
@@ -367,6 +370,7 @@ async fn edits_are_written_only_where_the_rows_were_read() {
 /// rows without a known database: they are never editable.
 #[tokio::test]
 async fn rows_read_across_a_use_are_not_editable() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
         return;
     };
@@ -416,8 +420,270 @@ async fn rows_read_across_a_use_are_not_editable() {
     run("sqlserver", &session, "drop table edit_source_batch").await;
 }
 
+/// An editable query result keeps the table its rows were read from (SDB-433): its edits are
+/// written while that table is intact, and refused once the name holds another table (dropped
+/// and created again) or no table at all, or when the page names a different table. Every
+/// engine of `pairs`, on its first database.
+#[tokio::test]
+async fn edits_follow_the_table_the_rows_were_read_from() {
+    let _turn = crate::serial::file_turn(module_path!());
+    const IDENTITY_QUERY: &str = "select id, name from edit_identity";
+    for pair in pairs("identity").await {
+        let label = pair.label;
+        let store = Arc::new(ResultStore::new());
+        // Only the first database, which exists already: `prepare` creates the second one.
+        let session = session(&pair, &pair.first, &store).await;
+        let create = async |value: &str| {
+            run(label, &session, "drop table if exists edit_identity").await;
+            run(
+                label,
+                &session,
+                "create table edit_identity (id int primary key, name varchar(40))",
+            )
+            .await;
+            run(
+                label,
+                &session,
+                &format!("insert into edit_identity values (1, '{value}')"),
+            )
+            .await;
+        };
+        let read_name = async || {
+            let id = run(
+                label,
+                &session,
+                "select name from edit_identity where id = 1",
+            )
+            .await
+            .expect("a result");
+            let stored = session.results().get(id).expect("kept");
+            let stored = stored.read().unwrap();
+            match stored.value_at(0, 0) {
+                Some(Value::Text(text)) => text,
+                other => panic!("{label}: name is {other:?}"),
+            }
+        };
+        // A query result found editable, with one change typed into the grid.
+        let editable = async || {
+            let result = run(label, &session, IDENTITY_QUERY)
+                .await
+                .expect("a result");
+            let table = editable_query_table(&session, result, IDENTITY_QUERY, false)
+                .await
+                .unwrap_or_else(|e| panic!("{label}: {e}"))
+                .unwrap_or_else(|| panic!("{label}: not editable"));
+            let stored = session.results().get(result).unwrap();
+            let mut stored = stored.write().unwrap();
+            let bound = stored.table().expect("the table is kept with the result");
+            assert_eq!(
+                (bound.schema(), bound.name()),
+                (table.object.schema.as_str(), table.object.name.as_str()),
+                "{label}"
+            );
+            stored
+                .edit_pending(PendingEdit::Type(CellEdit {
+                    row: 0,
+                    column: 1,
+                    value: Some(CellInput::Text("changed".into())),
+                }))
+                .unwrap();
+            (result, table.object.schema, table.object.name)
+        };
+        let statements = async |result: ResultId, schema: &str, name: &str| {
+            let (target, table) = result_edit_table(&session, result, schema, name).await?;
+            let stored = session.results().get(result).unwrap();
+            let stored = stored.read().unwrap();
+            edit_statements(&target, &table, &stored, &stored.pending().changes())
+        };
+
+        // Intact: the edit is written to the table, as many times as it is asked.
+        create("before").await;
+        let (result, schema, name) = editable().await;
+        assert_eq!(
+            editable_query_table(&session, result, IDENTITY_QUERY, false)
+                .await
+                .map(|table| table.is_some()),
+            Ok(true),
+            "{label}: asked again"
+        );
+        assert!(
+            matches!(
+                statements(result, &schema, "another_table").await,
+                Err(EditError::NotThisTable(_))
+            ),
+            "{label}: another table named"
+        );
+        let applied = statements(result, &schema, &name)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: intact: {e}"));
+        assert_eq!(apply_edits(&session, &applied).await, Ok(1), "{label}");
+        assert_eq!(read_name().await, "changed", "{label}");
+
+        // Dropped and created again under the same name, with the same key: refused.
+        create("before").await;
+        let (result, schema, name) = editable().await;
+        if matches!(label, "mysql" | "mariadb") {
+            // Their identity is the creation time, to the second.
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+        create("recreated").await;
+        assert_eq!(
+            statements(result, &schema, &name).await,
+            Err(EditError::TableChanged(name.clone())),
+            "{label}: recreated"
+        );
+        assert_eq!(
+            editable_query_table(&session, result, IDENTITY_QUERY, false).await,
+            Ok(None),
+            "{label}: recreated, asked again"
+        );
+        assert_eq!(read_name().await, "recreated", "{label}: nothing written");
+
+        // Gone: no table to identify, so nothing is written.
+        let (result, schema, name) = editable().await;
+        run(label, &session, "drop table edit_identity").await;
+        assert_eq!(
+            statements(result, &schema, &name).await,
+            Err(EditError::TableChanged(name.clone())),
+            "{label}: dropped"
+        );
+    }
+}
+
+/// A table data page is bound to its table by the core when it runs the SELECT the core wrote
+/// for it (SDB-440): its edits are written while that table is intact, and refused when the
+/// page names another table or once the name holds another table. A query result the core did
+/// not bind is refused whatever table the caller names, even the one it read. Every engine of
+/// `pairs`, on its first database.
+#[tokio::test]
+async fn only_results_the_core_bound_to_a_table_are_edited() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for pair in pairs("bound").await {
+        let label = pair.label;
+        let store = Arc::new(ResultStore::new());
+        let session = session(&pair, &pair.first, &store).await;
+        let schema = if pair.schema.is_empty() {
+            session
+                .connection()
+                .current_database()
+                .await
+                .unwrap()
+                .expect("a database")
+        } else {
+            pair.schema.to_string()
+        };
+        let create = async |value: &str| {
+            run(label, &session, "drop table if exists edit_page").await;
+            run(
+                label,
+                &session,
+                "create table edit_page (id int primary key, name varchar(40))",
+            )
+            .await;
+            run(
+                label,
+                &session,
+                &format!("insert into edit_page values (1, '{value}')"),
+            )
+            .await;
+        };
+        let read_name = async || {
+            let id = run(label, &session, "select name from edit_page where id = 1")
+                .await
+                .expect("a result");
+            let stored = session.results().get(id).expect("kept");
+            let stored = stored.read().unwrap();
+            match stored.value_at(0, 0) {
+                Some(Value::Text(text)) => text,
+                other => panic!("{label}: name is {other:?}"),
+            }
+        };
+        // A result with one change typed into the grid.
+        let typed = |result: ResultId| {
+            let stored = session.results().get(result).unwrap();
+            let mut stored = stored.write().unwrap();
+            stored
+                .edit_pending(PendingEdit::Type(CellEdit {
+                    row: 0,
+                    column: 1,
+                    value: Some(CellInput::Text("changed".into())),
+                }))
+                .unwrap();
+        };
+        // The table data tab's page, as the app loads it: the core writes it, then it runs.
+        let page = async || {
+            let sql = table_page_sql_by_key(
+                &session,
+                &TablePage {
+                    schema: schema.clone(),
+                    name: "edit_page".into(),
+                    filter: String::new(),
+                    order_by: String::new(),
+                    limit: 100,
+                    offset: 0,
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{label}: page: {e}"));
+            let result = run(label, &session, &sql).await.expect("a result");
+            typed(result);
+            result
+        };
+        let statements = async |result: ResultId, name: &str| {
+            let (target, table) = result_edit_table(&session, result, &schema, name).await?;
+            let stored = session.results().get(result).unwrap();
+            let stored = stored.read().unwrap();
+            edit_statements(&target, &table, &stored, &stored.pending().changes())
+        };
+
+        // A query result nobody bound: refused, even naming the table it read.
+        create("before").await;
+        let unbound = run(label, &session, "select id, name from edit_page")
+            .await
+            .expect("a result");
+        typed(unbound);
+        assert_eq!(
+            statements(unbound, "edit_page").await.map(|_| ()),
+            Err(EditError::NotBound),
+            "{label}: an unbound query result"
+        );
+
+        // A page: bound to its table and written to it, never to another table named.
+        let result = page().await;
+        assert!(
+            matches!(
+                statements(result, "another_table").await,
+                Err(EditError::NotThisTable(_))
+            ),
+            "{label}: another table named"
+        );
+        let applied = statements(result, "edit_page")
+            .await
+            .unwrap_or_else(|e| panic!("{label}: page: {e}"));
+        assert_eq!(apply_edits(&session, &applied).await, Ok(1), "{label}");
+        assert_eq!(read_name().await, "changed", "{label}");
+
+        // Dropped and created again under the same name, with the same key: refused.
+        create("before").await;
+        let result = page().await;
+        if matches!(label, "mysql" | "mariadb") {
+            // Their identity is the creation time, to the second.
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+        create("recreated").await;
+        assert_eq!(
+            statements(result, "edit_page").await.map(|_| ()),
+            Err(EditError::TableChanged("edit_page".into())),
+            "{label}: recreated"
+        );
+        assert_eq!(read_name().await, "recreated", "{label}: nothing written");
+        run(label, &session, "drop table edit_page").await;
+    }
+}
+
 #[tokio::test]
 async fn mysql_keeps_the_database_context_after_writes_with_backslashes() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, var, driver) in [
         ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
         ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),

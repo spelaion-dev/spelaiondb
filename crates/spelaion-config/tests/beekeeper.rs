@@ -5,7 +5,7 @@
 //! two SQLite files and an Amazon Redshift connection SpelaionDB cannot open. Passwords are
 //! decrypted the way Beekeeper decrypts them, with the install's `.key`.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 
@@ -58,6 +58,7 @@ const PASSPHRASE: &str = "SSH: if the private key has a passphrase, it is asked 
 
 #[test]
 fn every_connection_comes_with_its_engine_address_user_and_database() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-read");
     let all = read_fixture(&fx);
     let names: Vec<&str> = all.iter().map(|c| c.name.as_str()).collect();
@@ -132,6 +133,7 @@ fn every_connection_comes_with_its_engine_address_user_and_database() {
 
 #[test]
 fn sqlite_files_come_with_their_path_only() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-sqlite");
     let all = read_fixture(&fx);
     let shop = named(&all, "Shop file");
@@ -153,6 +155,7 @@ fn sqlite_files_come_with_their_path_only() {
 
 #[test]
 fn an_engine_spelaiondb_cannot_open_is_listed_but_not_imported() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-redshift");
     let all = read_fixture(&fx);
     let warehouse = named(&all, "Warehouse");
@@ -166,6 +169,7 @@ fn an_engine_spelaiondb_cannot_open_is_listed_but_not_imported() {
 
 #[test]
 fn folders_come_along() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-folders");
     let all = read_fixture(&fx);
     assert_eq!(named(&all, "Orders TLS").folder, "Production");
@@ -177,6 +181,7 @@ fn folders_come_along() {
 
 #[test]
 fn tls_follows_what_beekeeper_applies() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-tls");
     let all = read_fixture(&fx);
     // Certificate files with "Reject Unauthorized": Node checks the chain and the host name.
@@ -197,6 +202,7 @@ fn tls_follows_what_beekeeper_applies() {
 
 #[test]
 fn the_ssh_tunnel_becomes_a_one_hop_tunnel_with_its_key_file() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-ssh");
     let all = read_fixture(&fx);
     let bastion = named(&all, "PG via bastion");
@@ -216,6 +222,7 @@ fn the_ssh_tunnel_becomes_a_one_hop_tunnel_with_its_key_file() {
 
 #[test]
 fn read_only_comes_along_and_the_colour_is_listed_not_imported() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-colour");
     let all = read_fixture(&fx);
     let mysql = named(&all, "Shop MySQL");
@@ -249,6 +256,7 @@ fn with_saved_passwords(fx: &Fixture, key: bool) -> Vec<ImportedConnection> {
 
 #[test]
 fn saved_passwords_are_decrypted_with_the_installs_key() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-passwords");
     let all = with_saved_passwords(&fx, true);
     let orders = named(&all, "Orders TLS");
@@ -286,6 +294,7 @@ fn saved_passwords_are_decrypted_with_the_installs_key() {
 
 #[test]
 fn without_the_key_file_passwords_are_listed_and_asked() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-no-key");
     let all = with_saved_passwords(&fx, false);
     let orders = named(&all, "Orders TLS");
@@ -313,6 +322,7 @@ fn without_the_key_file_passwords_are_listed_and_asked() {
 
 #[test]
 fn a_damaged_key_or_another_installs_key_decrypts_nothing() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-bad-key");
     let extra = format!(
         "UPDATE saved_connection SET password = '{}' WHERE name = 'Orders TLS';",
@@ -372,6 +382,7 @@ fn a_damaged_key_or_another_installs_key_decrypts_nothing() {
 
 #[test]
 fn every_connection_becomes_a_connection_file_and_the_password_goes_to_the_keychain() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-import");
     let backend = FakeBackend::default();
     let folder = TargetFolder {
@@ -444,6 +455,7 @@ fn every_connection_becomes_a_connection_file_and_the_password_goes_to_the_keych
 
 #[test]
 fn settings_beekeeper_has_and_spelaiondb_does_not_are_listed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-crafted");
     let dir = data_dir(
         &fx,
@@ -519,6 +531,7 @@ fn settings_beekeeper_has_and_spelaiondb_does_not_are_listed() {
 
 #[test]
 fn sql_server_that_does_not_trust_its_certificate_verifies_it() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-mssql-verify");
     let dir = data_dir(
         &fx,
@@ -532,6 +545,7 @@ fn sql_server_that_does_not_trust_its_certificate_verifies_it() {
 
 #[test]
 fn databases_that_are_not_beekeepers_are_refused() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-bad");
     let other = fx.base.join("other").join("app.db");
     std::fs::create_dir_all(other.parent().unwrap()).unwrap();
@@ -562,6 +576,7 @@ fn databases_that_are_not_beekeepers_are_refused() {
 
 #[test]
 fn the_database_file_itself_reads_like_the_folder_and_is_never_changed() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fx = Fixture::new("beekeeper-readonly");
     let dir = data_dir(&fx, "", true);
     let file = dir.join("app.db");

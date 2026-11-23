@@ -6,13 +6,16 @@
 // it first needs them: they go with the schema, so a refresh reads them again.
 
 import { create } from "zustand";
-import type { ObjectItem, SchemaColumnItem, SchemaObjectItem } from "./api";
+import type { NameFilter, ObjectItem, SchemaColumnItem, SchemaObjectItem } from "./api";
 
 export interface CatalogSchema {
   connectionId: string;
   schema: string;
   relations: ObjectItem[];
   others: SchemaObjectItem[];
+  /** The connection's object filter the schema was read with (ADR-025): the palette's schema
+   *  diagram draws what the tree's does. */
+  filter?: NameFilter | null;
   /** Every column of the schema's relations; absent until metadata search reads them. */
   columns?: SchemaColumnItem[];
 }

@@ -9,7 +9,7 @@
 //! - Every statement is a read, inside the engine's read-only transaction: the session cannot
 //!   write afterwards in the same transaction, and a filter cannot change the statements.
 
-mod engines;
+use crate::engines;
 
 use std::sync::Arc;
 
@@ -182,6 +182,7 @@ async fn conditions_keep_their_rows(
 
 #[tokio::test]
 async fn column_statistics_on_every_engine() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (label, session, schema) in engines().await {
         items(label, &session).await;
 
@@ -314,6 +315,7 @@ async fn column_statistics_on_every_engine() {
 /// still come.
 #[tokio::test]
 async fn a_number_the_engine_refuses_leaves_the_others() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some((host, port)) = server("SPELAION_TEST_PG") else {
         return;
     };

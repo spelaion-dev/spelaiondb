@@ -2,7 +2,7 @@
 //! with what they need, run SQL (session setup included), and are refused read-only mode when
 //! they load: SpelaionDB has no read barrier of its own for them.
 
-mod common;
+use crate::common;
 
 use common::{FakeBackend, Fixture, personal};
 use spelaion_config::{Engine, Resolver};
@@ -24,6 +24,7 @@ fn base(engine: &str) -> String {
 
 #[test]
 fn flight_sql_connections_load_and_resolve() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (engine, expected, default_port) in [
         ("flightsql", Engine::Flightsql, None),
         ("dremio", Engine::Dremio, Some(32010)),
@@ -51,6 +52,7 @@ fn flight_sql_connections_load_and_resolve() {
 
 #[test]
 fn read_only_is_refused_rather_than_promised_without_a_barrier() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (engine, label) in [
         ("flightsql", "Arrow Flight SQL"),
         ("dremio", "Dremio"),
@@ -72,6 +74,7 @@ fn read_only_is_refused_rather_than_promised_without_a_barrier() {
 
 #[test]
 fn engines_with_a_barrier_keep_their_read_only_mode() {
+    let _turn = crate::serial::file_turn(module_path!());
     for engine in [
         Engine::Postgres,
         Engine::Mysql,

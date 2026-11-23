@@ -26,6 +26,7 @@ import { chooseOpenFile } from "../dialogs";
 import { errorText as message, loadedValue, type Loaded } from "../dialogState";
 import { Icon } from "./Icons";
 import { startJob } from "../jobs";
+import { shortcutText, withShortcut } from "../shortcuts";
 import { useApp, useDialogs } from "../store";
 import { confirmShown, useJobPhase } from "../useDialogState";
 
@@ -383,7 +384,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
           <>
             <div className="import-source">
               <button onClick={() => void chooseFile()}>{t("import.chooseFile")}</button>
-              <button title={`${t("import.paste")} (${PASTE_SHORTCUT})`} onClick={() => void paste()}>
+              <button title={withShortcut(t("import.paste"), shortcutText(PASTE_SHORTCUT))} onClick={() => void paste()}>
                 {t("import.paste")}
               </button>
               {sourceName && (

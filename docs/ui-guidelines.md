@@ -38,8 +38,17 @@ controls for novelty: the editor's compact vertical action column stays.
 Use tokens, never literals. Outside the two token blocks, neither `styles.css` nor the canvas
 code (`ResultGrid.tsx` reads the same variables) contains a color, font size, radius, shadow or
 z-index literal. The exceptions are the engine logos' brand colors and the SQL syntax theme,
-each in its own commented block. A value that is missing becomes a token named by its role,
-defined for both themes in the same change.
+each in its own commented block. Nor does it use `!important`, except in the `[hidden]` rule,
+which keeps a hidden element hidden whatever display its classes give it. A value that is
+missing becomes a token named by its role, defined for both themes in the same change.
+
+The result grid's canvas builds its fonts from `--font-ui` and the type scale (the header's
+name at `--text-sm`, the line under it at `--text-xs`; the values at the user's size, the row
+numbers never past `--text-md`) and fills its highlights with `--grid-edited`, `--grid-found`,
+`--grid-found-current` and `--grid-deleted`. These are translucent, laid over the rows, and each
+keeps the cell's text, plain or colored by its type, at 4.5:1 over a row and a striped row
+(`contrast.test.mjs`). It reads the tokens once and again only when the theme or the interface
+size changes, never per frame.
 
 The tokens are the sizes at the normal interface size. The interface size (Settings ›
 Appearance, SDB-389: 90% to 150%) draws the whole window at that scale with the webview's own
@@ -109,17 +118,27 @@ Each role is defined for both themes:
 
 - Radius: `--radius-sm` 4px (badges, chips, checkboxes, the grid's selection), `--radius-md`
   6px (buttons, inputs, tabs, list and menu items) and `--radius-lg` 10px (menus, popovers,
-  dialogs, toasts); dots are round.
+  dialogs, toasts); dots and spinners are round (`--radius-round`). A control that sits flush in
+  a list or bar has no radius (`border-radius: initial`).
 - The workspace is flat. Only layers above it cast a shadow: `--shadow-popover` for menus,
   popovers, tooltips and autocompletion, and `--shadow-dialog` for dialogs, with `--backdrop`
-  behind modal ones. Panels, cards and buttons have no shadow.
+  behind modal ones; the history laid over the editor in a narrow window has
+  `--shadow-panel-overlay`. Panels, cards and buttons have no shadow. A 2px accent edge is
+  drawn as an inset shadow: `--shadow-selected-row` for a selected sidebar row or row field,
+  `--shadow-active-tab` under the active result tab and `--shadow-active-side` beside the
+  active result side action.
 - Heights: `--control-sm` 24px (icon buttons in toolbars, inline controls), `--control-md`
   28px (buttons, inputs and selects) and `--control-lg` 32px (welcome and empty-state
   actions). Rows in lists, trees and menus are `--row-h` (26px); result grid rows are 24px to
   display more data with 12px text. Bars (the tab strip and the editor's and the
   results' toolbars) are `--bar-h` (36px).
-- Stacking order, lowest first: `--z-sticky`, `--z-dropdown`, `--z-dialog`, `--z-popover` (a
-  menu opened from a dialog shows above it) and `--z-toast`.
+- Stacking order, lowest first: `--z-sticky`, `--z-resizer` (the sidebar's separator over the
+  editor's edge) and `--z-panel-overlay` (the history over the editor in a narrow window),
+  `--z-grid-overlay` (the cell editor and the grid's notices), `--z-dropdown`, `--z-submenu` (a
+  menu opened from another menu) and `--z-grid-find` (the grid's find and jump boxes),
+  `--z-wizard` (the connection form, under the questions it opens), `--z-dialog`, `--z-popover`
+  (a menu opened from a dialog shows above it), `--z-toast` and `--z-drag` (what is dragged
+  under the pointer).
 
 ### Icons
 
@@ -131,6 +150,10 @@ Each role is defined for both themes:
 - Engine logos keep their brand colors; nothing else in the interface is multicolored.
 - An icon without visible text has an accessible name and a tooltip with its name and
   shortcut.
+- Every icon goes through `Icon` (`components/Icons.tsx`), by a name that says what it means
+  there (`refresh`, `plan`), never an import from `lucide-react` in a component: the set, its
+  size and its stroke stay in one place, and only the icons listed there reach the bundle. A
+  toggle that is on may fill its icon (`filled`, a default's star); nothing else is filled.
 
 ### Motion
 
@@ -146,7 +169,11 @@ animate data, the grid, layout changes or anything while the user types. Under
   toolbars, icon buttons, inline actions) and *danger* (filled red; only the button that
   confirms a destructive action). A label is a verb that names the result ("Delete
   connection", "Run 3 statements"), never "OK" or "Yes", and ends with "…" (one character)
-  when it opens a dialog that asks for more.
+  when it opens a dialog that asks for more. A *split button* (SDB-446, the explorer's Add
+  connection) keeps its main action in the button and puts the other ways to do it in a menu
+  on a narrow arrow beside it (`.split-button`, `aria-haspopup="menu"`, named for what the menu
+  holds: "More ways to add connections"); Enter or Down on the arrow opens the menu on its first
+  item, Escape closes it back to the arrow.
 - **Toolbars.** Ghost icon buttons grouped by task, groups separated by 12px or a single
   divider, never boxed. Text buttons only for the main action or where an icon would be
   ambiguous.
@@ -173,11 +200,17 @@ animate data, the grid, layout changes or anything while the user types. Under
   primary action. Lists inside a dialog are rows divided by hairlines, not a card per item.
 - **Menus.** `--radius-lg`, `--shadow-popover`, 4px of padding, 26px items with a
   `--radius-md` hover, shortcuts right-aligned in `--muted`, 1px separators; destructive items
-  come last, in red.
+  come last, in red. Items come in groups by task, separated by a line, the most used first; the
+  less used go into a submenu ("Selection ▸") at the end of their group, so a menu fits a
+  720px-high window: about 20 rows at most. The arrows move within a menu, Right or Enter opens a
+  submenu and its first item takes the focus, Left or Escape closes it. A context menu offers
+  what a right click is expected to: the region's main action and the clipboard.
 - **Empty states.** Centered in their region: an optional 24px icon in `--muted`, a one-line
   title, one sentence and at most one primary action. No illustrations.
 - **Scrollbars.** Thin and themed in every scrolling region, the grid included: a transparent
-  track and a thumb from a token that widens on hover. Check them on WebKitGTK.
+  track and a thumb from a token that widens on hover. Check them on WebKitGTK. One global rule
+  in `styles.css` draws them from the `--scrollbar-*` tokens; a region never sets its own
+  `scrollbar-width` or `scrollbar-color`, which would turn that rule off in WebView2.
 
 ## Workspace and data
 
@@ -208,18 +241,18 @@ to an action that is also in a context menu, never its only way in.
 
 | Place | What goes there | Today |
 |---|---|---|
-| Editor action column | running and saving the tab's SQL | Run, named by what it will send as the core reads the cursor and selection ("Run statement", "Run selection", "Run selection…" when the selection holds several statements and the picker asks which, "Run script" with no connection; Cancel while running), Run script, Run options, Format, Save, Save as; Run from the cursor to the end, Run in a new result tab and Variables… (the tab's and the connection's `${name}` values, and the `:name` parameters the tab remembers; SDB-383) in the editor's menu, with Reconnect (a new session on request, nothing re-run) and Read-only for this session (SDB-395: the barrier of a read-only connection for this tab's session, until it reconnects; shown as the Read-only session chip in the tab bar, whose click ends it), with Go to table, Reveal in explorer, Next / Previous statement and the Outline of the script (a panel beside the editor: one row per statement as the core splits it, a click puts the cursor there) |
+| Editor action column | running and saving the tab's SQL | Run, named by what it will send as the core reads the cursor and selection ("Run statement", "Run selection", "Run selection…" when the selection holds several statements and the picker asks which, "Run script" with no connection; Cancel while running), Run script, Run options, Format, Save, Save as. The editor's menu (right click, the Menu key or Shift+F10, and the action column's ☰; SDB-438) repeats Run and Format and holds the rest, in groups: Run (named as here), Run in a new result tab, Explain query, and Run ▸ (Run script, Run from the cursor to the end, Variables…: the tab's and the connection's `${name}` values, and the `:name` parameters the tab remembers, SDB-383); Cut, Copy, Paste, Copy current statement, Select all; Format, Toggle line comment, Selection ▸ (block comment, upper and lower case, lines to a quoted list; select the current statement, all occurrences; fold, unfold) and Insert ▸ (the SELECT, INSERT and UPDATE snippets); Go to table, Reveal in explorer, and Go to ▸ (next and previous statement, matching bracket, the Outline of the script: a panel beside the editor, one row per statement as the core splits it, a click puts the cursor there); View ▸ (word wrap, zoom) and Session ▸ (Reconnect: a new session on request, nothing re-run; Read-only for this session, SDB-395: the barrier of a read-only connection for this tab's session, until it reconnects, shown as the Read-only session chip in the tab bar, whose click ends it). Each group and submenu is the command's `editorMenu` in `commandRegistry.ts` |
 | Tab bar (connection row) | what the tab is connected to and its state | connection and database (or schema) pickers, status with Reconnect, type badge, transaction controls, the Read-only session chip |
 | Results toolbar and grid | the active result and its selection | result tabs (each one's menu, on right click, the Menu key or Shift+F10: Run this result's query again, Pin / Unpin result, Rename result…, Reset name (only on a name the user gave it: the tab shows its comment's name or "Result N" again, SDB-407), Close result; a pinned tab shows a pin and no run replaces it; the active tab has a close button), Refresh (before Filter rows on table data and eligible single-statement results), filter, Export… (CSV, Excel (XLSX: explorer tables as one workbook, a sheet each, SDB-390), TSV, JSON, NDJSON, SQL with its options and upserts for a table's export, Markdown, HTML, Parquet and Arrow; the file's name pattern and gzip under File name and compression, collapsed, SDB-391), chart (grid or chart of the result; Chart selected columns in the cell menu; the chart's own controls and Save image… above it), Transpose rows (the selected rows, or the current one, as columns: a read-only result of its own with the same copies and cell viewer; Transpose selected rows in the cell menu), maximize; a paged query's pages above the grid (first, previous, the page's number, next, last, Count, Load every row…: a later page loads the pages before it, the last one every row, with Cancel loading while it runs); row edits with Undo, Redo, Save changes and Discard above the grid; bulk edits of the selection in the cell menu (Set value…, Paste, Fill down, Set NULL, and under Change selected cells: trim, case, DEFAULT, a new UUID, now); copy, sort and filters in the grid's menus (every copy is the database's own text; Copy as displayed, in the cell menu's Copy submenu, copies what the grid shows and is there only while a display format shows values otherwise, SDB-385; Copy as SQL UPDATE writes one statement per selected row by the table's primary key, which the core decides as for edits and otherwise refuses with the reason in the grid's notice; Copy special… is a dialog of the delimiter, quote, row delimiter, NULL text, header and row numbers, whose choices the core keeps as the copy defaults, SDB-388); over a query result's column filters, Match all / Match any (two conditions or more) and Match case; in a table data tab's Custom filter…, Show the most frequent values, counted by the server on request to pick the value from (never a masked column's, ADR-051); in a table data tab, a foreign key cell's link and Open referenced row, and the side panel's references of the active row; the side panel's selection numbers (also in the cell menu) and its groups (Group rows: the columns are chosen in the panel, from a header's menu or by dragging a header to it; a group filters the grid to its rows); the cell panel's Map of a geometry value or of its whole column (ADR-045; tiles only from the server chosen in Settings), Save to file… and, in an editable result, Load from file… and the value pickers (a date and time, the allowed values, a row of the referenced table); in a table data tab, Column statistics in the header menu; Reveal value of a masked cell in the cell menu (ADR-051: a popover, never the grid) |
 | Table data bar | the table whose rows the tab shows | WHERE, which remembers (local data, checked by the core each time it is read): typing or the down arrow lists the filters used on the table and its columns, ☆ saves the filter on screen as the table's default (the tab then opens with it, marked Default) and ★ drops it; ORDER BY, Apply, rows per page, pages (first, previous, the page's number typed to jump, next, last: the last is counted first; "No primary key" says when a page is not exact), Count, Load every row… (how many rows and roughly how much memory first; Show pages goes back) |
 | Tab strip | tabs and files | new tab, the file menu (Open…, recent files: the app has no menu bar), each tab's context menu |
-| Explorer header | the explorer itself | link with editor, connected only, quick filter (finds connections by name, tag, type or host, forgiving a typo), add connection; the folder's Open… menu: Open folder… and the recent folders, each with Remove from the list (SDB-397) |
+| Explorer header | the explorer itself | link with editor, connected only, quick filter (finds connections by name, tag, type or host, forgiving a typo), add connection (a split button: its arrow's menu holds Import connections from another client…, which opens the list of clients with what each one has on this computer, SDB-446); the folder's Open… menu: Open folder… and the recent folders, each with Remove from the list (SDB-397) |
 | Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create (New table… opens ADR-047's form), Edit column… (a column, or the columns chosen with Ctrl+click: ADR-047's structure form), Edit source (a view, function or procedure, opened in the editor), Maintenance (SDB-392: a table's, a materialized view's or a SQLite / DuckDB schema's actions, each with its options and its SQL shown first, run in a new tab of its own), Duplicate table… (SDB-394: a new name and schema, its rows or not, what the copy keeps said first, run in a new tab of its own), Run… (a function or procedure: its call runs in a new tab after the parameter form), Import data… (a table, or a new table from a schema; an Excel workbook's sheet is chosen in its Options, SDB-390), ER diagram (of a schema; of a table's related tables, or of the tables chosen with Ctrl+click), New role… / New user… / New login… (a Roles, Users or Logins folder) and Change password…, Lock or unlock…, Privileges… (an account, ADR-048: the password shown as *** in the SQL; what it has, and a grant or revoke form), Move to folder… (also by dragging the connection onto a folder title), Rename…, Drop… (last, red); a connection's: New query, Open object by name…, Refresh all schemas, Edit…, Configure filters…, New schema, Back up… and Restore… (ADR-049: the engine's own tools through the tunnel, or SQLite's and DuckDB's own commands, with their live log; a restore asks first), Run SQL file… (statements done of the total, after a confirmation), Duplicate, Copy, Paste connection, Move to folder…, Disconnect all and Disconnect all others (SDB-395: every tab's and the explorer's sessions, asking first what would be lost), Delete… (last, red); a connection whose TLS does not check its server shows a warning mark (SDB-395), also in its form and its connection test |
 | Table node in the explorer | what the catalog says of one table | its folders (Columns, Constraints, Foreign keys, References, Indexes, Triggers, and Partitions when it is partitioned, with a node per partition), then Properties and Dependencies, which open as tabs (SDB-393): Properties lists the comment, owner, tablespace, engine… (Edit comment… opens the structure form), Dependencies what it uses and what uses it, or says the engine cannot tell |
 | ER diagram tab | the diagram on screen | its toolbar: the columns shown (all, keys only, names only), types, comments, zoom out / in, fit to screen, read the tables again, Export (PNG, SVG, Mermaid, DBML); a table's menu (right click): Focus on this table (a new diagram tab), Open data, Open structure (ADR-046) |
 | Activity bar | panels and pages | explorer, processes (its Processes, Locks and Settings views; ending a session from Locks uses the process actions), search (names from the explorer's catalog, values in chosen tables, ADR-043); history, saved queries, MCP and Settings at the bottom |
-| Settings | preferences for every workspace | applied and saved as they change, with no Save button; Appearance holds the interface size (SDB-389: the whole window, see Tokens) and how the grid shows values (SDB-385: date, time and number formats, the display time zone, binary, colors by type, what the header shows and the results' own font size), display only: the core formats each window and keeps the database's text for everything else; Snippets: the user's own editor snippets (a snippet is made whole, so its form has Save and Cancel, and the core's refusal is shown in it) and the template of new scripts, saved when its box is left; Plugins (ADR-055): each plugin of ours with Install, Update to … or Remove (asks first when it is running), and Install from file…; a running plugin's memory, processor use and sessions, read again while the page is open, and Restart (SDB-399: its sessions are lost and nothing is run again; it asks first only when one of them has a transaction open); the "add connection" picker and a connection whose plugin is not installed send there; Updates: the version, and Report a problem (Copy diagnostic info, Open a GitHub issue; SDB-398, also in the palette) |
-| Command palette | every app command, and the actions of connections and loaded objects | Ctrl+Shift+P: commands with their shortcuts, connections, the explorer's loaded objects (open data, open structure, new console, ER diagram of related tables, copy names, show in explorer), ER diagram of the current table or schema, recent files and recent folders (SDB-397) |
+| Settings | preferences for every workspace | applied and saved as they change, with no Save button; Appearance holds the interface size (SDB-389: the whole window, see Tokens) and how the grid shows values (SDB-385: date, time and number formats, the display time zone, binary, colors by type, what the header shows and the results' own font size), display only: the core formats each window and keeps the database's text for everything else; Snippets: the user's own editor snippets (a snippet is made whole, so its form has Save and Cancel, and the core's refusal is shown in it) and the template of new scripts, saved when its box is left; Plugins (ADR-055): each plugin of ours with Install, Update to … or Remove (asks first when it is running), and Install from file…; a running plugin's memory, processor use and sessions, read again while the page is open, and Restart (SDB-399: its sessions are lost and nothing is run again; it asks first only when one of them has a transaction open); the "add connection" picker and a connection whose plugin is not installed send there; Updates: the version, and Report a problem (Copy diagnostic info, Open a GitHub issue; SDB-398, also in the palette); Keyboard shortcuts (SDB-447): every command of the registry with its keys, grouped by where they act (Anywhere, SQL editor, Result grid, then those without keys) and by category, found by its name or its keys as typed ("ctrl+enter") or as shown; each row's Change… opens "Press the new keys" (the keys in words as they are pressed, the core's reason when they are refused, the command that has them and Move keys to take them from it), Remove and Reset (when changed, marked Changed); Reset all asks first; the editor's clipboard reads "Kept by the editor" (ADR-064) |
+| Command palette | every app command, and the actions of connections and loaded objects | Ctrl+Shift+P: commands with their shortcuts, connections, the explorer's loaded objects (open data, open structure, new console and show in explorer; for a table or a view also the actions of its explorer menu that do not need its row, SDB-92: open as SQL, export, import, ER diagram of related tables, edit source, copy names, bookmark, duplicate, rename and drop with the core's SQL first, generate DDL and statements; for a schema, SDB-441: new console, set as the editor's schema, import into a new table, ER diagram, new table / view / sequence, copy names, bookmark, drop; for a routine, sequence or trigger: open definition, edit source, run, generate call, copy names, bookmark, drop), the active result's selection (copy as each format, copy special, copy as UPDATE, export), ER diagram of the current table or schema, recent files and recent folders (SDB-397) |
 
 - App commands (the tab menu, the file menu, the activity bar, the welcome screen and the global
   shortcuts) are registered once in `commandRegistry.ts`, with their name and shortcut, and what
@@ -227,8 +260,11 @@ to an action that is also in a context menu, never its only way in.
   written by hand, so the palette lists it too; `scripts/commands.test.mjs` compares the registry
   with the menus, the locales and this shortcut map.
 - The palette lists objects only from what the explorer has already read (`catalog.ts`): it
-  never asks a database for more. Menus that act on a selection made in their own region (an
-  explorer row, the grid's cells) stay in that region.
+  never asks a database for more: schemas, relations and other schema objects, not a table's
+  columns or indexes, which stay in their rows' menus. An explorer row's menu and the palette
+  call the same actions (`explorerActions.ts`); what needs the row itself (refresh, the filter,
+  maintenance) stays in the menu. The grid's selection copies and exports from the palette
+  too (SDB-441): the grid does it with its selection, and says to select cells when there is none.
 
 - An option of one connection belongs in its form (Edit connection…), one of one tab in that tab
   (Run options), one of the whole app in Settings.
@@ -255,16 +291,27 @@ to an action that is also in a context menu, never its only way in.
   `e.key`, so a key that AltGr turns into a character never fires the shortcut.
 - Written with modifiers in the order Ctrl, Shift, Alt and keys as printed on the keyboard
   (`Ctrl+Shift+Enter`, `Shift+Alt+F`, `Delete`). Buttons show it in the tooltip, `Label
-  (Shortcut)`; menus right-align it in `.menu-shortcut`. The text comes from the command's entry
-  in `commandRegistry.ts` (or, for a focused area's own key, one constant next to its handler),
-  not from a translated string.
+  (Shortcut)`; menus right-align it in `.menu-shortcut`. The keys come from the command's entry
+  in `commandRegistry.ts`, or for a focused area's own key from `KEYS` there (or one constant
+  next to its handler), never from a translated string: a string that mentions a key
+  interpolates it (`{{shortcut}}`), and `scripts/commands.test.mjs` refuses one written in the
+  locales (SDB-86). `shortcuts.ts` puts the keys in words for the reader: the interface's names
+  for them (Spanish says Mayús, Intro, Supr) and ⌘ ⌥ ⇧ on macOS (`⇧⌘P`), where Cmd does what
+  Ctrl does.
 - A new shortcut is added to this map in the same change.
+- **The user can change a command's keys** (SDB-447, ADR-064) in Settings › Keyboard shortcuts.
+  This map lists the defaults; the registry answers the keys in effect (`commandKeys`), and every
+  handler, the SQL editor's keymap, the menus, the palette and the tooltips read them, never a
+  command's `shortcut` alone. A region's own keys (`KEYS`) and the editor's clipboard
+  (`fixedKeys`) cannot be changed. The core refuses keys that type text, that dialogs, the
+  editor or the system keep, or that AltGr produces. A clash is judged by where keys act: the
+  same place, or anywhere.
 
 | Where | Keys |
 |---|---|
 | Anywhere | Ctrl+Shift+P command palette · Ctrl+T new query · Ctrl+Shift+T reopen closed tab · Ctrl+W close tab (or Settings) · Ctrl+Shift+W close all · Ctrl+Alt+W close others · Ctrl+Alt+R close to the right · Ctrl+F2 rename tab · Ctrl+Alt+D duplicate tab · Ctrl+Alt+P pin tab · Ctrl+Tab / Ctrl+Shift+Tab recent tabs · Ctrl+PageDown / Ctrl+PageUp next / previous tab · Ctrl+Shift+PageDown / Ctrl+Shift+PageUp move the tab · Ctrl+O open SQL file · Ctrl+S save the file tab, or the console's query by name · Ctrl+Shift+S save as file · Ctrl+Alt+M maximize results · Ctrl+Shift+D open object by name · Ctrl+Shift+F explorer filter · Ctrl+H search names and data · Ctrl+Alt+V import data from the clipboard into the active tab's connection · Ctrl+, Settings |
-| SQL editor | Ctrl+Enter run selection or statement (a selection with several statements asks which: 1–9 runs that one alone, Enter all) · Ctrl+Shift+Enter run script · Ctrl+Alt+Enter run from the cursor to the end · Alt+Enter run the selection or statement in a new result tab · Shift+Alt+F format · Ctrl+click on a table's name opens its details, elsewhere it adds a cursor as Alt+click does · F12 go to the table under the cursor · Shift+Alt+E reveal it in the explorer · Alt+PageDown / Alt+PageUp next / previous statement · Ctrl+Shift+O outline of the script · hovering a name shows a table's columns or a column's type · Ctrl+/ line comment · Shift+Alt+A block comment · Alt+Z word wrap · Ctrl+Shift+[ fold selection · Ctrl+Shift+] unfold selection · Ctrl+Shift+\ matching bracket · Ctrl+Shift+Alt+U upper case · Ctrl+Shift+Alt+L lower case · Ctrl+Alt+Q lines to quoted list · Ctrl+Alt+S select statement · Ctrl+Alt+C copy statement · Ctrl+D select the next occurrence (selected text matches inside names; a word selected from the cursor matches whole words) · Ctrl+Shift+L select all occurrences by the same rule · Ctrl+Alt+1 SELECT snippet · Ctrl+Alt+2 INSERT snippet · Ctrl+Alt+3 UPDATE snippet · Ctrl+= (or Ctrl++) zoom in · Ctrl+- zoom out · Ctrl+0 back to 100% (the editor's zoom, remembered; the webview's own zoom keys are off) · Enter / Tab accept completion · Tab expand a snippet by its name (sel, ins, upd or one of your own) or next snippet field · Shift+Tab previous snippet field · Menu key / Shift+F10 editor actions · CodeMirror's defaults otherwise |
-| Result grid | arrows, Home, End, PageUp, PageDown (Ctrl: to the edge; Shift: extend) · Ctrl+A all · Shift+Space rows · Ctrl+Space columns · Ctrl+click a row number adds or removes that row · Ctrl+C copy · Ctrl+Shift+C copy with headers · Enter cell viewer, Escape closes it · Ctrl+Enter or Ctrl+click open the row a foreign key cell references (table data tabs) · Ctrl+F find, F3 / Shift+F3 next / previous, Alt+C match case · Ctrl+Shift+J jump to column · Ctrl+G go to row (another page of a table data tab, or a paged query's rows loaded up to it) · click a header sorts by that column (again: descending, then the original order), Shift+click adds it as the next key of the sort, Ctrl+click selects the column |
+| SQL editor | Ctrl+Enter run selection or statement (a selection with several statements asks which: 1–9 runs that one alone, Enter all) · Ctrl+Shift+Enter run script · Ctrl+Alt+Enter run from the cursor to the end · Alt+Enter run the selection or statement in a new result tab · Shift+Alt+F format · Ctrl+click on a table's name opens its details, elsewhere it adds a cursor as Alt+click does · F12 go to the table under the cursor · Shift+Alt+E reveal it in the explorer · Alt+PageDown / Alt+PageUp next / previous statement · Ctrl+Shift+O outline of the script · hovering a name shows a table's columns or a column's type · Ctrl+/ line comment · Shift+Alt+A block comment · Alt+Z word wrap · Ctrl+Shift+[ fold selection · Ctrl+Shift+] unfold selection · Ctrl+Shift+\ matching bracket · Ctrl+Shift+Alt+U upper case · Ctrl+Shift+Alt+L lower case · Ctrl+Alt+Q lines to quoted list · Ctrl+Alt+S select statement · Ctrl+Alt+C copy statement · Ctrl+D select the next occurrence (selected text matches inside names; a word selected from the cursor matches whole words) · Ctrl+Shift+L select all occurrences by the same rule · Ctrl+Alt+1 SELECT snippet · Ctrl+Alt+2 INSERT snippet · Ctrl+Alt+3 UPDATE snippet · Ctrl+= (or Ctrl++) zoom in · Ctrl+- zoom out · Ctrl+0 back to 100% (the editor's zoom, remembered; the webview's own zoom keys are off) · Enter / Tab accept completion · Tab expand a snippet by its name (sel, ins, upd or one of your own) or next snippet field · Shift+Tab previous snippet field · Menu key / Shift+F10 editor actions · Ctrl+X cut · Ctrl+C copy · Ctrl+V paste · Ctrl+A select all · CodeMirror's defaults otherwise |
+| Result grid | arrows, Home, End, PageUp, PageDown (Ctrl: to the edge; Shift: extend) · Ctrl+A all · Shift+Space rows · Ctrl+Space columns · Ctrl+click a row number adds or removes that row · Ctrl+C copy · Ctrl+Shift+C copy with headers · Enter cell viewer, Escape closes it · Ctrl+Enter or Ctrl+click open the row a foreign key cell references (table data tabs) · Ctrl+F find, F3 / Shift+F3 next / previous (Enter / Shift+Enter in the find box), Alt+C match case · Ctrl+Shift+J jump to column · Ctrl+G go to row (another page of a table data tab, or a paged query's rows loaded up to it) · click a header sorts by that column (again: descending, then the original order), Shift+click adds it as the next key of the sort, Ctrl+click selects the column |
 | Map in the cell panel | arrows pan · + or = zoom in · - zoom out · 0 fit the shapes · drag to pan · wheel to zoom |
 | ER diagram | arrows pan (Shift: further) · + or = zoom in · - zoom out · 0 fit to screen · 1 actual size · drag to pan · wheel to zoom · click a table to light up its relations, Escape clears |
 | Table data filter box | Down lists the filters used on the table and its columns · Up / Down move · Enter or Tab takes the one chosen (a filter is applied at once; Enter with none chosen applies what is typed) · Escape closes the list |
@@ -318,7 +365,11 @@ A confirmation reads:
   never drops or deletes; a form focuses its first field; a non-destructive choice focuses its
   primary answer. Escape is the safe choice (Cancel; Stop for a paused script).
 - **Always a dialog**, never a button that changes to "Click again to delete". Closing or
-  leaving never drops typed text, unsaved SQL or pending edits without one.
+  leaving never drops typed text, unsaved SQL or pending edits without one. Deleting something
+  the app keeps (a saved query, a network profile, a connection type) uses `ConfirmDelete`
+  (SDB-89): "Delete …?", the target by name and what is lost, the connections that use it,
+  Cancel focused and the danger button named by its action. When the core would refuse (a
+  profile a connection still goes through), it says why and offers only Cancel.
 - **While it runs**, its buttons are disabled, the action reads "Running…" or "Deleting…" and
   Escape does nothing. If it fails, the dialog stays open with the error inside it
   (`role="alert"`) and what was typed is kept. A dialog that shows the core's script and then

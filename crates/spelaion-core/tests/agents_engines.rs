@@ -14,8 +14,8 @@ use spelaion_core::{
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{cleaning_up, run_cleanup};
 
 fn limits(max_rows: usize) -> ReadLimits {
@@ -132,6 +132,7 @@ async fn postgres() -> Option<Session> {
 
 #[tokio::test]
 async fn postgres_unicode_escaped_names_and_sql_given_as_text_do_not_bypass_agent_barriers() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = postgres().await else {
         return;
     };
@@ -281,6 +282,7 @@ async fn sql_mode_trick_did_no_harm(
 
 #[tokio::test]
 async fn mysql_sql_modes_that_move_string_ends_do_not_bypass_agent_barriers() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (var, driver) in [
         ("SPELAION_TEST_MYSQL", engines::mysql()),
         ("SPELAION_TEST_MARIADB", engines::mariadb()),
@@ -406,6 +408,7 @@ async fn mysql_sessions() -> Vec<(&'static str, Session)> {
 
 #[tokio::test]
 async fn mysql_executable_comments_do_not_bypass_agent_barriers() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (server, session) in mysql_sessions().await {
         let t = format!("agent_comments_{}", std::process::id());
         let drops = [format!("drop table if exists {t}")];
@@ -458,6 +461,7 @@ async fn mysql_executable_comments_do_not_bypass_agent_barriers() {
 
 #[tokio::test]
 async fn mysql_reads_are_read_only_capped_and_leave_nothing_open() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (server, session) in mysql_sessions().await {
         let t = format!("agent_read_{}", std::process::id());
         let f = format!("agent_writes_{}", std::process::id());
@@ -555,6 +559,7 @@ async fn mysql_reads_are_read_only_capped_and_leave_nothing_open() {
 
 #[tokio::test]
 async fn mysql_writes_commit_roll_back_and_time_out() {
+    let _turn = crate::serial::file_turn(module_path!());
     for (server, session) in mysql_sessions().await {
         let t = format!("agent_write_{}", std::process::id());
         let drops = [format!("drop table if exists {t}")];
@@ -701,6 +706,7 @@ const MSSQL_SLOW: &str = concat!(
 
 #[tokio::test]
 async fn sqlserver_reads_roll_back_explain_without_running_and_time_out() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = sqlserver().await else {
         return;
     };
@@ -796,6 +802,7 @@ async fn sqlserver_reads_roll_back_explain_without_running_and_time_out() {
 
 #[tokio::test]
 async fn sqlserver_writes_commit_roll_back_and_time_out() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(session) = sqlserver().await else {
         return;
     };
@@ -889,6 +896,7 @@ async fn duckdb(database: &str, read_only: bool) -> Session {
 
 #[tokio::test]
 async fn destructive_table_ddl_preserves_existing_data() {
+    let _turn = crate::serial::file_turn(module_path!());
     let mut sessions = mysql_sessions().await;
     sessions.push(("duckdb", duckdb(":memory:", false).await));
     for (server, session) in sessions {
@@ -943,6 +951,7 @@ async fn destructive_table_ddl_preserves_existing_data() {
 
 #[tokio::test]
 async fn mariadb_schema_replacement_preserves_tables() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Ok(addr) = std::env::var("SPELAION_TEST_MARIADB") else {
         eprintln!("SPELAION_TEST_MARIADB not set: test skipped");
         return;
@@ -994,6 +1003,7 @@ async fn mariadb_schema_replacement_preserves_tables() {
 
 #[tokio::test]
 async fn duckdb_reads_reach_no_files_and_roll_back() {
+    let _turn = crate::serial::file_turn(module_path!());
     let session = duckdb(":memory:", false).await;
     let csv = std::env::temp_dir().join(format!("spelaion-agents-{}.csv", std::process::id()));
     std::fs::write(&csv, "secret\nhunter2\n").unwrap();
@@ -1071,6 +1081,7 @@ async fn duckdb_reads_reach_no_files_and_roll_back() {
 
 #[tokio::test]
 async fn duckdb_writes_commit_only_where_the_file_allows_them() {
+    let _turn = crate::serial::file_turn(module_path!());
     let path = std::env::temp_dir().join(format!("spelaion-agents-{}.duckdb", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let database = path.display().to_string();

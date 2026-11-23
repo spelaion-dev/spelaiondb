@@ -157,7 +157,8 @@ function Events({ session, onLeaveSession }: { session: AuditSessionItem | null;
         <span className="mcp-activity-actions">
           <button onClick={() => void exportAs("csv")} disabled={total === 0}>{t("activity.exportCsv")}</button>
           <button onClick={() => void exportAs("json")} disabled={total === 0}>{t("activity.exportJson")}</button>
-          <button className="danger" onClick={() => setConfirmClear(true)}>{t("activity.clear")}</button>
+          {/* It only opens the confirmation: that dialog's "Clear the log" is the danger button. */}
+          <button onClick={() => setConfirmClear(true)}>{t("activity.clear")}</button>
         </span>
       </div>
       {session && (

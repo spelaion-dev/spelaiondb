@@ -150,7 +150,13 @@
   `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
   read from the catalog again each time (the UI only names one), the values come from the
   stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
-  composite, multi-level and self-referencing keys on every engine.
+  composite, multi-level and self-referencing keys on every engine. A query's result follows
+  keys too (SDB-93) once `query_key_table` matched it to one table (editing's rule,
+  `edit::query_table`, without the read-only gate: following only reads); the result keeps
+  that table, and `check_key_table`, called by the app's `follow_key` and `row_references`
+  before anything else, refuses another table's keys or a table replaced since (its identity,
+  SDB-433); a table data page is bound to its table too (SDB-440). A result with no table bound
+  (a view's page) is read as a page of the table named, as before.
   `data_search.rs` (ADR-043) searches a value in the tables the user chose: one `SELECT` per
   table written from the catalog and the columns' types, the value always bound as a parameter
   (`Connection::execute_bound`), each a read in the engine's read-only transaction in a session
@@ -175,9 +181,18 @@
   `table_stats.rs` a table's sizes and row estimate from the catalog; `tests/server_observation.rs`
   makes one session wait for another's row lock on every engine and checks the pair.
   `geometry.rs` (ADR-045) reads geometry values into GeoJSON for the cell panel's map: PostGIS's
-  EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs and
-  DuckDB's WKB, as untrusted bytes (counts checked before allocating, bounded nesting, read to
-  the last byte); `column_map` puts a column of the current view on one map, bounded.
+  EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs,
+  DuckDB's WKB and SQL Server's CLR serialization (MS-SSCLRT, SDB-213), as untrusted bytes
+  (counts checked before allocating, bounded nesting, read to the last byte); `column_map` puts
+  a column of the current view on one map, bounded. SQL Server's geometry and geography are
+  serialized alike but geography stores latitude first: the plugin names a CLR column's type
+  (`geometry`, `geography`), and that decides. An older plugin says `udt` for every CLR type:
+  then a value at SRID 0 is geometry (geography always has an SRID), and one with an SRID is
+  never guessed: it is not drawn, and `MapNote::SqlServerTypeUnknown` (the cell) and
+  `ColumnMap::type_unknown` (the column) say why. A text cell whose whole value is well-known
+  text (WKT, or EWKT with `SRID=…;`, as `ST_AsText` and `ST_AsEWKT` write it; SDB-214) is read
+  too, in any column, with the same bounds (nesting, finite coordinates, one geometry and
+  nothing after it).
   `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
   PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
   (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
@@ -250,6 +265,13 @@
   leaves none), and edit statements are written only through an `EditTarget` from
   `Session::edit_target`, which refuses rows read through another session (another connection,
   a reconnected tab) or in another database; `tests/edit_source.rs` tries it on every engine.
+  An editable query result also keeps the table it was matched to (`ResultTable`, SDB-433,
+  ADR-061): the desktop's edit commands get their target and table only from
+  `result_edit_table`, which refuses another table's name and an identity (`table_identity`)
+  that changed since the result was found editable. A table data page is bound the same way
+  when it runs the SELECT the core wrote for it (`table_pages.rs`, SDB-440): the session
+  records each page statement it writes. `result_edit_table` refuses any result left unbound.
+  Edits to a result must never trust a table name that the page passes.
   `masking.rs` is column masking (ADR-051): the session compiles the connection's rules
   (`spelaion-config::masking` combines its `[masking]`, the user's `user.toml` and its type's
   `mask_columns`; required patterns only add up) and `ResultStore` masks every batch as it
@@ -281,7 +303,11 @@
   required), in a transaction of its own unless the user's is open, so a cancel half-way leaves
   nothing. `cursor.rs` keeps a `COPY`'s data with it when a selection runs. `tests/copy_from_stdin.rs`
   restores a `pg_dump` of every common type and dumps it again identically, streams a million rows
-  and cancels half-way.
+  and cancels half-way. psql's `\copy` line is a meta-command, not a `COPY`: it has no data
+  (`copy_stdio` is `None` for it), so the session refuses it before anything is sent (SDB-437).
+  `copy_stdio` reads words with the splitter's own rule (one may follow white space outside
+  ASCII, SDB-439): if they disagreed on a statement's first word, text after its `;` could be
+  taken both as COPY data and as SQL.
   `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads), and
   `xlsx.rs` a sheet of an XLSX file (SDB-390): every part's declared size, compression and

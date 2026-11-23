@@ -22,8 +22,8 @@ use spelaion_core::{
 use spelaion_driver_api::{ExecEvent, ExecOptions, Secret, Value};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
-mod engines;
-mod support;
+use crate::engines;
+use crate::support;
 use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
 
 fn unique(prefix: &str) -> String {
@@ -408,6 +408,7 @@ async fn writable(ws: &Workspace, server: &Server, sqls: Vec<String>, panicked: 
 
 #[tokio::test]
 async fn read_only_servers_run_reads_settings_and_transactions_and_refuse_every_write() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new();
     let mut tested = 0;
     for server in servers() {
@@ -554,6 +555,7 @@ async fn read_only_servers_run_reads_settings_and_transactions_and_refuse_every_
 
 #[tokio::test]
 async fn postgres_read_only_mode_stops_a_function_that_writes_and_plans_only_read() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(server) = servers().into_iter().find(|s| s.label == "postgres") else {
         return;
     };
@@ -638,6 +640,7 @@ async fn postgres_read_only_mode_stops_a_function_that_writes_and_plans_only_rea
 
 #[tokio::test]
 async fn mysql_read_only_mode_is_set_before_the_setup() {
+    let _turn = crate::serial::file_turn(module_path!());
     for server in servers()
         .into_iter()
         .filter(|s| s.label == "mysql" || s.label == "mariadb")
@@ -673,6 +676,7 @@ async fn mysql_read_only_mode_is_set_before_the_setup() {
 
 #[tokio::test]
 async fn read_only_sqlite_and_duckdb_files_refuse_writes_in_the_core_too() {
+    let _turn = crate::serial::file_turn(module_path!());
     let ws = Workspace::new();
     let lite = ws.file("read_only.sqlite");
     let duck = ws.file("read_only.duckdb");

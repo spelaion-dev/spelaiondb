@@ -107,7 +107,10 @@ export function cssViolations(css) {
     const exemptColor = (engineBadges.has(scope) && prop === "background") ||
       (syntaxColors.has(scope) && prop === "color");
     const rules = tokenBlocks.has(decl.parent) && prop.startsWith("--") ? [] : rulesFor(prop, decl.value);
-    if (decl.important) rules.push("!important");
+    // The one allowed !important: the hidden attribute hides an element whatever display its
+    // classes give it, as the browser's own rule would without author styles.
+    const hiddenReset = scope === "[hidden]" && prop === "display" && decl.value.trim() === "none";
+    if (decl.important && !hiddenReset) rules.push("!important");
     for (const rule of rules) {
       if (rule !== "color" || !exemptColor) {
         found.push({

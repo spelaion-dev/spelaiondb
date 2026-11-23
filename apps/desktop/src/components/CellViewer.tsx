@@ -17,6 +17,8 @@ import { canShowTiles, MapView, type MapFeature } from "./MapView";
 import { chooseOpenFile, chooseSavePath } from "../dialogs";
 import { usePicker, ValuePicker, type PickedEdit, type PickerSource } from "./ValuePicker";
 import { formatJson } from "../formatJson";
+import { keyText } from "../shortcuts";
+import { Icon } from "./Icons";
 
 type View =
   | { kind: "null" }
@@ -290,7 +292,7 @@ export function CellViewer(props: {
               <strong>{t("viewer.rowTitle", { number: (row + 1).toLocaleString(i18n.language) })}</strong>
               <span className="muted small">{t("viewer.columns", { count: props.columns.length })}</span>
             </div>
-            <button className="ghost cell-viewer-close" aria-label={t("viewer.close")} onClick={props.onClose}>×</button>
+            <button className="ghost cell-viewer-close" aria-label={t("viewer.close", { shortcut: keyText("close") })} title={t("viewer.close", { shortcut: keyText("close") })} onClick={props.onClose}><Icon name="x" /></button>
           </div>
           <div className="cell-viewer-controls">{modes}</div>
         </header>
@@ -342,7 +344,7 @@ export function CellViewer(props: {
               {length ? ` · ${length}` : ""}
             </span>
           </div>
-          <button className="ghost cell-viewer-close" aria-label={t("viewer.close")} onClick={props.onClose}>×</button>
+          <button className="ghost cell-viewer-close" aria-label={t("viewer.close", { shortcut: keyText("close") })} title={t("viewer.close", { shortcut: keyText("close") })} onClick={props.onClose}><Icon name="x" /></button>
         </div>
         <div className="cell-viewer-controls">
           {modes}
@@ -393,6 +395,7 @@ export function CellViewer(props: {
       {error && <p className="error small" role="alert">{error}</p>}
       {copyError && <p className="error small" role="alert">{t("viewer.copyError", { detail: copyError })}</p>}
       {note && <p className={note.error ? "error small" : "muted small"} role={note.error ? "alert" : "status"}>{note.text}</p>}
+      {!hasEdit && item?.mapNote === "sqlServerTypeUnknown" && <p className="muted small" role="status">{t("viewer.map.sqlServerTypeUnknown")}</p>}
       {!item && !error && <p className="muted small">{t("viewer.loading")}</p>}
       {withheld && item && (
         <div className="cell-viewer-notice" role="status">
@@ -445,7 +448,7 @@ export function CellViewer(props: {
           )}
           {binary && shown?.kind === "null" && <p className="muted cell-viewer-null">NULL</p>}
           <footer className="viewer-edit-actions" role="toolbar" aria-label={t("viewer.editActions")}>
-            <span className="muted small">{t(hasEdit ? "viewer.pendingEdit" : binary ? "viewer.binaryHint" : "viewer.editHint")}</span>
+            <span className="muted small">{t(hasEdit ? "viewer.pendingEdit" : binary ? "viewer.binaryHint" : "viewer.editHint", { shortcut: keyText("editCell") })}</span>
             {jsonCandidate && <button className="ghost small" disabled={formattedJson === null} onClick={() => {
               if (formattedJson !== null) { props.onEdit?.(row, column, formattedJson === item?.text ? undefined : formattedJson); setJsonView("raw"); }
             }}>{t("viewer.formatJson")}</button>}
@@ -459,7 +462,7 @@ export function CellViewer(props: {
                 {loadingFile ? t("viewer.loadingFile") : t("viewer.load")}
               </button>
             )}
-            <button className="ghost small" title={t("edit.setNullHint")} disabled={!item || (hasEdit ? editText === null : item.kind === "null")} onClick={() => props.onEdit?.(row, column, item?.kind === "null" ? undefined : null)}>{t("edit.setNull")}</button>
+            <button className="ghost small" title={t("edit.setNullHint", { shortcut: keyText("setNull") })} disabled={!item || (hasEdit ? editText === null : item.kind === "null")} onClick={() => props.onEdit?.(row, column, item?.kind === "null" ? undefined : null)}>{t("edit.setNull")}</button>
           </footer>
         </>
       )}
@@ -470,7 +473,7 @@ export function CellViewer(props: {
 }
 
 /** Names of the stored formats (brand and format names: not translated). */
-const GEO_FORMATS: Record<GeoFormat, string> = { wkb: "WKB", ewkb: "EWKB", mysql: "MySQL", spatialite: "SpatiaLite", geoPackage: "GeoPackage" };
+const GEO_FORMATS: Record<GeoFormat, string> = { wkb: "WKB", ewkb: "EWKB", mysql: "MySQL", spatialite: "SpatiaLite", geoPackage: "GeoPackage", sqlServer: "SQL Server", wkt: "WKT" };
 
 /** The cell's geometry on a map, or every geometry of its column (read from the core's current
  *  view of the result, at most the core's limit of shapes). */
@@ -518,6 +521,7 @@ function GeometryPanel(props: {
       t("viewer.map.shapes", { count: m.shapes.length, formattedCount: n(m.shapes.length), rows: n(m.rowsRead) }),
       m.nulls > 0 ? t("viewer.map.nulls", { count: m.nulls, formattedCount: n(m.nulls) }) : "",
       m.unreadable > 0 ? t("viewer.map.unreadable", { count: m.unreadable, formattedCount: n(m.unreadable) }) : "",
+      m.typeUnknown > 0 ? t("viewer.map.typeUnknown", { count: m.typeUnknown, formattedCount: n(m.typeUnknown) }) : "",
       m.tooBig > 0 ? t("viewer.map.tooBig", { count: m.tooBig, formattedCount: n(m.tooBig) }) : "",
       m.truncated ? t("viewer.map.truncated", { max: n(m.maxShapes) }) : "",
       m.mixedSrids ? t("viewer.map.mixedSrids") : "",

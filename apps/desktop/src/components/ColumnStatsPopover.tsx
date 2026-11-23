@@ -8,6 +8,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ColumnStatsItem, type StatStateItem } from "../api";
 import { startJob, type Job } from "../jobs";
+import { keyText } from "../shortcuts";
 import { Icon } from "./Icons";
 
 /** Ids of statistics runs: far from the export dialog's, which share the core's cancel map. */
@@ -147,7 +148,7 @@ export function ColumnStatsPopover(props: {
           <strong title={props.name}>{props.name}</strong>
           <span className="muted small" title={`${table.schema}.${table.name}`}>{table.name}</span>
         </div>
-        <button className="ghost cell-viewer-close" aria-label={t("columnStats.close")} title={t("columnStats.close")} onClick={onClose}><Icon name="x" /></button>
+        <button className="ghost cell-viewer-close" aria-label={t("columnStats.close", { shortcut: keyText("close") })} title={t("columnStats.close", { shortcut: keyText("close") })} onClick={onClose}><Icon name="x" /></button>
       </header>
       <p className="column-stats-scope small muted">
         {t(table.filter.trim() ? "columnStats.scopeFiltered" : "columnStats.scope")}

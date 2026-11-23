@@ -267,7 +267,8 @@ export function setNewScriptTemplate(template: string) {
 }
 
 export type ConnectionDialog =
-  | { kind: "add"; openImportMenu?: boolean }
+  /** `imports`: open on the list of clients to import connections from (SDB-446). */
+  | { kind: "add"; imports?: boolean }
   /** `notice`: shown above the form, such as "this is the copy just made". */
   | { kind: "edit"; id: string; notice?: string };
 
@@ -287,7 +288,10 @@ export interface ExplorerReveal {
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
-export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | "reconnect" | "sessionReadOnly" | ResultTabCommand | EditorActionId;
+export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | "variables" | "reconnect" | "sessionReadOnly" | ClipboardCommand | ResultTabCommand | EditorActionId;
+
+/** The editor menu's clipboard commands (SDB-438). */
+export type ClipboardCommand = "cut" | "copy" | "paste" | "selectAll";
 /** What a result tab's menu asks about the tab's active result (SDB-378). */
 export type ResultTabCommand = "resultRerun" | "resultPin" | "resultRename" | "resultResetName" | "resultClose";
 
@@ -298,6 +302,15 @@ export const EDITS_COMMAND_EVENT = "spelaion:edits-command";
 /** A command for the grid of one result, from the palette (SDB-386: "Go to row"); its
  *  detail is `{ result, command }`. */
 export const GRID_COMMAND_EVENT = "spelaion:grid-command";
+
+/** What the palette asks of a result's grid: "Go to row", or an action on its selection
+ *  (SDB-441), done as the grid's own menu does it. */
+export type GridCommand =
+  | { kind: "goToRow" }
+  | { kind: "copy"; format: "tsv" | "csv" | "json" | "markdown" | "inList" | "html" | "sqlInsert"; header: boolean }
+  | { kind: "copySpecial" }
+  | { kind: "copyUpdates" }
+  | { kind: "exportSelection" };
 
 /** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
 export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;

@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ColumnFilterItem, type ColumnItem } from "../api";
 import type { FilterModeItem, GroupingItem } from "../bindings";
+import { keyText } from "../shortcuts";
 import { Icon } from "./Icons";
 
 /** How long the columns must stay before they are grouped. */
@@ -128,7 +129,7 @@ export function GroupPanel(props: {
           <div className="cell-viewer-title">
             <strong>{t("group.title")}</strong>
           </div>
-          <button className="ghost cell-viewer-close" aria-label={t("group.close")} title={t("group.close")} onClick={props.onClose}><Icon name="x" /></button>
+          <button className="ghost cell-viewer-close" aria-label={t("group.close", { shortcut: keyText("close") })} title={t("group.close", { shortcut: keyText("close") })} onClick={props.onClose}><Icon name="x" /></button>
         </div>
         <div className="cell-viewer-controls">{props.modes}</div>
       </header>
@@ -137,7 +138,7 @@ export function GroupPanel(props: {
           {grouped.map((column) => (
             <span className="group-chip" key={column}>
               <span>{name(column)}</span>
-              <button type="button" className="ghost" aria-label={t("group.remove", { column: name(column) })} title={t("group.remove", { column: name(column) })} onClick={() => props.onGrouped(grouped.filter((c) => c !== column))}>×</button>
+              <button type="button" className="ghost" aria-label={t("group.remove", { column: name(column) })} title={t("group.remove", { column: name(column) })} onClick={() => props.onGrouped(grouped.filter((c) => c !== column))}><Icon name="x" /></button>
             </span>
           ))}
           {free.length > 0 && (

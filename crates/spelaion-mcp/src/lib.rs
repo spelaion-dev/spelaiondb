@@ -23,6 +23,7 @@
 //! - Headless: unknown SSH hosts and `prompt` passwords are rejected.
 //! - stdout is the protocol channel: nothing else is ever written to it.
 
+mod catalog;
 mod format;
 
 /// What every tool's description says about failures (SDB-374), as one literal so `concat!`
@@ -30,6 +31,13 @@ mod format;
 macro_rules! failure_codes {
     () => {
         " On a refusal or failure the result is an error whose structuredContent is {\"code\", \"retry\"}: code is one of session_lost, connection_unavailable, not_exposed, not_trusted, read_only, refused_by_guard, engine_without_barrier, plugin_missing, cancelled, timed_out, statement_failed, invalid_arguments, internal; retry says whether running the same call again, unchanged, may work. The server never retries."
+    };
+}
+
+/// How a catalog tool's answer says it was cut (SDB-120), appended to its description.
+macro_rules! catalog_limit {
+    () => {
+        " Answers stop within about 60,000 characters and comments are cut to one line. A successful answer's structuredContent is {\"complete\", \"shown\", \"omitted\", \"narrow_with\"}: when complete is false, the last line says how many entries were left out, and narrow_with (when present) names the argument that asks for the rest."
     };
 }
 
@@ -386,8 +394,18 @@ fn tool_error(
 /// What a tool that is not a query answers: its result, or why it failed.
 type Answer = Result<CallToolResult, Failure>;
 
+/// A plain text answer (the tests' stand-in for a tool's run).
+#[cfg(test)]
 fn answer(message: impl Into<String>) -> Answer {
     Ok(CallToolResult::success(vec![ContentBlock::text(message)]))
+}
+
+/// A catalog tool's answer (SDB-120): its lines as text, and whether they are all of them as
+/// structured content.
+fn catalog_answer(listing: catalog::CatalogAnswer) -> Answer {
+    let mut result = CallToolResult::success(vec![ContentBlock::text(listing.text.clone())]);
+    result.structured_content = Some(listing.structured());
+    Ok(result)
 }
 
 /// A schema tool's driver failure on `open`, with whether its session was lost meanwhile.
@@ -458,8 +476,9 @@ pub struct ExplainArgs {
     pub connection: String,
     /// One read query for a new plan; omit when paging a cached plan_id.
     pub sql: Option<String>,
-    /// Opt in to the normalized plan tree (PostgreSQL, MySQL, MariaDB, SQL Server); omitted keeps the
-    /// user's JSON/TOON output.
+    // `{engines}` is filled in when the server starts (`with_plan_engines`).
+    /// Opt in to the normalized plan tree on {engines}; omitted keeps the user's JSON/TOON
+    /// output.
     pub structured: Option<bool>,
     /// Legacy output only; omitted keeps the user's configured JSON/TOON format.
     pub output_format: Option<OutputFormat>,
@@ -497,6 +516,47 @@ pub struct WriteArgs {
     pub sql: String,
 }
 
+/// Where `explain_query`'s description and its `structured` argument name the engines that
+/// structured plans work on.
+const PLAN_ENGINES: &str = "{engines}";
+
+/// The engines agents can ask for a structured plan on, as a sentence names them ("A, B or
+/// C"), from the core's own capabilities (SDB-103): a new engine there is named here with no
+/// change to this crate.
+fn plan_engine_names() -> String {
+    let names: Vec<&str> = spelaion_core::plan::agent_plan_engines()
+        .into_iter()
+        .map(Engine::label)
+        .collect();
+    match names.split_last() {
+        None => "no engine yet".into(),
+        Some((last, [])) => (*last).into(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+/// `router` with [`PLAN_ENGINES`] replaced by the engines' names in `explain_query`'s
+/// description and in its `structured` argument's.
+fn with_plan_engines(mut router: ToolRouter<SpelaionMcp>) -> ToolRouter<SpelaionMcp> {
+    let names = plan_engine_names();
+    if let Some(route) = router.map.get_mut("explain_query") {
+        let tool = &mut route.attr;
+        if let Some(description) = &tool.description {
+            tool.description = Some(description.replace(PLAN_ENGINES, &names).into());
+        }
+        let mut schema = (*tool.input_schema).clone();
+        if let Some(serde_json::Value::String(text)) = schema
+            .get_mut("properties")
+            .and_then(|properties| properties.get_mut("structured"))
+            .and_then(|structured| structured.get_mut("description"))
+        {
+            *text = text.replace(PLAN_ENGINES, &names);
+        }
+        tool.input_schema = Arc::new(schema);
+    }
+    router
+}
+
 #[tool_router]
 impl SpelaionMcp {
     pub fn new(options: ServerOptions) -> Result<Self, String> {
@@ -526,7 +586,7 @@ impl SpelaionMcp {
                 plans: spelaion_core::plan::PlanStore::new(),
                 plan_connections: Mutex::new(HashMap::new()),
             }),
-            tool_router: Self::tool_router(),
+            tool_router: with_plan_engines(Self::tool_router()),
         })
     }
 
@@ -1252,7 +1312,7 @@ impl SpelaionMcp {
     }
 
     #[tool(
-        description = concat!("Lists schemas, or the tables and views of a schema (with estimated rows).", failure_codes!()),
+        description = concat!("Lists schemas, or the tables and views of a schema (with estimated rows).", catalog_limit!(), failure_codes!()),
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_objects(
@@ -1296,46 +1356,18 @@ impl SpelaionMcp {
         let conn = open.session.connection();
         let Some(schema) = args.schema else {
             return match conn.list_schemas().await {
-                Ok(schemas) => answer(
-                    schemas
-                        .iter()
-                        .filter(|s| !s.system)
-                        .map(|s| format!("- {}\n", s.name))
-                        .collect::<String>(),
-                ),
+                Ok(schemas) => catalog_answer(catalog::schemas(&schemas)),
                 Err(e) => Err(driver_failure(&open, &e)),
             };
         };
-        let filter = args.filter.map(|f| f.to_lowercase());
         match conn.list_objects(&schema).await {
-            Ok(objects) => answer(
-                objects
-                    .iter()
-                    .filter(|o| {
-                        filter
-                            .as_ref()
-                            .is_none_or(|f| o.name.to_lowercase().contains(f))
-                    })
-                    .map(|o| {
-                        let rows = o
-                            .estimated_rows
-                            .map(|n| format!(", ~{n} rows"))
-                            .unwrap_or_default();
-                        let comment = o
-                            .comment
-                            .as_deref()
-                            .map(|c| format!(" — {c}"))
-                            .unwrap_or_default();
-                        format!("- {} ({:?}{rows}){comment}\n", o.name, o.kind)
-                    })
-                    .collect::<String>(),
-            ),
+            Ok(objects) => catalog_answer(catalog::objects(&objects, args.filter.as_deref())),
             Err(e) => Err(driver_failure(&open, &e)),
         }
     }
 
     #[tool(
-        description = concat!("Describes a table: columns with types, primary key, indexes and foreign keys.", failure_codes!()),
+        description = concat!("Describes a table: columns with types, primary key, indexes and foreign keys.", catalog_limit!(), failure_codes!()),
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn describe_table(
@@ -1376,54 +1408,11 @@ impl SpelaionMcp {
             Ok(table) => table,
             Err(e) => return Err(driver_failure(&open, &e)),
         };
-        let mut out = format!(
-            "{}.{} ({:?})\n",
-            table.object.schema, table.object.name, table.object.kind
-        );
-        if let Some(comment) = &table.object.comment {
-            out.push_str(&format!("{comment}\n"));
-        }
-        out.push_str("\nColumns:\n");
-        for c in &table.columns {
-            let null = if c.nullable { "" } else { " NOT NULL" };
-            let default = c
-                .default
-                .as_deref()
-                .map(|d| format!(" DEFAULT {d}"))
-                .unwrap_or_default();
-            let comment = c
-                .comment
-                .as_deref()
-                .map(|d| format!(" — {d}"))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "- {} {}{null}{default}{comment}\n",
-                c.name, c.native_type
-            ));
-        }
-        if !table.primary_key.is_empty() {
-            out.push_str(&format!(
-                "\nPrimary key: ({})\n",
-                table.primary_key.join(", ")
-            ));
-        }
-        for fk in &table.foreign_keys {
-            out.push_str(&format!(
-                "Foreign key: ({}) → {}.{} ({})\n",
-                fk.columns.join(", "),
-                fk.referenced_schema,
-                fk.referenced_table,
-                fk.referenced_columns.join(", ")
-            ));
-        }
-        for index in &table.indexes {
-            out.push_str(&format!("Index: {}\n", index.definition));
-        }
-        answer(out)
+        catalog_answer(catalog::table(&table))
     }
 
     #[tool(
-        description = concat!("Searches tables and views by name or comment across all schemas of a connection.", failure_codes!()),
+        description = concat!("Searches tables and views by name or comment across all schemas of a connection.", catalog_limit!(), failure_codes!()),
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_schema(
@@ -1461,33 +1450,14 @@ impl SpelaionMcp {
             Ok(s) => s,
             Err(e) => return Err(driver_failure(&open, &e)),
         };
-        let mut hits = String::new();
+        let mut hits = Vec::new();
         for schema in schemas.iter().filter(|s| !s.system) {
             let Ok(objects) = conn.list_objects(&schema.name).await else {
                 continue;
             };
-            for o in objects {
-                let comment = o.comment.clone().unwrap_or_default();
-                if o.name.to_lowercase().contains(&needle)
-                    || comment.to_lowercase().contains(&needle)
-                {
-                    let comment = if comment.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" — {comment}")
-                    };
-                    hits.push_str(&format!(
-                        "- {}.{} ({:?}){comment}\n",
-                        o.schema, o.name, o.kind
-                    ));
-                }
-            }
+            hits.extend(objects.into_iter().filter(|o| catalog::matches(o, &needle)));
         }
-        if hits.is_empty() {
-            answer(format!("Nothing matches {:?}.", args.query))
-        } else {
-            answer(hits)
-        }
+        catalog_answer(catalog::search_hits(&hits, &args.query))
     }
 
     #[tool(
@@ -1530,7 +1500,7 @@ impl SpelaionMcp {
     }
 
     #[tool(
-        description = concat!("Shows an estimated read-query plan, never ANALYZE. Set structured=true on PostgreSQL, MySQL, MariaDB or SQL Server for the same normalized core tree, metrics and findings as the desktop. Responses are complete JSON pages within 60 KB: continue with connection, plan_id=summary.id and offset=page.nextOffset, omitting sql (no re-execution). Release with release=true. By default, preserve the user's JSON/TOON output_format on every engine.", failure_codes!()),
+        description = concat!("Shows an estimated read-query plan, never ANALYZE. Set structured=true on {engines} for the same normalized core tree, metrics and findings as the desktop. Responses are complete JSON pages within 60 KB: continue with connection, plan_id=summary.id and offset=page.nextOffset, omitting sql (no re-execution). Release with release=true. By default, preserve the user's JSON/TOON output_format on every engine.", failure_codes!()),
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn explain_query(

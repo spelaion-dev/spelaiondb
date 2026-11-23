@@ -148,3 +148,14 @@ outside the team.
 - Windows 11 is the main machine. Linux is tried with WSL (`scripts/setup-wsl.sh`) as a
   first look; definitive measurements on real Linux.
 - Test databases and SSH bastions: `testing/docker` (see its README).
+- Builds and the disk (SDB-168): several sessions build at once, so give each worktree its own
+  target (`CARGO_TARGET_DIR=<worktree>/target`) and build with `CARGO_BUILD_JOBS=4`: cargo's
+  default of one job per core, with other sessions compiling, ran Windows out of paging file
+  (error 1455). When a card is done, delete its target with `scripts/clean-target.sh --now`
+  (it refuses while a build or a test runs from it); `scripts/clean-target.sh
+  .claude/worktrees/*/target` deletes the ones nobody used for a day.
+- The core's and the configuration crate's integration tests are one binary each
+  (`tests/main.rs`, each file a module of it): `cargo test -p spelaion-core edit_source` runs one
+  file. Each test starts with its file's turn (`tests/serial.rs`), so files still run one after
+  another; a new file is a module in `tests/main.rs`. Only the files CI runs apart by name
+  (`--test hive`, `search`…) stay binaries of their own.

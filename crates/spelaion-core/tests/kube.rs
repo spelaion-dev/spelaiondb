@@ -105,6 +105,7 @@ async fn down_reason(state: &mut tokio::sync::watch::Receiver<TunnelState>) -> S
 /// SDB-366: a Kubernetes tunnel is not up before its first kubectl listens.
 #[tokio::test]
 async fn a_kubernetes_tunnel_is_opening_until_its_first_forward_listens() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fake = FakeKubectl::new("opening");
     let tunnel = Arc::new(KubeTunnel::new(fake.spec("svc/gated")));
     let state = tunnel.state();
@@ -138,6 +139,7 @@ async fn a_kubernetes_tunnel_is_opening_until_its_first_forward_listens() {
 /// down, never up.
 #[tokio::test]
 async fn a_first_forward_that_fails_takes_the_opening_tunnel_down() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fake = FakeKubectl::new("missing");
     let tunnel = Arc::new(KubeTunnel::new(fake.spec("svc/missing")));
     let err = tunnel.forward(5432).await.unwrap_err();
@@ -156,6 +158,7 @@ async fn a_first_forward_that_fails_takes_the_opening_tunnel_down() {
 /// are stopped (nothing listens on their ports); closing it later keeps that reason.
 #[tokio::test]
 async fn when_one_forward_ends_the_others_are_stopped() {
+    let _turn = crate::serial::file_turn(module_path!());
     let fake = FakeKubectl::new("ends");
     let tunnel = Arc::new(KubeTunnel::new(fake.spec("svc/postgres")));
     let kept = tunnel.forward(5432).await.unwrap();
@@ -190,6 +193,7 @@ async fn when_one_forward_ends_the_others_are_stopped() {
 /// opened from its file like the app does; two of them share one `kubectl port-forward`.
 #[tokio::test]
 async fn connections_reach_a_database_inside_the_cluster() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(kubeconfig) = kubeconfig() else {
         return;
     };
@@ -310,6 +314,7 @@ fn kill_listener(port: u16) {
 /// the tunnel goes down and the other one is stopped; closing keeps the reason.
 #[tokio::test]
 async fn with_a_cluster_one_forward_ending_stops_the_others() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(kubeconfig) = kubeconfig() else {
         return;
     };
@@ -334,6 +339,7 @@ async fn with_a_cluster_one_forward_ending_stops_the_others() {
 /// What kubectl says is what the user sees; checking finds the resource or explains why not.
 #[tokio::test]
 async fn kubectl_errors_reach_the_user() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(kubeconfig) = kubeconfig() else {
         return;
     };
@@ -409,6 +415,7 @@ async fn kubectl_errors_reach_the_user() {
 /// resolved forward (cluster, namespace and resource) is one `kubectl port-forward`.
 #[tokio::test]
 async fn connections_share_a_kubernetes_network_profile() {
+    let _turn = crate::serial::file_turn(module_path!());
     let Some(kubeconfig) = kubeconfig() else {
         return;
     };
