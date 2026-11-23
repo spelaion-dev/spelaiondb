@@ -6719,10 +6719,23 @@ export type TextSpan = {
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 
-/**  A connection whose TLS does not check its server (SDB-395), as the core decided it. */
+/**
+ *  A connection whose TLS does not check its server (SDB-395), as the core decided it.
+ *  What a connection's TLS leaves unchecked (SDB-395), as the core decides it.
+ */
+export type TlsRiskItem = 
+/**  `disable`: nothing is encrypted. */
+"unencrypted" | 
+/**  `prefer` or `require`: encrypted, but the server's certificate is not checked. */
+"unverified" | 
+/**
+ *  A SQL login to a LocalDB instance: its password crosses the local pipe without TLS
+ *  (ADR-068).
+ */
+"localDbPassword";
+
 export type TlsWarningItem = {
-	/**  `unencrypted` (`disable`) or `unverified` (`prefer`, `require`). */
-	risk: string,
+	risk: TlsRiskItem,
 	/**  The TLS mode as the connection file writes it. */
 	mode: string,
 	host: string,

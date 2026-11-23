@@ -681,7 +681,7 @@ function ConnectionForm(props: {
   // the core decides it from what is typed, and says it again with the test's result.
   const [tlsWarning, setTlsWarning] = useState<TlsWarningItem | null>(null);
   const [testTlsWarning, setTestTlsWarning] = useState<TlsWarningItem | null>(null);
-  const tlsKey = JSON.stringify([request.personal, request.engine, request.host, request.tlsMode, request.tunnel, request.kubernetes !== null, request.fileFolder, request.sqlite3]);
+  const tlsKey = JSON.stringify([request.personal, request.engine, request.host, request.user, request.tlsMode, request.tunnel, request.kubernetes !== null, request.fileFolder, request.sqlite3]);
   useEffect(() => {
     let current = true;
     const timer = window.setTimeout(() => {
@@ -1011,7 +1011,9 @@ function ConnectionForm(props: {
                 <Field label={t("fields.user")}>
                   <input type="text" value={draft.user} autoComplete="off" onChange={(e) => update({ user: e.target.value })} />
                 </Field>
-                {localdb && auth === "none" && !draft.user.trim() && <p className="muted small">{t("fields.localdbWindowsAccount")}</p>}
+                {localdb && <p className="muted small">{t("fields.localdbWindowsAccount")}</p>}
+                {/* The core's rule: a SQL login's password crosses LocalDB's pipe without TLS (ADR-068). */}
+                {localdb && tlsNote(tlsWarning)}
                 {auth === "password" && (
                   <>
                     <Field label={t("fields.password")}>
