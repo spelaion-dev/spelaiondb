@@ -1,13 +1,12 @@
 # Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
-
-> **Status:** SpelaionDB is applying to SignPath Foundation's open-source programme
-> ([ADR-063](adr/0063-signing-windows-installers-and-notarizing-macos.md)). Until it is
-> accepted and the release workflow signs through it, the Windows installers are not signed.
-> This page is the policy those signatures will follow, published before the first one as
-> SignPath asks.
+> **Status:** the Windows installers are not signed. SignPath Foundation declined SpelaionDB's
+> application on 2026-11-23 because the project does not yet have enough public visibility,
+> and invited it to apply again once it has
+> ([ADR-063](adr/0063-signing-windows-installers-and-notarizing-macos.md)). Until then nothing
+> is signed for Windows. This page stays the policy those signatures will follow; when they
+> start, it will carry SignPath's attribution ("Free code signing provided by SignPath.io,
+> certificate by SignPath Foundation").
 
 ## What is signed
 

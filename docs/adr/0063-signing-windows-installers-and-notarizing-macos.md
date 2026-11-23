@@ -175,6 +175,20 @@ SignPath Foundation declines the project or ends the programme (use the fallback
 Signing so the publisher reads "Spelaion"). Microsoft changes what earns SmartScreen reputation,
 or Apple changes how Developer ID apps are notarized.
 
+## Note, 2026-11-23: SignPath Foundation declined, for now
+SignPath Foundation declined the application on 2026-11-23: the programme asks for public
+trust and visibility (stars, forks, contributors, articles and discussions elsewhere, or
+institutional backing) that a three-week-old project does not have yet, and it invited
+SpelaionDB to apply again once it has. SignPath's paid subscription remains open.
+
+The owner chose to wait rather than buy a certificate: with so few downloads an OV certificate
+would not remove the SmartScreen warning soon, since reputation builds with downloads either
+way. So the Windows installers stay unsigned, the code-signing policy stays published for the
+next application, and decision 1 (macOS) is unchanged. Apply again when the project shows those
+signals; if Windows users report the SmartScreen warning as a real obstacle before then, the
+next step is an OV certificate on a cloud HSM (decision 2's second fallback), since Azure
+Artifact Signing is still closed to an individual in Spain.
+
 ## Sources (checked 2026-11-22)
 - Apple: [membership and fee waivers](https://developer.apple.com/support/fee-waiver),
   [opening an app from an unknown developer on macOS 15](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/15.0/mac/15.0),
