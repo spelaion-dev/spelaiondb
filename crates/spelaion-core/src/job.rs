@@ -39,10 +39,14 @@ impl JobCancel {
     /// Stops the job: its statement through its session, if one is bound, and every step after
     /// it. It never waits for the job to end.
     pub async fn cancel(&self) {
-        let session = {
+        // The session's next statement waits for a cancel counted in flight (SDB-266). It is
+        // counted before the job can see the flag and send its own next statement (a ROLLBACK,
+        // SDB-448): that statement never goes out ahead of the cancel, which would stop it.
+        let (session, _in_flight) = {
             let session = self.session.lock().expect("lock poisoned");
             self.cancelled.store(true, Ordering::SeqCst);
-            session.clone()
+            let in_flight = session.as_ref().map(SessionCancel::in_flight);
+            (session.clone(), in_flight)
         };
         self.notify.notify_waiters();
         if let Some(session) = session {
