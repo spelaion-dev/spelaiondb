@@ -1,6 +1,9 @@
 //! Execution plans: bounded source documents and engine-independent analysis.
 //! Raw database rows stay in the core. Adapters receive a summary or a bounded projection.
 
+mod clickhouse;
+#[cfg(test)]
+mod clickhouse_tests;
 mod duckdb;
 mod mysql;
 #[cfg(test)]
@@ -283,8 +286,8 @@ pub struct PlanDocument {
     pub(crate) raw_utf16: Option<bool>,
 }
 
-/// Reads a PostgreSQL, MySQL, MariaDB, SQL Server, SQLite or DuckDB plan, recognized by its
-/// shape.
+/// Reads a PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, DuckDB or ClickHouse plan,
+/// recognized by its shape.
 pub fn parse_plan(raw: &str, name: &str) -> Result<PlanDocument, PlanError> {
     parse_plan_from(raw, name, None)
 }
@@ -317,6 +320,8 @@ pub(crate) fn parse_plan_from(
         sqlite::parse_json(raw, &json, name)
     } else if duckdb::is_json(&json) {
         duckdb::parse(raw, &json, name)
+    } else if clickhouse::is_json(&json) {
+        clickhouse::parse(raw, &json, name)
     } else {
         postgres::parse(raw, &json, name)
     }
