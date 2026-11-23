@@ -26,3 +26,9 @@
   dialect's own `code_ranges`). A new dialect gets its pieces there (`extra_atoms`, and a
   property of its own for blocks or separators); a change to a splitter keeps them passing.
   `SPELAION_FUZZ_CASES=<n>` runs a long local fuzz (see `CONTRIBUTING.md`).
+- ADR-065 (SDB-157, not implemented yet): each SQL dialect is to get one lexical scanner,
+  a lazy sequence of regions that the splitter, `code_ranges`, `copy_data` and the guard's
+  fallback all read, instead of each scanning the text its own way. Until a dialect moves,
+  a rule its splitter learns (a quote, a meta line, white space) must be copied into its other
+  readers (`code_ranges`'s skip function, PostgreSQL's `copy_stdio`) in the same change: that
+  gap is what SDB-436, 437 and 439 were.
