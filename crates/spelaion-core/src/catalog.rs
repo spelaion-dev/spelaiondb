@@ -214,6 +214,18 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             Some("root"),
             Some("dev"),
         ),
+        // SDB-303: it browses through the PostgreSQL plugin. It gets no agents, read-only
+        // connections or streaming reads: its read-only transaction lets DDL through, and its
+        // session's read-only mode is refused (`server_family.rs`).
+        kind_of(
+            Engine::Postgres,
+            "materialize",
+            "Materialize",
+            Analytical,
+            6875,
+            Some("materialize"),
+            Some("materialize"),
+        ),
         supported(Engine::Duckdb, "DuckDB", Analytical, File),
         // CSV, TSV and Parquet files read through DuckDB: a DuckDB connection whose target is a
         // folder, saved with `file_folder = true` (SDB-316).
@@ -389,6 +401,7 @@ mod tests {
                 ("yugabytedb", Some(Engine::Postgres), Some(5433)),
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),
                 ("risingwave", Some(Engine::Postgres), Some(4566)),
+                ("materialize", Some(Engine::Postgres), Some(6875)),
                 ("influxdb", Some(Engine::Flightsql), Some(8181)),
                 ("valkey", Some(Engine::Redis), Some(6379)),
                 ("scylladb", Some(Engine::Cassandra), Some(9042)),

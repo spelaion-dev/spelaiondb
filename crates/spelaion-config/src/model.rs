@@ -181,7 +181,9 @@ pub const MAX_DATABASE_NAME: usize = 128;
 pub fn engine_kind_base(kind: &str) -> Option<Engine> {
     match kind {
         "tidb" | "oceanbase" | "singlestore" | "greptimedb" | "starrocks" => Some(Engine::Mysql),
-        "cockroachdb" | "yugabytedb" | "timescaledb" | "risingwave" => Some(Engine::Postgres),
+        "cockroachdb" | "yugabytedb" | "timescaledb" | "risingwave" | "materialize" => {
+            Some(Engine::Postgres)
+        }
         "influxdb" => Some(Engine::Flightsql),
         "valkey" => Some(Engine::Redis),
         "scylladb" => Some(Engine::Cassandra),

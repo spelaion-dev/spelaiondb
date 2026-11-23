@@ -6,8 +6,10 @@
 //!   keep read-only connections and agents' reads from writing with their own barriers;
 //! - RisingWave (`SPELAION_TEST_RISINGWAVE`) browses, and gets no agents nor read-only
 //!   connections: a view hides its table functions that reach other servers (SDB-302);
-//! - RisingWave, Materialize (`SPELAION_TEST_MATERIALIZE`) and CrateDB
-//!   (`SPELAION_TEST_CRATEDB`) are recognised and get only what they enforce.
+//! - Materialize (`SPELAION_TEST_MATERIALIZE`) browses, and its read-only transaction is
+//!   shown letting DDL through (SDB-303);
+//! - RisingWave, Materialize and CrateDB (`SPELAION_TEST_CRATEDB`) are recognised and get only
+//!   what they enforce.
 //!
 //! Each variable is `host:port`; a server without one is skipped, which does not count as
 //! tested.
@@ -814,4 +816,136 @@ async fn greptime_read_only_transaction_does_not_stop_writes() {
         rows, 1,
         "GreptimeDB unexpectedly enforced its transaction barrier"
     );
+}
+
+/// Materialize browses through the PostgreSQL plugin (SDB-303): no `format`, no
+/// `pg_get_function_identity_arguments`, and its definitions come from `SHOW CREATE`.
+#[tokio::test]
+async fn materialize_connects_and_browses() {
+    let Some(file) = MATERIALIZE.file(false) else {
+        return;
+    };
+    let ws = Workspace::new();
+    let open = ws.open(&file, false).await.unwrap();
+    assert_eq!(
+        open.session.server_family(),
+        Some(&ServerFamily::Materialize)
+    );
+    let table = unique("sdb_mz_table");
+    let view = unique("sdb_mz_view");
+    let mv = unique("sdb_mz_mv");
+    run(
+        &open,
+        &format!(
+            "create table {table} (id int not null, name text);
+             create view {view} as select id, name from {table};
+             create materialized view {mv} as select count(*) as n from {table};"
+        ),
+    )
+    .await
+    .unwrap();
+    support::cleaning_up(
+        async {
+            let conn = open.session.connection();
+            let schemas = conn.list_schemas().await.unwrap();
+            assert!(
+                schemas.iter().any(|s| s.name == "public" && !s.system),
+                "{schemas:?}"
+            );
+            let objects = conn.list_objects("public").await.unwrap();
+            for name in [&table, &view, &mv] {
+                assert!(
+                    objects.iter().any(|o| &o.name == name),
+                    "{name} in {objects:?}"
+                );
+            }
+            let info = conn.describe_table("public", &table).await.unwrap();
+            let columns: Vec<_> = info.columns.iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(columns, ["id", "name"]);
+            let all = conn.list_columns("public").await.unwrap();
+            assert!(all.iter().any(|c| c.table == table && c.name == "name"));
+            assert!(
+                conn.list_referencing_keys("public", &table)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            conn.list_schema_objects("public").await.unwrap();
+            assert!(!conn.list_server_objects().await.unwrap().is_empty());
+            let ddl = conn.relation_definition("public", &table).await.unwrap();
+            assert!(ddl.starts_with("CREATE TABLE"), "{ddl}");
+            let ddl = conn.relation_definition("public", &mv).await.unwrap();
+            assert!(ddl.starts_with("CREATE MATERIALIZED VIEW"), "{ddl}");
+        },
+        |panicked| {
+            let session = &open.session;
+            let statements = vec![
+                format!("drop materialized view if exists {mv}"),
+                format!("drop view if exists {view}"),
+                format!("drop table if exists {table}"),
+            ];
+            async move {
+                support::run_cleanup("Materialize", session, &statements, panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
+}
+
+/// Why Materialize gets no agents, read-only connections or streaming reads (SDB-169,
+/// SDB-303): its read-only transaction refuses `INSERT` but lets DDL through, and its session's
+/// read-only mode is refused. If this test fails, Materialize changed what its transaction
+/// enforces: ADR-020's table must be read again before anything relies on it.
+#[tokio::test]
+async fn materialize_read_only_transaction_lets_ddl_through() {
+    let Some(file) = MATERIALIZE.file(false) else {
+        return;
+    };
+    let ws = Workspace::new();
+    let open = ws.open(&file, false).await.unwrap();
+    let table = unique("sdb_mz_ro");
+    let made = unique("sdb_mz_made");
+    run(&open, &format!("create table {table} (id int)"))
+        .await
+        .unwrap();
+    support::cleaning_up(
+        async {
+            assert!(engine_error(&open, "begin read only").await.is_none());
+            let insert = engine_error(&open, &format!("insert into {table} values (1)")).await;
+            assert!(
+                insert.as_deref().is_some_and(|e| e.contains("read-only")),
+                "{insert:?}"
+            );
+            assert!(engine_error(&open, "rollback").await.is_none());
+            assert!(engine_error(&open, "begin read only").await.is_none());
+            assert_eq!(
+                engine_error(&open, &format!("create table {made} (id int)")).await,
+                None,
+                "Materialize's read-only transaction refused a CREATE TABLE"
+            );
+            let _ = engine_error(&open, "rollback").await;
+            let session_mode = engine_error(
+                &open,
+                "set session characteristics as transaction read only",
+            )
+            .await;
+            assert!(
+                session_mode.is_some(),
+                "the session's read-only mode was accepted"
+            );
+        },
+        |panicked| {
+            let session = &open.session;
+            let statements = vec![
+                format!("drop table if exists {made}"),
+                format!("drop table if exists {table}"),
+            ];
+            async move {
+                support::run_cleanup("Materialize", session, &statements, panicked).await;
+            }
+        },
+    )
+    .await;
+    open.close().await;
 }
