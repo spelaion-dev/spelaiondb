@@ -180,7 +180,7 @@ pub const MAX_DATABASE_NAME: usize = 128;
 /// Base engine for a picker kind. This is presentation metadata, never a server capability.
 pub fn engine_kind_base(kind: &str) -> Option<Engine> {
     match kind {
-        "tidb" | "oceanbase" | "singlestore" | "greptimedb" => Some(Engine::Mysql),
+        "tidb" | "oceanbase" | "singlestore" | "greptimedb" | "starrocks" => Some(Engine::Mysql),
         "cockroachdb" | "yugabytedb" | "timescaledb" | "risingwave" => Some(Engine::Postgres),
         "influxdb" => Some(Engine::Flightsql),
         "valkey" => Some(Engine::Redis),

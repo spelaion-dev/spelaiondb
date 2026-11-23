@@ -101,7 +101,7 @@ whatever it calls itself.
 | MySQL, MariaDB, OceanBase 4.3 (MySQL mode) | every write but DDL refused (DDL commits first; the classifier refuses it, as above) | enforced, DDL too | everything |
 | TiDB 8.5 | refused as a no-op a setting can switch on | the same | no agents, read-only connections or streaming reads |
 | SingleStore 10.9, Apache Doris 3.0 | a syntax error | accepted, session stays writable | no agents, read-only connections or streaming reads |
-| StarRocks 3.4 (says it is MySQL) | a syntax error | accepted, session stays writable (caught by the read-back) | no agents nor read-only connections; a streaming read fails at the syntax error |
+| StarRocks 3.4 (says it is MySQL; recognised by its `current_version()`, SDB-310) | a syntax error | accepted, session stays writable | no agents, read-only connections or streaming reads |
 
 ## Alternatives
 - **Only the classifier for the new engines:** it cannot see what a function does. The

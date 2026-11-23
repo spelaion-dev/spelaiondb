@@ -158,6 +158,18 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             None,
             Some("public"),
         ),
+        // Its frontend's MySQL port (SDB-310). Recognised by its `current_version()`: read-only
+        // connections, agents, manual commit, edits and imports are refused on it, since its
+        // transactions open nothing and its read-only modes are ignored (`server_family.rs`).
+        kind_of(
+            Engine::Mysql,
+            "starrocks",
+            "StarRocks",
+            Analytical,
+            9030,
+            Some("root"),
+            None,
+        ),
         supported(Engine::Sqlserver, "SQL Server", Relational, Network),
         supported(Engine::Oracle, "Oracle", Relational, Network),
         // SQLite's SQL over HTTP: libSQL's server and Turso (ADR-058).
@@ -372,6 +384,7 @@ mod tests {
                 ("oceanbase", Some(Engine::Mysql), Some(2881)),
                 ("singlestore", Some(Engine::Mysql), Some(3306)),
                 ("greptimedb", Some(Engine::Mysql), Some(4002)),
+                ("starrocks", Some(Engine::Mysql), Some(9030)),
                 ("cockroachdb", Some(Engine::Postgres), Some(26257)),
                 ("yugabytedb", Some(Engine::Postgres), Some(5433)),
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),
