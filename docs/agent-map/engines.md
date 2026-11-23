@@ -46,7 +46,13 @@
   the plugin receives each batch as one statement and may return several result sets. Here,
   its tests run through that plugin, unchanged, with `SPELAION_TEST_MSSQL=127.0.0.1:11433`:
   the pinned build next to the program, or, in a development build, the one
-  `SPELAION_DEV_PLUGIN_SQLSERVER` points at.
+  `SPELAION_DEV_PLUGIN_SQLSERVER` points at. LocalDB (ADR-068) is a SQL Server connection
+  whose host is `(localdb)\Instance` (`spelaion-config`'s `localdb_instance`): the plugin
+  starts the instance with `SqlLocalDB` and speaks TDS through its pipe, no user means the
+  Windows account, the configuration refuses tunnels, ports and certificates to verify, the
+  connection test has no address step, and the picker's `localdb` kind exists only on
+  Windows. Its real test is the plugin's `tests/localdb.rs` on a Windows machine with
+  `SqlLocalDB` (GitHub's runners have it).
 - **MongoDB is a plugin whose language is not SQL** (ADR-056): its driver lives in
   `spelaion-dev/spelaiondb-plugin-mongodb` (MongoDB and FerretDB), pinned in `plugins.toml`.
   Its language is the core's, in `spelaion-dialect`'s `mongodb.rs`: a closed subset of the

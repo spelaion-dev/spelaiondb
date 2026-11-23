@@ -364,6 +364,15 @@ const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
 const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
 type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "session" | "options";
 
+/** How a SQL Server LocalDB instance is named in place of a host (ADR-068). */
+const LOCALDB_PREFIX = "(localdb)\\";
+/** The instance every LocalDB installation has. */
+const LOCALDB_DEFAULT = "MSSQLLocalDB";
+/** The instance's name in a LocalDB host, or the host as it is when it names none. */
+function localdbName(host: string): string {
+  return host.slice(0, LOCALDB_PREFIX.length).toLowerCase() === LOCALDB_PREFIX ? host.slice(LOCALDB_PREFIX.length) : host;
+}
+
 /** The core's limit (`ConnectionFile::MAX_DESCRIPTION`); the core checks it again. */
 const DESCRIPTION_MAX = 2000;
 /** The core's limits (`SessionConfig::MAX_SETUP`, `MAX_SCHEMA`); the core checks them again. */
@@ -467,16 +476,20 @@ function ConnectionForm(props: {
   const connections = useApp((s) => s.connections);
   const knownTags = tagsInUse(connections);
   const network = engine.access === "network";
+  // SQL Server LocalDB (ADR-068): the instance is named in place of a host and reached through
+  // its pipe on this machine, so there is no port, tunnel, Kubernetes or certificate to set.
+  const localdb = (props.initial?.engineKind ?? props.engineKind) === "localdb";
   // A SQLite file may be on a server, opened there through an SSH tunnel (ADR-018).
   const remoteFile = engine.id === "sqlite";
-  const tunnelsAllowed = network || remoteFile;
+  const tunnelsAllowed = (network && !localdb) || remoteFile;
   const [tab, setTab] = useState<FormTab>("main");
   const [tunnels, setTunnels] = useState<TunnelItem[]>([]);
   const { initial, editing, prefill } = props;
   // A folder of files is always read-only, never shown to agents and has no session setup:
   // the core sets its session up to read that folder alone (SDB-316).
   const fileFolder = initial ? initial.fileFolder : Boolean(props.fileFolder);
-  const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network ? "password" : "none");
+  // A new LocalDB connection logs in with the Windows account: no user and no password.
+  const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network && !localdb ? "password" : "none");
   const [cloudToken, setCloudToken] = useState<CloudToken>(
     initial && (CLOUD_TOKENS as string[]).includes(initial.passwordMode) ? (initial.passwordMode as CloudToken) : "awsRds",
   );
@@ -515,7 +528,7 @@ function ConnectionForm(props: {
     engine: engine.id,
     engineKind: props.engineKind ?? null,
     env: "",
-    host: prefill?.host || (network ? "localhost" : ""),
+    host: prefill?.host || (localdb ? `${LOCALDB_PREFIX}${LOCALDB_DEFAULT}` : network ? "localhost" : ""),
     port: prefill?.port ?? null,
     database: prefill?.database ?? "",
     fileFolder,
@@ -639,10 +652,12 @@ function ConnectionForm(props: {
     mcpExposed: draft.mcpExposed && !fileFolder,
     mcpWrites: agentsWrite && !fileFolder,
     passwordMode,
-    tunnel: network && useKubernetes ? kubeProfile : tunnelsAllowed && useTunnel ? tunnel : "",
+    tunnel: tunnelsAllowed && network && useKubernetes ? kubeProfile : tunnelsAllowed && useTunnel ? tunnel : "",
     sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
-    localPort: network && useTunnel && !useKubernetes ? (draft.localPort ?? null) : null,
-    kubernetes: network && useKubernetes ? kubernetes : null,
+    localPort: tunnelsAllowed && network && useTunnel && !useKubernetes ? (draft.localPort ?? null) : null,
+    kubernetes: tunnelsAllowed && network && useKubernetes ? kubernetes : null,
+    // A LocalDB instance has no port and no certificate to verify (the core refuses both).
+    ...(localdb ? { port: null, tlsCa: "", tlsMode: draft.tlsMode === "verify-ca" || draft.tlsMode === "verify-full" ? "prefer" : draft.tlsMode } : {}),
     // ADR-056: nothing of what such an engine has not got yet is saved (the form hides it, but
     // a connection whose engine was changed may still carry it).
     ...(engine.sql
@@ -834,7 +849,9 @@ function ConnectionForm(props: {
 
   const onServer = remoteFile && useTunnel;
   // An engine whose language is not SQL runs no session setup (ADR-056).
-  const tabs: FormTab[] = (network
+  const tabs: FormTab[] = (network && localdb
+    ? ["main", "session", "options"] as FormTab[]
+    : network
     ? ["main", "ssl", "ssh", "kubernetes", "session", "options"] as FormTab[]
     : remoteFile
       ? ["main", "ssh", "session", "options"] as FormTab[]
@@ -910,6 +927,20 @@ function ConnectionForm(props: {
             <>
               <fieldset>
                 <legend>{t("sections.server")}</legend>
+                {localdb ? (
+                  <>
+                    <Field label={t("fields.localdbInstance")}>
+                      <input
+                        type="text"
+                        name="localdbInstance"
+                        value={localdbName(draft.host)}
+                        placeholder={LOCALDB_DEFAULT}
+                        onChange={(e) => update({ host: `${LOCALDB_PREFIX}${e.target.value}` })}
+                      />
+                    </Field>
+                    <p className="muted small">{t("fields.localdbHint")}</p>
+                  </>
+                ) : (
                 <div className="form-pair">
                   <Field label={t("fields.host")} className="grow">
                     <input type="text" value={draft.host} onChange={(e) => update({ host: e.target.value })} />
@@ -925,7 +956,8 @@ function ConnectionForm(props: {
                     />
                   </Field>
                 </div>
-                {tlsNote(tlsWarning)}
+                )}
+                {!localdb && tlsNote(tlsWarning)}
                 {/* A libSQL server serves one database per address (ADR-058). */}
                 {engine.id !== "libsql" && (
                   <Field label={engine.id === "oracle" ? t("fields.serviceName") : t("fields.database")}>
@@ -979,6 +1011,7 @@ function ConnectionForm(props: {
                 <Field label={t("fields.user")}>
                   <input type="text" value={draft.user} autoComplete="off" onChange={(e) => update({ user: e.target.value })} />
                 </Field>
+                {localdb && auth === "none" && !draft.user.trim() && <p className="muted small">{t("fields.localdbWindowsAccount")}</p>}
                 {auth === "password" && (
                   <>
                     <Field label={t("fields.password")}>

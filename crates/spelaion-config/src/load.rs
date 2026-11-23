@@ -454,6 +454,9 @@ pub(crate) fn validate_connection(
             "engine_kind must name a kind of the connection engine",
         ));
     }
+    // A SQL Server LocalDB instance in place of a host (SDB-312, ADR-068): its owner logs in
+    // with the Windows account when no user is given.
+    let localdb = crate::localdb_instance(file.engine, file.host.as_deref());
     let missing: Vec<&str> = match file.engine {
         // Through Kubernetes the host is only a name for TLS: it may be left out. A network
         // profile may be a Kubernetes one (ADR-050): the resolver asks for the host otherwise.
@@ -474,7 +477,7 @@ pub(crate) fn validate_connection(
                 "host",
                 file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
             ),
-            ("user", file.user.is_none()),
+            ("user", file.user.is_none() && localdb.is_none()),
         ]
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
@@ -561,6 +564,36 @@ pub(crate) fn validate_connection(
                 missing.join(", ")
             ),
         ));
+    }
+    // A LocalDB instance is reached through its pipe on this machine: no network route, no port
+    // and no certificate to verify.
+    if let Some(instance) = localdb {
+        crate::check_localdb_name(instance).map_err(|e| ConfigError::new(path, e))?;
+        let refused = if file.tunnel.is_some() {
+            Some("tunnel")
+        } else if file.kubernetes.is_some() {
+            Some("Kubernetes")
+        } else if file.port.is_some() {
+            Some("port")
+        } else if file.local_port.is_some() {
+            Some("local_port")
+        } else if matches!(
+            file.tls.mode,
+            crate::model::TlsModeConfig::VerifyCa | crate::model::TlsModeConfig::VerifyFull
+        ) || file.tls.ca.is_some()
+        {
+            Some("certificate to verify")
+        } else {
+            None
+        };
+        if let Some(refused) = refused {
+            return Err(ConfigError::new(
+                path,
+                format!(
+                    "a LocalDB instance is reached through its pipe on this machine: it takes no {refused}"
+                ),
+            ));
+        }
     }
     // A SQLite file may be on a server, reached through a tunnel (ADR-018); DuckDB may not.
     let remote_sqlite = file.engine == Engine::Sqlite && file.tunnel.is_some();
