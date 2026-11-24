@@ -92,6 +92,9 @@ do today. New engines are only written as plugins.**
      its connections), and pinned by its hash: a changed file is refused until trusted again
      (as ADR-022 pins repository files). Nothing in a repository's `.spelaion/` can install,
      name or point to a plugin. Its manifest names one of the core's dialects, or none.
+     (ADR-079: with none, the core reads its SQL by the standard's lexical rules under the
+     engine's own name, which no barrier answers to; our own Flight SQL engines are read the
+     same way.)
      **Agents get nothing on it and read-only mode is not offered** (not a weaker one): the
      barrier ADR-020 asks of each engine is not ours to vouch for. No registry or marketplace.
      (Amended by ADR-055: the app has a Plugins page fed by a signed catalogue of our own
