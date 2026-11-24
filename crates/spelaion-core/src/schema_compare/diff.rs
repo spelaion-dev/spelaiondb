@@ -197,7 +197,7 @@ fn blanks(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// A source text with line endings and trailing blanks ignored.
+/// A source text as its line diff shows it: line endings and trailing blanks left out.
 fn lines(text: &str) -> String {
     text.replace("\r\n", "\n")
         .lines()
@@ -500,7 +500,13 @@ impl Rules<'_> {
     fn source_shape(&self, definition: &str, own_schema: &str) -> String {
         let renamed = ddl::rename_defined(definition, self.flavor, OWN_NAME)
             .unwrap_or_else(|_| definition.to_string());
-        lines(&ddl::requalified(&renamed, self.flavor, own_schema, OWN_SCHEMA).unwrap_or(renamed))
+        let requalified =
+            ddl::requalified(&renamed, self.flavor, own_schema, OWN_SCHEMA).unwrap_or(renamed);
+        // Runs of blanks between tokens count as one (SQL Server keeps `CREATE OR ALTER VIEW` as
+        // `CREATE   VIEW`); inside a string, a quoted name or a comment they are the text.
+        ddl::collapse_blanks(&requalified, self.flavor)
+            .trim()
+            .to_string()
     }
 
     fn source_changes(&self, source: &str, target: &str) -> Option<ObjectChanges> {
@@ -874,6 +880,38 @@ mod tests {
             panic!("f changed");
         };
         assert!(!changes.names_source_schema);
+    }
+
+    #[test]
+    fn blanks_count_between_tokens_only_never_inside_a_literal() {
+        let view = |text: &str| ViewSnapshot {
+            name: "v".into(),
+            materialized: false,
+            definition: text.into(),
+        };
+        let mut source = snapshot("s", vec![]);
+        let mut target = snapshot("s", vec![]);
+        source
+            .views
+            .push(view("CREATE VIEW s.v AS SELECT 'a b' AS x FROM t;"));
+        // SQL Server's `CREATE OR ALTER` kept as blanks, and other runs between tokens.
+        target.views.push(view(
+            "CREATE   VIEW s.v AS\n  SELECT  'a b'  AS x FROM t;  ",
+        ));
+        assert!(compare(&Pg, &source, &target).is_empty());
+        // A literal that differs only in its inner spaces differs.
+        target.views[0] = view("CREATE VIEW s.v AS SELECT 'a  b' AS x FROM t;");
+        let comparison = compare(&Pg, &source, &target);
+        assert!(
+            matches!(
+                comparison.objects.as_slice(),
+                [ObjectComparison {
+                    status: ObjectStatus::Changed(_),
+                    ..
+                }]
+            ),
+            "{comparison:?}"
+        );
     }
 
     #[test]

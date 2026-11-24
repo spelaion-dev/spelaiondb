@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    CompareError, CompareObjectKind, ComparedPart, CoreEvent, JobCancel, ObjectStatus, PartStatus,
-    Property, ResultStore, SchemaComparison, ServerFamily, Session, compare_schemas,
-    compare_support,
+    CompareError, CompareObjectKind, ComparedPart, CoreEvent, JobCancel, MigrationOptions,
+    ObjectStatus, PartStatus, Property, ResultStore, SchemaComparison, ServerFamily, Session,
+    compare_schemas, compare_support, count_table_rows, migration_script,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
 
@@ -358,6 +358,103 @@ async fn known_differences_are_reported_on_every_engine() {
             );
         }
         run(label, &session, &cleanup, true).await;
+    }
+}
+
+/// Builds the source and the target with rows in the target, writes the script with or
+/// without drops, runs it on the target, and compares again. Each test passes schema names of
+/// its own: the tests of this file run in parallel on the same servers.
+async fn round_trip(
+    label: &str,
+    session: &Session,
+    (source, target): (&str, &str),
+    drops: bool,
+) -> SchemaComparison {
+    let mut cleanup = Vec::new();
+    for schema in [source, target] {
+        let (create, drop) = schema_statements(label, schema);
+        run(label, session, &drop, true).await;
+        run(label, session, &create, false).await;
+        cleanup.extend(drop);
+    }
+    run(label, session, &source_statements(label, source), false).await;
+    run(label, session, &target_statements(label, target), false).await;
+    run(
+        label,
+        session,
+        &[
+            format!(
+                "INSERT INTO {target}.items (id, name, price, qty, legacy) VALUES (1, 'a', 1.50, 2, 'x')"
+            ),
+            format!("INSERT INTO {target}.items (id, name, price, qty, legacy) VALUES (2, 'b', 2.25, 3, 'y')"),
+            format!("INSERT INTO {target}.same_t (id, label) VALUES (1, 'kept')"),
+        ],
+        false,
+    )
+    .await;
+    let first = compare_schemas(session, source, session, target, &JobCancel::new(), &|_| {})
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+    let script = migration_script(session, &first, &MigrationOptions { drops })
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+    assert!(
+        script.not_scripted.is_empty(),
+        "{label}: {:?}\n{}",
+        script.not_scripted,
+        script.sql
+    );
+    let events: Vec<CoreEvent> = session.run_script(&script.sql).collect().await;
+    for event in &events {
+        if let CoreEvent::StatementFailed { error, .. } = event {
+            panic!(
+                "{label}: the script failed: {}\n{}",
+                error.message, script.sql
+            );
+        }
+    }
+    let again = compared(label, session, source, target).await;
+    for (table, rows) in [("items", 2), ("same_t", 1)] {
+        assert_eq!(
+            count_table_rows(session, target, table, "").await,
+            Ok(rows),
+            "{label}: the rows of {table} stay"
+        );
+    }
+    run(label, session, &cleanup, true).await;
+    again
+}
+
+#[tokio::test]
+async fn without_drops_the_script_leaves_only_what_is_only_in_the_target() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for (label, session) in engines().await {
+        let again = round_trip(label, &session, ("cmp_keep_src", "cmp_keep_tgt"), false).await;
+        for object in &again.objects {
+            let only_target = match &object.status {
+                ObjectStatus::OnlyInTarget => true,
+                ObjectStatus::Changed(changes) => changes
+                    .parts
+                    .iter()
+                    .all(|p| matches!(p.status, PartStatus::OnlyInTarget(_))),
+                ObjectStatus::OnlyInSource => false,
+            };
+            assert!(only_target, "{label}: {object:?}");
+        }
+        assert_eq!(
+            status_of(&again, CompareObjectKind::Table, "only_t"),
+            Some(&ObjectStatus::OnlyInTarget),
+            "{label}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn with_drops_a_second_compare_is_empty_and_the_target_keeps_its_rows() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for (label, session) in engines().await {
+        let again = round_trip(label, &session, ("cmp_drop_src", "cmp_drop_tgt"), true).await;
+        assert!(again.is_empty(), "{label}: {:?}", again.objects);
     }
 }
 

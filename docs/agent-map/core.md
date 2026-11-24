@@ -189,8 +189,16 @@
   decides every difference in one place with the forms' rules (`same_type`, `typed`), pairing
   parts by name and then by what they are (SQL Server names constraints itself), and comparing
   view and routine sources with their own name and their own schema's qualifiers left out
-  (`ddl::rename_defined`, `ddl::requalified`). It never writes; `tests/schema_compare.rs` runs
-  known differences on every engine it serves.
+  (`ddl::rename_defined`, `ddl::requalified`). `script.rs` writes the script that makes the
+  target like the source from both snapshots, through the existing writers only (ADR-047's
+  `alteration_plan` against the target's catalog, SQLite's rebuild included, `create_table_plan`,
+  ADR-026's drops and `new_table_element_sql`, "Edit source"'s `replace_form`, and the engine's
+  kept `CREATE TABLE` text on SQLite, MySQL and DuckDB), in an order the statements need (drops,
+  alterations, new tables, columns, constraints, foreign keys, views and routines last), with a
+  header of what cannot be undone, what is left in place and what is not scripted; SQL Server
+  gets one batch per piece. It never runs anything; `tests/schema_compare.rs` runs known
+  differences, and both round trips (without drops, and with drops keeping the target's rows),
+  on every engine it serves.
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
   the engine's read-only transaction (the export barrier) in a session of its own, sampled past

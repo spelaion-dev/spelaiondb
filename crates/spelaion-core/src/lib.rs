@@ -249,10 +249,11 @@ pub use results::{
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use schema_compare::{
     CompareError, CompareObjectKind, CompareProgress, CompareSide, ComparedPart, ComparedSchemas,
-    ConstraintKindCompared, ConstraintSnapshot, IndexSnapshot, NotCompared, ObjectChanges,
-    ObjectComparison, ObjectStatus, PartComparison, PartStatus, Property, PropertyChange,
-    RoutineKind, RoutineSnapshot, SchemaComparison, SchemaSnapshot, TableSnapshot, ViewSnapshot,
-    compare, compare_schemas, compare_support, read_snapshot,
+    ConstraintKindCompared, ConstraintSnapshot, IndexSnapshot, MigrationOptions, MigrationScript,
+    NotCompared, NotScripted, ObjectChanges, ObjectComparison, ObjectStatus, PartComparison,
+    PartStatus, Property, PropertyChange, RoutineKind, RoutineSnapshot, SchemaComparison,
+    SchemaSnapshot, TableSnapshot, ViewSnapshot, compare, compare_schemas, compare_support,
+    migration_script, read_snapshot,
 };
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,

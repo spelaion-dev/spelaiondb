@@ -11,9 +11,11 @@
 //!   object, one ending.
 
 mod diff;
+mod script;
 mod snapshot;
 
 pub use diff::compare;
+pub use script::{MigrationOptions, MigrationScript, NotScripted, migration_script};
 pub use snapshot::read_snapshot;
 
 use spelaion_config::mcp_clients::DiffLine;
