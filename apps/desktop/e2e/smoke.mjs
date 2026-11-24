@@ -5890,6 +5890,127 @@ try {
     }
   }
 
+  step("schema compare: from a schema's menu, the core compares two schemas and nothing opens in the editor until asked");
+  {
+    // SQLite's main with itself: the dialog, the core's reads and its report, without a script
+    // to open. The round trips of every engine are the core's tests (ADR-070).
+    await page.getByRole("button", { name: "Expand or collapse schema main", exact: true }).first().click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Compare schemas…" }).click();
+    const compare = page.getByRole("dialog", { name: "Compare schemas" });
+    await compare.locator('select[name="targetSchema"]').selectOption("main");
+    await compare.getByRole("button", { name: "Compare", exact: true }).click();
+    await compare.getByRole("status").filter({ hasText: /^The schemas are the same \(\d+ objects? compared\)\.$/ }).waitFor();
+    assert.equal(await compare.getByRole("button", { name: "Open script", exact: true }).count(), 0);
+    await shot("sdb-34-compare-same");
+    await compare.getByRole("button", { name: "Cancel", exact: true }).click();
+    await compare.waitFor({ state: "detached" });
+  }
+
+  step("schema compare: two SQLite files that differ, the report of each object, and a script that opens on the target without running");
+  {
+    // Two files written here, each pasted as a personal connection: a table only in each, a
+    // table whose column's type differs, and a view whose text differs. No server is needed.
+    const { DatabaseSync } = await import("node:sqlite");
+    const files = { "Compare A": join(userDir, "compare-a.sqlite"), "Compare B": join(userDir, "compare-b.sqlite") };
+    const write = (file, sql) => {
+      const db = new DatabaseSync(file);
+      db.exec(sql);
+      db.close();
+    };
+    write(files["Compare A"], [
+      "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, price REAL);",
+      "CREATE TABLE only_s (id INTEGER PRIMARY KEY);",
+      "CREATE VIEW v_items AS SELECT id, name FROM items;",
+    ].join("\n"));
+    write(files["Compare B"], [
+      "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, price INTEGER);",
+      "CREATE TABLE only_t (id INTEGER PRIMARY KEY);",
+      "CREATE VIEW v_items AS SELECT id FROM items;",
+      "INSERT INTO items VALUES (1, 'kept', 2);",
+    ].join("\n"));
+    for (const [name, file] of Object.entries(files)) {
+      const text = `schema_version = 1\nname = "${name}"\nengine = "sqlite"\ndatabase = '${file.replaceAll("\\", "/")}'\n`;
+      await page.evaluate((value) => (navigator.clipboard.readText = () => Promise.resolve(value)), text);
+      await page.locator(".connection-row").first().click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Paste connection" }).click();
+      const pasted = page.locator(".modal.wizard");
+      await pasted.getByRole("heading", { name: `Edit ${name}` }).waitFor();
+      await pasted.getByRole("button", { name: "Cancel", exact: true }).click();
+      await pasted.waitFor({ state: "detached" });
+    }
+    // Both connected in the explorer: B opened and folded again, then A, whose schema is the source.
+    const twisty = (name) => page.getByRole("button", { name: `Expand or collapse ${name}`, exact: true });
+    await twisty("Compare B").click();
+    // A schema's row is a div with the button role, so the path asks for the role, not the tag.
+    const schemaAfter = (name) =>
+      page.locator(`.connection-row:has-text("${name}")`).locator('xpath=following::*[@role="button"][@aria-label="Expand or collapse schema main"][1]');
+    await schemaAfter("Compare B").waitFor();
+    await twisty("Compare B").click();
+    await twisty("Compare A").click();
+    await schemaAfter("Compare A").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Compare schemas…" }).click();
+    const compare = page.getByRole("dialog", { name: "Compare schemas" });
+    await compare.getByText("Source: Compare A · main").waitFor();
+    await compare.locator('select[name="targetConnection"]').selectOption({ label: "Compare B" });
+    await compare.locator('select[name="targetSchema"] option[value="main"]').waitFor({ state: "attached" });
+    await compare.locator('select[name="targetSchema"]').selectOption("main");
+    await compare.getByRole("button", { name: "Compare", exact: true }).click();
+    await compare.getByRole("status").filter({ hasText: "4 objects differ; 0 are the same." }).waitFor();
+    const objects = compare.getByRole("listbox", { name: "Objects that differ" });
+    assert.deepEqual(
+      (await objects.getByRole("option").allInnerTexts()).map((text) => text.replace(/\s+/g, " ").trim()),
+      [
+        "items Table · Changed",
+        "only_s Table · Only in the source",
+        "only_t Table · Only in the target",
+        "v_items View · Changed",
+      ],
+    );
+    // The changed table: its column's type side by side.
+    await objects.getByRole("option", { name: /^items/ }).click();
+    const properties = compare.locator(".schema-compare-properties");
+    await properties.locator("tr", { hasText: "Column price" }).filter({ hasText: "Type" }).filter({ hasText: "REAL" }).filter({ hasText: "INTEGER" }).waitFor();
+    await shot("sdb-34-compare-report");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("sdb-34-compare-report-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    // The changed view: its text, line by line.
+    await objects.getByRole("option", { name: /^v_items/ }).click();
+    const diff = compare.locator(".schema-compare-diff");
+    await diff.locator(".diff-added", { hasText: "SELECT id, name FROM items" }).waitFor();
+    await diff.locator(".diff-removed", { hasText: "SELECT id FROM items" }).waitFor();
+    // The script opens in a new tab on the target's connection; nothing has run.
+    const tabsBefore = await page.locator(".tabbar .tab").count();
+    await compare.getByRole("button", { name: "Open script", exact: true }).click();
+    await compare.waitFor({ state: "detached" });
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 1, tabsBefore);
+    const scriptPanel = page.locator(".tab-panel:not([hidden])");
+    // The tab's connection is its editor's connection select; the status only says it connected.
+    await scriptPanel.locator(".status-connected").waitFor();
+    assert.equal(
+      await scriptPanel.getByRole("combobox", { name: "Connection", exact: true }).evaluate((el) => el.selectedOptions[0].text),
+      "Compare B (sqlite)",
+    );
+    const script = await scriptPanel.locator(".cm-content").innerText();
+    assert.match(script, /^-- Makes schema main like schema main/);
+    assert.match(script, /CREATE TABLE .*only_s/);
+    assert.match(script, /Only in the target, left in place:/);
+    const target = new DatabaseSync(files["Compare B"], { readOnly: true });
+    assert.equal(target.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'only_s'").get().n, 0, "nothing ran on the target");
+    assert.equal(target.prepare("SELECT count(*) AS n FROM items").get().n, 1);
+    target.close();
+    await page.keyboard.press("Control+w");
+    // The two connections go, as they came.
+    await twisty("Compare A").click();
+    for (const name of Object.keys(files)) {
+      await (await connectionMenu(name)).getByRole("menuitem", { name: "Delete…" }).click();
+      const confirmDelete = page.getByRole("dialog", { name: "Delete connection?" });
+      await confirmDelete.getByRole("button", { name: "Delete connection", exact: true }).click();
+      await confirmDelete.waitFor({ state: "detached" });
+    }
+    await page.locator(".connection-row", { hasText: "Compare A" }).waitFor({ state: "detached" });
+  }
+
   step("query parameters: :name values asked once, written in by the core");
   await replaceQuery(panel, "select :name as who, :n + 1 as next, :name || '!' as again;");
   await run(panel);

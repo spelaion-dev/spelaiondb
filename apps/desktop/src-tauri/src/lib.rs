@@ -19,6 +19,7 @@ mod mcp;
 mod panics;
 mod plans;
 mod plugins;
+mod schema_compare;
 mod startup;
 mod table_copy;
 mod update;
@@ -89,6 +90,8 @@ struct AppState {
     jobs: jobs::Jobs,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
+    /// Schema comparisons, by their job's id, until the page forgets them (ADR-070).
+    comparisons: std::sync::Mutex<HashMap<u32, schema_compare::StoredComparison>>,
 }
 
 struct DesktopSession {
@@ -3522,6 +3525,19 @@ async fn open_export_session(
     Arc<JobCancel>,
     jobs::Job,
 )> {
+    let running = jobs::start(state, kind, job);
+    let cancel = running.cancel().clone();
+    let (source_open, open) = open_read_session(state, app, source).await?;
+    Ok((source_open, open, cancel, running))
+}
+
+/// A new session opened for reads only from the `source` session's resolved connection and
+/// in-memory password, as an export's is (ADR-034), with the source session itself.
+async fn open_read_session(
+    state: &AppState,
+    app: &AppHandle,
+    source: &str,
+) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>)> {
     let (source_open, password) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -3529,14 +3545,12 @@ async fn open_export_session(
             .ok_or("the connection of this export is closed")?;
         (source.open.clone(), source.password.clone())
     };
-    let running = jobs::start(state, kind, job);
-    let cancel = running.cancel().clone();
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password,
-        // Only a single read is ever run again there (ADR-034).
+        // Only reads are ever run there (ADR-034).
         read_only_session: true,
     };
     match open_connection(
@@ -3547,7 +3561,7 @@ async fn open_export_session(
     )
     .await
     {
-        Ok(open) => Ok((source_open, Arc::new(open), cancel, running)),
+        Ok(open) => Ok((source_open, Arc::new(open))),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -6271,6 +6285,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             diagram::diagram_layout,
             diagram::save_diagram_text,
             diagram::close_diagram,
+            schema_compare::schema_compare_support,
+            schema_compare::compare_schemas,
+            schema_compare::schema_compare_script,
+            schema_compare::forget_schema_comparison,
             plans::explain_preflight,
             plans::plan_capabilities,
             plans::explain_query,
@@ -6872,6 +6890,7 @@ pub fn run() {
         quit: app_lifecycle::Quit::default(),
         jobs: jobs::Jobs::new(),
         diagrams: std::sync::Mutex::new(HashMap::new()),
+        comparisons: std::sync::Mutex::new(HashMap::new()),
     };
 
     let typed = builder.invoke_handler();

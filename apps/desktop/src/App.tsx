@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { ExportDialog } from "./components/ExportDialog";
 import { BackupDialog } from "./components/BackupDialog";
 import { CopyDialog } from "./components/CopyDialog";
+import { SchemaCompareDialog } from "./components/SchemaCompareDialog";
 import { ImportDialog } from "./components/ImportDialog";
 import { RunFileDialog } from "./components/RunFileDialog";
 import { ActivityBar } from "./components/ActivityBar";
@@ -305,6 +306,7 @@ export default function App() {
       <ImportDialog />
       <CopyDialog />
       <BackupDialog />
+      <SchemaCompareDialog />
       <RunFileDialog />
       <Dialogs />
     </div>

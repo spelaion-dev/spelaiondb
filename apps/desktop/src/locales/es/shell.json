@@ -953,5 +953,82 @@
     "Insert": "Insert",
     "Tab": "Tab",
     "click": "clic"
+  },
+  "compare": {
+    "menu": "Comparar esquemas…",
+    "title": "Comparar esquemas",
+    "source": "Origen: {{connection}} · {{schema}}",
+    "targetConnection": "Conexión de destino",
+    "targetSchema": "Esquema de destino",
+    "unavailable": "Comparar esquemas no está disponible: {{reason}}",
+    "noTarget": "Conecta en el explorador otra conexión del mismo motor para comparar con ella, o crea otro esquema en esta.",
+    "run": "Comparar",
+    "again": "Comparar de nuevo",
+    "cancel": "Cancelar la comparación",
+    "starting": "Abriendo las sesiones…",
+    "reading": "Leyendo el esquema de {{side}}: {{done}} de {{total}}",
+    "sides": {
+      "source": "origen",
+      "target": "destino"
+    },
+    "cancelled": "Se canceló la comparación.",
+    "failed": "No se pudieron comparar los esquemas: {{detail}}",
+    "same_one": "Los esquemas son iguales ({{count}} objeto comparado).",
+    "same_other": "Los esquemas son iguales ({{count}} objetos comparados).",
+    "summary_one": "{{count}} objeto es distinto; {{same}} son iguales.",
+    "summary_other": "{{count}} objetos son distintos; {{same}} son iguales.",
+    "objects": "Objetos distintos",
+    "kinds": {
+      "table": "Tabla",
+      "view": "Vista",
+      "materializedView": "Vista materializada",
+      "function": "Función",
+      "procedure": "Procedimiento"
+    },
+    "status": {
+      "onlyInSource": "Solo en el origen",
+      "onlyInTarget": "Solo en el destino",
+      "changed": "Cambiado"
+    },
+    "part": "Parte",
+    "property": "Propiedad",
+    "sourceHeader": "Origen",
+    "targetHeader": "Destino",
+    "parts": {
+      "object": "El objeto",
+      "column": "Columna {{name}}",
+      "primaryKey": "Clave primaria",
+      "constraint": "Restricción {{name}}",
+      "index": "Índice {{name}}",
+      "foreignKey": "Clave ajena {{name}}"
+    },
+    "properties": {
+      "type": "Tipo",
+      "nullable": "Admite nulos",
+      "default": "Valor por defecto",
+      "comment": "Comentario",
+      "generated": "Generada",
+      "columns": "Columnas",
+      "definition": "Definición",
+      "referencedTable": "Tabla referenciada",
+      "referencedColumns": "Columnas referenciadas",
+      "unique": "Única",
+      "source": "Texto fuente"
+    },
+    "none": "(ninguno)",
+    "gap_one": "… {{count}} línea sin cambios",
+    "gap_other": "… {{count}} líneas sin cambios",
+    "namesSourceSchema": "Su texto nombra el esquema de origen {{schema}} fuera de un calificador: el script mantiene ese nombre. Revísalo.",
+    "notCompared": "No se compara: {{items}}.",
+    "notComparedItems": {
+      "foreignKeyActions": "ON DELETE y ON UPDATE de las claves ajenas",
+      "columnAttributes": "identidad, intercalaciones y otros atributos de columna",
+      "columnOrder": "el orden de las columnas",
+      "otherObjects": "secuencias, disparadores, tipos, particiones y privilegios"
+    },
+    "drops": "Eliminar también lo que solo está en el destino",
+    "opensInTab": "El script se abre en una pestaña nueva del editor en la conexión de destino. Desde aquí no se ejecuta nada.",
+    "openScript": "Abrir el script",
+    "scriptFailed": "No se pudo escribir el script: {{detail}}"
   }
 }

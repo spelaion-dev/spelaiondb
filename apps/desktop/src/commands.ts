@@ -67,6 +67,7 @@ import {
   setEditorSchema,
   toggleBookmark,
 } from "./explorerActions";
+import { compareSchemas } from "./schemaCompare";
 import { useImport } from "./components/ImportDialog";
 import { ended } from "./resultEnd";
 import { canStartRun, explorerSessionOpen, isConnected, isRunning, sessionReadOnly } from "./tabState";
@@ -622,6 +623,8 @@ function schemaActions(connectionId: string, schema: string, filter: NameFilter 
       ? [
           { id: "importNewTable", label: "shell:importNewTable", run: () => importIntoNewTable(connectionId, session, schema) },
           { id: "erDiagram", label: "shell:diagram.menuSchema", run: () => openSchemaDiagram(connectionId, session, schema, filter) },
+          // The dialog says why when the engine cannot be compared (ADR-070).
+          { id: "compareSchemas", label: "shell:compare.menu", run: () => compareSchemas(connectionId, schema) },
         ]
       : []),
     ...schemaCreateKinds(actions).map((kind) => ({

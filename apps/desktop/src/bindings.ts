@@ -22,6 +22,22 @@ export const commands = {
 	saveDiagramText: (diagram: number, format: DiagramTextFormatItem, path: string) => typedError<null, string>(__TAURI_INVOKE("save_diagram_text", { diagram, format, path })),
 	/**  Forgets a diagram's model (its tab closed or read it again under another id). */
 	closeDiagram: (diagram: number) => typedError<null, string>(__TAURI_INVOKE("close_diagram", { diagram })),
+	/**  Whether `session` can take part in a comparison: `None`, or the core's reason why not. */
+	schemaCompareSupport: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("schema_compare_support", { session })),
+	/**
+	 *  Compares `source_schema` of `source`'s connection with `target_schema` of `target`'s (both
+	 *  explorer sessions), each read in a new session opened for reads only. Progress goes to
+	 *  `on_progress`, the ticket to `job`; `cancel_job` stops it. The comparison is kept until
+	 *  `forget_schema_comparison`.
+	 */
+	compareSchemas: (source: string, sourceSchema: string, target: string, targetSchema: string, job: Channel<JobTicket>, onProgress: Channel<CompareProgressItem>) => typedError<JobOutcome<SchemaComparisonItem_Serialize, null>, string>(__TAURI_INVOKE("compare_schemas", { source, sourceSchema, target, targetSchema, job, onProgress })),
+	/**
+	 *  The script that makes the comparison's target like its source, written against the
+	 *  target's catalog now. Nothing runs: the page opens it in an editor tab (ADR-070, point 7).
+	 */
+	schemaCompareScript: (comparison: number, drops: boolean) => typedError<MigrationScriptItem, string>(__TAURI_INVOKE("schema_compare_script", { comparison, drops })),
+	/**  Forgets a comparison (its dialog closed, or it compared again). */
+	forgetSchemaComparison: (comparison: number) => typedError<null, string>(__TAURI_INVOKE("forget_schema_comparison", { comparison })),
 	explainPreflight: (session: string, sql: string, options: ExplainOptions_Deserialize) => typedError<ExplainCheck, string>(__TAURI_INVOKE("explain_preflight", { session, sql, options })),
 	planCapabilities: (session: string) => typedError<PlanCapabilities_Serialize, string>(__TAURI_INVOKE("plan_capabilities", { session })),
 	explainQuery: (session: string, sql: string, options: ExplainOptions_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("explain_query", { session, sql, options, onEvent })),
@@ -1876,6 +1892,21 @@ export type CommitModeItem =
 "manual" | 
 /**  Smart commit turned manual commit on: it ends with the transaction. */
 "smartSwitched";
+
+export type CompareObjectKindItem = "table" | "view" | "materializedView" | "function" | "procedure";
+
+export type CompareProgressItem = {
+	side: CompareSideItem,
+	done: number,
+	total: number,
+};
+
+export type ComparePropertyItem = "type" | "nullable" | "default" | "comment" | "generated" | "columns" | "definition" | "referencedTable" | "referencedColumns" | "unique" | "source";
+
+export type CompareSideItem = "source" | "target";
+
+/**  A part of an object, by its name where it has one. */
+export type ComparedPartItem = { kind: "object" } | { kind: "column"; name: string } | { kind: "primaryKey" } | { kind: "constraint"; name: string } | { kind: "index"; name: string } | { kind: "foreignKey"; name: string };
 
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
 
@@ -3837,7 +3868,9 @@ export type JobKind =
 /**  "Run SQL file…". */
 "fileRun" | "connectionTest" | 
 /**  "Load every row", a page or a row jump of a query's result. */
-"rowLoad" | "pluginInstall";
+"rowLoad" | "pluginInstall" | 
+/**  A schema comparison's reads (ADR-070). */
+"schemaCompare";
 
 /**
  *  How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
@@ -4382,6 +4415,13 @@ export type McpVisibilityItem = "visible" | "notExposed" | "untrusted" |
 /**  The engine has no agents' barrier yet (ADR-056). */
 "noAgents";
 
+export type MigrationScriptItem = {
+	sql: string,
+	irreversible: string[],
+	leftInPlace: string[],
+	notScripted: NotScriptedItem[],
+};
+
 /**  A connection moved to another folder. */
 export type MovedItem = {
 	/**  Its identifier now. */
@@ -4563,6 +4603,8 @@ export type NewTableItem_Serialize = {
 	indexes: NewIndexItem[],
 };
 
+export type NotComparedItem = "foreignKeyActions" | "columnAttributes" | "columnOrder" | "otherObjects";
+
 /**  What of the source table the copy does not bring, counted. */
 export type NotCopiedItem = {
 	indexes: number,
@@ -4570,6 +4612,11 @@ export type NotCopiedItem = {
 	constraints: number,
 	defaults: number,
 	primaryKey: boolean,
+};
+
+export type NotScriptedItem = {
+	object: string,
+	reason: string,
 };
 
 export type NoticeItem = {
@@ -4608,6 +4655,22 @@ export type ObjectChangeItem_Serialize = { action: "rename"; target: ObjectTarge
 export type ObjectChangePreview = {
 	sql: string,
 	cascade: boolean,
+};
+
+export type ObjectComparisonItem = ObjectComparisonItem_Serialize | ObjectComparisonItem_Deserialize;
+
+export type ObjectComparisonItem_Deserialize = {
+	kind: CompareObjectKindItem,
+	name: string,
+	detail?: string | null,
+	status: ObjectStatusItem_Deserialize,
+};
+
+export type ObjectComparisonItem_Serialize = {
+	kind: CompareObjectKindItem,
+	name: string,
+	detail: string | null,
+	status: ObjectStatusItem_Serialize,
 };
 
 export type ObjectItem = ObjectItem_Serialize | ObjectItem_Deserialize;
@@ -4669,6 +4732,12 @@ export type ObjectPropertyItem = {
 	name: string,
 	value: string,
 };
+
+export type ObjectStatusItem = ObjectStatusItem_Serialize | ObjectStatusItem_Deserialize;
+
+export type ObjectStatusItem_Deserialize = { kind: "onlyInSource" } | { kind: "onlyInTarget" } | { kind: "changed"; parts: PartComparisonItem_Deserialize[]; sourceDiff: McpDiffLineItem[]; namesSourceSchema: boolean };
+
+export type ObjectStatusItem_Serialize = { kind: "onlyInSource" } | { kind: "onlyInTarget" } | { kind: "changed"; parts: PartComparisonItem_Serialize[]; sourceDiff: McpDiffLineItem[]; namesSourceSchema: boolean };
 
 /**
  *  An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
@@ -4760,6 +4829,24 @@ export type OutlineItem = {
 	/**  How many statements the script has. */
 	total: number,
 };
+
+export type PartComparisonItem = PartComparisonItem_Serialize | PartComparisonItem_Deserialize;
+
+export type PartComparisonItem_Deserialize = {
+	part: ComparedPartItem,
+	status: PartStatusItem_Deserialize,
+};
+
+export type PartComparisonItem_Serialize = {
+	part: ComparedPartItem,
+	status: PartStatusItem_Serialize,
+};
+
+export type PartStatusItem = PartStatusItem_Serialize | PartStatusItem_Deserialize;
+
+export type PartStatusItem_Deserialize = { kind: "onlyInSource"; definition: string } | { kind: "onlyInTarget"; definition: string } | { kind: "changed"; changes: PropertyChangeItem_Deserialize[] };
+
+export type PartStatusItem_Serialize = { kind: "onlyInSource"; definition: string } | { kind: "onlyInTarget"; definition: string } | { kind: "changed"; changes: PropertyChangeItem_Serialize[] };
 
 /**  Why a result was cut short. */
 export type PartialReasonItem = "cancelled" | "failed" | "timedOut" | "connectionLost";
@@ -5629,6 +5716,20 @@ export type ProcessTargetItem_Serialize = {
 	identity: string | null,
 };
 
+export type PropertyChangeItem = PropertyChangeItem_Serialize | PropertyChangeItem_Deserialize;
+
+export type PropertyChangeItem_Deserialize = {
+	property: ComparePropertyItem,
+	source?: string | null,
+	target?: string | null,
+};
+
+export type PropertyChangeItem_Serialize = {
+	property: ComparePropertyItem,
+	source: string | null,
+	target: string | null,
+};
+
 /**  The proxy section of the tunnel editor. Its password, if typed, travels apart. */
 export type ProxyDraftItem = ProxyDraftItem_Serialize | ProxyDraftItem_Deserialize;
 
@@ -6028,6 +6129,29 @@ export type SchemaColumnItem = {
 	table: string,
 	name: string,
 	nativeType: string,
+};
+
+/**  A comparison's report, under the id its script is asked for with. */
+export type SchemaComparisonItem = SchemaComparisonItem_Serialize | SchemaComparisonItem_Deserialize;
+
+/**  A comparison's report, under the id its script is asked for with. */
+export type SchemaComparisonItem_Deserialize = {
+	comparison: number,
+	sourceSchema: string,
+	targetSchema: string,
+	objects: ObjectComparisonItem_Deserialize[],
+	same: number,
+	notCompared: NotComparedItem[],
+};
+
+/**  A comparison's report, under the id its script is asked for with. */
+export type SchemaComparisonItem_Serialize = {
+	comparison: number,
+	sourceSchema: string,
+	targetSchema: string,
+	objects: ObjectComparisonItem_Serialize[],
+	same: number,
+	notCompared: NotComparedItem[],
 };
 
 export type SchemaItem = {

@@ -123,6 +123,12 @@
   (`usePreviewThenApply`, `useJobPhase`, `confirmShown`): a new dialog uses them, not its own
   preview, error, busy or id flags. The hooks only show: what may run is still the core's
   check (ADR-047, ADR-008). The search panel's data search is one phase in `src/searchRun.ts`.
+  Schema compare (ADR-070) is `SchemaCompareDialog.tsx`, opened from a schema's explorer menu
+  and the palette (`src/schemaCompare.ts`): the menu item is disabled with the core's reason
+  (`schema_compare_support`); `src-tauri/src/schema_compare.rs` opens a read-only session per
+  side under one job, keeps the core's comparison by its job id until the dialog forgets it, and
+  writes the script against the target's explorer session; the page holds only the report, and
+  "Open script" opens it in a new editor tab on the target, never run.
   The app's own lifecycles (the registry of running work, a tab's connection, the dialogs, the
   update, the folder switch, quitting) are SDB-369, SDB-371, SDB-375 and SDB-377.
   SDB-371: a tab's connection is one union, `Tab.connectionState` (`src/tabState.ts`'s

@@ -953,5 +953,82 @@
     "Insert": "Insert",
     "Tab": "Tab",
     "click": "click"
+  },
+  "compare": {
+    "menu": "Compare schemas…",
+    "title": "Compare schemas",
+    "source": "Source: {{connection}} · {{schema}}",
+    "targetConnection": "Target connection",
+    "targetSchema": "Target schema",
+    "unavailable": "Schema compare is not available: {{reason}}",
+    "noTarget": "Connect another connection of the same engine in the explorer to compare with it, or create another schema in this one.",
+    "run": "Compare",
+    "again": "Compare again",
+    "cancel": "Cancel comparison",
+    "starting": "Opening the sessions…",
+    "reading": "Reading the {{side}} schema: {{done}} of {{total}}",
+    "sides": {
+      "source": "source",
+      "target": "target"
+    },
+    "cancelled": "The comparison was cancelled.",
+    "failed": "Could not compare the schemas: {{detail}}",
+    "same_one": "The schemas are the same ({{count}} object compared).",
+    "same_other": "The schemas are the same ({{count}} objects compared).",
+    "summary_one": "{{count}} object differs; {{same}} are the same.",
+    "summary_other": "{{count}} objects differ; {{same}} are the same.",
+    "objects": "Objects that differ",
+    "kinds": {
+      "table": "Table",
+      "view": "View",
+      "materializedView": "Materialized view",
+      "function": "Function",
+      "procedure": "Procedure"
+    },
+    "status": {
+      "onlyInSource": "Only in the source",
+      "onlyInTarget": "Only in the target",
+      "changed": "Changed"
+    },
+    "part": "Part",
+    "property": "Property",
+    "sourceHeader": "Source",
+    "targetHeader": "Target",
+    "parts": {
+      "object": "The object",
+      "column": "Column {{name}}",
+      "primaryKey": "Primary key",
+      "constraint": "Constraint {{name}}",
+      "index": "Index {{name}}",
+      "foreignKey": "Foreign key {{name}}"
+    },
+    "properties": {
+      "type": "Type",
+      "nullable": "Nullable",
+      "default": "Default",
+      "comment": "Comment",
+      "generated": "Generated",
+      "columns": "Columns",
+      "definition": "Definition",
+      "referencedTable": "Referenced table",
+      "referencedColumns": "Referenced columns",
+      "unique": "Unique",
+      "source": "Source text"
+    },
+    "none": "(none)",
+    "gap_one": "… {{count}} line unchanged",
+    "gap_other": "… {{count}} lines unchanged",
+    "namesSourceSchema": "Its text names the source schema {{schema}} outside a qualifier: the script keeps that name. Review it.",
+    "notCompared": "Not compared: {{items}}.",
+    "notComparedItems": {
+      "foreignKeyActions": "foreign keys' ON DELETE and ON UPDATE",
+      "columnAttributes": "identity, collations and other column attributes",
+      "columnOrder": "column order",
+      "otherObjects": "sequences, triggers, types, partitions and privileges"
+    },
+    "drops": "Also drop what is only in the target",
+    "opensInTab": "The script opens in a new editor tab on the target connection. Nothing runs from here.",
+    "openScript": "Open script",
+    "scriptFailed": "Could not write the script: {{detail}}"
   }
 }

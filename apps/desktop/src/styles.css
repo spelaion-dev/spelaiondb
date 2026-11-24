@@ -5776,3 +5776,43 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .screen-failed-app { min-height: 100vh; justify-content: center; }
 /* What a launch from outside could not open (SDB-397): one line per item. */
 .launch-notice span { white-space: pre-line; }
+
+/* Schema compare (ADR-070): the objects that differ beside the one chosen. */
+.modal.schema-compare-dialog { width: min(760px, 94vw); }
+.schema-compare-report {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 2fr;
+  gap: var(--space-md);
+  min-height: 0;
+  max-height: 46vh;
+}
+.schema-compare-objects {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.schema-compare-objects button {
+  display: grid;
+  width: 100%;
+  text-align: left;
+  gap: 2px;
+  padding: var(--space-sm) var(--space-md);
+  border: 0;
+  background: transparent;
+}
+.schema-compare-objects button:hover { background: var(--hover); }
+.schema-compare-objects button.selected { background: var(--accent-soft); }
+.schema-compare-details { overflow: auto; display: grid; gap: var(--space-md); align-content: start; }
+.schema-compare-properties { border-collapse: collapse; font-size: var(--text-sm); }
+.schema-compare-properties th,
+.schema-compare-properties td {
+  text-align: left;
+  vertical-align: top;
+  padding: 2px var(--space-sm);
+  border-bottom: 1px solid var(--line);
+  word-break: break-word;
+}
+.schema-compare-diff { max-height: 220px; }
