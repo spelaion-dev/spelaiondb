@@ -1,6 +1,7 @@
 # ADR-027: SOCKS and HTTP proxies go in tunnel files, and tunnel files are the network profiles
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented; amended by ADR-076: a network profile may also name a
+  program to run before its route opens)
 - **Date:** 2026-11-05
 - **Builds on:** ADR-007 (in-process SSH), ADR-009 (configuration and secrets), ADR-022 (trust
   pinned to content)
