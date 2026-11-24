@@ -55,8 +55,9 @@ the second like the first, without ever running it from the comparison.
    kind, columns and definition as the catalog writes it, an index by its definition (the
    `CREATE INDEX` the driver writes, its own table's name left out), a foreign key by its
    columns, referenced table (in the target schema when it pointed into the source schema) and
-   referenced columns, a view's or routine's source by its text with line endings and trailing
-   blanks ignored, its own name left out, and every name its own schema qualifies counted as
+   referenced columns, a view's or routine's source by its text with line endings, trailing
+   blanks and runs of blanks ignored (SQL Server keeps `CREATE OR ALTER VIEW` as
+   `CREATE   VIEW`), its own name left out, and every name its own schema qualifies counted as
    the same on both sides (PostgreSQL, MySQL and DuckDB write a view's own schema into its
    text, so the same view in two schemas would otherwise always differ). A foreign key's
    `ON DELETE` and `ON UPDATE` are not compared: the driver contract does not report them yet,
