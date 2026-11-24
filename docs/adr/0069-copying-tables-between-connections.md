@@ -35,11 +35,23 @@ another, and some have no exact counterpart.
 
    It is refused where A's server does not keep its read barrier (Babelfish, RisingWave, the
    servers ADR-020 lists), as streaming exports are. A read-only connection may be a source.
+
+   The user learns of that refusal before choosing anything. The plan reads the source first:
+   its catalog, then a read of no rows inside the barrier. A source whose server does not keep
+   the barrier fails right there, with the server family's own reason (Babelfish's, for
+   example). So the dialog shows that reason in place of the column list, as soon as the source
+   table is chosen.
 4. **The target is the import's load** (ADR-038), fed by those batches instead of a file. So
    everything the import guarantees holds unchanged:
    - the DDL is written by the core and shown first;
-   - the guard runs: a connection type that confirms data changes asks, and a replace asks for
-     its `DROP`;
+   - the guard runs on every statement:
+     - a replace's `DROP TABLE` asks first on every connection, whatever its type (the guard
+       always asks for a `DROP`, Development included);
+     - on ClickHouse it is the `DROP` of what `EXCHANGE TABLES` swapped out, and it asks the
+       same;
+     - a connection type that confirms data changes (Production) asks for the rows' insert, and
+       one that confirms execution asks for everything;
+     - the core refuses a run that skipped a confirmation it needed;
    - a read-only target is refused, and so is a server whose transactions do not hold (SDB-354);
    - rows load in transactions of `commit_every` rows, or on ClickHouse into a table of the
      import's own, put in place whole (ADR-066);
@@ -77,8 +89,9 @@ another, and some have no exact counterpart.
    PostgreSQL and DuckDB read that text as bytes. MySQL, MariaDB, SQLite and ClickHouse would
    store the hex text itself, and SQL Server refuses it. So into those five targets a binary
    column cannot be copied yet: the preview says so, and the copy is refused unless the user
-   leaves the column out. Binary columns in `insert_rows` (protocol 1.2, every SQL plugin) are a
-   card of their own.
+   leaves the column out. Binary columns in `insert_rows` (protocol 1.2, every SQL plugin) are
+   SDB-464, in the same release (v0.16): the copy is not done until binary copies between every
+   pair too.
 9. **Tests:** the done-when sets the bar. A table with every common type, created on each engine
    that can be a target (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, DuckDB, ClickHouse),
    is copied to each of them (49 pairs), and the data read back is compared value by value,

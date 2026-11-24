@@ -255,8 +255,12 @@
   `table_copy/` (SDB-35, ADR-069) copies tables between connections: `types.rs` maps a source
   column (logical and native type) to a portable kind and that kind to each target engine's type,
   naming every loss (`Loss`); `values.rs` writes each value as the canonical text the target
-  reads. Any change to the mapping needs its unit tests (`types_tests.rs`) and the every-pair
-  copy test.
+  reads; `run.rs` plans and runs a copy: the source read through `export_stream`'s
+  `read_only_transaction` (its own cancel, passed on from the job's), the rows loaded by the
+  import's `resolve_columns` and `run_resolved` (so its guard, transactions, #473's cancel rule
+  and ClickHouse's staging hold), binary and masked columns refused until left out. Any change
+  needs its unit tests (`types_tests.rs`) and the every-pair copy test (`tests/copy_engines.rs`,
+  49 pairs of seven engines, data compared).
   `export_stream.rs` streams a query, a table data tab or explorer tables to a file
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs

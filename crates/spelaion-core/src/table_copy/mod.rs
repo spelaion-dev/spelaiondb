@@ -3,11 +3,16 @@
 //! value as the text the target reads ([`values`]); the copy itself reuses the streaming
 //! export's read (ADR-034) and the import's load (ADR-038).
 
+pub mod run;
 pub mod types;
 pub mod values;
 
 use spelaion_driver_api::LogicalType;
 
+pub use run::{
+    Blocked, COPY_BATCH_ROWS, CopyError, CopyHow, CopyPlan, CopyRequest, CopySummary, NotCopied,
+    plan_copy, run_copy,
+};
 pub use types::{Loss, Portable, TargetType, portable, target_type};
 pub use values::text_for;
 

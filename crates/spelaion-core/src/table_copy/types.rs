@@ -116,6 +116,12 @@ pub fn portable(engine: &str, native: &str, logical: LogicalType) -> Portable {
     let native = unwrap_clickhouse(native);
     let (base, numbers) = parts(native);
     let first = numbers.first().copied();
+    // SQLite types a result by its values; a read of no rows has only the declared type, which
+    // it reports as text. The declared type then says what the column holds.
+    let logical = match logical {
+        LogicalType::Text if engine == "sqlite" => sqlite_declared(&base),
+        other => other,
+    };
     match logical {
         LogicalType::Bool => Portable::Bool,
         LogicalType::Int => int_kind(engine, &base),
@@ -176,6 +182,35 @@ pub fn portable(engine: &str, native: &str, logical: LogicalType) -> Portable {
         LogicalType::Uuid => Portable::Uuid,
         LogicalType::Json => Portable::Json,
         LogicalType::Interval | LogicalType::Array | LogicalType::Native => Portable::Other,
+    }
+}
+
+/// What a SQLite column holds by its declared type (lower case, sizes taken off), as SQLite's
+/// own affinity rules read the name, refined by the names that say more (`boolean`, `date`).
+fn sqlite_declared(base: &str) -> LogicalType {
+    match base {
+        "boolean" | "bool" => LogicalType::Bool,
+        "date" => LogicalType::Date,
+        "time" => LogicalType::Time,
+        "datetime" | "timestamp" => LogicalType::Timestamp,
+        "timestamptz" | "timestamp with time zone" => LogicalType::TimestampTz,
+        "decimal" | "numeric" => LogicalType::Decimal,
+        "uuid" => LogicalType::Uuid,
+        "json" => LogicalType::Json,
+        name if name.contains("int") => LogicalType::Int,
+        // No declared type holds anything: its values travel as text.
+        name if name.contains("char")
+            || name.contains("clob")
+            || name.contains("text")
+            || name.is_empty() =>
+        {
+            LogicalType::Text
+        }
+        name if name.contains("blob") => LogicalType::Bytes,
+        name if name.contains("real") || name.contains("floa") || name.contains("doub") => {
+            LogicalType::Float
+        }
+        _ => LogicalType::Decimal,
     }
 }
 
