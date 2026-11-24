@@ -1,6 +1,6 @@
 # ADR-033: The MCP server page: read-only mode for every agent, compact output, and one-click setup of AI clients
 
-- **Status:** Accepted
+- **Status:** Accepted (the approval gate it left for SDB-38 is decided by ADR-071)
 - **Date:** 2026-11-07
 - **Builds on:** ADR-008 (MCP), ADR-019 (agents' writes), ADR-022 (repository trust),
   ADR-029 (connection types)
