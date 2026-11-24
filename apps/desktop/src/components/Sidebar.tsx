@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { chooseFolder, workspaceParent } from "../dialogs";
+import { compareSchemas } from "../schemaCompare";
 import { Trans, useTranslation } from "react-i18next";
 import {
   call,
@@ -2269,6 +2270,21 @@ function SchemaNode({
   const [menu, setMenu] = useContextMenu();
   /** The maintenance action whose dialog is open (SDB-392). */
   const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
+  /** Why "Compare schemas…" is unavailable here, from the core, read as the menu opens
+   *  (ADR-070): shown disabled with the reason, never hidden. */
+  const [compareUnavailable, setCompareUnavailable] = useState<string | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    let current = true;
+    call(commands.schemaCompareSupport(session))
+      .then((reason) => {
+        if (current) setCompareUnavailable(reason);
+      })
+      .catch((e: unknown) => {
+        if (current) setCompareUnavailable(errorText(e));
+      });
+    return () => { current = false; };
+  }, [menu, session]);
   const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
   /** Bumped by "Refresh schema": the tables already described read their details again. */
   const [refreshed, setRefreshed] = useState(0);
@@ -2463,6 +2479,15 @@ function SchemaNode({
               </button>
               <button role="menuitem" data-action="erDiagram" onClick={() => act(() => openSchemaDiagram(connectionId, session, schema, objectFilter))}>
                 {t("diagram.menuSchema")}
+              </button>
+              <button
+                role="menuitem"
+                data-action="compareSchemas"
+                disabled={compareUnavailable !== null}
+                title={compareUnavailable ?? undefined}
+                onClick={() => act(() => compareSchemas(connectionId, schema))}
+              >
+                {t("compare.menu")}
               </button>
             </>
           )}

@@ -297,7 +297,7 @@ test("a schema's and a schema object's explorer menus and their palette actions 
     showOnly: "changes the connection's explorer filter through its node",
     maintenance: "a submenu of the actions the core lists for that object",
   }, PALETTE_ONLY);
-  for (const shared of ["setEditorSchema", "importIntoNewTable", "openSchemaDiagram", "createInSchema", "dropSchema", "schemaBookmark"]) {
+  for (const shared of ["setEditorSchema", "importIntoNewTable", "openSchemaDiagram", "compareSchemas", "createInSchema", "dropSchema", "schemaBookmark"]) {
     assert.match(schema.node, new RegExp(`\\b${shared}\\(`), `the schema menu calls ${shared}`);
     assert.match(schemaPalette.source, new RegExp(`\\b${shared}\\(`), `the schema palette calls ${shared}`);
   }

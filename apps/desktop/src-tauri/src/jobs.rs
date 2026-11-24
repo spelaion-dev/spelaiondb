@@ -43,6 +43,8 @@ pub enum JobKind {
     /// "Load every row", a page or a row jump of a query's result.
     RowLoad,
     PluginInstall,
+    /// A schema comparison's reads (ADR-070).
+    SchemaCompare,
 }
 
 /// What the page holds of a running job: its id and kind, to give back to `cancel_job`.
