@@ -25,6 +25,7 @@ mod cleartext;
 mod clickhouse;
 mod column_stats;
 mod conn_test;
+mod copy_engines;
 mod copy_from_stdin;
 mod copy_updates;
 mod data_search;

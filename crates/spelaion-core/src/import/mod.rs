@@ -323,8 +323,8 @@ impl ImportPlan {
 }
 
 /// The plan with what the load needs besides.
-struct Resolved {
-    plan: ImportPlan,
+pub(crate) struct Resolved {
+    pub(crate) plan: ImportPlan,
     target: InsertTarget,
     /// For each target column, the source column it reads.
     sources: Vec<usize>,
@@ -351,6 +351,25 @@ async fn resolve(
     safeguards: &Safeguards,
     read_only: bool,
 ) -> Result<Resolved, ImportError> {
+    check_target(session, read_only)?;
+    let source_columns = source_columns(request).await?;
+    zone(&request.options)?;
+    formats(&request.options)?;
+    resolve_columns(
+        session,
+        &request.target,
+        &request.columns,
+        &source_columns,
+        &[],
+        safeguards,
+        read_only,
+    )
+    .await
+}
+
+/// Whether rows can be loaded on this session at all: not read-only, and a connection that
+/// loads rows (`insert_rows`).
+fn check_target(session: &Session, read_only: bool) -> Result<(), ImportError> {
     if read_only {
         return Err(ImportError::ReadOnly);
     }
@@ -361,19 +380,33 @@ async fn resolve(
                 .into(),
         ));
     }
+    Ok(())
+}
+
+/// Writes what loading rows of `source_columns` into `target` runs, each source column going
+/// where `columns` says, and checks it against the table. An import reads its source's columns
+/// from the file; a copy (ADR-069) gives the source table's, and its `primary_key` for a new
+/// table.
+pub(crate) async fn resolve_columns(
+    session: &Session,
+    target: &ImportTarget,
+    columns: &[ColumnMapping],
+    source_columns: &[String],
+    primary_key: &[String],
+    safeguards: &Safeguards,
+    read_only: bool,
+) -> Result<Resolved, ImportError> {
+    check_target(session, read_only)?;
     let dialect = session.dialect().clone();
     let dialect = dialect.as_ref();
-    let source_columns = source_columns(request).await?;
-    if request.columns.len() != source_columns.len() {
+    if columns.len() != source_columns.len() {
         return Err(ImportError::Invalid(format!(
             "the source has {} columns, the mapping {}: preview it again",
             source_columns.len(),
-            request.columns.len()
+            columns.len()
         )));
     }
-    zone(&request.options)?;
-    formats(&request.options)?;
-    let (schema, table, if_exists, wanted_new) = match &request.target {
+    let (schema, table, if_exists, wanted_new) = match target {
         ImportTarget::Existing { schema, table } => (schema, table, None, false),
         ImportTarget::New {
             schema,
@@ -425,7 +458,7 @@ async fn resolve(
     let mut sources = Vec::new();
     let mut kinds = Vec::new();
     let mut new_columns: Vec<(String, String)> = Vec::new();
-    for (i, mapping) in request.columns.iter().enumerate() {
+    for (i, mapping) in columns.iter().enumerate() {
         let (name, kind) = match mapping {
             ColumnMapping::Skip => continue,
             ColumnMapping::Existing(name) => {
@@ -464,10 +497,26 @@ async fn resolve(
         return Err(ImportError::Invalid("no column is imported".into()));
     }
     if creates_table {
-        let columns: Vec<String> = new_columns
+        let mut columns: Vec<String> = new_columns
             .iter()
             .map(|(name, sql_type)| format!("  {} {sql_type}", dialect.quote_identifier(name)))
             .collect();
+        // A copy's primary key (ADR-069), over columns the new table has. ClickHouse's sort key
+        // is not unique: its table keeps none.
+        if !primary_key.is_empty() && !staged {
+            for name in primary_key {
+                if !new_columns.iter().any(|(column, _)| column == name) {
+                    return Err(ImportError::Invalid(format!(
+                        "the primary key's column {name} is not copied"
+                    )));
+                }
+            }
+            let key: Vec<String> = primary_key
+                .iter()
+                .map(|name| dialect.quote_identifier(name))
+                .collect();
+            columns.push(format!("  PRIMARY KEY ({})", key.join(", ")));
+        }
         let engine = if staged {
             format!(" {}", staged::TABLE_ENGINE)
         } else {
@@ -759,6 +808,62 @@ pub async fn run_import(
 ) -> Result<ImportSummary, ImportError> {
     let started = Instant::now();
     let resolved = resolve(session, request, safeguards, read_only).await?;
+    // Before the file is opened (and again in `run_resolved`, for every caller).
+    if resolved.plan.needs_confirmation() && !confirmed {
+        return Err(ImportError::NeedsConfirmation);
+    }
+    let normalizer = Normalizer {
+        kinds: resolved.kinds.clone(),
+        formats: formats(&request.options)?,
+        zone: zone(&request.options)?,
+        mysql: matches!(session.dialect().name(), "mysql" | "clickhouse"),
+    };
+    let (batches, reader) = read_batches(request);
+    run_resolved(
+        session,
+        resolved,
+        &normalizer,
+        request.commit_every,
+        confirmed,
+        cancel,
+        progress,
+        batches,
+        // The reader stopped without an error of its own: it either read the whole file, or it
+        // panicked and the rows after its last batch were never read (SDB-163).
+        async move { reader.await.is_ok() },
+        started,
+    )
+    .await
+}
+
+/// The import's values normalised for `resolved`'s columns, from text written as the core
+/// writes it (ISO dates, `true`/`false`): a copy's (ADR-069).
+pub(crate) fn canonical_normalizer(session: &Session, resolved: &Resolved) -> Normalizer {
+    Normalizer {
+        kinds: resolved.kinds.clone(),
+        formats: Formats::default(),
+        zone: None,
+        mysql: matches!(session.dialect().name(), "mysql" | "clickhouse"),
+    }
+}
+
+/// Runs what `resolved` says on `session` and loads `batches` into it: the import's statements,
+/// its rows in transactions, and ClickHouse's finish (ADR-066). `source_whole` answers, once the
+/// batches end, whether the source was read to its end; if not, nothing more is committed. The
+/// import's file and a copy's read (ADR-069) both load through here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_resolved(
+    session: &Session,
+    resolved: Resolved,
+    normalizer: &Normalizer,
+    commit_every: u64,
+    confirmed: bool,
+    cancel: &JobCancel,
+    progress: &(dyn Fn(ImportProgress) + Send + Sync),
+    batches: tokio::sync::mpsc::Receiver<Batch>,
+    source_whole: impl Future<Output = bool>,
+    started: Instant,
+) -> Result<ImportSummary, ImportError> {
     if resolved.plan.needs_confirmation() && !confirmed {
         return Err(ImportError::NeedsConfirmation);
     }
@@ -812,21 +917,17 @@ pub async fn run_import(
             message,
         });
     }
-    let normalizer = Normalizer {
-        kinds: resolved.kinds.clone(),
-        formats: formats(&request.options)?,
-        zone: zone(&request.options)?,
-        mysql: matches!(session.dialect().name(), "mysql" | "clickhouse"),
-    };
     // A panic while loading (SDB-163) rolls back the batch it was in, as any failure does, and
     // the import ends with an error instead of unwinding into the app.
     let loaded = crate::panics::catch_panic(load(
         session,
-        request,
+        commit_every,
         &resolved,
-        &normalizer,
+        normalizer,
         cancel,
         progress,
+        batches,
+        source_whole,
     ))
     .await;
     let rows = match loaded {
@@ -908,7 +1009,8 @@ fn first_line(statement: &str) -> String {
     }
 }
 
-type Batch = Result<Vec<Vec<Option<String>>>, ImportError>;
+/// A batch of rows, each value text or `None` for NULL, or why the source stopped.
+pub(crate) type Batch = Result<Vec<Vec<Option<String>>>, ImportError>;
 
 /// Reads the source in a blocking thread, a batch at a time: at most two batches wait. The
 /// channel's end alone does not say the source was read to its end: the thread's handle does
@@ -959,13 +1061,16 @@ fn read_batches(
     (rx, reader)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn load(
     session: &Session,
-    request: &ImportRequest,
+    commit_every: u64,
     resolved: &Resolved,
     normalizer: &Normalizer,
     cancel: &JobCancel,
     progress: &(dyn Fn(ImportProgress) + Send + Sync),
+    mut batches: tokio::sync::mpsc::Receiver<Batch>,
+    source_whole: impl Future<Output = bool>,
 ) -> Result<u64, ImportError> {
     let dialect = session.dialect().name();
     let begin = match dialect {
@@ -976,7 +1081,6 @@ async fn load(
     // Loaded into a table of our own (ClickHouse, ADR-066): no transactions, the whole import is
     // one unit, and nothing counts as committed until the table is put in place.
     let transactions = resolved.staging.is_none();
-    let (mut batches, reader) = read_batches(request);
     let mut read = 0u64;
     let mut committed = 0u64;
     let mut in_transaction = 0u64;
@@ -1038,10 +1142,10 @@ async fn load(
                 rollback(open).await;
                 return Err(ImportError::Cancelled { committed });
             }
-            let room = if request.commit_every == 0 || !transactions {
+            let room = if commit_every == 0 || !transactions {
                 u64::MAX
             } else {
-                request.commit_every - in_transaction
+                commit_every - in_transaction
             };
             let length = usize::try_from(room)
                 .unwrap_or(usize::MAX)
@@ -1083,7 +1187,7 @@ async fn load(
             }
             read += count;
             in_transaction += count;
-            if transactions && request.commit_every > 0 && in_transaction >= request.commit_every {
+            if transactions && commit_every > 0 && in_transaction >= commit_every {
                 if cancel.is_cancelled() {
                     rollback(open).await;
                     return Err(ImportError::Cancelled { committed });
@@ -1109,16 +1213,17 @@ async fn load(
         rollback(open).await;
         return Err(ImportError::Cancelled { committed });
     }
-    // The reader stopped without an error of its own: it either read the whole source, or it
-    // panicked and the rows after its last batch were never read. Those are not committed.
-    if reader.await.is_err() {
+    // The source stopped without an error of its own: it either was read to its end, or its
+    // reader panicked and the rows after its last batch were never read. Those are not
+    // committed.
+    if !source_whole.await {
         rollback(open).await;
         return Err(ImportError::Failed {
             first: read + 1,
             last: read + 1,
             committed,
             message: format!(
-                "the file could not be read past this row: {}",
+                "the source could not be read past this row: {}",
                 crate::panics::INTERNAL_ERROR
             ),
         });
