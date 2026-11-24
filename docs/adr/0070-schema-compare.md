@@ -56,13 +56,18 @@ the second like the first, without ever running it from the comparison.
    `CREATE INDEX` the driver writes, its own table's name left out), a foreign key by its
    columns, referenced table (in the target schema when it pointed into the source schema) and
    referenced columns, a view's or routine's source by its text with line endings and trailing
-   blanks ignored. A foreign key's `ON DELETE` and `ON UPDATE` are not compared: the driver
-   contract does not report them yet, and the report says so on every foreign key.
-   An index's or constraint's definition is moved to the target by replacing its own table's
-   qualified name, found as code by the dialect's scanner (ADR-065), never by a text search.
-   When source and target schemas have different names, any other reference to the source
-   schema inside a source text (a view's, a routine's, a check's) is not rewritten: the report
-   says the text names it, for the user to review.
+   blanks ignored, its own name left out, and every name its own schema qualifies counted as
+   the same on both sides (PostgreSQL, MySQL and DuckDB write a view's own schema into its
+   text, so the same view in two schemas would otherwise always differ). A foreign key's
+   `ON DELETE` and `ON UPDATE` are not compared: the driver contract does not report them yet,
+   and the report says so on every foreign key.
+   Every name is found as a token by the tokenizer the structure forms already use for
+   `CREATE TABLE` text (ADR-047; the dialect's scanner once ADR-065 lands), never by a text
+   search. Moving a definition to the target replaces only its own name (and an index's own
+   table) and the source schema where it qualifies a name (`src.t` becomes `dst.t`): those
+   are positions the tokens show. The source schema anywhere else in a source text, inside a
+   string (dynamic SQL) above all, is not rewritten: the report says the text names it, for
+   the user to review.
 5. **The report is per object**: only in source, only in target, changed, or the same (only
    counted). A changed table lists each changed property side by side (a column's type,
    nullability, default, comment; an index's or constraint's definition); a changed view or
@@ -117,9 +122,13 @@ the second like the first, without ever running it from the comparison.
   statements can be run one at a time, is the safer place (ADR-026).
 - **Compare data as well:** a different question (row counts, keys, values), with its own
   cost and masking rules; a later ADR if it is wanted.
-- **Rewrite the source schema's name inside view and routine text when the schemas' names
-  differ:** text rewriting of SQL bodies is guesswork (strings, comments, dynamic SQL); the
-  report points at it instead.
+- **Rewrite every mention of the source schema's name inside view and routine text when the
+  schemas' names differ:** text rewriting of SQL bodies is guesswork (strings, comments,
+  dynamic SQL); only the qualifiers the tokens show are moved, and the report points at the
+  rest.
+- **Leave even the qualifiers as they are:** the script would create the target's views over
+  the source schema's tables, and on PostgreSQL, MySQL and DuckDB a second comparison could
+  never be empty when the schemas' names differ.
 
 ## Consequences
 - `tests/schema_compare.rs` runs on every engine of point 1, with both round trips of point 8.
