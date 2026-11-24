@@ -157,3 +157,8 @@ That is the database's barrier, not ours, it needs 23ai, and its session refused
 agents on Oracle only where the session's user is read-only in the database, checked when the
 session opens, would be a decision of its own, with tests against such a user in
 `testing/docker`; it is a Backlog item (SDB-457), not part of this note.
+
+**2026-11-24: decided in ADR-080.** Point 2's barrier is replaced: read-only connections and
+agents' reads are offered on Oracle only where the database keeps the session's user read-only,
+checked on each session, and closed everywhere else. Not implemented yet: until its tests pass,
+Oracle still has no read-only mode and no agents.
