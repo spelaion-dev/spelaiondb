@@ -248,6 +248,63 @@ pub(crate) fn rename_defined(
     Ok(out)
 }
 
+/// `sql` with each run of blanks between two tokens (spaces, tabs, line breaks) written as one
+/// space, and none at the end: what a schema compare ignores in a view's or routine's source
+/// (ADR-070; SQL Server keeps `CREATE OR ALTER VIEW` as `CREATE   VIEW`, and engines lay a
+/// view's text out on lines their own way). Strings, quoted names and comments keep their inner
+/// blanks, and a line comment keeps the line break that ends it. A text the tokenizer cannot
+/// read is returned as it is.
+pub(crate) fn collapse_blanks(sql: &str, flavor: Flavor) -> String {
+    let Ok(tokens) = tokenize(sql, flavor) else {
+        return sql.to_string();
+    };
+    let mut out = String::with_capacity(sql.len());
+    let mut at = 0;
+    for token in tokens.iter().map(Some).chain([None]) {
+        let end = token.map_or(sql.len(), |t| t.start);
+        // Between two tokens there are only blanks and comments.
+        let gap = &sql[at..end];
+        let mut i = 0;
+        let bytes = gap.as_bytes();
+        let mut after_line_comment = false;
+        while i < bytes.len() {
+            if gap[i..].starts_with("--") {
+                let stop = gap[i..].find('\n').map_or(gap.len(), |n| i + n);
+                out.push_str(&gap[i..stop]);
+                i = stop;
+                after_line_comment = true;
+            } else if gap[i..].starts_with("/*") {
+                let stop = gap[i + 2..].find("*/").map_or(gap.len(), |n| i + 2 + n + 2);
+                out.push_str(&gap[i..stop]);
+                i = stop;
+                after_line_comment = false;
+            } else if matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+                let mut line_break = false;
+                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+                    line_break |= bytes[i] == b'\n';
+                    i += 1;
+                }
+                if line_break && after_line_comment {
+                    out.push('\n');
+                } else if token.is_some() || i < bytes.len() {
+                    out.push(' ');
+                }
+                after_line_comment = false;
+            } else {
+                let c = gap[i..].chars().next().expect("a character");
+                out.push(c);
+                i += c.len_utf8();
+                after_line_comment = false;
+            }
+        }
+        if let Some(t) = token {
+            out.push_str(&sql[t.start..t.end]);
+            at = t.end;
+        }
+    }
+    out
+}
+
 /// Whether a string literal of `sql` holds `schema` as a qualifier (`'DELETE FROM schema.t'`):
 /// dynamic SQL that [`requalified`] does not move (ADR-070). Matched without case.
 pub(crate) fn strings_qualify_with(sql: &str, flavor: Flavor, schema: &str) -> bool {
@@ -907,6 +964,26 @@ mod tests {
             assert_eq!(rename_defined(sql, Flavor::Sqlite, "X").unwrap(), renamed);
         }
         assert!(rename_defined("SELECT 1", Flavor::Sqlite, "X").is_err());
+    }
+
+    #[test]
+    fn only_blanks_between_tokens_are_collapsed() {
+        assert_eq!(
+            collapse_blanks(
+                "CREATE   VIEW v AS\r\n  SELECT 'a  b' AS \"x  y\",\t[p  q] -- two  spaces\n  FROM t /* a  b */  ",
+                Flavor::Sqlite
+            ),
+            "CREATE VIEW v AS SELECT 'a  b' AS \"x  y\", [p  q] -- two  spaces\nFROM t /* a  b */"
+        );
+        // A line break inside a string is the string's.
+        assert_eq!(
+            collapse_blanks("SELECT  'a\n  b'\n\n  FROM t", Flavor::Sqlite),
+            "SELECT 'a\n  b' FROM t"
+        );
+        assert_eq!(
+            collapse_blanks("SELECT 'it''s  ok',  `a  b`", Flavor::Mysql),
+            "SELECT 'it''s  ok', `a  b`"
+        );
     }
 
     #[test]

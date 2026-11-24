@@ -13,7 +13,7 @@ mod duplicate;
 mod maintenance;
 mod privileges;
 mod rebuild;
-mod source;
+pub(crate) mod source;
 mod users;
 
 pub use alter::{
