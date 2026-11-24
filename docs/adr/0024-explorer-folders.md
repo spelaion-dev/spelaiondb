@@ -1,6 +1,7 @@
 # ADR-024: The explorer groups objects in folders by type
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by ADR-074: a PostgreSQL connection that opens several
+  databases has a database level, with extensions under each database)
 - **Date:** 2026-11-04
 - **Refines:** point 4 of ADR-005 ("driver-driven schema") for the relational engines
 
