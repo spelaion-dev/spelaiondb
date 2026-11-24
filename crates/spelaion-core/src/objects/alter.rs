@@ -194,7 +194,7 @@ fn nstring(text: &str) -> String {
     format!("N'{}'", text.replace('\'', "''"))
 }
 
-fn flavor(engine: &str) -> Flavor {
+pub(crate) fn flavor(engine: &str) -> Flavor {
     if engine == "mysql" {
         Flavor::Mysql
     } else {
@@ -203,7 +203,7 @@ fn flavor(engine: &str) -> Flavor {
 }
 
 /// What a form typed: trimmed, and empty as nothing.
-fn typed(text: &Option<String>) -> Option<String> {
+pub(crate) fn typed(text: &Option<String>) -> Option<String> {
     text.as_deref()
         .map(str::trim)
         .filter(|t| !t.is_empty())
@@ -211,7 +211,7 @@ fn typed(text: &Option<String>) -> Option<String> {
 }
 
 /// Types compared as SQL: case and runs of blanks do not count.
-fn same_type(a: &str, b: &str) -> bool {
+pub(crate) fn same_type(a: &str, b: &str) -> bool {
     let normal = |s: &str| {
         s.split_whitespace()
             .collect::<Vec<_>>()
@@ -237,7 +237,7 @@ pub(crate) struct Current {
     pub columns: Vec<EditableColumn>,
 }
 
-async fn read_current(
+pub(crate) async fn read_current(
     session: &Session,
     schema: &str,
     table: &str,
