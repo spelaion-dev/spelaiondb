@@ -1,6 +1,7 @@
 # ADR-039: Importing connections from other clients: one flow, a reader per client
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented; amended by ADR-077: the stores protected with Windows DPAPI,
+  left for later here, are not read)
 - **Date:** 2026-11-08
 - **Builds on:** ADR-009 (configuration and secrets), ADR-022 (team sharing), ADR-027 (network
   profiles), ADR-030 (copying connections)
