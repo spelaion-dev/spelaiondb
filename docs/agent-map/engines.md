@@ -118,7 +118,9 @@
   read-only cannot set it). It declares no transactions and no editing, and agents' writes
   are refused (`run_write` needs a transaction). Imports load into a table of our own put in
   place by one atomic rename (ADR-066: `import/staged.rs`; new tables only, `Atomic`
-  databases only). Data search writes its
+  databases only); the preview's `kept_whole`, from `staged::applies_to`, is what makes the
+  import dialog show that line instead of "Commit every" (SDB-460), never the engine's name
+  in React. Data search writes its
   ClickHouse forms (`toString`, `positionCaseInsensitiveUTF8`, `substringUTF8`; its `String`
   is searched as text) and binds `{pN:String}`. Its plans are estimated only
   (`plan/clickhouse.rs`, `tests/plans_clickhouse.rs`; no ANALYZE). Its

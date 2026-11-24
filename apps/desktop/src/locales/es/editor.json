@@ -894,6 +894,7 @@
     "newColumn": "Columna nueva…",
     "commitEvery": "Confirmar cada (filas)",
     "commitHint": "Cada lote se confirma al completarse; cancelar o un error deshace solo el lote en el que ocurre. Con 0 todo va en una sola transacción.",
+    "keptWhole": "Las filas se cargan en una tabla propia y se colocan en su sitio de una vez: la importación se guarda entera o no se guarda, así que no hay lotes que confirmar.",
     "reviewSql": "Revisar SQL…",
     "planning": "Comprobando la tabla…",
     "couldNotPlan": "No se pudo preparar la importación: {{reason}}",

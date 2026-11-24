@@ -236,6 +236,9 @@ pub struct ImportPreviewItem {
     pub suggested_table: String,
     /// The worksheets of a workbook (XLSX), in order; empty for the other formats.
     pub sheets: Vec<String>,
+    /// The core puts the rows in place whole or not at all (ADR-066): no batches to commit, so
+    /// the dialog offers no "Commit every".
+    pub kept_whole: bool,
 }
 
 fn count(n: usize) -> u32 {
@@ -423,6 +426,7 @@ pub async fn import_preview(
         more: preview.more,
         suggested_table: preview.suggested_table,
         sheets: preview.sheets,
+        kept_whole: preview.kept_whole,
     })
 }
 
