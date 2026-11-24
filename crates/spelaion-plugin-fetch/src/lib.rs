@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use spelaion_core::plugins::pins::{
-    PinnedBuild, PinnedPlugin, Pins, PluginRefused, check_file, program_file_name, sha256_of,
+    PinnedBuild, PinnedPlugin, Pins, PluginRefused, check_file, sha256_of,
 };
 
 /// Where releases are, when nothing else is said.
@@ -138,14 +138,33 @@ fn fetch_keeping(
     let archives = archives.map(whole).transpose()?;
     let mut fetched = Vec::new();
     for (plugin, build) in pins.for_platform(platform) {
-        fetched.push(fetch_one(plugin, build, base, into, archives.as_deref())?);
+        fetched.push(fetch_one(
+            plugin,
+            build,
+            platform,
+            base,
+            into,
+            archives.as_deref(),
+        )?);
     }
     Ok(fetched)
+}
+
+/// A plugin's program file on `platform`, which may not be this machine's (`--platform`, for
+/// an installer of another platform): `.exe` only on Windows targets (SDB-463). On this
+/// machine's platform it is the name the app starts (`pins::program_file_name`).
+pub fn program_file_for(name: &str, platform: &str) -> String {
+    if platform.contains("-windows-") {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
 }
 
 fn fetch_one(
     plugin: &PinnedPlugin,
     build: &PinnedBuild,
+    platform: &str,
     base: &str,
     into: &Path,
     archives: Option<&Path>,
@@ -158,7 +177,7 @@ fn fetch_one(
         plugin.version,
         build.archive
     );
-    let file = program_file_name(&plugin.name);
+    let file = program_file_for(&plugin.name, platform);
     // Everything happens in a folder of its own, removed whatever happens: nothing that was
     // not checked is ever left where the programs go.
     let work = Work::new(into, &plugin.name)?;
