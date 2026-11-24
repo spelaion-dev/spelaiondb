@@ -128,6 +128,9 @@ pub struct ImportPreview {
     /// The worksheets of a workbook (XLSX), in order: the sheet read is the options' or the
     /// first. Empty for the other formats.
     pub sheets: Vec<String>,
+    /// The rows are put in place whole or not at all, loaded aside and swapped in (ClickHouse,
+    /// ADR-066): nothing is committed in batches, and the request's `commit_every` does not apply.
+    pub kept_whole: bool,
 }
 
 /// Reads the start of `source` (blocking: call it off the async runtime). `options: None`
@@ -192,6 +195,7 @@ pub fn preview(
         rows,
         suggested_table: suggested_table(source),
         sheets: reader.sheets.clone(),
+        kept_whole: staged::applies_to(engine),
         options,
     })
 }

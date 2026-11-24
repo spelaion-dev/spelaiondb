@@ -180,6 +180,8 @@ async fn exercise(engine: Engine) {
     })
     .await
     .unwrap();
+    // Batches commit one by one here: the dialog offers "Commit every" (SDB-460).
+    assert!(!shown.kept_whole, "{}", dialect.name());
     let kinds: Vec<ColumnKind> = shown.columns.iter().map(|c| c.kind).collect();
     assert_eq!(
         kinds,
@@ -746,6 +748,8 @@ async fn clickhouse_imports_land_whole_or_not_at_all() {
     })
     .await
     .unwrap();
+    // Kept whole: the dialog shows no "Commit every" here (SDB-460).
+    assert!(shown.kept_whole);
     let types: Vec<&str> = shown.columns.iter().map(|c| c.sql_type.as_str()).collect();
     assert_eq!(
         [types[0], types[1], types[3], types[4]],

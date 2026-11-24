@@ -3696,6 +3696,11 @@ export type ImportPreviewItem = {
 	suggestedTable: string,
 	/**  The worksheets of a workbook (XLSX), in order; empty for the other formats. */
 	sheets: string[],
+	/**
+	 *  The core puts the rows in place whole or not at all (ADR-066): no batches to commit, so
+	 *  the dialog offers no "Commit every".
+	 */
+	keptWhole: boolean,
 };
 
 export type ImportProgressItem = {

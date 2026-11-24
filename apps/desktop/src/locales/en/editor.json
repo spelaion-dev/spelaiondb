@@ -894,6 +894,7 @@
     "newColumn": "New column…",
     "commitEvery": "Commit every (rows)",
     "commitHint": "Each batch is committed when it is complete; a cancel or an error rolls back only the batch it happened in. 0 imports everything in one transaction.",
+    "keptWhole": "The rows load into a table of their own and are put in place in one step: the import is kept whole or not at all, so there are no batches to commit.",
     "reviewSql": "Review SQL…",
     "planning": "Checking the table…",
     "couldNotPlan": "Could not prepare the import: {{reason}}",
