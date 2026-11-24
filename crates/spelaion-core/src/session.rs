@@ -273,6 +273,10 @@ pub struct Session {
     /// The server a PostgreSQL session reached (SDB-169), read by [`crate::open_connection`]
     /// when it opens; `None` for the other engines and for sessions built without it.
     server_family: Option<crate::ServerFamily>,
+    /// The file of an embedded database (SQLite, DuckDB), as [`crate::open_connection`] names it:
+    /// two sessions on one file have the same text (ADR-069). `None` for servers, in-memory
+    /// databases and sessions built without it.
+    database_file: Option<String>,
     /// The table data page statements the core wrote on this session, with their tables: a
     /// run that sends one binds its results to that table (SDB-440).
     table_pages: Arc<crate::table_pages::TablePages>,
@@ -388,6 +392,7 @@ impl Session {
             read_only: false,
             session_read_only: AtomicBool::new(false),
             server_family: None,
+            database_file: None,
             transaction_pooled: false,
             table_pages: Arc::default(),
         }
@@ -435,6 +440,17 @@ impl Session {
 
     pub fn server_family(&self) -> Option<&crate::ServerFamily> {
         self.server_family.as_ref()
+    }
+
+    /// The embedded database file this session works on (ADR-069), named so that two sessions
+    /// on one file have the same text.
+    pub fn with_database_file(mut self, file: impl Into<String>) -> Self {
+        self.database_file = Some(file.into());
+        self
+    }
+
+    pub fn database_file(&self) -> Option<&str> {
+        self.database_file.as_deref()
     }
 
     /// Why a read that relies on the engine's read-only transaction (agents' reads, streaming

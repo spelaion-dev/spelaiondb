@@ -22,6 +22,7 @@ import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase, SET_A
 import { openDiagram } from "./diagramTabs";
 import { useApp } from "./store";
 import { useExport } from "./components/ExportDialog";
+import { useCopy } from "./components/CopyDialog";
 import { useImport } from "./components/ImportDialog";
 import { isConnected, isRunning } from "./tabState";
 
@@ -155,6 +156,11 @@ export function exportRelations(connectionId: string, session: string, tables: {
 /** The import dialog into this table. */
 export function importIntoTable(connectionId: string, session: string, object: ObjectItem) {
   useImport.getState().open({ session, connectionId, schema: object.schema, table: object.name, text: null });
+}
+
+/** Copies the table or view to another connection (ADR-069). */
+export function copyToConnection(connectionId: string, session: string, object: ObjectItem) {
+  useCopy.getState().open({ session, connectionId, schema: object.schema, table: object.name });
 }
 
 /** The ER diagram of the table's related tables, or of the tables chosen with Ctrl+click. */

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import { ExportDialog } from "./components/ExportDialog";
 import { BackupDialog } from "./components/BackupDialog";
+import { CopyDialog } from "./components/CopyDialog";
 import { ImportDialog } from "./components/ImportDialog";
 import { RunFileDialog } from "./components/RunFileDialog";
 import { ActivityBar } from "./components/ActivityBar";
@@ -302,6 +303,7 @@ export default function App() {
       <ExplorerDialogHost />
       <ExportDialog />
       <ImportDialog />
+      <CopyDialog />
       <BackupDialog />
       <RunFileDialog />
       <Dialogs />

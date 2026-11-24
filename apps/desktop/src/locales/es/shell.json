@@ -638,6 +638,7 @@
   },
   "exportTable": "Exportar…",
   "importData": "Importar datos…",
+  "copyToConnection": "Copiar a otra conexión…",
   "importNewTable": "Importar datos en una tabla nueva…",
   "exportTables_one": "Exportar {{formattedCount}} tabla…",
   "exportTables_other": "Exportar {{formattedCount}} tablas…",

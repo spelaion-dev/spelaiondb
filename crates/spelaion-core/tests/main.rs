@@ -27,6 +27,7 @@ mod column_stats;
 mod conn_test;
 mod copy_engines;
 mod copy_from_stdin;
+mod copy_same_file;
 mod copy_updates;
 mod data_search;
 mod databend;

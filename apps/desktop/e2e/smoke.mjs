@@ -4484,7 +4484,7 @@ try {
   await page.keyboard.press("Enter");
   // The table's explorer menu, through the same functions (SDB-92), and the palette's own.
   const tableActions = await paletteLabels();
-  assert.deepEqual(tableActions.slice(0, 9), ["Open data", "Open structure", "New console", "Open as SQL", "Export…", "Import data…", "ER diagram of related tables", "Copy name", "Copy qualified name"]);
+  assert.deepEqual(tableActions.slice(0, 10), ["Open data", "Open structure", "New console", "Open as SQL", "Export…", "Import data…", "Copy to another connection…", "ER diagram of related tables", "Copy name", "Copy qualified name"]);
   for (const label of ["Duplicate table…", "Rename…", "Drop…", "Generate DDL", "Generate SELECT"]) assert.ok(tableActions.includes(label), `${label} in ${tableActions.join(", ")}`);
   assert.equal(tableActions.at(-1), "Show in explorer");
   await shot("sdb-18-palette-actions");
@@ -5951,6 +5951,32 @@ try {
   await deleteSaved.getByRole("button", { name: "Delete saved query", exact: true }).click();
   await snippets.getByText("No saved queries yet.", { exact: false }).waitFor();
   await page.getByRole("button", { name: "Close saved queries" }).click();
+
+  step("copy to another connection: into its own SQLite file it is refused before anything runs, saying what to do instead (ADR-069)");
+  {
+    await page.keyboard.press("Control+Shift+P");
+    await paletteBox.fill("ord");
+    await paletteResults.locator(".palette-item", { hasText: "big_orders" }).waitFor();
+    await page.keyboard.press("Enter");
+    await paletteBox.fill("copy to another");
+    assert.equal((await paletteLabels())[0], "Copy to another connection…");
+    await page.keyboard.press("Enter");
+    const copyDialog = page.getByRole("dialog", { name: /^Copy main\.orders from / });
+    await copyDialog.waitFor();
+    const connection = copyDialog.getByLabel("Connection");
+    const shop = await connection.locator("option", { hasText: "Shop" }).first().getAttribute("value");
+    await connection.selectOption(shop);
+    // A <select> inside its <label> takes its options' text into its name ("…a new table"): by role.
+    await copyDialog.getByRole("textbox", { name: "New table", exact: true }).fill("orders_copy_smoke");
+    await copyDialog.getByRole("button", { name: "Next", exact: true }).click();
+    // The copy reads the source while it writes the target, and one file cannot do both.
+    await copyDialog.getByRole("alert").filter({ hasText: "the source and the target are the same database file" }).waitFor();
+    assert.ok(await copyDialog.getByRole("button", { name: "Copy", exact: true }).isDisabled());
+    await shot("sdb-35-copy-same-file");
+    await copyDialog.getByRole("button", { name: "Back", exact: true }).click();
+    await copyDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await copyDialog.waitFor({ state: "detached" });
+  }
 
   step("SQL files: Ctrl+O opens one, the unsaved marker, Ctrl+S keeps its encoding and line endings, a change on disk asks, save as, closing asks, recent files");
   {
@@ -8164,6 +8190,60 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await run(panel);
   await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
   await shot("12a3-duckdb");
+  step("copy to another connection: Shop's orders into the DuckDB file, columns mapped, the statements shown, the rows copied (ADR-069)");
+  {
+    // Reached through the explorer's tree: the palette lists only objects of open schemas, and
+    // by now every connection is collapsed. Each lookup stays inside its connection's node.
+    const expand = async (button) => {
+      await button.waitFor();
+      if ((await button.getAttribute("aria-expanded")) !== "true") await button.click();
+    };
+    const tableIn = async (connectionName, table) => {
+      const node = page.locator(".connection-row", { hasText: connectionName }).locator("xpath=..");
+      await expand(node.getByRole("button", { name: `Expand or collapse ${connectionName}`, exact: true }));
+      await expand(node.getByRole("button", { name: "Expand or collapse schema main", exact: true }));
+      await expand(node.getByRole("button", { name: "Expand or collapse Tables", exact: true }));
+      const row = node.getByRole("button", { name: `Expand or collapse ${table}`, exact: true });
+      await row.waitFor();
+      return row;
+    };
+    await (await tableIn("Shop (SQLite)", "orders")).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy to another connection…" }).click();
+    const copyDialog = page.getByRole("dialog", { name: /^Copy main\.orders from Shop/ });
+    await copyDialog.waitFor();
+    const connection = copyDialog.getByLabel("Connection");
+    const analytics = await connection.locator("option", { hasText: "analytics" }).first().getAttribute("value");
+    await connection.selectOption(analytics);
+    // Its schemas come once the copy's session to the file is open; the table goes into main.
+    const targetSchema = copyDialog.locator("label.field", { hasText: /^Schema/ }).locator("select");
+    await targetSchema.locator("option", { hasText: "main" }).waitFor({ state: "attached" });
+    await targetSchema.selectOption("main");
+    await copyDialog.getByRole("textbox", { name: "New table", exact: true }).fill("orders_copy_smoke");
+    await copyDialog.getByRole("button", { name: "Next", exact: true }).click();
+    // Each column's type there and here, and what runs, shown before anything does.
+    const columns = copyDialog.getByRole("region", { name: "Columns" });
+    await columns.getByRole("checkbox", { name: "Copy id", exact: true }).waitFor();
+    await copyDialog.locator("pre.import-sql", { hasText: "CREATE TABLE" }).waitFor();
+    await shot("sdb-35-copy-review");
+    await copyDialog.getByRole("button", { name: "Copy", exact: true }).click();
+    await copyDialog.getByRole("status").filter({ hasText: /rows? copied to orders_copy_smoke/ }).waitFor({ timeout: 30_000 });
+    await shot("sdb-35-copy-done");
+    await copyDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await copyDialog.waitFor({ state: "detached" });
+    // The new table is in the DuckDB file's tree (the copy refreshed it), and goes away again
+    // through the explorer's own drop.
+    await (await tableIn("analytics", "orders_copy_smoke")).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Drop…" }).click();
+    const dropCopy = page.getByRole("dialog", { name: "Drop orders_copy_smoke?" });
+    await dropCopy.getByRole("button", { name: "Drop", exact: true }).click();
+    await dropCopy.waitFor({ state: "detached" });
+    // Both connections collapsed again, as the steps after this one found them.
+    for (const connectionName of ["analytics", "Shop (SQLite)"]) {
+      const toggle = page.getByRole("button", { name: `Expand or collapse ${connectionName}`, exact: true });
+      if ((await toggle.getAttribute("aria-expanded")) === "true") await toggle.click();
+    }
+  }
+
   step("grid look: booleans as checkboxes and NULL drawn empty, from Settings");
   {
     const looks = await newQuery("analytics", "select true as yes, false as no, cast(null as varchar) as nothing;");

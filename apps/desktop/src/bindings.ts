@@ -84,6 +84,22 @@ export const commands = {
 	 *  in transactions, reporting progress on `on_progress`.
 	 */
 	runImport: (source: string, job: Channel<JobTicket>, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<JobOutcome<ImportDoneItem, number | null>, string>(__TAURI_INVOKE("run_import", { source, job, request, confirmed, onProgress })),
+	/**  The engines a copy can write to, by the configuration's name (ADR-069). */
+	copyTargets: () => __TAURI_INVOKE<string[]>("copy_targets"),
+	/**
+	 *  What copying `request` from `source`'s connection to `target`'s will do. The source is read
+	 *  on a session of the plan's own, opened and closed here (never the explorer's: its read
+	 *  barrier may be a setting that stays); the target's plan only reads its catalog, on its
+	 *  explorer session, as an import's does.
+	 */
+	copyPlan: (source: string, target: string, request: CopyRequestItem) => typedError<CopyPlanItem_Serialize, string>(__TAURI_INVOKE("copy_plan", { source, target, request })),
+	/**
+	 *  Runs a copy on sessions of its own (a reading one from the source's connection, one from the
+	 *  target's), for a job whose ticket goes to `job` at once so `cancel_job` can stop it while
+	 *  they open. The core writes the plan again, refuses blocked columns, a read-only target and an
+	 *  unconfirmed plan that needs a confirmation, and reports progress on `on_progress`.
+	 */
+	runCopy: (source: string, target: string, job: Channel<JobTicket>, request: CopyRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<JobOutcome<ImportDoneItem, number | null>, string>(__TAURI_INVOKE("run_copy", { source, target, job, request, confirmed, onProgress })),
 	/**
 	 *  Stops the running job `id`, which must be a `kind`: the ticket its command sent. A job that
 	 *  has ended is not an error; an id of another kind is refused and stops nothing.
@@ -1400,6 +1416,9 @@ export type BlockItem = {
 	columns: number[],
 };
 
+/**  Why a column cannot be copied as it is. */
+export type BlockedItem = "binary" | "masked";
+
 /**  A row of the blocking tree, in display order. */
 export type BlockingNodeItem = {
 	session: string,
@@ -2283,6 +2302,78 @@ export type ConstraintDetails_Serialize = {
 };
 
 export type ConstraintKindItem = "primary_key" | "unique" | "check";
+
+/**  One source column and what it becomes. */
+export type CopyColumnItem = CopyColumnItem_Serialize | CopyColumnItem_Deserialize;
+
+/**  One source column and what it becomes. */
+export type CopyColumnItem_Deserialize = {
+	name: string,
+	sourceType: string,
+	targetType: string,
+	losses: LossItem[],
+	/**  Left out by the user. */
+	skipped: boolean,
+	/**  Why it cannot be copied as it is, if it cannot (and is not left out). */
+	blocked?: BlockedItem | null,
+};
+
+/**  One source column and what it becomes. */
+export type CopyColumnItem_Serialize = {
+	name: string,
+	sourceType: string,
+	targetType: string,
+	losses: LossItem[],
+	/**  Left out by the user. */
+	skipped: boolean,
+	/**  Why it cannot be copied as it is, if it cannot (and is not left out). */
+	blocked: BlockedItem | null,
+};
+
+/**  What the copy does with the target. */
+export type CopyHowItem = 
+/**  A new table with the source's rows. */
+"structureAndData" | 
+/**  A new table, empty. */
+"structureOnly" | 
+/**  The rows into a table that is there. */
+"dataOnly";
+
+/**  What a copy will do, written by the core, to show before it runs. */
+export type CopyPlanItem = CopyPlanItem_Serialize | CopyPlanItem_Deserialize;
+
+/**  What a copy will do, written by the core, to show before it runs. */
+export type CopyPlanItem_Deserialize = {
+	columns: CopyColumnItem_Deserialize[],
+	primaryKey: string[],
+	notCopied: NotCopiedItem,
+	/**  What runs on the target, as an import shows it. */
+	target: ImportPlanItem,
+};
+
+/**  What a copy will do, written by the core, to show before it runs. */
+export type CopyPlanItem_Serialize = {
+	columns: CopyColumnItem_Serialize[],
+	primaryKey: string[],
+	notCopied: NotCopiedItem,
+	/**  What runs on the target, as an import shows it. */
+	target: ImportPlanItem,
+};
+
+/**  One table to copy, from a connection's explorer session to another's. */
+export type CopyRequestItem = {
+	sourceSchema: string,
+	sourceTable: string,
+	targetSchema: string,
+	targetTable: string,
+	how: CopyHowItem,
+	ifExists: IfExistsItem,
+	/**  Source columns left out. */
+	skip: string[],
+	/**  Target types typed instead of the mapped ones: `[column, type]`. */
+	types: ([string, string])[],
+	commitEvery: number | null,
+};
 
 /**
  *  "Copy special…" options, which are also the copy defaults (SDB-388). The core checks
@@ -3737,6 +3828,8 @@ export type JobKind =
 "export" | "dataSearch" | 
 /**  A column's statistics or its top values. */
 "columnStats" | "import" | 
+/**  A copy of a table to another connection (ADR-069). */
+"copy" | 
 /**  A backup, with its vendor's tool or the engine's own. */
 "backup" | 
 /**  A restore, or an import of a DuckDB export. */
@@ -4022,6 +4115,9 @@ export type LockWaitItem = {
 	waiting: string,
 	blocking: string,
 };
+
+/**  What a column loses on its way, for the page to word. */
+export type LossItem = { kind: "zoneToUtc" } | { kind: "uuidAsText" } | { kind: "jsonAsText" } | { kind: "timeAsText" } | { kind: "asText" } | { kind: "decimalNarrowed"; precision: number; scale: number } | { kind: "decimalBounded"; precision: number; scale: number } | { kind: "decimalApproximate" } | { kind: "lengthDropped" } | { kind: "binaryNotYet" };
 
 /**  An action of the explorer's Maintenance menu (SDB-392). */
 export type MaintenanceKindItem = "vacuum" | "analyze" | "refreshMaterializedView" | "truncate" | "enableTriggers" | "disableTriggers" | "check" | "repair" | "optimize" | "rebuildTable" | "rebuildIndexes" | "integrityCheck" | "checkpoint";
@@ -4465,6 +4561,15 @@ export type NewTableItem_Serialize = {
 	primaryKey: string[],
 	foreignKeys: NewForeignKeyItem[],
 	indexes: NewIndexItem[],
+};
+
+/**  What of the source table the copy does not bring, counted. */
+export type NotCopiedItem = {
+	indexes: number,
+	foreignKeys: number,
+	constraints: number,
+	defaults: number,
+	primaryKey: boolean,
 };
 
 export type NoticeItem = {
