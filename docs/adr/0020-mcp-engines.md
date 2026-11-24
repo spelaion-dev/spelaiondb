@@ -1,6 +1,7 @@
 # ADR-020: The MCP serves MySQL, MariaDB, SQL Server and DuckDB
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by ADR-072: for agents, the names refused here stay and a
+  function must also be on a list to be called)
 - **Date:** 2026-11-03
 - **Supersedes:** the "not in `spelunk mcp` yet" decisions of ADR-016 (DuckDB) and ADR-017
   (SQL Server), and the MySQL limit noted in ADR-008
