@@ -6,9 +6,9 @@
 //! here with each engine's syntax and quoting; the UI only says what to change, and a change
 //! runs only once the user has seen its SQL and confirmed it.
 
-mod alter;
+pub(crate) mod alter;
 mod create;
-mod ddl;
+pub(crate) mod ddl;
 mod duplicate;
 mod maintenance;
 mod privileges;

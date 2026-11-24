@@ -182,6 +182,15 @@
   type, since it compares no float with a decimal); it has no unique key nor transactions, so
   its hits are filtered by their values and its reads need none. Metadata search is the app's
   (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
+  `schema_compare/` (ADR-070) compares two schemas of the same engine: `compare_support` says
+  which sessions can (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB proper; every
+  other engine and fork with the reason), `snapshot.rs` reads a side only through the catalog
+  reads the explorer and the structure forms use (`read_current` for tables), and `diff.rs`
+  decides every difference in one place with the forms' rules (`same_type`, `typed`), pairing
+  parts by name and then by what they are (SQL Server names constraints itself), and comparing
+  view and routine sources with their own name and their own schema's qualifiers left out
+  (`ddl::rename_defined`, `ddl::requalified`). It never writes; `tests/schema_compare.rs` runs
+  known differences on every engine it serves.
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
   the engine's read-only transaction (the export barrier) in a session of its own, sampled past

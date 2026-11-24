@@ -44,7 +44,7 @@ mod load_rows;
 mod locks;
 pub mod masking;
 mod mongodb_srv;
-mod objects;
+pub(crate) mod objects;
 mod observe;
 mod open;
 mod open_tabs;
@@ -66,6 +66,7 @@ mod run_state;
 #[cfg(test)]
 mod run_state_tests;
 mod save_name;
+mod schema_compare;
 mod script;
 mod selection_stats;
 mod server_family;
@@ -245,6 +246,13 @@ pub use results::{
     RevealError, RevealedCell, StoredResult,
 };
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
+pub use schema_compare::{
+    CompareError, CompareObjectKind, CompareProgress, CompareSide, ComparedPart, ComparedSchemas,
+    ConstraintKindCompared, ConstraintSnapshot, IndexSnapshot, NotCompared, ObjectChanges,
+    ObjectComparison, ObjectStatus, PartComparison, PartStatus, Property, PropertyChange,
+    RoutineKind, RoutineSnapshot, SchemaComparison, SchemaSnapshot, TableSnapshot, ViewSnapshot,
+    compare, compare_schemas, compare_support, read_snapshot,
+};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
 };

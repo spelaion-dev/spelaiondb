@@ -74,6 +74,7 @@ mod redis;
 mod references;
 mod result_jumps;
 mod run_from_cursor;
+mod schema_compare;
 mod script_runs;
 mod server_messages;
 mod server_observation;
