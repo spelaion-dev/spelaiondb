@@ -252,6 +252,11 @@
   (`spelaion-store`'s `export.rs`) only once `ExportDefaults::check` accepts them (what an
   export would accept) and read back part by part, a part this version cannot use at its
   default (formula escaping is on for a new user, and a damaged flag reads as on);
+  `table_copy/` (SDB-35, ADR-069) copies tables between connections: `types.rs` maps a source
+  column (logical and native type) to a portable kind and that kind to each target engine's type,
+  naming every loss (`Loss`); `values.rs` writes each value as the canonical text the target
+  reads. Any change to the mapping needs its unit tests (`types_tests.rs`) and the every-pair
+  copy test.
   `export_stream.rs` streams a query, a table data tab or explorer tables to a file
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
