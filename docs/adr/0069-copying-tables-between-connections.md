@@ -1,6 +1,6 @@
 # ADR-069: Copying tables between connections: an import whose source is a read
 
-- **Status:** Accepted (being implemented)
+- **Status:** Accepted (implemented; binary into five engines waits for SDB-464)
 - **Date:** 2026-11-24
 - **Builds on:** ADR-020 (read barriers), ADR-029 (connection types), ADR-031 (transactions),
   ADR-034 (streaming exports), ADR-038 (imports), ADR-060 (jobs), ADR-066 (ClickHouse imports)
@@ -32,6 +32,14 @@ another, and some have no exact counterpart.
    - the core's own `SELECT` of the table;
    - A's engine's read barrier, always rolled back;
    - one batch at a time, never the table in memory.
+
+   The read and the load run at the same time, each on its own session. So a copy whose source
+   and target are one file of an embedded engine (SQLite, DuckDB) is refused before anything
+   runs: the read's lock would keep the load from ever committing ("database is locked"). The
+   core names each embedded session's file when it opens it (a local file by its canonical
+   path, whichever connection and spelling opened it; a remote SQLite file by its hop and its
+   path there). The refusal says what to do instead: copy to another connection, or
+   `CREATE TABLE … AS SELECT` in a console of that one.
 
    It is refused where A's server does not keep its read barrier (Babelfish, RisingWave, the
    servers ADR-020 lists), as streaming exports are. A read-only connection may be a source.

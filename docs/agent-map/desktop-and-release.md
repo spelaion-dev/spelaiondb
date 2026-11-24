@@ -158,7 +158,12 @@
   guard settles it when dropped, so a failed or panicking switch never leaves the app unable to
   change folder). After a plugin change only new connections use the new engines; a session
   already open keeps its plugin process until it is closed (ADR-055), on purpose.
-  Running work (exports, data searches, column statistics, imports, backups, restores, file
+  Copying a table to another connection (ADR-069) is `src-tauri/src/table_copy.rs` and
+  `CopyDialog.tsx`: the dialog connects the target's explorer session as the explorer would
+  (`openSession`), the plan opens a reading session of its own on the source (never the
+  explorer's: ClickHouse's read barrier is a session setting that stays), and the run opens one
+  for each side, a `Copy` job.
+  Running work (exports, data searches, column statistics, imports, copies, backups, restores, file
   runs, connection tests, row loads, plugin installs) is one registry, `AppState.jobs`
   (`src-tauri/src/jobs.rs` over the core's `JobRegistry`, SDB-369): a job command takes a
   `job: Channel<JobTicket>` and sends the ticket (an id the registry made, and the kind) when

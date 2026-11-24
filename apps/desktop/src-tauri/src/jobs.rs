@@ -31,6 +31,8 @@ pub enum JobKind {
     /// A column's statistics or its top values.
     ColumnStats,
     Import,
+    /// A copy of a table to another connection (ADR-069).
+    Copy,
     /// A backup, with its vendor's tool or the engine's own.
     Backup,
     /// A restore, or an import of a DuckDB export.

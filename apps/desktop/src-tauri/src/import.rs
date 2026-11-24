@@ -445,7 +445,13 @@ pub async fn import_plan(
     )
     .await
     .map_err(|e| e.to_string())?;
-    Ok(ImportPlanItem {
+    Ok(plan_item(plan))
+}
+
+/// What the core will run, for the page: an import's plan, or the target side of a copy's
+/// (ADR-069).
+pub(crate) fn plan_item(plan: spelaion_core::ImportPlan) -> ImportPlanItem {
+    ImportPlanItem {
         risks: plan
             .risks
             .iter()
@@ -462,7 +468,7 @@ pub async fn import_plan(
         table: plan.table,
         columns: plan.columns,
         creates_table: plan.creates_table,
-    })
+    }
 }
 
 /// A new session for an import, opened from the `source` session's resolved connection and

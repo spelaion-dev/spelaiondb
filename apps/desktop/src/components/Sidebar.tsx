@@ -92,6 +92,7 @@ import {
   exportRelations,
   forgetExplorerSession,
   importIntoNewTable,
+  copyToConnection,
   importIntoTable,
   isPlainTable,
   knownObjectActions,
@@ -2825,6 +2826,9 @@ function ObjectNode({
               {t("importData")}
             </button>
           )}
+          <button role="menuitem" data-action="copyToConnection" onClick={() => act(() => copyToConnection(connectionId, session, object))}>
+            {t("copyToConnection")}
+          </button>
           {!view && (
             <button
               role="menuitem"

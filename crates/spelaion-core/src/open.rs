@@ -679,6 +679,9 @@ pub async fn open_connection(
     if let Some(family) = family {
         session = session.with_server_family(family);
     }
+    if let Some(file) = database_file(&resolved).await {
+        session = session.with_database_file(file);
+    }
     // A tunnel that goes down takes its sessions with it (ADR-028).
     match &tunnel {
         Some(ActiveTunnel::Ssh(t)) => session.health_handle().watch_tunnel(t.state()),
@@ -936,6 +939,30 @@ pub(crate) fn target(params: &ConnectParams) -> Target {
     Target {
         host: params.host.clone(),
         port: params.port,
+    }
+}
+
+/// The file of an embedded database, named so that two connections that open one file name it
+/// the same (ADR-069): a local file by its canonical path, whatever spelling the connection
+/// used; a SQLite file on a tunnel's last hop by that hop and its path there. `None` for
+/// servers, in-memory databases and folders of files.
+async fn database_file(resolved: &ResolvedConnection) -> Option<String> {
+    if !resolved.engine.is_file() || resolved.file_folder.is_some() {
+        return None;
+    }
+    let path = resolved.params.database.trim();
+    if path.is_empty() || path == ":memory:" || path.starts_with("file::memory:") {
+        return None;
+    }
+    match &resolved.tunnel {
+        Some(tunnel) => Some(match tunnel.hops.last() {
+            Some(hop) => format!("{}@{}:{}:{path}", hop.user, hop.host, hop.port),
+            None => format!("{}:{path}", tunnel.name),
+        }),
+        None => Some(match tokio::fs::canonicalize(path).await {
+            Ok(canonical) => canonical.to_string_lossy().into_owned(),
+            Err(_) => path.to_string(),
+        }),
     }
 }
 

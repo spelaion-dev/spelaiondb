@@ -91,6 +91,12 @@ pub enum CopyError {
     Source(String),
     #[error("these columns cannot be copied as they are: {0}; leave them out to copy the rest")]
     Blocked(String),
+    #[error(
+        "the source and the target are the same database file: a copy reads one while it writes \
+         the other, and one file cannot do both at once. Copy to another connection, or run \
+         CREATE TABLE … AS SELECT in a console of this one"
+    )]
+    SameFile,
     #[error(transparent)]
     Target(#[from] ImportError),
 }
@@ -184,6 +190,13 @@ async fn prepare(
     safeguards: &Safeguards,
     target_read_only: bool,
 ) -> Result<Prepared, CopyError> {
+    // The source is read while the target is written, each on its own session: on one file of
+    // an embedded engine, the read's lock would keep the writes from ever committing.
+    if let (Some(from), Some(to)) = (source.database_file(), target.database_file())
+        && from == to
+    {
+        return Err(CopyError::SameFile);
+    }
     let (info, columns, select) =
         source_table(source, &request.source_schema, &request.source_table).await?;
     let target_engine = target.dialect().name();

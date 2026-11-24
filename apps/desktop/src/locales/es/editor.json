@@ -1650,5 +1650,63 @@
     "readOnlyChip": "Sesión de solo lectura",
     "readOnlyHint": "La sesión de esta pestaña rechaza escrituras, como una conexión de solo lectura. Haz clic para quitarlo."
   },
-  "schemaPooled": "Esta conexión pasa por un pooler en modo transacción, que no conserva ajustes de sesión: cualifica los nombres con su esquema."
+  "schemaPooled": "Esta conexión pasa por un pooler en modo transacción, que no conserva ajustes de sesión: cualifica los nombres con su esquema.",
+  "copy": {
+    "title": "Copiar {{table}} de {{connection}}",
+    "steps": "Pasos",
+    "step": {
+      "target": "Dónde",
+      "review": "Revisar"
+    },
+    "target": "Copiar a",
+    "connection": "Conexión",
+    "chooseConnection": "Elige una conexión",
+    "connecting": "Conectando…",
+    "schema": "Esquema",
+    "what": "Copiar",
+    "how": {
+      "structureAndData": "Estructura y datos: una tabla nueva con las filas",
+      "structureOnly": "Solo estructura: una tabla nueva, vacía",
+      "dataOnly": "Solo datos: en una tabla que ya existe"
+    },
+    "existingTable": "Tabla",
+    "chooseTable": "Elige una tabla",
+    "tableName": "Tabla nueva",
+    "ifExists": "Si existe",
+    "planning": "Leyendo la tabla y escribiendo la copia…",
+    "couldNotPlan": "No se pudo preparar la copia: {{reason}}",
+    "columns": "Columnas",
+    "copyColumn": "Copiar",
+    "include": "Copiar {{name}}",
+    "sourceType": "Tipo allí",
+    "targetType": "Tipo aquí",
+    "losses": "Qué cambia",
+    "existingColumn": "La columna de la tabla con ese nombre",
+    "loss": {
+      "zoneToUtc": "Ningún tipo guarda la zona horaria: se guarda su hora UTC.",
+      "uuidAsText": "No hay tipo UUID: se guarda como texto.",
+      "jsonAsText": "No hay tipo JSON: se guarda como texto.",
+      "timeAsText": "No hay tipo de hora del día: se guarda como texto.",
+      "asText": "No hay tipo equivalente: se guarda como su texto.",
+      "decimalNarrowed": "Más ancho de lo permitido: como mucho {{precision}} dígitos, {{scale}} tras el punto; un valor que no cabe detiene la copia.",
+      "decimalBounded": "Sin precisión propia: se guarda con {{precision}} dígitos, {{scale}} tras el punto.",
+      "decimalApproximate": "SQLite lo guarda como su propio número: los dígitos tras el 15.º pueden redondearse.",
+      "lengthDropped": "Aquí no hay límite de longitud.",
+      "binaryNotYet": "Las columnas binarias todavía no se pueden copiar a este motor."
+    },
+    "blocked": {
+      "binary": "Las columnas binarias todavía no se pueden copiar a este motor: déjala fuera para copiar el resto.",
+      "masked": "Enmascarada en esta conexión: sus valores nunca salen de ella. Déjala fuera para copiar el resto."
+    },
+    "notCopied": "No se copian: {{indexes}} índices, {{foreignKeys}} claves foráneas, {{constraints}} otras restricciones, {{defaults}} valores por defecto.",
+    "primaryKeyNotCopied": "Tampoco la clave primaria (el destino no guarda ninguna, o una de sus columnas queda fuera).",
+    "start": "Copiar",
+    "again": "Copiar de nuevo",
+    "cancel": "Cancelar copia",
+    "done_one": "{{formattedCount}} fila copiada a {{table}} en {{seconds}} s.",
+    "done_other": "{{formattedCount}} filas copiadas a {{table}} en {{seconds}} s.",
+    "cancelled_one": "Se canceló la copia: antes se confirmó {{formattedCount}} fila.",
+    "cancelled_other": "Se canceló la copia: antes se confirmaron {{formattedCount}} filas.",
+    "failed": "La copia falló: {{reason}}"
+  }
 }

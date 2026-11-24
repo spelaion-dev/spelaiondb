@@ -20,6 +20,7 @@ mod panics;
 mod plans;
 mod plugins;
 mod startup;
+mod table_copy;
 mod update;
 mod update_state;
 mod webview_args;
@@ -6300,6 +6301,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             import::import_preview,
             import::import_plan,
             import::run_import,
+            table_copy::copy_targets,
+            table_copy::copy_plan,
+            table_copy::run_copy,
             jobs::cancel_job,
             backup::backup_preferences,
             backup::set_backup_preferences,

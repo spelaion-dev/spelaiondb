@@ -266,9 +266,11 @@
   reads; `run.rs` plans and runs a copy: the source read through `export_stream`'s
   `read_only_transaction` (its own cancel, passed on from the job's), the rows loaded by the
   import's `resolve_columns` and `run_resolved` (so its guard, transactions, #473's cancel rule
-  and ClickHouse's staging hold), binary and masked columns refused until left out. Any change
-  needs its unit tests (`types_tests.rs`) and the every-pair copy test (`tests/copy_engines.rs`,
-  49 pairs of seven engines, data compared).
+  and ClickHouse's staging hold), binary and masked columns refused until left out. The read and
+  the load run at once, so a copy within one embedded file is refused up front
+  (`CopyError::SameFile`, by `Session::database_file`, which `open_connection` names). Any change
+  needs its unit tests (`types_tests.rs`), the every-pair copy test (`tests/copy_engines.rs`,
+  49 pairs of seven engines, data compared) and `tests/copy_same_file.rs`.
   `export_stream.rs` streams a query, a table data tab or explorer tables to a file
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
