@@ -7767,8 +7767,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await announceMove("ArrowUp", /^Row 1, name \(/);
     // The accessibility tree (what AT-SPI and UI Automation read) names the active cell with
     // that text, and the focused grid points at it.
-    const activeId = await announceGrid.getAttribute("aria-activedescendant");
-    const cellText = await page.evaluate((id) => document.getElementById(id).textContent, activeId);
+    // Read together, once the active cell is there: a re-render between two reads could leave
+    // an id with no cell (SDB-449).
+    const { activeId, cellText } = await (await page.waitForFunction(() => {
+      const grid = document.querySelector(".tab-panel:not([hidden]) .grid-scroller");
+      const id = grid?.getAttribute("aria-activedescendant");
+      const text = id ? document.getElementById(id)?.textContent : null;
+      return text && /^Row 1, name \(/.test(text) ? { activeId: id, cellText: text } : null;
+    })).jsonValue();
     const cdp = await page.context().newCDPSession(page);
     const { root: domRoot } = await cdp.send("DOM.getDocument", { depth: 0 });
     const selector = await page.evaluate((id) => `#${CSS.escape(id)}`, activeId);
@@ -7812,7 +7818,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.mouse.click(updated.x + 52 + 110 + 20, updated.y + 34 + 12);
     await page.keyboard.press("Enter");
     await panel.locator(".cell-viewer").getByRole("textbox", { name: "New value for name" }).waitFor();
-    assert.equal(await panel.locator(".cell-viewer textarea").inputValue(), "viewer shortcut");
+    // The viewer shows the cell of the result read again after the save (SDB-449).
+    await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .cell-viewer textarea")?.value === "viewer shortcut");
   }
   await panel.locator(".cm-content").click();
   await page.keyboard.press("Control+a");
