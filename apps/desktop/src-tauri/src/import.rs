@@ -349,6 +349,10 @@ pub struct ImportRiskItem {
 pub struct ImportPlanItem {
     pub statements: Vec<String>,
     pub insert: String,
+    /// Run once every row is in: on ClickHouse, what puts the loaded table in place (ADR-066).
+    pub finish: Vec<String>,
+    /// Tables that unfinished imports into this database left behind (ClickHouse, ADR-066).
+    pub leftovers: Vec<String>,
     pub schema: String,
     pub table: String,
     pub columns: Vec<String>,
@@ -452,6 +456,8 @@ pub async fn import_plan(
             .collect(),
         statements: plan.statements,
         insert: plan.insert,
+        finish: plan.finish,
+        leftovers: plan.leftovers,
         schema: plan.schema,
         table: plan.table,
         columns: plan.columns,

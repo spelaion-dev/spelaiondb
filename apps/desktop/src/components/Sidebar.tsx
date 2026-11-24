@@ -72,6 +72,7 @@ import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 import { ObjectMenu } from "./ObjectMenu";
 import { MissingPlugin } from "./MissingPlugin";
 import { FolderMenuButton } from "./FolderMenu";
+import { HideSidePanelButton } from "./SidePanelButtons";
 import { folderSwitchBlocked, switchFolder } from "../folders";
 import { ariaKeyShortcuts, commandShortcut, keyText, shortcutText } from "../shortcuts";
 import { matchesShortcut } from "../commandRegistry";
@@ -1640,6 +1641,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           </div>
           {/* Open folder… and the recent folders (SDB-397). */}
           <FolderMenuButton disabled={cannotSwitch} onOpenFolder={() => void openFolder()} />
+          <HideSidePanelButton />
         </div>
         <div className="sidebar-tools">
           <span className="sidebar-section-title">{t("connections")}</span>

@@ -78,6 +78,27 @@ const fn planned(
     }
 }
 
+/// SQL Server Express LocalDB (SDB-312, ADR-068): a SQL Server connection whose host names the
+/// instance, reached through its pipe on this machine. It has no port and starts with the
+/// Windows account (no user). Only Windows has it: elsewhere it is listed, saying so, and cannot
+/// be picked.
+fn localdb() -> EngineInfo {
+    EngineInfo {
+        id: "localdb",
+        name: if cfg!(windows) {
+            "SQL Server LocalDB"
+        } else {
+            "SQL Server LocalDB (Windows only)"
+        },
+        category: EngineCategory::Relational,
+        access: EngineAccess::Network,
+        default_port: None,
+        engine: cfg!(windows).then_some(Engine::Sqlserver),
+        default_user: None,
+        default_database: None,
+    }
+}
+
 /// A server that speaks `engine`'s protocol, checked against it (SDB-169).
 const fn kind_of(
     engine: Engine,
@@ -158,7 +179,20 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             None,
             Some("public"),
         ),
+        // Its frontend's MySQL port (SDB-310). Recognised by its `current_version()`: read-only
+        // connections, agents, manual commit, edits and imports are refused on it, since its
+        // transactions open nothing and its read-only modes are ignored (`server_family.rs`).
+        kind_of(
+            Engine::Mysql,
+            "starrocks",
+            "StarRocks",
+            Analytical,
+            9030,
+            Some("root"),
+            None,
+        ),
         supported(Engine::Sqlserver, "SQL Server", Relational, Network),
+        localdb(),
         supported(Engine::Oracle, "Oracle", Relational, Network),
         // SQLite's SQL over HTTP: libSQL's server and Turso (ADR-058).
         supported(Engine::Libsql, "libSQL / Turso", Relational, Network),
@@ -189,6 +223,42 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             5432,
             Some("postgres"),
             Some("postgres"),
+        ),
+        // SDB-302: it browses through the PostgreSQL plugin. It gets no read-only connections
+        // (its session's read-only mode is ignored) and no agents (a view hides its table
+        // functions that reach other servers): ADR-020's 2026-11-23 note.
+        kind_of(
+            Engine::Postgres,
+            "risingwave",
+            "RisingWave",
+            Analytical,
+            4566,
+            Some("root"),
+            Some("dev"),
+        ),
+        // SDB-303: it browses through the PostgreSQL plugin. It gets no agents, read-only
+        // connections or streaming reads: its read-only transaction lets DDL through, and its
+        // session's read-only mode is refused (`server_family.rs`).
+        kind_of(
+            Engine::Postgres,
+            "materialize",
+            "Materialize",
+            Analytical,
+            6875,
+            Some("materialize"),
+            Some("materialize"),
+        ),
+        // SDB-304: it browses through the PostgreSQL plugin. It has no transactions, so its
+        // editor sessions stay in auto-commit (`ServerFamily::opens_transactions`), and it
+        // gets no agents, read-only connections or streaming reads.
+        kind_of(
+            Engine::Postgres,
+            "cratedb",
+            "CrateDB",
+            Analytical,
+            5432,
+            Some("crate"),
+            Some("doc"),
         ),
         supported(Engine::Duckdb, "DuckDB", Analytical, File),
         // CSV, TSV and Parquet files read through DuckDB: a DuckDB connection whose target is a
@@ -307,7 +377,13 @@ mod tests {
                 if info.access == EngineAccess::Folder {
                     assert_eq!((info.id, engine), ("file-folder", Engine::Duckdb));
                 } else if info.is_kind() {
-                    assert!(info.default_port.is_some(), "{}", info.id);
+                    // LocalDB is reached through a pipe, not a port (ADR-068).
+                    assert_eq!(
+                        info.default_port.is_some(),
+                        info.id != "localdb",
+                        "{}",
+                        info.id
+                    );
                 } else {
                     assert_eq!(info.default_port, engine.default_port());
                     assert_eq!((info.default_user, info.default_database), (None, None));
@@ -353,6 +429,11 @@ mod tests {
                 (e.id, e.engine, e.default_port)
             })
             .collect();
+        // LocalDB only exists on Windows (ADR-068): elsewhere it is listed but cannot be picked.
+        let localdb = catalog.iter().find(|e| e.id == "localdb").unwrap();
+        assert_eq!(localdb.engine.is_some(), cfg!(windows));
+        assert_eq!(localdb.name.contains("Windows only"), !cfg!(windows));
+        let kinds: Vec<_> = kinds.into_iter().filter(|k| k.0 != "localdb").collect();
         assert_eq!(
             kinds,
             [
@@ -360,9 +441,13 @@ mod tests {
                 ("oceanbase", Some(Engine::Mysql), Some(2881)),
                 ("singlestore", Some(Engine::Mysql), Some(3306)),
                 ("greptimedb", Some(Engine::Mysql), Some(4002)),
+                ("starrocks", Some(Engine::Mysql), Some(9030)),
                 ("cockroachdb", Some(Engine::Postgres), Some(26257)),
                 ("yugabytedb", Some(Engine::Postgres), Some(5433)),
                 ("timescaledb", Some(Engine::Postgres), Some(5432)),
+                ("risingwave", Some(Engine::Postgres), Some(4566)),
+                ("materialize", Some(Engine::Postgres), Some(6875)),
+                ("cratedb", Some(Engine::Postgres), Some(5432)),
                 ("influxdb", Some(Engine::Flightsql), Some(8181)),
                 ("valkey", Some(Engine::Redis), Some(6379)),
                 ("scylladb", Some(Engine::Cassandra), Some(9042)),

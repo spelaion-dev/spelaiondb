@@ -250,6 +250,19 @@ pub(crate) fn sql_type(
     max_chars: usize,
 ) -> String {
     let precision = int_digits + 2 + scale;
+    // ClickHouse (ADR-066): its own type names, each nullable so a missing value stays NULL.
+    if engine == "clickhouse" {
+        let inner = match kind {
+            ColumnKind::Integer => "Int64".to_string(),
+            ColumnKind::Decimal if precision <= 76 => format!("Decimal({precision}, {scale})"),
+            ColumnKind::Decimal | ColumnKind::Float => "Float64".into(),
+            ColumnKind::Boolean => "Bool".into(),
+            ColumnKind::Date => "Date32".into(),
+            ColumnKind::Timestamp | ColumnKind::TimestampTz => "DateTime64(6)".into(),
+            ColumnKind::Text => "String".into(),
+        };
+        return format!("Nullable({inner})");
+    }
     let decimal = |max_precision: usize, max_scale: usize, fallback: &str| {
         if precision <= max_precision && scale <= max_scale {
             format!("DECIMAL({precision},{scale})")
@@ -296,14 +309,23 @@ pub(crate) enum TargetKind {
 }
 
 /// The target kind of a column from its type as the engine writes it (`boolean`, `bit`,
-/// `tinyint(1)`, `timestamp with time zone`, `datetimeoffset(7)`…).
+/// `tinyint(1)`, `timestamp with time zone`, `datetimeoffset(7)`, ClickHouse's
+/// `Nullable(DateTime64(6))`…).
 pub(crate) fn target_kind(native_type: &str) -> TargetKind {
     let t = native_type.trim().to_ascii_lowercase();
     let base = t.split('(').next().unwrap_or("").trim();
+    // ClickHouse's wrappers say nothing of the values: the type inside them does.
+    if matches!(base, "nullable" | "lowcardinality")
+        && let Some(inner) = t
+            .split_once('(')
+            .and_then(|(_, rest)| rest.strip_suffix(')'))
+    {
+        return target_kind(inner);
+    }
     if matches!(base, "bool" | "boolean" | "bit") || t == "tinyint(1)" {
         return TargetKind::Boolean;
     }
-    if base == "date" {
+    if base == "date" || base == "date32" {
         return TargetKind::Date;
     }
     if base.starts_with("datetimeoffset")
@@ -321,12 +343,14 @@ pub(crate) fn target_kind(native_type: &str) -> TargetKind {
 /// Converts values on their way to their columns: booleans to `1`/`0` (what every engine's
 /// boolean, `bit` and `tinyint(1)` take), dates and timestamps written in the chosen formats to
 /// ISO, and timestamps without a zone given the chosen time zone where the column keeps one.
-/// MySQL and MariaDB have no type that keeps a zone: their timestamps with one are stored in UTC.
+/// MySQL, MariaDB and ClickHouse (`DateTime64` without a zone) get no type that keeps one: their
+/// timestamps with one are stored in UTC.
 #[derive(Debug, Clone)]
 pub(crate) struct Normalizer {
     pub kinds: Vec<TargetKind>,
     pub formats: Formats,
     pub zone: Option<FixedOffset>,
+    /// Timestamps with a zone go as their UTC time, without one (MySQL, MariaDB, ClickHouse).
     pub mysql: bool,
 }
 
@@ -572,6 +596,62 @@ mod tests {
         assert_eq!(target_kind("datetime2(7)"), TargetKind::Timestamp);
         assert_eq!(target_kind("DATE"), TargetKind::Date);
         assert_eq!(target_kind("character varying(80)"), TargetKind::Other);
+        // ClickHouse's wrappers are looked through (ADR-066).
+        assert_eq!(target_kind("Nullable(Bool)"), TargetKind::Boolean);
+        assert_eq!(target_kind("Nullable(Date32)"), TargetKind::Date);
+        assert_eq!(
+            target_kind("Nullable(DateTime64(6))"),
+            TargetKind::Timestamp
+        );
+        assert_eq!(
+            target_kind("LowCardinality(Nullable(String))"),
+            TargetKind::Other
+        );
+    }
+
+    #[test]
+    fn clickhouse_types_are_its_own_and_nullable() {
+        assert_eq!(
+            sql_type("clickhouse", ColumnKind::Integer, 0, 0, 0),
+            "Nullable(Int64)"
+        );
+        assert_eq!(
+            sql_type("clickhouse", ColumnKind::Decimal, 8, 3, 0),
+            "Nullable(Decimal(13, 3))"
+        );
+        assert_eq!(
+            sql_type("clickhouse", ColumnKind::Decimal, 80, 2, 0),
+            "Nullable(Float64)"
+        );
+        assert_eq!(
+            sql_type("clickhouse", ColumnKind::Boolean, 0, 0, 0),
+            "Nullable(Bool)"
+        );
+        assert_eq!(
+            sql_type("clickhouse", ColumnKind::TimestampTz, 0, 0, 0),
+            "Nullable(DateTime64(6))"
+        );
+        assert_eq!(
+            sql_type("clickhouse", ColumnKind::Text, 0, 0, 20_000),
+            "Nullable(String)"
+        );
+        // Every one of them passes the check a typed type goes through.
+        for kind in [
+            ColumnKind::Integer,
+            ColumnKind::Decimal,
+            ColumnKind::Float,
+            ColumnKind::Boolean,
+            ColumnKind::Date,
+            ColumnKind::Timestamp,
+            ColumnKind::TimestampTz,
+            ColumnKind::Text,
+        ] {
+            let sql_type = sql_type("clickhouse", kind, 10, 2, 10);
+            assert!(
+                super::super::check_sql_type(&sql_type).is_ok(),
+                "{sql_type}"
+            );
+        }
     }
 
     #[test]

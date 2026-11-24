@@ -1,6 +1,7 @@
 # ADR-019: Agents may write, per connection
 
-- **Status:** Accepted
+- **Status:** Accepted (extended by ADR-071: `"confirm"` asks a person in the app before the
+  write runs)
 - **Date:** 2026-11-03
 - **Supersedes:** layer 6 of ADR-008 (writes)
 

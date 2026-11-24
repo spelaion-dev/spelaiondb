@@ -15,16 +15,32 @@
   ending.
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included); a
   server that speaks another engine's protocol is a kind of that engine's connection there
-  (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169; TiDB, OceanBase
+  (CockroachDB, YugabyteDB and TimescaleDB are PostgreSQL connections, SDB-169, and so is
+  RisingWave, SDB-302, which gets no agents: a view hides its table functions that reach
+  other servers from the classifier, ADR-020's 2026-11-23 note; Materialize, SDB-303, which
+  gets no agents either: its read-only transaction lets DDL through; and CrateDB, SDB-304,
+  which has no transactions: like RisingWave, its editor sessions follow none, ADR-031's
+  2026-11-23 note; TiDB, OceanBase
   and SingleStore are MySQL connections, SDB-170, and so is GreptimeDB, SDB-344, whose rows the
-  MySQL plugin keys by primary key and time index, and an append-only table by nothing), and
+  MySQL plugin keys by primary key and time index, and an append-only table by nothing, and
+  StarRocks, SDB-310, whose primary keys the plugin reads from `information_schema.columns`
+  and whose imports and data search it refuses, since it prepares neither), and
   `server_family.rs` reads which server a PostgreSQL or MySQL session reached from the server:
   one that does not enforce its engine's read-only transaction or session mode gets no agents,
   streaming reads or read-only connections (unchecked PostgreSQL forks neither), and a
   read-only connection's session mode is read back from the server after it is set (a MySQL
-  fork that names itself as MySQL, StarRocks, is caught there). A MySQL transaction's read-only
+  fork that names itself as MySQL is caught there). A MySQL transaction's read-only
   mode cannot be read back, so a fork that accepts it and writes anyway must be recognised by
-  its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350).
+  its version (GreptimeDB; Databend, whose version only says MySQL and its own release, SDB-350;
+  StarRocks, a MySQL connection in the picker whose comment is only its release and commit, by
+  asking its own `current_version()`, SDB-310). `ServerFamily::opens_transactions` is false where
+  `START TRANSACTION` and `autocommit = 0` open nothing (CrateDB, GreptimeDB, StarRocks, and
+  RisingWave's read-write `BEGIN`, SDB-304): the
+  session does not follow transactions there, so manual commit is refused rather than offered.
+  On a SQL Server connection it tells only Babelfish apart (`@@VERSION`, SDB-313, ADR-020's
+  note): its transactions hold, but its T-SQL reaches PostgreSQL's functions past SQL Server's
+  rolled-back transaction, so it gets no agents, read-only connections or streaming reads
+  (`tests/babelfish.rs`, against `testing/docker/babelfish`).
   Like `readonly.rs`, any change
   there needs tests that try to get around it (`tests/postgres_family.rs` and
   `tests/mysql_family.rs`, against `testing/docker/pg-family` and `mysql-family`, and GreptimeDB
@@ -161,7 +177,10 @@
   table written from the catalog and the columns' types, the value always bound as a parameter
   (`Connection::execute_bound`), each a read in the engine's read-only transaction in a session
   of its own, bounded (rows per table, total hits) and cancellable; `tests/data_search.rs` runs
-  it on every engine, 50 tables cancelled mid-way included. Metadata search is the app's
+  it on every engine, 50 tables cancelled mid-way included. ClickHouse (SDB-324) has its own
+  forms (`toString`, `positionUTF8`, `substringUTF8`, a float or decimal cast by the column's
+  type, since it compares no float with a decimal); it has no unique key nor transactions, so
+  its hits are filtered by their values and its reads need none. Metadata search is the app's
   (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
@@ -254,7 +273,10 @@
   and `:named` placeholders; UPDATE and DELETE always carry a WHERE on what identifies a row
   (the primary key, else a unique constraint, else every column) (`tests/generated_sql.rs`).
   `plan/` is Visual EXPLAIN: each engine's reader (`postgres.rs`, `mysql.rs`, `sqlserver.rs`,
-  `sqlite.rs`, `duckdb.rs`) turns its plan into one tree, analysed the same way; the plan's
+  `sqlite.rs`, `duckdb.rs`, `clickhouse.rs`) turns its plan into one tree, analysed the same
+  way (ClickHouse's `EXPLAIN json = 1, indexes = 1, description = 1` is estimated only: no
+  costs or rows, its indexes' granules tell a full read; `classify.rs` reads its option list
+  so read-only connections and agents can explain); the plan's
   run (`run.rs`) is serialized and cancellable; `ANALYZE`, which runs the statement, needs a
   confirmation of its own and is off on a read-only connection; explicit runs are recorded in
   history; raw plan rows stay in the core, the page receives a bounded projection
@@ -320,7 +342,12 @@
   the DDL, checks read-only and the guard, and loads the rows in transactions through
   `Connection::insert_rows`, which takes them as columns of text (`TextRows`: Arrow, read as
   `&str`, never one `String` per cell, so they reach a plugin as they are) and binds every value (`COPY` on PostgreSQL, prepared inserts on
-  MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
+  MySQL, a TDS bulk load on SQL Server, the appender on DuckDB, TabSeparated data in the
+  request's body on ClickHouse): never SQL text. ClickHouse has no transactions: `staged.rs`
+  (ADR-066) loads into a table of our own (`__spelaion_import_` + a random UUID, created
+  without `IF NOT EXISTS`) and puts it in place with one `RENAME TABLE` or `EXCHANGE TABLES`
+  (the plan's `finish`), drops it on any failure or cancel, refuses appends and databases that
+  are not `Atomic`, and lists the ones left behind (`leftovers`) without dropping them.
   `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
   to get around it.
   `objects/` writes the explorer's object actions (ADR-026: qualified names, rename, drop,

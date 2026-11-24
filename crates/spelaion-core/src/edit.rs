@@ -7,7 +7,10 @@
 use std::collections::HashSet;
 
 use futures_util::StreamExt;
-use spelaion_driver_api::{Dialect, LogicalType, ObjectKind, TableInfo, TransactionState, Value};
+use spelaion_driver_api::{
+    Dialect, LogicalType, NameFilter, ObjectKind, TableInfo, TransactionState, Value,
+    literal_pattern,
+};
 use sqlparser::ast::{Expr, GroupByExpr, SelectItem, SetExpr, Statement, TableFactor};
 use sqlparser::parser::Parser;
 
@@ -149,7 +152,7 @@ async fn query_result_table(
     };
     let conn = session.connection();
     let objects = conn
-        .list_objects(&schema)
+        .list_objects_matching(&schema, &object_name_filter(&name))
         .await
         .map_err(|e| UpdateCopyError::Failed(e.to_string()))?;
     let mut named = objects.iter().filter(|o| o.name == name);
@@ -623,13 +626,23 @@ fn text(value: Option<Value>) -> Option<String> {
     }
 }
 
+/// Push a literal name into the catalog query. The callers still compare the returned
+/// name byte for byte, since the catalog filter itself is case-insensitive.
+fn object_name_filter(name: &str) -> NameFilter {
+    NameFilter {
+        include: vec![literal_pattern(name)],
+        exclude: Vec::new(),
+    }
+}
+
 /// The only listed schema with an object called `name`, if there is exactly one.
 async fn unique_schema(session: &Session, name: &str) -> Result<Option<String>, String> {
     let conn = session.connection();
     let mut found = None;
+    let filter = object_name_filter(name);
     for schema in conn.list_schemas().await.map_err(|e| e.to_string())? {
         let objects = conn
-            .list_objects(&schema.name)
+            .list_objects_matching(&schema.name, &filter)
             .await
             .map_err(|e| e.to_string())?;
         if objects.iter().any(|o| o.name == name) {

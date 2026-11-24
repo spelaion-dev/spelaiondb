@@ -51,6 +51,10 @@
 /crates/spelaion-core/src/plugins/fetch.rs      @petilolz @frglez
 /crates/spelaion-plugin-fetch/src/write_catalogue.rs @petilolz @frglez
 
+# The transport that brings the plugin catalogue and plugin archives (ADR-055): HTTPS at every
+# hop, nothing of the user's sent. The core checks what arrives; only this keeps the way there.
+/crates/spelaion-https/                         @petilolz @frglez
+
 # Automatic updates and their signing (ADR-021).
 /apps/desktop/src-tauri/src/update.rs           @petilolz @frglez
 /apps/desktop/src-tauri/src/update_state.rs     @petilolz @frglez

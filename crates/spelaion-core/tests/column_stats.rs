@@ -96,6 +96,14 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
             "dbo",
         ));
     }
+    if let Some((host, port)) = server("SPELAION_TEST_CLICKHOUSE") {
+        let params = login(host, port, "spelaion", "spelaion", "spelaion");
+        out.push((
+            "clickhouse",
+            session(&*engines::clickhouse(), params).await,
+            "spelaion",
+        ));
+    }
     out
 }
 
@@ -122,9 +130,16 @@ async fn items(label: &str, session: &Session) {
         _ => ("TRUE", "FALSE", "BOOLEAN"),
     };
     run(label, session, &[&format!("DROP TABLE {TABLE}")], true).await;
-    let create = format!(
-        "CREATE TABLE {TABLE} (id INT PRIMARY KEY, name VARCHAR(40), price DECIMAL(10, 2), ok {boolean})"
-    );
+    let create = if label == "clickhouse" {
+        format!(
+            "CREATE TABLE {TABLE} (id Int32, name Nullable(String), price Nullable(Decimal(10, 2)), \
+             ok Nullable(Bool)) ENGINE = MergeTree ORDER BY id"
+        )
+    } else {
+        format!(
+            "CREATE TABLE {TABLE} (id INT PRIMARY KEY, name VARCHAR(40), price DECIMAL(10, 2), ok {boolean})"
+        )
+    };
     let insert = format!(
         "INSERT INTO {TABLE} (id, name, price, ok) VALUES \
          (1, 'Ana', 10.50, {t}), (2, 'Bob', 20.00, {f}), (3, 'Ana', NULL, {t}), \

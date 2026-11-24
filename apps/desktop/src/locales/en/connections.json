@@ -72,6 +72,9 @@
     "mcpHint": "Agents using spelaiondb mcp can only read, and every query is audited.",
     "mcpWritesUnavailable": "Writes from agents are not available for this engine yet: agents using spelaiondb mcp can only read, and every query is audited.",
     "serviceName": "Service name",
+    "localdbInstance": "LocalDB instance",
+    "localdbHint": "Reached through its pipe on this computer (Windows only). SpelaionDB starts the instance with SqlLocalDB if it is not running.",
+    "localdbWindowsAccount": "With no user, LocalDB logs you in with your Windows account.",
     "noBarrierSafety": "Read-only mode and agents are not available for this engine yet: SpelaionDB has no safeguard for them on it. The guard still asks before risky statements.",
     "noSqlSafety": "Read-only mode and agents are not available for this engine yet: SpelaionDB has no safeguard for them on it. The guard still asks before dropping or emptying a collection.",
     "mcpAccess": "Agents can",
@@ -554,6 +557,7 @@
   },
   "tlsWarning": {
     "unverified": "TLS mode “{{mode}}” does not check the server's certificate: anyone on the network between you and {{host}} could read or impersonate it. Use verify-full to check it.",
+    "localDbPassword": "LocalDB is reached through its pipe on this computer without TLS: this SQL login's password crosses it unencrypted. Leave the user empty to log in with your Windows account, which sends no password.",
     "unencrypted": "TLS is off: everything sent to {{host}}, the password included, crosses the network unencrypted.",
     "unverifiedTunneled": "Through the tunnel, TLS mode “{{mode}}” does not check {{host}}'s certificate on the last stretch, from the tunnel's end to the server.",
     "unencryptedTunneled": "Through the tunnel, the last stretch to {{host}}, from the tunnel's end to the server, is not encrypted."

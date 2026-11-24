@@ -46,7 +46,13 @@
   the plugin receives each batch as one statement and may return several result sets. Here,
   its tests run through that plugin, unchanged, with `SPELAION_TEST_MSSQL=127.0.0.1:11433`:
   the pinned build next to the program, or, in a development build, the one
-  `SPELAION_DEV_PLUGIN_SQLSERVER` points at.
+  `SPELAION_DEV_PLUGIN_SQLSERVER` points at. LocalDB (ADR-068) is a SQL Server connection
+  whose host is `(localdb)\Instance` (`spelaion-config`'s `localdb_instance`): the plugin
+  starts the instance with `SqlLocalDB` and speaks TDS through its pipe, no user means the
+  Windows account, the configuration refuses tunnels, ports and certificates to verify, the
+  connection test has no address step, and the picker's `localdb` kind exists only on
+  Windows. Its real test is the plugin's `tests/localdb.rs` on a Windows machine with
+  `SqlLocalDB` (GitHub's runners have it).
 - **MongoDB is a plugin whose language is not SQL** (ADR-056): its driver lives in
   `spelaion-dev/spelaiondb-plugin-mongodb` (MongoDB and FerretDB), pinned in `plugins.toml`.
   Its language is the core's, in `spelaion-dialect`'s `mongodb.rs`: a closed subset of the
@@ -109,8 +115,13 @@
   and its read barrier: no transactions, so the session's `readonly` setting
   (`readonly.rs`'s `clickhouse_read_only`), set once for agents' reads, exports, column
   statistics and read-only connections, and never set twice (a user whose profile is
-  read-only cannot set it). It declares no transactions, no editing, no imports, no plans
-  and no data search, and agents' writes are refused (`run_write` needs a transaction). Its
+  read-only cannot set it). It declares no transactions and no editing, and agents' writes
+  are refused (`run_write` needs a transaction). Imports load into a table of our own put in
+  place by one atomic rename (ADR-066: `import/staged.rs`; new tables only, `Atomic`
+  databases only). Data search writes its
+  ClickHouse forms (`toString`, `positionCaseInsensitiveUTF8`, `substringUTF8`; its `String`
+  is searched as text) and binds `{pN:String}`. Its plans are estimated only
+  (`plan/clickhouse.rs`, `tests/plans_clickhouse.rs`; no ANALYZE). Its
   tests: `tests/clickhouse.rs` with `SPELAION_TEST_CLICKHOUSE=127.0.0.1:18123` (and
   `SPELAION_TEST_SSH` for the tunnel); `SPELAION_DEV_PLUGIN_CLICKHOUSE` in a development build.
 - **Trino and Presto are one plugin** (`spelaion-dev/spelaiondb-plugin-trino`, engines `trino`
@@ -137,8 +148,11 @@
   unit asks nothing). It has **no read-only mode and no agents yet**: the configuration
   refuses `read_only` and `has_read_barrier` (`agent_view`, the form) leaves it out, because
   a function with an autonomous transaction writes from inside a `SELECT`, even in a
-  read-only transaction (ADR-059's 2026-11-15 note); no exports, column statistics or data
-  search either, which need that barrier. Its tests: `tests/oracle.rs` with
+  read-only transaction (ADR-059's 2026-11-15 note), and undoes any session setting that would
+  stop it (`DISABLE COMMIT IN PROCEDURE`, `READ_ONLY = TRUE`) with an `ALTER SESSION` of its
+  own (the 2026-11-23 note; `tests/oracle.rs` keeps that evidence). Do not turn the barrier on
+  with a session setting; no exports, column statistics or data search either, which need
+  that barrier. Its tests: `tests/oracle.rs` with
   `SPELAION_TEST_ORACLE=127.0.0.1:11521` (and `SPELAION_TEST_SSH` for TLS through the two
   bastions); `SPELAION_DEV_PLUGIN_ORACLE` in a development build.
 - **libSQL only exists as a plugin** (ADR-058): `spelaion-dev/spelaiondb-plugin-libsql` (Hrana

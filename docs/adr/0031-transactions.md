@@ -118,3 +118,20 @@ transaction id of two consecutive statements.
 - If an engine's state ever costs a round trip that matters (a long script of thousands of
   statements on DuckDB), the core could read it only when the script ends and before deciding a
   `BEGIN`.
+
+## Notes
+
+**2026-11-23: no transaction is followed on a server where `BEGIN` opens none (SDB-310,
+SDB-304).** Some servers of PostgreSQL's or MySQL's protocol accept `BEGIN` (or `START
+TRANSACTION`) and write each statement at once anyway. Checked:
+- CrateDB: no transactions at all; `ROLLBACK` is a syntax error, and the row stays.
+- GreptimeDB and StarRocks (SDB-310).
+- RisingWave: a read-write `BEGIN` answers that no transaction is started.
+
+Their driver answers the transaction state like its engine's, so their editor sessions were
+followed. Under a type that asks for manual commit, a write then looked held back while it was
+already written, and Rollback undid nothing or failed. The core reads which server it reached
+when the session opens (SDB-169), so `ServerFamily::opens_transactions` decides it there.
+Such a session follows no transaction: it stays in auto-commit, and Commit, Rollback and the
+auto-commit switch say why. The connection type's other safeguards (confirming data changes)
+still apply. A server that was not checked to open nothing is followed as its engine.

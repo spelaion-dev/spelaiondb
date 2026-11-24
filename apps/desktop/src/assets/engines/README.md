@@ -29,6 +29,7 @@ policy](https://www.apache.org/foundation/marks).
 | `singlestore.svg` | SingleStore | simple-icons@16.36.0 `icons/singlestore.svg` | CC0-1.0 |
 | `greptimedb.svg` | GreptimeDB | simple-icons@16.36.0 `icons/greptimedb.svg` | CC0-1.0 |
 | `timescale.svg` | TimescaleDB | simple-icons@16.36.0 `icons/timescale.svg` | CC0-1.0 |
+| `cratedb.svg` | CrateDB | simple-icons@16.36.0 `icons/cratedb.svg` | CC0-1.0 |
 | `trino.svg` | Trino | simple-icons@16.36.0 `icons/trino.svg` | CC0-1.0 |
 | `presto.svg` | Presto | simple-icons@16.36.0 `icons/presto.svg` | CC0-1.0 |
 | `googlecloudspanner.svg` | Google Cloud Spanner | simple-icons@16.36.0 `icons/googlecloudspanner.svg` | CC0-1.0 |

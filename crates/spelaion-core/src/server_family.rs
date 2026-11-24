@@ -13,7 +13,8 @@
 //! ("Source distribution", "Percona Server", a cloud's own), so the MySQL family is told apart
 //! by the forks' names, and a read-only connection's session mode is read back from every
 //! server after it is set ([`read_only_confirmed`]): a fork that accepts it and stays writable
-//! (StarRocks) is caught there whatever it calls itself.
+//! is caught there whatever it calls itself. StarRocks, which answers as MySQL with only its
+//! release in `@@version_comment`, is recognised by its own `current_version()` (SDB-310).
 
 use futures_util::StreamExt;
 use spelaion_driver_api::{Connection, ExecEvent, ExecOptions, Value};
@@ -60,6 +61,18 @@ pub enum ServerFamily {
     /// 1.2.881). Its version says MySQL 8.0.90 and its comment is the variable's own name: it is
     /// told apart by the rest of its version (`databend_version`).
     Databend,
+    /// StarRocks: its version says MySQL 8.0.33 and its comment is only its release
+    /// (`3.4.5-1207fa7`), which its own `current_version()` answers too. `START TRANSACTION` and
+    /// `autocommit = 0` are accepted and open nothing (a ROLLBACK undoes no write), `START
+    /// TRANSACTION READ ONLY` is a syntax error, and `SET SESSION TRANSACTION READ ONLY` leaves
+    /// the session writable (checked with 3.4.5).
+    StarRocks,
+    /// Babelfish for PostgreSQL through SQL Server's protocol (SDB-313), told from `@@VERSION`.
+    /// Its transactions hold (a rolled-back write is gone), but its T-SQL reaches PostgreSQL's
+    /// own functions, some of whose effects outlive a rolled-back transaction: a `SELECT` took an
+    /// advisory lock that stayed after the rollback, and `set_config` changes the session
+    /// (checked with 5.6.0). A view can hide them, so SQL Server's barrier does not hold here.
+    Babelfish,
 }
 
 /// PostgreSQL forks that name themselves in their `version()` without verified barriers:
@@ -87,6 +100,22 @@ fn databend_version(version: &str) -> bool {
             && version.split('-').nth(1).is_some_and(|release| {
                 release.starts_with('v') && release[1..].split('.').count() == 3
             }))
+}
+
+/// StarRocks's `@@version_comment`: only its release and commit, `3.4.5-1207fa7`. MySQL's and
+/// its forks' comments name their distributor; a server with this shape is asked
+/// `current_version()`, StarRocks's own function, before it is taken for StarRocks.
+fn starrocks_comment(comment: &str) -> bool {
+    let Some((release, commit)) = comment.trim().split_once('-') else {
+        return false;
+    };
+    let parts: Vec<&str> = release.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && !commit.is_empty()
+        && commit.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn contains(text: &str, name: &str) -> bool {
@@ -122,6 +151,11 @@ impl ServerFamily {
             return ServerFamily::Unchecked((*fork).into());
         }
         ServerFamily::PostgreSql
+    }
+
+    /// Whether a SQL Server connection's `@@VERSION` is Babelfish's.
+    pub fn is_babelfish(version: &str) -> bool {
+        version.trim_start().starts_with("Babelfish for PostgreSQL")
     }
 
     /// Reads a MySQL server's `select version(), @@version_comment`.
@@ -164,6 +198,8 @@ impl ServerFamily {
             ServerFamily::Doris => "Apache Doris",
             ServerFamily::GreptimeDb => "GreptimeDB",
             ServerFamily::Databend => "Databend",
+            ServerFamily::StarRocks => "StarRocks",
+            ServerFamily::Babelfish => "Babelfish",
         }
     }
 
@@ -176,14 +212,16 @@ impl ServerFamily {
             | ServerFamily::SingleStore
             | ServerFamily::Doris
             | ServerFamily::GreptimeDb
-            | ServerFamily::Databend => true,
+            | ServerFamily::Databend
+            | ServerFamily::StarRocks => true,
             ServerFamily::PostgreSql
             | ServerFamily::CockroachDb
             | ServerFamily::YugabyteDb
             | ServerFamily::RisingWave
             | ServerFamily::Materialize
             | ServerFamily::CrateDb
-            | ServerFamily::Unchecked(_) => false,
+            | ServerFamily::Unchecked(_)
+            | ServerFamily::Babelfish => false,
         }
     }
 
@@ -202,13 +240,45 @@ impl ServerFamily {
             | ServerFamily::MariaDb
             | ServerFamily::OceanBase
             | ServerFamily::TiDb
-            | ServerFamily::SingleStore => true,
+            | ServerFamily::SingleStore
+            | ServerFamily::Babelfish => true,
             ServerFamily::RisingWave
             | ServerFamily::CrateDb
             | ServerFamily::Unchecked(_)
             | ServerFamily::Doris
             | ServerFamily::GreptimeDb
-            | ServerFamily::Databend => false,
+            | ServerFamily::Databend
+            | ServerFamily::StarRocks => false,
+        }
+    }
+
+    /// `BEGIN` / `START TRANSACTION` opens a transaction at all. False only where it was checked
+    /// that it is accepted and opens nothing: a ROLLBACK undoes no write (CrateDB, where
+    /// `ROLLBACK` is even a syntax error; GreptimeDB; StarRocks; RisingWave, whose read-write
+    /// `BEGIN` answers that no transaction is started, checked with 3.1). Such a session is not
+    /// followed as a transaction: no manual commit, Commit or Rollback is offered on it
+    /// (SDB-310, SDB-304). Other servers that do not
+    /// [`enforce_transactions`](Self::enforces_transactions) keep theirs, which may still hold.
+    pub fn opens_transactions(&self) -> bool {
+        match self {
+            ServerFamily::CrateDb
+            | ServerFamily::GreptimeDb
+            | ServerFamily::StarRocks
+            | ServerFamily::RisingWave => false,
+            ServerFamily::PostgreSql
+            | ServerFamily::CockroachDb
+            | ServerFamily::YugabyteDb
+            | ServerFamily::Materialize
+            | ServerFamily::Unchecked(_)
+            | ServerFamily::MySql
+            | ServerFamily::MariaDb
+            | ServerFamily::OceanBase
+            | ServerFamily::TiDb
+            | ServerFamily::SingleStore
+            | ServerFamily::Doris
+            | ServerFamily::Databend
+            // Its transactions hold: a rolled-back write is gone (checked with 5.6.0).
+            | ServerFamily::Babelfish => true,
         }
     }
 
@@ -225,7 +295,8 @@ impl ServerFamily {
             | ServerFamily::MySql
             | ServerFamily::MariaDb
             | ServerFamily::OceanBase
-            | ServerFamily::TiDb => true,
+            | ServerFamily::TiDb
+            | ServerFamily::Babelfish => true,
             ServerFamily::RisingWave
             | ServerFamily::Materialize
             | ServerFamily::CrateDb
@@ -233,7 +304,8 @@ impl ServerFamily {
             | ServerFamily::SingleStore
             | ServerFamily::Doris
             | ServerFamily::GreptimeDb
-            | ServerFamily::Databend => false,
+            | ServerFamily::Databend
+            | ServerFamily::StarRocks => false,
         }
     }
 
@@ -256,7 +328,9 @@ impl ServerFamily {
             | ServerFamily::SingleStore
             | ServerFamily::Doris
             | ServerFamily::GreptimeDb
-            | ServerFamily::Databend => false,
+            | ServerFamily::Databend
+            | ServerFamily::StarRocks
+            | ServerFamily::Babelfish => false,
         }
     }
 
@@ -278,7 +352,9 @@ impl ServerFamily {
             | ServerFamily::SingleStore
             | ServerFamily::Doris
             | ServerFamily::GreptimeDb
-            | ServerFamily::Databend => false,
+            | ServerFamily::Databend
+            | ServerFamily::StarRocks
+            | ServerFamily::Babelfish => false,
         }
     }
 
@@ -298,8 +374,20 @@ impl ServerFamily {
         }
     }
 
+    /// Why SQL Server's barrier (a transaction always rolled back, ADR-020) does not hold on
+    /// Babelfish, for the refusals.
+    const BABELFISH_REASON: &'static str = "its T-SQL reaches PostgreSQL's own functions, some \
+        of whose effects (advisory locks, settings) outlive a rolled-back transaction, and a view \
+        can hide them";
+
     /// Why a read that relies on the read-only transaction is refused here, if it is.
     pub fn read_only_transactions_refusal(&self) -> Option<String> {
+        if *self == ServerFamily::Babelfish {
+            return Some(format!(
+                "Babelfish: {}, so SpelaionDB cannot keep this read from writing",
+                Self::BABELFISH_REASON
+            ));
+        }
         (!self.read_only_transactions()).then(|| {
             format!(
                 "{} does not enforce read-only transactions ({}): \
@@ -312,6 +400,12 @@ impl ServerFamily {
 
     /// Why a read-only connection is refused here, if it is.
     pub fn read_only_sessions_refusal(&self) -> Option<String> {
+        if *self == ServerFamily::Babelfish {
+            return Some(format!(
+                "read-only mode is not available on Babelfish: {}",
+                Self::BABELFISH_REASON
+            ));
+        }
         (!self.read_only_sessions()).then(|| {
             format!(
                 "read-only mode is not available on {}: it does not enforce a read-only session \
@@ -347,8 +441,28 @@ pub(crate) async fn read_family(
                     .unwrap_or_default(),
             };
             let column = |i: usize| row.get(i).map_or("", String::as_str);
-            Some(ServerFamily::from_mysql_version(column(0), column(1)))
+            let family = ServerFamily::from_mysql_version(column(0), column(1));
+            // Only a comment of StarRocks's shape is checked further, and only by asking the
+            // server: a MySQL server is never asked anything more.
+            if family == ServerFamily::MySql && starrocks_comment(column(1)) {
+                let current = first_row(connection, "select current_version()").await;
+                if current
+                    .is_some_and(|row| row.first().is_some_and(|v| v.trim() == column(1).trim()))
+                {
+                    return Some(ServerFamily::StarRocks);
+                }
+            }
+            Some(family)
         }
+        // Only Babelfish is told apart: SQL Server itself keeps its own barrier, unchanged, and
+        // a server that does not answer is taken for SQL Server, as before (SDB-313).
+        "sqlserver" => first_row(connection, "SELECT @@VERSION")
+            .await
+            .filter(|row| {
+                row.first()
+                    .is_some_and(|version| ServerFamily::is_babelfish(version))
+            })
+            .map(|_| ServerFamily::Babelfish),
         _ => None,
     }
 }
@@ -465,6 +579,156 @@ mod tests {
         }
     }
 
+    /// A MySQL-protocol server that answers the identity probes with these values, and fails a
+    /// `current_version()` it does not have. It records what it was asked.
+    struct Answers {
+        inner: Box<dyn Connection>,
+        version: &'static str,
+        comment: &'static str,
+        current: Option<&'static str>,
+        asked: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Connection for Answers {
+        fn capabilities(&self) -> &Capabilities {
+            self.inner.capabilities()
+        }
+        fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
+            self.inner.cancel_handle()
+        }
+        async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream, DriverError> {
+            self.asked.lock().unwrap().push(sql.to_string());
+            match sql {
+                "select version(), @@version_comment" => {
+                    let sql = format!("select '{}', '{}'", self.version, self.comment);
+                    self.inner.execute(&sql, opts).await
+                }
+                "select current_version()" => match self.current {
+                    Some(current) => {
+                        self.inner
+                            .execute(&format!("select '{current}'"), opts)
+                            .await
+                    }
+                    None => Err(DriverError::Other(
+                        "FUNCTION current_version does not exist".into(),
+                    )),
+                },
+                other => panic!("unexpected identity probe: {other}"),
+            }
+        }
+        async fn server_version(&self) -> Result<String, DriverError> {
+            self.inner.server_version().await
+        }
+        async fn list_schemas(&self) -> Result<Vec<SchemaInfo>, DriverError> {
+            self.inner.list_schemas().await
+        }
+        async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>, DriverError> {
+            self.inner.list_objects(schema).await
+        }
+        async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo, DriverError> {
+            self.inner.describe_table(schema, name).await
+        }
+    }
+
+    async fn answers(
+        version: &'static str,
+        comment: &'static str,
+        current: Option<&'static str>,
+    ) -> Answers {
+        let inner = crate::open::test_driver(spelaion_config::Engine::Sqlite)
+            .connect(&ConnectParams {
+                database: ":memory:".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        Answers {
+            inner,
+            version,
+            comment,
+            current,
+            asked: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// SDB-310: StarRocks answers as MySQL 8.0.33 with only its release as the comment; its own
+    /// `current_version()` confirms it. A MySQL server is never asked anything more, and a
+    /// comment of that shape whose server answers otherwise stays MySQL.
+    #[tokio::test]
+    async fn starrocks_is_recognised_by_asking_its_own_version() {
+        let starrocks = answers("8.0.33", "3.4.5-1207fa7", Some("3.4.5-1207fa7")).await;
+        let family = read_family(&starrocks, "mysql").await.unwrap();
+        assert_eq!(family, StarRocks);
+        assert_eq!(family.name(), "StarRocks");
+        assert!(!family.enforces_transactions());
+        assert!(!family.opens_transactions());
+        assert!(
+            family
+                .read_only_sessions_refusal()
+                .unwrap()
+                .contains("StarRocks")
+        );
+
+        let mysql = answers("8.4.2", "MySQL Community Server - GPL", None).await;
+        assert_eq!(read_family(&mysql, "mysql").await.unwrap(), MySql);
+        assert_eq!(
+            *mysql.asked.lock().unwrap(),
+            ["select version(), @@version_comment"],
+            "MySQL is asked nothing more"
+        );
+
+        for current in [None, Some("3.4.6-0000000")] {
+            let lookalike = answers("8.0.33", "3.4.5-1207fa7", current).await;
+            assert_eq!(read_family(&lookalike, "mysql").await.unwrap(), MySql);
+        }
+    }
+
+    #[test]
+    fn only_a_bare_release_and_commit_looks_like_starrocks() {
+        for comment in ["3.4.5-1207fa7", "3.3.12-abcdef0", " 4.0.0-1a "] {
+            assert!(starrocks_comment(comment), "{comment}");
+        }
+        for comment in [
+            "MySQL Community Server - GPL",
+            "Source distribution",
+            "3.4.5",
+            "3.4-1207fa7",
+            "3.4.5-",
+            "3.4.5-ghij",
+            "Doris version doris-3.0.5",
+            "v3.4.5-1207fa7",
+        ] {
+            assert!(!starrocks_comment(comment), "{comment}");
+        }
+    }
+
+    /// Only servers checked to open nothing on `START TRANSACTION` are not followed.
+    #[test]
+    fn only_checked_servers_open_no_transactions() {
+        for family in [CrateDb, GreptimeDb, StarRocks, RisingWave] {
+            assert!(!family.opens_transactions(), "{family:?}");
+            // A server that opens no transaction never holds an atomic write either.
+            assert!(!family.enforces_transactions(), "{family:?}");
+        }
+        for family in [
+            PostgreSql,
+            CockroachDb,
+            YugabyteDb,
+            Materialize,
+            Unchecked("Redshift".into()),
+            MySql,
+            MariaDb,
+            OceanBase,
+            TiDb,
+            SingleStore,
+            Doris,
+            Databend,
+        ] {
+            assert!(family.opens_transactions(), "{family:?}");
+        }
+    }
+
     #[tokio::test]
     async fn missing_mysql_version_comment_does_not_grant_greptime_a_barrier() {
         for stream_error in [false, true] {
@@ -489,6 +753,35 @@ mod tests {
                     .unwrap()
                     .contains("START TRANSACTION READ ONLY")
             );
+        }
+    }
+
+    /// Babelfish (SDB-313), from `@@VERSION` as 5.6.0 answered it: its transactions and keys
+    /// hold, SQL Server's barrier does not, and the refusals say why in Babelfish's terms.
+    #[test]
+    fn babelfish_is_recognised_and_refused_what_its_barrier_cannot_keep() {
+        let version = "Babelfish for PostgreSQL with SQL Server Compatibility - 12.0.2000.8\n\
+                       Nov 23 2026 12:53:37\nCopyright (c) Amazon Web Services\n\
+                       PostgreSQL 17.10 on x86_64-pc-linux-gnu (Babelfish 5.6.0)";
+        assert!(ServerFamily::is_babelfish(version));
+        for sql_server in [
+            "Microsoft SQL Server 2022 (RTM-CU20) (KB5059390) - 16.0.4205.1 (X64)",
+            "PostgreSQL 17.10 (Babelfish 5.6.0)",
+            "",
+        ] {
+            assert!(!ServerFamily::is_babelfish(sql_server), "{sql_server}");
+        }
+        let family = Babelfish;
+        assert!(family.enforces_transactions() && family.enforces_unique_keys());
+        assert!(family.opens_transactions());
+        assert!(!family.read_only_transactions() && !family.read_only_sessions());
+        for reason in [
+            family.read_only_transactions_refusal().unwrap(),
+            family.read_only_sessions_refusal().unwrap(),
+        ] {
+            assert!(reason.contains("Babelfish"), "{reason}");
+            assert!(reason.contains("PostgreSQL's own functions"), "{reason}");
+            assert!(!reason.contains("BEGIN READ ONLY"), "{reason}");
         }
     }
 
@@ -631,6 +924,7 @@ mod tests {
             (Doris, false, false),
             (GreptimeDb, false, false),
             (Databend, false, false),
+            (StarRocks, false, false),
             (Unchecked("GreptimeDB".into()), false, false),
         ] {
             assert_eq!(family.read_only_transactions(), transactions, "{family:?}");

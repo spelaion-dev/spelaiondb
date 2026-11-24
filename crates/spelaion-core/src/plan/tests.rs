@@ -481,6 +481,7 @@ fn the_engines_with_plans_come_from_the_plan_reader_and_the_agents_barrier() {
             Engine::Mariadb,
             Engine::Duckdb,
             Engine::Sqlserver,
+            Engine::Clickhouse,
             // SQLite's dialect, read by the same plan reader.
             Engine::Libsql,
         ]
@@ -495,6 +496,7 @@ fn the_engines_with_plans_come_from_the_plan_reader_and_the_agents_barrier() {
             Engine::Mariadb,
             Engine::Duckdb,
             Engine::Sqlserver,
+            Engine::Clickhouse,
         ]
     );
 }

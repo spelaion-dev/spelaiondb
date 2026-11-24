@@ -470,6 +470,12 @@ select {
   flex-direction: column;
   min-height: 0;
 }
+/* "Hide side panel" (SDB-451), at the right end of a panel's header. */
+.sidebar-header .side-panel-toggle {
+  margin-left: auto;
+  flex: none;
+}
+
 .sidebar-resizer {
   grid-column: 3;
   position: relative;

@@ -1124,6 +1124,29 @@ pub struct SizeStepsItem {
     pub default_editor_zoom: u16,
 }
 
+/// The side panel as the user left it (SDB-451), with the widths the core allows it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SidePanelItem {
+    pub hidden: bool,
+    pub width: u32,
+    pub min_width: u32,
+    pub max_width: u32,
+    pub default_width: u32,
+}
+
+impl From<spelaion_core::SidePanelPreferences> for SidePanelItem {
+    fn from(preferences: spelaion_core::SidePanelPreferences) -> Self {
+        Self {
+            hidden: preferences.hidden,
+            width: preferences.width,
+            min_width: spelaion_core::SIDE_PANEL_MIN_WIDTH,
+            max_width: spelaion_core::SIDE_PANEL_MAX_WIDTH,
+            default_width: spelaion_core::SIDE_PANEL_DEFAULT_WIDTH,
+        }
+    }
+}
+
 /// The map view's background (ADR-045): tiles from the user's server, off by default.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1984,9 +2007,10 @@ pub struct ColumnItem {
 )]
 pub enum ScriptEvent {
     /// The run was accepted, before any of its statements: the result tabs it replaced,
-    /// already freed by the core (SDB-378).
+    /// already freed by the core (SDB-378). Paged runs also report the effective grid sort.
     RunStarted {
         closed: Vec<u32>,
+        page_sort: Option<Vec<SortKeyItem>>,
     },
     /// Byte range of the statement within the script.
     StatementStarted {
@@ -2442,8 +2466,9 @@ impl RunEvents {
     }
 
     /// The first event of the run: what it replaced.
-    pub fn started(&self) -> ScriptEvent {
+    pub fn started(&self, page_sort: Option<Vec<SortKeyItem>>) -> ScriptEvent {
         ScriptEvent::RunStarted {
+            page_sort,
             closed: self
                 .results
                 .closed()
@@ -3116,20 +3141,14 @@ pub struct IndexDetails {
     pub definition: String,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct EditableTableItem {
-    pub schema: String,
-    pub name: String,
-    pub primary_key: Vec<String>,
-}
-
 /// The table whose foreign keys a query's result follows (SDB-93), as the core matched it.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyTableItem {
     pub schema: String,
     pub name: String,
+    pub primary_key: Vec<String>,
+    pub writable: bool,
 }
 
 /// Where rows copied as UPDATE statements come from (SDB-388): a table data tab's table, or
@@ -4798,7 +4817,7 @@ impl From<spelaion_core::ColumnFilter> for ColumnFilterItem {
 }
 
 /// One key of a result's sort: a result column by position, and its direction.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize, Serialize, Type)]
 pub struct SortKeyItem {
     pub column: u32,
     pub descending: bool,
@@ -8142,11 +8161,23 @@ impl From<spelaion_core::LastPage> for LastPageItem {
 }
 
 /// A connection whose TLS does not check its server (SDB-395), as the core decided it.
+/// What a connection's TLS leaves unchecked (SDB-395), as the core decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TlsRiskItem {
+    /// `disable`: nothing is encrypted.
+    Unencrypted,
+    /// `prefer` or `require`: encrypted, but the server's certificate is not checked.
+    Unverified,
+    /// A SQL login to a LocalDB instance: its password crosses the local pipe without TLS
+    /// (ADR-068).
+    LocalDbPassword,
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TlsWarningItem {
-    /// `unencrypted` (`disable`) or `unverified` (`prefer`, `require`).
-    pub risk: String,
+    pub risk: TlsRiskItem,
     /// The TLS mode as the connection file writes it.
     pub mode: String,
     pub host: String,
@@ -8158,10 +8189,10 @@ impl From<spelaion_core::TlsWarning> for TlsWarningItem {
     fn from(w: spelaion_core::TlsWarning) -> Self {
         Self {
             risk: match w.risk {
-                spelaion_core::TlsRisk::Unencrypted => "unencrypted",
-                spelaion_core::TlsRisk::Unverified => "unverified",
-            }
-            .into(),
+                spelaion_core::TlsRisk::Unencrypted => TlsRiskItem::Unencrypted,
+                spelaion_core::TlsRisk::Unverified => TlsRiskItem::Unverified,
+                spelaion_core::TlsRisk::LocalDbPassword => TlsRiskItem::LocalDbPassword,
+            },
             mode: w.mode.into(),
             host: w.host,
             tunneled: match w.route {

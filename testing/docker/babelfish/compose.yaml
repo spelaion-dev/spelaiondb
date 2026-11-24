@@ -1,0 +1,24 @@
+# Babelfish for PostgreSQL (SDB-313), for `crates/spelaion-core/tests/babelfish.rs` and the SQL
+# Server plugin's `tests/babelfish.rs`. A project of its own, apart from the main test
+# environment: its image is built here from Babelfish's sources (tens of minutes the first
+# time), so nothing starts it unless asked, and CI does not.
+#
+#   docker compose -f testing/docker/babelfish/compose.yaml up -d --wait
+#
+# Then, with the plugin variables of `spelaion-plugin-fetch`:
+#   SPELAION_TEST_BABELFISH=127.0.0.1:11434 cargo test -p spelaion-core babelfish
+#
+# The login is `babelfish_user` with the SQL Server container's password, over TLS.
+name: spelaion-test-babelfish
+
+services:
+  babelfish:
+    build: .
+    image: spelaion-test-babelfish:5.6.0
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:11434:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U postgres"]
+      interval: 3s
+      retries: 60

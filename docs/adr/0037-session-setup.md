@@ -1,6 +1,7 @@
 # ADR-037: Every new session starts as its connection says: setup statements, default schema, isolation level
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented; amended by ADR-074: on a PostgreSQL connection that opens
+  several databases, the default schema is set only in the connection's own database)
 - **Date:** 2026-11-08
 - **Amends:** ADR-028 (part 3: what reconnecting runs), AGENTS.md ("nothing is ever re-run")
 - **Builds on:** ADR-008 (read-only barrier), ADR-022 (trust pinned to content), ADR-029

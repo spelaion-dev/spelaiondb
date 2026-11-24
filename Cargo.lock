@@ -232,9 +232,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "60.1.0"
+version = "60.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f3d22a41d3df78b71df0b685af219ae3a94188ab98d6fb29c958eb55c3247f4"
+checksum = "a7a75080e8066219ed2d1e3b8fd2eb0b1a4b35d03b6fa87fb1035e93bd8dac95"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -250,9 +250,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "60.1.0"
+version = "60.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bd46a530bc1a8e763102fc36c1dc0f51f3ffa150c78e7f5658ccb54b1458ade"
+checksum = "6c6bf2edf52662586214410c6030204215453eb86b8715037e8951326e173b19"
 dependencies = [
  "bytes",
  "half",
@@ -283,9 +283,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-cmp"
-version = "60.1.0"
+version = "60.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1913e57a64fbf2c4502fa6d54b547d6a1ae59e3146cbc15321d47468c937abd1"
+checksum = "c7e23e1092a61d7addfe57a69bf5cde7628b7b6685adea11731c19acdfd86695"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -294,9 +294,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "60.1.0"
+version = "60.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "415b7fbc4cf56b080bb5677a4ae74211b5c79e571ed37a1d547633ec07f3b43b"
+checksum = "d0a7becabdb9bf3fa058b55845c52e0f792bedc88fd0e28d6580c9730a902b60"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -307,9 +307,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "60.1.0"
+version = "60.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45f3e766bccf5a0cb57a5de52a4cba450dea5171547c2cb5939b486d08887cba"
+checksum = "3d6fe9198046b67abf4e3e3ef70de2d705099975bdc2a7d9f0661675a978a083"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -348,15 +348,15 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "60.1.0"
+version = "60.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de2c8e714b466404cdc1189e89f892426efea614d938e16c15518c340cd43ba3"
+checksum = "3e7574c4175cc731e0d26a8384bc25d455c5e220250988a772c1af843592444b"
 
 [[package]]
 name = "arrow-select"
-version = "60.1.0"
+version = "60.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5af3f6656c5f2c6944f93d9a357a7f204c93d5f349385a44cf46c4a26fbcf30"
+checksum = "8d6a571e56e54b485b9f2d1dac4c3c34edcaffaa2668a23a7204108b66ef163d"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -1129,9 +1129,9 @@ dependencies = [
 
 [[package]]
 name = "cookie"
-version = "0.18.2"
+version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
+checksum = "d55f2d6c30eeec7d5c6f98bd4395d4abb1895629eab97ee6522d340623615f8a"
 dependencies = [
  "time",
  "version_check",
@@ -1330,7 +1330,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -4121,9 +4121,9 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "60.1.0"
+version = "60.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "806eaa0f1c0436dcb43bee8e6a82bf2efff90521a60172f8281cb9ef577b43a4"
+checksum = "6701f0dd63f5ee23a0f1f2865ff76825c301759d6ab649e3e5686cc32d066957"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -5711,7 +5711,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5728,7 +5728,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "aes 0.8.4",
  "apple-native-keyring-store",
@@ -5757,7 +5757,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -5795,7 +5795,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-desktop"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5823,7 +5823,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-desktop-macros"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5832,7 +5832,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-dialect"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "proptest",
  "serde_json",
@@ -5841,7 +5841,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-api"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5854,7 +5854,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-sqlite"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5870,7 +5870,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-https"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "rcgen",
@@ -5883,7 +5883,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-mcp"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -5902,7 +5902,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-fetch"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "spelaion-core",
@@ -5911,7 +5911,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-host"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5927,7 +5927,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-protocol"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "serde",
@@ -5938,7 +5938,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-plugin-sdk"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5952,7 +5952,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-sqlite-schema"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "spelaion-dialect",
@@ -5962,7 +5962,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-ssh"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -5980,7 +5980,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-store"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
@@ -5988,7 +5988,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-test-plugin"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "async-stream",

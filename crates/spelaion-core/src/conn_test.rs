@@ -566,8 +566,12 @@ impl Plan {
             steps.len() - 1
         });
         // A file has no address; a Kubernetes forward always accepts locally, so reaching it
-        // says nothing more than its own step.
-        let target = (!file && kubernetes.is_none()).then(|| {
+        // says nothing more than its own step. A LocalDB instance has no address either: the
+        // plugin starts it and reaches it through its pipe at the login (ADR-068).
+        let localdb =
+            spelaion_config::localdb_instance(resolved.engine, Some(resolved.params.host.as_str()))
+                .is_some();
+        let target = (!file && kubernetes.is_none() && !localdb).then(|| {
             steps.push(StepKind::Target {
                 host: resolved.params.host.clone(),
                 port: resolved.params.port,
@@ -1447,6 +1451,54 @@ mod tests {
             redactor.add(secret);
         }
         redactor.redact(text)
+    }
+
+    /// A SQL Server connection to `host`, without tunnel or Kubernetes.
+    fn sqlserver(host: &str) -> ResolvedConnection {
+        ResolvedConnection {
+            id: spelaion_config::ConnectionId {
+                source: spelaion_config::Source::User,
+                path: "local.toml".into(),
+            },
+            name: "local".into(),
+            engine: Engine::Sqlserver,
+            env: None,
+            kind: None,
+            params: spelaion_driver_api::ConnectParams {
+                host: host.into(),
+                port: 1433,
+                ..Default::default()
+            },
+            password: Password::None,
+            tunnel: None,
+            kubernetes: None,
+            sqlite3: None,
+            file_folder: None,
+            databases: None,
+            local_port: spelaion_config::LocalPort::Any,
+            keepalive: None,
+            statement_timeout: None,
+            session: Default::default(),
+            mcp: Default::default(),
+            masking: Default::default(),
+        }
+    }
+
+    /// A LocalDB instance has no address to reach (ADR-068): the plugin starts it and goes
+    /// through its pipe at the login, so the test has no "Reach host:port" step for it.
+    #[test]
+    fn a_localdb_instance_is_tested_at_its_login_without_an_address() {
+        let local = Plan::of_connection(&sqlserver("(localdb)\\MSSQLLocalDB"), TestScope::Full);
+        assert_eq!(local.target, None);
+        assert!(
+            !local
+                .steps
+                .iter()
+                .any(|s| matches!(s, StepKind::Target { .. }))
+        );
+        assert!(local.database.is_some());
+        let server = Plan::of_connection(&sqlserver("db.internal"), TestScope::Full);
+        assert!(server.target.is_some());
     }
 
     #[test]

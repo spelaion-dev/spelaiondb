@@ -227,7 +227,8 @@ pub use pending::{
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use progress::{ROWS_PROGRESS_INTERVAL, coalesce_rows};
 pub use query_page::{
-    append_query_page, count_query_rows, first_query_page_sql, query_count_sql, query_pages_exactly,
+    append_query_page, count_query_rows, editor_query_page_sql, first_query_page_sql,
+    query_count_sql, query_pages_exactly,
 };
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use references::{
@@ -269,7 +270,8 @@ pub use spelaion_store::{
     BackupPreferences, Bookmark, BookmarkKind, DEFAULT_EDITOR_ZOOM, DEFAULT_INTERFACE_SIZE,
     EDITOR_ZOOMS, EditorPreferences, EditorSnippet, ExplorerFilter, ExplorerPreferences,
     FilterKind, FilteredTable, GridPreferences, INTERFACE_SIZES, MapPreferences, RecentFile,
-    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX,
+    SIDE_PANEL_DEFAULT_WIDTH, SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, SavedFile, SavedTab,
+    SavedTabs, ScriptErrorMode, ScriptPreferences, SidePanelPreferences, TILE_ATTRIBUTION_MAX,
     TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
 };
 pub use sql_file::{

@@ -99,6 +99,14 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
             "dbo",
         ));
     }
+    if let Some((host, port)) = server("SPELAION_TEST_CLICKHOUSE") {
+        let params = login(host, port, "spelaion", "spelaion", "spelaion");
+        out.push((
+            "clickhouse",
+            session(&*engines::clickhouse(), params).await,
+            "spelaion",
+        ));
+    }
     out
 }
 
@@ -124,6 +132,13 @@ fn types(label: &str) -> (&'static str, bool, &'static str, &'static str) {
         "mysql" | "mariadb" => ("TEXT", true, "VARBINARY(64)", "X'787820736563726574'"),
         "sqlserver" => ("NTEXT", true, "VARBINARY(64)", "0x787820736563726574"),
         "duckdb" => ("VARCHAR", false, "BLOB", "unhex('787820736563726574')"),
+        // ClickHouse's `String` is text of any length and bytes too.
+        "clickhouse" => (
+            "Nullable(String)",
+            false,
+            "Nullable(String)",
+            "unhex('787820736563726574')",
+        ),
         _ => ("TEXT", false, "BLOB", "X'787820736563726574'"),
     }
 }
@@ -146,10 +161,18 @@ async fn tables(label: &str, session: &Session) {
         label,
         session,
         &[
-            format!(
-                "CREATE TABLE ds_people (id INT PRIMARY KEY, name VARCHAR(60), note {large}, \
-                 amount DECIMAL(10, 2), photo {binary}, born DATE)"
-            ),
+            if label == "clickhouse" {
+                format!(
+                    "CREATE TABLE ds_people (id Int32, name Nullable(String), note {large}, \
+                     amount Decimal(10, 2), photo {binary}, born Nullable(Date)) \
+                     ENGINE = MergeTree ORDER BY id"
+                )
+            } else {
+                format!(
+                    "CREATE TABLE ds_people (id INT PRIMARY KEY, name VARCHAR(60), note {large}, \
+                     amount DECIMAL(10, 2), photo {binary}, born DATE)"
+                )
+            },
             format!(
                 "INSERT INTO ds_people (id, name, note, amount, photo, born) VALUES \
                  (1, 'Ana Smith', {}, 10.50, {secret}, NULL)",
@@ -162,14 +185,36 @@ async fn tables(label: &str, session: &Session) {
             ),
             "INSERT INTO ds_people (id, name, amount) VALUES (3, 'it''s %_[x]', 7.25)".into(),
             "INSERT INTO ds_people (id, amount) VALUES (4, 42)".into(),
-            "CREATE TABLE ds_log (msg VARCHAR(60), n INT)".into(),
+            if label == "clickhouse" {
+                "CREATE TABLE ds_log (msg Nullable(String), n Nullable(Int32)) \
+                 ENGINE = MergeTree ORDER BY tuple()"
+                    .into()
+            } else {
+                "CREATE TABLE ds_log (msg VARCHAR(60), n INT)".into()
+            },
             "INSERT INTO ds_log (msg, n) VALUES ('needle one', 1)".into(),
             "INSERT INTO ds_log (msg, n) VALUES ('other', 2)".into(),
-            "CREATE TABLE ds_dates (d DATE)".into(),
+            if label == "clickhouse" {
+                "CREATE TABLE ds_dates (d Nullable(Date)) ENGINE = MergeTree ORDER BY tuple()"
+                    .into()
+            } else {
+                "CREATE TABLE ds_dates (d DATE)".into()
+            },
         ],
         false,
     )
     .await;
+}
+
+/// A table of an id and a label, as the engine writes one.
+fn small_table(label: &str, name: &str) -> String {
+    if label == "clickhouse" {
+        format!(
+            "CREATE TABLE {name} (id Int32, label Nullable(String)) ENGINE = MergeTree ORDER BY id"
+        )
+    } else {
+        format!("CREATE TABLE {name} (id INT PRIMARY KEY, label VARCHAR(40))")
+    }
 }
 
 fn t(schema: &str, table: &str) -> SearchTable {
@@ -217,16 +262,34 @@ fn hits_of<'a>(outcomes: &'a [TableOutcome], table: &str) -> &'a [SearchHit] {
     }
 }
 
-/// The ids of a `ds_people` search's hits, in order.
-fn ids(hits: &[SearchHit]) -> Vec<String> {
-    let mut ids: Vec<String> = hits
-        .iter()
-        .map(|h| {
-            assert_eq!(h.key.len(), 1, "{h:?}");
-            h.key[0].1.clone()
-        })
-        .collect();
+/// The ids of a `ds_people` search's hits, in order. A hit carries its row's key; on an engine
+/// without one (ClickHouse's sort key is not unique), the ids its filter keeps are read back.
+async fn ids(session: &Session, schema: &str, hits: &[SearchHit]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for h in hits {
+        if let [(_, id)] = &h.key[..] {
+            ids.push(id.clone());
+            continue;
+        }
+        assert!(h.key.is_empty(), "{h:?}");
+        let filter = h.filter.as_deref().unwrap_or_else(|| panic!("{h:?}"));
+        let sql = format!("SELECT id FROM {schema}.ds_people WHERE {filter}");
+        let events: Vec<CoreEvent> = session.run_script(&sql).collect().await;
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                CoreEvent::ResultStarted { result, .. } => Some(*result),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{sql}: {events:?}"));
+        let stored = session.results().get(result).expect("stored result");
+        let stored = stored.read().unwrap();
+        for row in 0..stored.rows() {
+            ids.push(stored.value_at(row, 0).expect("a value").to_string());
+        }
+    }
     ids.sort();
+    ids.dedup();
     ids
 }
 
@@ -246,7 +309,7 @@ async fn data_search_finds_values_on_every_engine() {
         // Case insensitive by default, case sensitive when asked (even on a _ci collation).
         let (_, out) = search(&session, "ana", people(), plain.clone()).await;
         let hits = hits_of(&out, "ds_people");
-        assert_eq!(ids(hits), ["1"], "{label}");
+        assert_eq!(ids(&session, schema, hits).await, ["1"], "{label}");
         assert_eq!(matched(&hits[0]), ["name"], "{label}");
         assert_eq!(
             hits[0].matches[0].text.as_deref(),
@@ -260,14 +323,26 @@ async fn data_search_finds_values_on_every_engine() {
         let (_, out) = search(&session, "ana", people(), sensitive.clone()).await;
         assert!(hits_of(&out, "ds_people").is_empty(), "{label}");
         let (_, out) = search(&session, "Ana", people(), sensitive.clone()).await;
-        assert_eq!(ids(hits_of(&out, "ds_people")), ["1"], "{label}");
+        assert_eq!(
+            ids(&session, schema, hits_of(&out, "ds_people")).await,
+            ["1"],
+            "{label}"
+        );
         let (_, out) = search(&session, "bob", people(), plain.clone()).await;
-        assert_eq!(ids(hits_of(&out, "ds_people")), ["2"], "{label}");
+        assert_eq!(
+            ids(&session, schema, hits_of(&out, "ds_people")).await,
+            ["2"],
+            "{label}"
+        );
 
         // The value is plain text: wildcards and quotes match only themselves.
         for value in ["%_[", "s %", "[x]", "it's", "_"] {
             let (_, out) = search(&session, value, people(), plain.clone()).await;
-            assert_eq!(ids(hits_of(&out, "ds_people")), ["3"], "{label}: {value}");
+            assert_eq!(
+                ids(&session, schema, hits_of(&out, "ds_people")).await,
+                ["3"],
+                "{label}: {value}"
+            );
         }
         let (_, out) = search(
             &session,
@@ -292,10 +367,14 @@ async fn data_search_finds_values_on_every_engine() {
         };
         let (_, out) = search(&session, "42", people(), numbers.clone()).await;
         let hits = hits_of(&out, "ds_people");
-        assert_eq!(ids(hits), ["2", "4"], "{label}");
+        assert_eq!(ids(&session, schema, hits).await, ["2", "4"], "{label}");
         assert!(hits.iter().all(|h| matched(h) == ["amount"]), "{label}");
         let (_, out) = search(&session, "10.5", people(), numbers).await;
-        assert_eq!(ids(hits_of(&out, "ds_people")), ["1"], "{label}");
+        assert_eq!(
+            ids(&session, schema, hits_of(&out, "ds_people")).await,
+            ["1"],
+            "{label}"
+        );
 
         // Large text and binary columns only when asked.
         let large = DataSearchOptions {
@@ -304,10 +383,14 @@ async fn data_search_finds_values_on_every_engine() {
         };
         let (_, out) = search(&session, "needle", people(), plain.clone()).await;
         let expected: &[&str] = if has_large { &[] } else { &["2"] };
-        assert_eq!(ids(hits_of(&out, "ds_people")), expected, "{label}");
+        assert_eq!(
+            ids(&session, schema, hits_of(&out, "ds_people")).await,
+            expected,
+            "{label}"
+        );
         let (_, out) = search(&session, "needle", people(), large.clone()).await;
         let hits = hits_of(&out, "ds_people");
-        assert_eq!(ids(hits), ["2"], "{label}");
+        assert_eq!(ids(&session, schema, hits).await, ["2"], "{label}");
         assert_eq!(matched(&hits[0]), ["note"], "{label}");
         assert!(
             hits[0].matches[0]
@@ -316,13 +399,21 @@ async fn data_search_finds_values_on_every_engine() {
                 .is_some_and(|s| s.contains("needle")),
             "{label}: {hits:?}"
         );
-        let (_, out) = search(&session, "secret", people(), plain.clone()).await;
-        assert!(hits_of(&out, "ds_people").is_empty(), "{label}");
-        let (_, out) = search(&session, "secret", people(), large).await;
-        let hits = hits_of(&out, "ds_people");
-        assert_eq!(ids(hits), ["1"], "{label}");
-        assert_eq!(matched(&hits[0]), ["photo"], "{label}");
-        assert_eq!(hits[0].matches[0].text, None, "{label}");
+        // ClickHouse has no binary type: its `String` holds bytes and is searched as text.
+        if label == "clickhouse" {
+            let (_, out) = search(&session, "secret", people(), plain.clone()).await;
+            let hits = hits_of(&out, "ds_people");
+            assert_eq!(ids(&session, schema, hits).await, ["1"], "{label}");
+            assert_eq!(matched(&hits[0]), ["photo"], "{label}");
+        } else {
+            let (_, out) = search(&session, "secret", people(), plain.clone()).await;
+            assert!(hits_of(&out, "ds_people").is_empty(), "{label}");
+            let (_, out) = search(&session, "secret", people(), large).await;
+            let hits = hits_of(&out, "ds_people");
+            assert_eq!(ids(&session, schema, hits).await, ["1"], "{label}");
+            assert_eq!(matched(&hits[0]), ["photo"], "{label}");
+            assert_eq!(hits[0].matches[0].text, None, "{label}");
+        }
 
         // Every table in one search: each hit's filter keeps exactly its row; a table without
         // a key is filtered by the matching value; one with only dates and a missing one are
@@ -395,11 +486,14 @@ async fn data_search_finds_values_on_every_engine() {
             "{label}: {:?}",
             summary.statements
         );
-        assert_eq!(
-            session.connection().transaction_state().await.ok(),
-            Some(spelaion_driver_api::TransactionState::Idle),
-            "{label}"
-        );
+        // ClickHouse has no transactions to be left in.
+        if label != "clickhouse" {
+            assert_eq!(
+                session.connection().transaction_state().await.ok(),
+                Some(spelaion_driver_api::TransactionState::Idle),
+                "{label}"
+            );
+        }
 
         // The column catalog of metadata search: every table, its columns in order.
         let columns = session
@@ -450,9 +544,7 @@ async fn a_search_over_fifty_tables_stops_when_cancelled() {
         run(label, &session, &setup, true).await;
         let mut create = Vec::new();
         for name in &names {
-            create.push(format!(
-                "CREATE TABLE {name} (id INT PRIMARY KEY, label VARCHAR(40))"
-            ));
+            create.push(small_table(label, name));
             create.push(format!(
                 "INSERT INTO {name} (id, label) VALUES (1, 'needle'), (2, 'hay')"
             ));
@@ -535,9 +627,7 @@ async fn a_search_cancelled_at_any_point_reports_how_it_ended() {
         run(label, &session, &drops, true).await;
         let mut create = Vec::new();
         for name in &names {
-            create.push(format!(
-                "CREATE TABLE {name} (id INT PRIMARY KEY, label VARCHAR(40))"
-            ));
+            create.push(small_table(label, name));
             create.push(format!(
                 "INSERT INTO {name} (id, label) VALUES (1, 'needle'), (2, 'hay')"
             ));
@@ -711,7 +801,14 @@ mod statements {
     };
     use spelaion_driver_api::{ColumnMeta, Dialect, LogicalType, bound_placeholder};
 
-    const ENGINES: [&str; 5] = ["postgres", "mysql", "sqlserver", "sqlite", "duckdb"];
+    const ENGINES: [&str; 6] = [
+        "postgres",
+        "mysql",
+        "sqlserver",
+        "sqlite",
+        "duckdb",
+        "clickhouse",
+    ];
 
     fn d(engine: &str) -> Box<dyn Dialect> {
         match engine {
@@ -719,6 +816,7 @@ mod statements {
             "mysql" => Box::new(spelaion_dialect::MysqlDialect),
             "sqlserver" => Box::new(spelaion_dialect::SqlServerDialect),
             "duckdb" => Box::new(spelaion_dialect::DuckdbDialect),
+            "clickhouse" => Box::new(spelaion_dialect::ClickhouseDialect),
             _ => Box::new(spelaion_dialect::SqliteDialect),
         }
     }

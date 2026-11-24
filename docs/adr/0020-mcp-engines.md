@@ -1,6 +1,7 @@
 # ADR-020: The MCP serves MySQL, MariaDB, SQL Server and DuckDB
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by ADR-072: for agents, the names refused here stay and a
+  function must also be on a list to be called)
 - **Date:** 2026-11-03
 - **Supersedes:** the "not in `spelunk mcp` yet" decisions of ADR-016 (DuckDB) and ADR-017
   (SQL Server), and the MySQL limit noted in ADR-008
@@ -55,13 +56,37 @@ each server's image (`testing/docker/pg-family`):
 | Server | `BEGIN READ ONLY` | Session's read-only mode | What it gets |
 |---|---|---|---|
 | PostgreSQL (and TimescaleDB, an extension), CockroachDB 24.3, YugabyteDB 2026.1 | enforced | enforced | everything |
-| RisingWave 3.1 | enforced | accepted with a notice, ignored | no read-only connections, so no agents (their reads open read-only); streaming reads |
+| RisingWave 3.1 | enforced | accepted with a notice, ignored | no read-only connections, no agents (2026-11-23, below); streaming reads |
 | Materialize 26.50 | refuses `INSERT`, lets `CREATE TABLE` through | refused | no agents, read-only connections or streaming reads |
 | CrateDB 6.5 | accepted, ignored (no transactions) | accepted, ignored | no agents, read-only connections or streaming reads |
 | A fork that names itself and was not checked (Redshift, Greenplum…), or a server whose version does not start with `PostgreSQL` | not assumed | not assumed | no agents, read-only connections or streaming reads |
 
 The refusal comes when the session opens (a read-only connection, agents' sessions) or before
 the read is sent (streaming exports, column statistics, the data search), with the reason.
+
+**2026-11-23, RisingWave gets no agents (SDB-302).** Checked against RisingWave 3.1.1, whose
+read-only transaction refuses every write and DDL sent inside it, and changes nothing when
+`SET TRANSACTION READ WRITE` or `BEGIN READ WRITE` is sent inside it:
+- **It does not stop the table functions that reach outside.** `postgres_query` and
+  `mysql_query` run their text on another server (checked: one reached the test MySQL from
+  inside `BEGIN READ ONLY`), `file_scan` reads a bucket (it reached S3), and
+  `openai_embedding` sends its text to a remote service. The classifier refuses the four on
+  every PostgreSQL connection, before anything is sent.
+- **That list cannot be the barrier.** RisingWave lists none of its built-in functions
+  (`pg_proc` is empty, `information_schema.routines` is not implemented, `SHOW FUNCTIONS` and
+  `rw_catalog.rw_functions` list only user functions), so it cannot be checked complete
+  against the server. Any view may also call one, and the statement then only names the view:
+  a view over `postgres_query` passes the classifier and runs its query on the other server
+  inside the read-only transaction (`tests/postgres_family.rs` keeps that evidence).
+- **So agents' reads stay refused** when their session opens, as before (their session is a
+  read-only connection's, whose mode RisingWave ignores).
+- **Agents' writes are refused** on any server whose transactions do not hold
+  (`Session::atomic_writes_refusal`). They run in a transaction of their own (ADR-019), and
+  RisingWave's writes are not transactional. Before this, an agent's write session opened on
+  RisingWave.
+
+Offering agents on RisingWave would need a barrier that a view cannot get around, for example
+a read-only database user that cannot reach other servers, decided in an ADR of its own.
 
 ### Servers that speak MySQL's protocol (2026-11-15, SDB-170)
 The same for a MySQL connection, read from `select version(), @@version_comment`. A MySQL
@@ -77,7 +102,36 @@ whatever it calls itself.
 | MySQL, MariaDB, OceanBase 4.3 (MySQL mode) | every write but DDL refused (DDL commits first; the classifier refuses it, as above) | enforced, DDL too | everything |
 | TiDB 8.5 | refused as a no-op a setting can switch on | the same | no agents, read-only connections or streaming reads |
 | SingleStore 10.9, Apache Doris 3.0 | a syntax error | accepted, session stays writable | no agents, read-only connections or streaming reads |
-| StarRocks 3.4 (says it is MySQL) | a syntax error | accepted, session stays writable (caught by the read-back) | no agents nor read-only connections; a streaming read fails at the syntax error |
+| StarRocks 3.4 (says it is MySQL; recognised by its `current_version()`, SDB-310) | a syntax error | accepted, session stays writable | no agents, read-only connections or streaming reads |
+
+### Babelfish through SQL Server's protocol (2026-11-23, SDB-313)
+Babelfish for PostgreSQL speaks TDS in front of PostgreSQL. A SQL Server connection to it is
+told apart from `@@VERSION` ("Babelfish for PostgreSQL…") when the session opens; a server that
+does not say so keeps SQL Server's barrier, unchanged. Checked against Babelfish 5.6.0
+(PostgreSQL 17.10), built in `testing/docker/babelfish`:
+- **Its transactions hold.** A write rolled back is gone, so table edits, imports and agents'
+  writes, which rely on a transaction of their own, work as on SQL Server.
+- **SQL Server's barrier does not hold.** The barrier rests on T-SQL functions that cannot change
+  anything. On Babelfish, T-SQL reaches PostgreSQL's own functions:
+  - `pg_backend_pid()` and `set_config(...)` answer;
+  - a `SELECT` of `pg_try_advisory_lock` inside a transaction that is then rolled back leaves the
+    lock held (`tests/babelfish.rs` keeps that evidence);
+  - `pg_advisory_lock` takes its lock even though the statement then fails on its `void` result.
+  The classifier could name them, as it does on PostgreSQL connections, but any view may call
+  one, and the statement then only names the view.
+- **So Babelfish gets no agents' reads and no read-only connections**, refused when the session
+  opens, with the reason. Nor does it get the reads that rely on the same barrier (streaming
+  exports, column statistics, the data search), refused before they are sent.
+- **The SQL Server plugin follows Babelfish's differences** (its 0.1.2):
+  - the transaction state comes from `XACT_STATE()`, since Babelfish sends no transaction
+    descriptor;
+  - plans are not declared, since Babelfish has none;
+  - a cancel, which Babelfish would answer only once the statement ends on its own, stops the
+    statement from a second connection: with `pg_cancel_backend` where the login may, otherwise
+    with `KILL`, which ends the session and says so.
+
+Offering agents on Babelfish would need a barrier a view cannot get around, such as a
+PostgreSQL role for agents that cannot reach those functions, decided in an ADR of its own.
 
 ## Alternatives
 - **Only the classifier for the new engines:** it cannot see what a function does. The

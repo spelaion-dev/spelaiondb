@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import { startJob, type Job } from "../jobs";
-import type { EditableTableItem, KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
+import type { KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
@@ -20,7 +20,7 @@ import { latestOnly } from "../latestRequest";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
 import { defaultChart, ResultChart, type ChartSettings } from "./ResultChart";
-import { ResultGrid, type GridEditing } from "./ResultGrid";
+import { ResultGrid, type GridEditing, type GridEditingState } from "./ResultGrid";
 import { TransposedView } from "./TransposedView";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { showsSummary, summaryMessages, summaryShort } from "../scriptRun";
@@ -262,10 +262,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** The table's primary key (`null` until known): editing needs one. */
   const [primaryKey, setPrimaryKey] = useState<string[] | null>(null);
   const [columnComments, setColumnComments] = useState<Record<string, string>>({});
-  const [queryTable, setQueryTable] = useState<(EditableTableItem & { result: number }) | null>(null);
-  /** The one table a query's result was matched to, whose foreign keys it follows (SDB-93). */
-  const [queryKeyTable, setQueryKeyTable] = useState<(KeyTableItem & { result: number }) | null>(null);
-  const [queryChecked, setQueryChecked] = useState<number | null>(null);
+  const [queryTarget, setQueryTarget] = useState<{ result: number; table: KeyTableItem | null } | null>(null);
   /** Its edits are being applied: kept once, for the store, this render and a second click. */
   const saving = useFlag();
   const savingEdits = saving.on;
@@ -278,50 +275,43 @@ export function EditorTab({ tab }: { tab: Tab }) {
     updateTab(tab.id, { pendingEdits: pendingCount > 0, savingEdits });
   }, [tab.id, pendingCount, savingEdits, updateTab]);
 
-  // A query follows foreign keys, and is editable, only when the core can resolve its entire
-  // result to one table: first the table (read-only connections too), then whether it may be
-  // edited, which only a result with a table can be.
+  const activeResult = tab.run?.results.find((result) => result.id === tab.run?.activeResult);
+  const resultId = activeResult?.id;
+  const resultRun = activeResult?.run === undefined ? undefined : runTexts.current.get(activeResult.run);
+  const queryText = ended(activeResult) && resultRun?.results === 1 ? resultRun.text : undefined;
+  const readOnly = !!connection?.readOnly || sessionReadOnly(tab);
+
+  // Resolve the table once for both editing and foreign keys. View updates (sorting,
+  // filtering, counting and appending rows) do not change the result's source.
   useEffect(() => {
-    if (tab.table || tabStatus !== "connected" || running) return;
-    const result = tab.run?.results.find((item) => item.id === tab.run?.activeResult);
-    // Only a result that is the whole answer of its run: the core resolves that run's text.
-    const request = result?.run === undefined ? undefined : runTexts.current.get(result.run);
-    if (!result || !ended(result) || !request || request.results !== 1) return;
+    if (tab.table || tabStatus !== "connected" || running || resultId === undefined || queryText === undefined) return;
     let active = true;
-    void (async () => {
-      try {
-        const keyTable = await call(commands.queryKeyTable(tab.id, result.id, request.text));
-        if (!active) return;
-        setQueryKeyTable(keyTable ? { ...keyTable, result: result.id } : null);
-        const table = keyTable ? await call(commands.editableQueryTable(tab.id, result.id, request.text)) : null;
-        if (!active) return;
-        setQueryTable(table ? { ...table, result: result.id } : null);
-      } catch {
-        // Neither: the result stays a plain, read-only result.
-      }
-      if (active) setQueryChecked(result.id);
-    })();
+    call(commands.queryKeyTable(tab.id, resultId, queryText))
+      .then((table) => { if (active) setQueryTarget({ result: resultId, table }); })
+      .catch(() => { if (active) setQueryTarget({ result: resultId, table: null }); });
     return () => { active = false; };
-  }, [tab.id, tab.table, tabStatus, running, tab.run?.results, tab.run?.activeResult]);
-  // Rows read through a session that is gone (lost, disconnected, another connection) are not
-  // editable and follow no keys: the check above asks again once connected, and the core
-  // refuses them anyway (SDB-137).
+  }, [tab.id, tab.table, tabStatus, running, database, readOnly, resultId, queryText]);
+
   useEffect(() => {
-    if (tabStatus !== "connected") {
-      setQueryTable(null);
-      setQueryKeyTable(null);
-    }
+    if (tabStatus !== "connected") setQueryTarget(null);
   }, [tabStatus]);
 
-  const activeResult = tab.run?.results.find((result) => result.id === tab.run?.activeResult);
-  const editTarget = tab.table
-    ? (primaryKey?.length && !connection?.readOnly ? { ...tab.table, primaryKey } : null)
-    : (queryTable && queryTable.result === activeResult?.id ? queryTable : null);
-  /** The table whose foreign keys the active result follows: a table data tab's own, or the
-   *  one table the core matched a query's result to (SDB-93). */
+  const queryTable = tabStatus === "connected" && queryTarget && queryTarget.result === resultId
+    ? queryTarget.table
+    : undefined;
+  const editTarget = readOnly ? null : tab.table
+    ? (primaryKey?.length ? { ...tab.table, primaryKey } : null)
+    : (queryTable?.writable ? queryTable : null);
+  /** The table whose foreign keys the active result follows. */
   const keyTable = tab.table
     ? { schema: tab.table.schema, name: tab.table.name, connectionId: tab.connectionId }
-    : (queryKeyTable && queryKeyTable.result === activeResult?.id ? { schema: queryKeyTable.schema, name: queryKeyTable.name, connectionId: tab.connectionId } : undefined);
+    : (queryTable ? { schema: queryTable.schema, name: queryTable.name, connectionId: tab.connectionId } : undefined);
+  const checkingEditability = tab.table
+    ? primaryKey === null
+    : !ended(activeResult) || running || (queryText !== undefined && queryTable === undefined);
+  const editingState: GridEditingState = readOnly || tabStatus !== "connected" ? "readOnly"
+    : editTarget ? "available"
+    : checkingEditability ? "checking" : "readOnly";
 
   // A page shown again (another result tab, a tab restored) shows the edits its core holds.
   const activeResultId = activeResult && ended(activeResult) ? activeResult.id : null;
@@ -1058,8 +1048,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
       // The rows on screen were read in the other database: read-only until run again
       // (SDB-137; the core refuses their edits too).
-      setQueryTable(null);
-      setQueryChecked(activeResult?.id ?? null);
+      setQueryTarget(null);
     } catch (e) {
       setNotice({ text: message(e), error: true });
     } finally {
@@ -1175,8 +1164,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     setPlan(null); setPlanOpen(false); setCapabilities(null); setAnalyzePlan(false);
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
     // The rows on screen came from the other connection: read-only until run again (SDB-137).
-    setQueryTable(null);
-    setQueryChecked(activeResult?.id ?? null);
+    setQueryTarget(null);
     updateTab(tab.id, { connectionId: id || null, connectionState: DISCONNECTED });
   }
 
@@ -1301,16 +1289,6 @@ export function EditorTab({ tab }: { tab: Tab }) {
       if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
       confirmed = true;
     }
-    const pages = (order: SortState[]) => call(commands.queryPageSupported(tab.id, sent.text, order)).catch(() => false);
-    // A sort the pages can no longer follow is dropped, never the paging: the query's own
-    // order is still read a page at a time.
-    let pageSort = sort;
-    let canPage = !tab.table && await pages(pageSort);
-    if (!canPage && !tab.table && pageSort.length > 0) {
-      pageSort = [];
-      canPage = await pages(pageSort);
-    }
-    const queryPage = canPage ? { sql: sent.text, pageSize, ...(pageSort.length > 0 ? { sort: pageSort } : {}) } : null;
     // The results stay until the core says which ones the run replaced (its first event): it
     // frees every one that is not pinned, none for a run into a new tab (SDB-378).
     const started = startRun(sent.text, refreshSource);
@@ -1319,14 +1297,18 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const finished = new Promise<void>((resolve) => { finishEvent = resolve; });
     // The last error, for the question a paused run asks (ADR-035).
     const failures = new Map<number, string>();
+    let queryPage: { sql: string; pageSize: number; sort?: SortState[] } | null = null;
     channel.onmessage = (event) => {
+      if (event.kind === "runStarted" && event.pageSort != null) {
+        queryPage = { sql: sent.text, pageSize, ...(event.pageSort.length ? { sort: event.pageSort } : {}) };
+      }
       handle(event, sent, started.startedAt, queryPage, failures, started.run);
       if (event.kind === "scriptFinished") finishEvent?.();
     };
     const options = runOptionsOf(tab);
     try {
-      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, pageSort, confirmed, options, placement, channel));
-      else await call(commands.runScript(tab.id, sent.text, confirmed, options, placement, channel));
+      if (tab.table) await call(commands.runScript(tab.id, sent.text, confirmed, options, placement, channel));
+      else await call(commands.runQueryPage(tab.id, sent.text, pageSize, sort, confirmed, options, placement, channel));
       // The command may resolve before the channel's final event updates the result metadata.
       // Bound the wait if the channel closes without delivering it.
       await Promise.race([finished, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
@@ -1410,7 +1392,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     switch (event.kind) {
       case "runStarted":
         // What the core freed as the run started: every result that was not pinned, or none.
-        setQueryTable((table) => (table && event.closed.includes(table.result) ? null : table));
+        setQueryTarget((target) => (target && event.closed.includes(target.result) ? null : target));
         updateRun(tab.id, (r) => withoutResults(r, event.closed));
         break;
       case "statementStarted":
@@ -1821,7 +1803,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             keyTable={keyTable}
             editing={editing}
             columnComments={tab.table ? columnComments : undefined}
-            readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
+            editingState={editingState}
             pendingEdits={pendingCount > 0}
             refreshDisabled={running || historySaving || databaseBusy || tabStatus !== "connected" || workspaceChanging || savingEdits || pageLoading || refreshRestoring}
             restoringView={refreshRestoring}
@@ -1912,7 +1894,7 @@ function Results({
   keyTable,
   editing,
   columnComments,
-  readOnlyHint,
+  editingState,
   pendingEdits,
   refreshDisabled,
   restoringView,
@@ -1952,7 +1934,7 @@ function Results({
   keyTable?: { schema: string; name: string; connectionId: string | null };
   editing?: GridEditing;
   columnComments?: Record<string, string>;
-  readOnlyHint?: boolean;
+  editingState: GridEditingState;
   pendingEdits: boolean;
   refreshDisabled: boolean;
   restoringView: boolean;
@@ -2116,6 +2098,7 @@ function Results({
             keyTable={keyTable}
             columnComments={columnComments}
             editing={filteringResult === active.id || restoringView ? undefined : editing}
+            editingState={editingState}
             restoringView={restoringView}
             viewerOpen={viewerOpen}
             onViewerOpen={setViewerOpen}
@@ -2183,7 +2166,6 @@ function Results({
           </span>
         )}
         {error && !showMessages && <span className="status-error">{t("results.error", { message: error.split("\n")[0] })}</span>}
-        {active && readOnlyHint && <span className="muted" title={t("edit.queryReadOnlyHint")}>{t("edit.readOnly")}</span>}
       </div>
     </div>
   );

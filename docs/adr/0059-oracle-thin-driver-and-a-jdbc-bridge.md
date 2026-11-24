@@ -124,3 +124,41 @@ refuses `read_only` on Oracle and agents never see it, until a barrier passes th
 example `ALTER SESSION DISABLE COMMIT IN PROCEDURE`, which stops an autonomous transaction from
 committing. Exports, column statistics and the data search, which need the same barrier, are
 not available on Oracle either.
+
+**2026-11-23: no session setting is that barrier, so Oracle still has no read-only mode and
+no agents (SDB-339).** The candidates were tried against Oracle Free 23.26, in a session that
+starts with each of them, calling functions that write and commit in an autonomous
+transaction from a `SELECT`:
+
+- `ALTER SESSION DISABLE COMMIT IN PROCEDURE` refuses the function's `COMMIT` and its
+  `ROLLBACK` (ORA-00034), and so the other ways out we tried: DDL in an autonomous block (it
+  commits), `DBMS_JOB.SUBMIT` and `DBMS_SCHEDULER.CREATE_JOB` (they commit), and a write
+  through a database link to the same database. A write through a link outside an autonomous
+  transaction is refused anyway (ORA-14551, no DML inside a query).
+- **But a function can undo it.** `EXECUTE IMMEDIATE 'ALTER SESSION ENABLE COMMIT IN
+  PROCEDURE'` needs no privilege, runs from inside the query, and the function then commits
+  its write, through a database link too. The classifier cannot refuse it: it is inside a
+  function, or a view, the statement only names.
+- `ALTER SESSION SET READ_ONLY = TRUE` (23ai) refuses the function's `INSERT` (ORA-28193),
+  and a function undoes it the same way, with `ALTER SESSION SET READ_ONLY = FALSE`. It also
+  refuses the session's own `ROLLBACK` after a failed statement, and Oracle older than 23ai
+  does not have it.
+- `SET TRANSACTION READ ONLY` does not reach the autonomous transaction at all.
+
+`tests/oracle.rs` (`no_session_setting_stops_a_function_that_undoes_it`) keeps that evidence:
+if it fails, Oracle has changed what these settings do, and this note must be read again.
+
+The only thing we found that held is **a read-only database user** (23ai, `ALTER USER …
+READ ONLY`, which a DBA sets): every function above failed under it (ORA-28194), a
+definer's-rights function owned by a writable user included, after undoing both session
+settings, and so did a scheduler job it created, which ran and failed with the same error.
+That is the database's barrier, not ours, it needs 23ai, and its session refused the
+`ROLLBACK` after such a call too (ORA-28194), which our reads end with. Offering read-only connections and
+agents on Oracle only where the session's user is read-only in the database, checked when the
+session opens, would be a decision of its own, with tests against such a user in
+`testing/docker`; it is a Backlog item (SDB-457), not part of this note.
+
+**2026-11-24: decided in ADR-080.** Point 2's barrier is replaced: read-only connections and
+agents' reads are offered on Oracle only where the database keeps the session's user read-only,
+checked on each session, and closed everywhere else. Not implemented yet: until its tests pass,
+Oracle still has no read-only mode and no agents.

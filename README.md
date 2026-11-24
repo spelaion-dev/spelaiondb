@@ -124,9 +124,9 @@ Starring the repository, reporting a bug or telling a colleague about it helps j
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org) (applied for: the Windows installers are not
-signed yet).
+The Windows installers are not signed yet: SignPath Foundation declined the application for
+now, until the project is more widely known, and SpelaionDB will apply again. The policy the
+signatures will follow is in [docs/code-signing-policy.md](docs/code-signing-policy.md).
 
 - **Signed:** on Windows, the app, `spelaiondb.exe` and the installers, built only by the
   release workflow on GitHub-hosted runners from tags on `main`.

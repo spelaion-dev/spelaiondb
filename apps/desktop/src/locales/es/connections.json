@@ -72,6 +72,9 @@
     "mcpHint": "Los agentes que usan spelaiondb mcp solo pueden leer, y cada consulta queda auditada.",
     "mcpWritesUnavailable": "Las escrituras de los agentes aún no están disponibles para este motor: los agentes que usan spelaiondb mcp solo pueden leer, y cada consulta queda auditada.",
     "serviceName": "Nombre del servicio",
+    "localdbInstance": "Instancia de LocalDB",
+    "localdbHint": "Se llega por su canalización en este equipo (solo Windows). SpelaionDB inicia la instancia con SqlLocalDB si no está en marcha.",
+    "localdbWindowsAccount": "Sin usuario, LocalDB te conecta con tu cuenta de Windows.",
     "noBarrierSafety": "El modo solo lectura y los agentes aún no están disponibles para este motor: SpelaionDB todavía no tiene una salvaguarda para ellos en él. El aviso de seguridad sigue preguntando antes de las sentencias de riesgo.",
     "noSqlSafety": "El modo solo lectura y los agentes aún no están disponibles para este motor: SpelaionDB todavía no tiene una salvaguarda para ellos en él. El aviso de seguridad sigue preguntando antes de borrar o vaciar una colección.",
     "mcpAccess": "Los agentes pueden",
@@ -554,6 +557,7 @@
   },
   "tlsWarning": {
     "unverified": "El modo TLS “{{mode}}” no comprueba el certificado del servidor: cualquiera en la red entre tú y {{host}} podría leerlo o suplantarlo. Usa verify-full para comprobarlo.",
+    "localDbPassword": "A LocalDB se llega por su canalización en este equipo sin TLS: la contraseña de este inicio de sesión SQL la cruza sin cifrar. Deja el usuario vacío para entrar con tu cuenta de Windows, que no envía contraseña.",
     "unencrypted": "TLS está desactivado: todo lo que se envía a {{host}}, contraseña incluida, cruza la red sin cifrar.",
     "unverifiedTunneled": "A través del túnel, el modo TLS “{{mode}}” no comprueba el certificado de {{host}} en el último tramo, del final del túnel al servidor.",
     "unencryptedTunneled": "A través del túnel, el último tramo hasta {{host}}, del final del túnel al servidor, no va cifrado."

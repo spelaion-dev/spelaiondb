@@ -30,8 +30,72 @@ pub enum ReadKind {
     Show,
 }
 
+/// The output options ClickHouse's `EXPLAIN` takes that only change what the plan shows
+/// (SDB-324): `EXPLAIN json = 1, indexes = 1, description = 1 SELECT …`.
+const CLICKHOUSE_EXPLAIN_OPTIONS: [&str; 9] = [
+    "json",
+    "indexes",
+    "description",
+    "header",
+    "actions",
+    "sorting",
+    "distributed",
+    "projections",
+    "keep_logical_steps",
+];
+
+/// ClickHouse's `EXPLAIN [PLAN] option = 0|1, … statement`, which sqlparser cannot read, as
+/// `EXPLAIN statement`: the options are only from [`CLICKHOUSE_EXPLAIN_OPTIONS`], each set to
+/// 0 or 1, separated by commas, with nothing else between them (no comment, no other word).
+/// `None` when `sql` is not that, and it is classified as written.
+fn clickhouse_explain_options(sql: &str) -> Option<String> {
+    let words = |text: &str| -> (String, usize) {
+        let end = text
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(text.len());
+        (text[..end].to_ascii_lowercase(), end)
+    };
+    let rest = sql.trim_start();
+    let (word, end) = words(rest);
+    if word != "explain" {
+        return None;
+    }
+    let mut rest = rest[end..].trim_start();
+    let (word, end) = words(rest);
+    if word == "plan" {
+        rest = rest[end..].trim_start();
+    }
+    let mut seen = false;
+    loop {
+        let (name, end) = words(rest);
+        let after = rest[end..].trim_start();
+        if !CLICKHOUSE_EXPLAIN_OPTIONS.contains(&name.as_str()) || !after.starts_with('=') {
+            break;
+        }
+        let value = after[1..].trim_start();
+        let digits = value
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(value.len());
+        if !matches!(&value[..digits], "0" | "1") {
+            return None;
+        }
+        seen = true;
+        rest = value[digits..].trim_start();
+        match rest.strip_prefix(',') {
+            Some(next) => rest = next.trim_start(),
+            None => break,
+        }
+    }
+    seen.then(|| format!("EXPLAIN {rest}"))
+}
+
 /// Is `sql` (a single statement) a read? `Err` explains why not.
 pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
+    if engine == "clickhouse"
+        && let Some(explain) = clickhouse_explain_options(sql)
+    {
+        return classify_read_only(engine, &explain);
+    }
     reject_unicode_escapes(engine, sql)?;
     let dialect = sql_dialect(engine);
     let statements = Parser::parse_sql(dialect.as_ref(), sql)
@@ -219,6 +283,11 @@ fn setup_statement(engine: &str, statement: &Statement) -> Result<(), String> {
 /// parse are refused. A T-SQL batch may hold several statements, and each must pass; elsewhere
 /// a span is one statement, as for agents. `Err` explains why.
 pub fn classify_read_only_connection(engine: &str, sql: &str) -> Result<(), String> {
+    if engine == "clickhouse"
+        && let Some(explain) = clickhouse_explain_options(sql)
+    {
+        return classify_read_only_connection(engine, &explain);
+    }
     if reject_mysql_executable_comments(engine, sql).is_err() {
         return Err(
             "it has a MySQL executable comment (/*! … */), which the server runs as SQL".into(),
@@ -572,6 +641,15 @@ fn outside_functions(engine: &str) -> &'static [&'static str] {
             "pg_file_unlink",
             "pg_file_rename",
             "pg_file_sync",
+            // RisingWave, through PostgreSQL's protocol (SDB-302). Its read-only transaction
+            // does not stop them (checked with 3.1): `postgres_query` and `mysql_query` run
+            // their text on another server, `file_scan` reads a bucket, `openai_embedding`
+            // sends its text to a remote service. A view still hides them, so RisingWave gets
+            // no agents (ADR-020's 2026-11-23 note): this only refuses them written out.
+            "postgres_query",
+            "mysql_query",
+            "file_scan",
+            "openai_embedding",
         ],
         "sqlite" => &[
             "load_extension",
@@ -942,6 +1020,23 @@ mod tests {
             ("postgres", "select PG_TERMINATE_BACKEND(42)"),
             ("postgres", "select pg_catalog.pg_ls_dir('.')"),
             ("postgres", "select (select pg_advisory_lock(1))"),
+            // RisingWave (SDB-302): other servers, buckets and a remote service.
+            (
+                "postgres",
+                "select * from postgres_query('h', '5432', 'u', 'p', 'd', 'delete from t')",
+            ),
+            (
+                "postgres",
+                "select * from rw_catalog.mysql_query('h', '3306', 'u', 'p', 'd', 'select 1')",
+            ),
+            (
+                "postgres",
+                "with f as (select * from FILE_SCAN('parquet', 's3', 'r', 'k', 's', 's3://b/x')) select count(*) from f",
+            ),
+            (
+                "postgres",
+                "select id from t where openai_embedding('{}'::jsonb, name) is not null",
+            ),
             ("sqlite", "select load_extension('x')"),
             ("mysql", "select load_file('/etc/passwd')"),
             ("mysql", "select get_lock('x', 10)"),
@@ -1263,6 +1358,23 @@ mod tests {
             ),
             ("postgres", "select lo_import('/etc/passwd')"),
             ("postgres", "select pg_advisory_lock(1)"),
+            // RisingWave's table functions that reach other servers, buckets and services.
+            (
+                "postgres",
+                "select * from postgres_query('h', '5432', 'u', 'p', 'd', 'delete from t')",
+            ),
+            (
+                "postgres",
+                "SELECT * FROM MYSQL_QUERY('h', '3306', 'u', 'p', 'd', 'delete from t')",
+            ),
+            (
+                "postgres",
+                "select count(*) from file_scan('parquet', 's3', 'r', 'k', 's', 's3://b/x')",
+            ),
+            (
+                "postgres",
+                "select openai_embedding('{\"model\": \"m\"}'::jsonb, secret) from t",
+            ),
             // Turning read-only mode off, in every spelling.
             ("postgres", "begin read write"),
             ("postgres", "START TRANSACTION READ WRITE"),
@@ -1571,9 +1683,51 @@ mod tests {
             "select * from `events` where id in (1, 2)",
             "show tables",
             "explain select 1",
+            // The plan view's EXPLAIN (SDB-324): output options only.
+            "EXPLAIN json = 1, indexes = 1, description = 1\nSELECT * FROM t",
+            "explain plan json=1 select 1",
+            "EXPLAIN header = 0 , actions = 1 SELECT 1",
         ] {
             assert!(ch(sql).is_ok(), "{sql}: {:?}", ch(sql));
         }
+        // An EXPLAIN with output options is still only an EXPLAIN of a read.
+        assert_eq!(
+            ch("EXPLAIN json = 1 SELECT 1"),
+            Ok(ReadKind::Explain),
+            "the options do not change the kind"
+        );
+        for sql in [
+            "EXPLAIN json = 1 INSERT INTO t VALUES (1)",
+            "EXPLAIN json = 1 DROP TABLE t",
+            "EXPLAIN json = 1 SELECT * FROM url('http://x/y.csv', CSV, 'a String')",
+            "EXPLAIN json = 1 SELECT 1; DROP TABLE t",
+            // Only the known options, only 0 or 1, nothing between them.
+            "EXPLAIN json = 2 SELECT 1",
+            "EXPLAIN json = 1, max_threads = 1 SELECT 1",
+            "EXPLAIN json = 1, /* x */ indexes = 1 SELECT 1",
+            "EXPLAIN json = 1, -- x\nindexes = 1 SELECT 1",
+            "EXPLAIN PIPELINE json = 1 SELECT 1",
+            "EXPLAIN json = 'yes' SELECT 1",
+        ] {
+            assert!(ch(sql).is_err(), "{sql} passed");
+            // A read-only connection's barrier (ADR-053) reads it the same way.
+            assert!(
+                classify_read_only_connection("clickhouse", sql).is_err(),
+                "{sql} passed the read-only connection"
+            );
+        }
+        for sql in [
+            "EXPLAIN json = 1, indexes = 1, description = 1\nSELECT * FROM t",
+            "explain plan json=1 select 1",
+        ] {
+            assert_eq!(
+                classify_read_only_connection("clickhouse", sql),
+                Ok(()),
+                "{sql}"
+            );
+        }
+        // Other engines read it as written: it is not their syntax.
+        assert!(classify_read_only("postgres", "EXPLAIN json = 1 SELECT 1").is_err());
         for sql in [
             "insert into t values (1)",
             "alter table t delete where 1",

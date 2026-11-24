@@ -403,6 +403,7 @@ async fn query_results_are_editable_only_as_the_table_they_came_from() {
         .run_script(
             "create table orders (id integer primary key, item text, qty int);
              create table nokey (a int);
+             create table \"order%_?*\\data\" (id integer primary key);
              create view v_orders as select * from orders;
              insert into orders values (1, 'pen', 2);
              insert into nokey values (1)",
@@ -421,6 +422,10 @@ async fn query_results_are_editable_only_as_the_table_they_came_from() {
     assert_eq!(
         editable(&session, "select * from main.orders", false).await,
         main
+    );
+    assert_eq!(
+        editable(&session, r#"select * from "order%_?*\data""#, false).await,
+        Some(("main".to_string(), r"order%_?*\data".to_string()))
     );
     for sql in [
         // No primary key in the result, or no primary key at all.
@@ -460,5 +465,45 @@ async fn query_results_are_editable_only_as_the_table_they_came_from() {
     assert_eq!(
         editable(&session, "select * from temp.orders", false).await,
         Some(("temp".to_string(), "orders".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn first_editor_page_uses_query_order_when_grid_sort_is_ineligible() {
+    let _turn = crate::serial::file_turn(module_path!());
+    use spelaion_core::{SortKey, editor_query_page_sql, first_query_page_sql};
+
+    let session = session().await;
+    let _: Vec<_> = session
+        .run_script("create table page_orders (id integer primary key, name text not null)")
+        .collect()
+        .await;
+    let sql = "select * from page_orders";
+    let first = first_query_page_sql(&session, sql, 10, &[]).await.unwrap();
+    let valid = [SortKey {
+        column: 1,
+        descending: true,
+    }];
+    let sorted = first_query_page_sql(&session, sql, 10, &valid)
+        .await
+        .unwrap();
+    assert_ne!(first, sorted);
+    assert_eq!(
+        editor_query_page_sql(&session, sql, 10, &valid).await,
+        Some((sorted, true))
+    );
+
+    let missing = [SortKey {
+        column: 2,
+        descending: false,
+    }];
+    assert_eq!(
+        editor_query_page_sql(&session, sql, 10, &missing).await,
+        Some((first, false))
+    );
+    assert!(
+        editor_query_page_sql(&session, "select 1", 10, &[])
+            .await
+            .is_none()
     );
 }

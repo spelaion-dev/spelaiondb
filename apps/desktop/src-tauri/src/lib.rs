@@ -125,6 +125,7 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
             ServerFamily::TiDb => "tidb",
             ServerFamily::SingleStore => "singlestore",
             ServerFamily::GreptimeDb => "greptimedb",
+            ServerFamily::StarRocks => "starrocks",
             ServerFamily::PostgreSql
             | ServerFamily::RisingWave
             | ServerFamily::Materialize
@@ -133,7 +134,8 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
             | ServerFamily::MySql
             | ServerFamily::MariaDb
             | ServerFamily::Doris
-            | ServerFamily::Databend => return None,
+            | ServerFamily::Databend
+            | ServerFamily::Babelfish => return None,
         };
         (spelaion_config::engine_kind_base(mark) == Some(open.resolved.engine))
             .then(|| mark.to_owned())
@@ -551,6 +553,28 @@ async fn get_map_preferences(state: State<'_, AppState>) -> CmdResult<MapPrefere
         .map_preferences()
         .await
         .map(MapPreferencesItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// The side panel as the user left it (SDB-451): hidden or not, its width, and the widths the
+/// core allows.
+#[command]
+async fn get_side_panel(state: State<'_, AppState>) -> CmdResult<SidePanelItem> {
+    state
+        .history
+        .side_panel_preferences()
+        .await
+        .map(SidePanelItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the side panel's state; the core refuses a width out of range.
+#[command]
+async fn set_side_panel(hidden: bool, width: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .history
+        .set_side_panel_preferences(spelaion_core::SidePanelPreferences { hidden, width })
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -2651,8 +2675,12 @@ async fn start_script(
     options: RunOptionsItem,
     placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
-    original: Option<String>,
+    page: Option<(String, Vec<SortKeyItem>)>,
 ) -> CmdResult<()> {
+    let (original, page_sort) = match page {
+        Some((original, sort)) => (Some(original), Some(sort)),
+        None => (None, None),
+    };
     let editor = session;
     let (open, workspace) = {
         let sessions = state.sessions.lock().await;
@@ -2673,7 +2701,7 @@ async fn start_script(
             .begin_results(editor, placement.into(), &open, &sql, original.as_deref())
             .await?,
     );
-    let _ = on_event.send(placed.started());
+    let _ = on_event.send(placed.started(page_sort));
     let events = state.history.run_script_in_context(
         &open.session,
         &sql,
@@ -2729,8 +2757,8 @@ async fn query_page_supported(
     Ok(spelaion_core::query_pages_exactly(&open.session, &sql, &sort_keys(sort)).await)
 }
 
-/// Run the first page, keeping the original SQL in the user's query history. `sort` is the
-/// grid's sort: the core writes the page's order from it.
+/// Run an editor query, using the first page when the core can page it exactly. A grid
+/// sort the page cannot follow falls back to the query's order, then to running as written.
 #[allow(clippy::too_many_arguments)]
 #[command]
 async fn run_query_page(
@@ -2744,20 +2772,29 @@ async fn run_query_page(
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
+    if !(1..=spelaion_core::MAX_PAGE_ROWS).contains(&u64::from(limit)) {
+        return Err(format!(
+            "a page holds from 1 to {} rows",
+            spelaion_core::MAX_PAGE_ROWS
+        ));
+    }
     let open = state.session(&session).await?;
-    let paged =
-        spelaion_core::first_query_page_sql(&open.session, &sql, limit.into(), &sort_keys(sort))
-            .await
-            .ok_or("this query cannot be paged")?;
+    let (sql, page) = match spelaion_core::editor_query_page_sql(
+        &open.session,
+        &sql,
+        limit.into(),
+        &sort_keys(sort.clone()),
+    )
+    .await
+    {
+        Some((paged, used_sort)) => (
+            paged,
+            Some((sql, if used_sort { sort } else { Vec::new() })),
+        ),
+        None => (sql, None),
+    };
     start_script(
-        &state,
-        &session,
-        paged,
-        confirmed,
-        options,
-        placement,
-        on_event,
-        Some(sql),
+        &state, &session, sql, confirmed, options, placement, on_event, page,
     )
     .await
 }
@@ -5077,32 +5114,9 @@ async fn object_definition(
         .map_err(|e| e.to_string())
 }
 
-/// The table a query's result can be edited as, or none: the core decides (ADR-014).
-#[command]
-async fn editable_query_table(
-    session: String,
-    result: u32,
-    sql: String,
-    state: State<'_, AppState>,
-) -> CmdResult<Option<EditableTableItem>> {
-    let open = state.session(&session).await?;
-    let table = spelaion_core::editable_query_table(
-        &open.session,
-        ResultId(result.into()),
-        &sql,
-        // The connection's read-only, or the session's (SDB-395).
-        open.session.is_read_only(),
-    )
-    .await?;
-    Ok(table.map(|table| EditableTableItem {
-        schema: table.object.schema,
-        name: table.object.name,
-        primary_key: table.primary_key,
-    }))
-}
-
 /// The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
-/// none: the core matches the rows to one table, on a read-only connection too.
+/// none: the core matches the rows to one table, on a read-only connection too. The same
+/// answer says whether the session permits editing, so both actions share the catalog read.
 #[command]
 async fn query_key_table(
     session: String,
@@ -5116,6 +5130,8 @@ async fn query_key_table(
     Ok(table.map(|table| KeyTableItem {
         schema: table.object.schema,
         name: table.object.name,
+        primary_key: table.primary_key,
+        writable: !open.session.is_read_only(),
     }))
 }
 
@@ -6326,6 +6342,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             time_zones,
             get_map_preferences,
             set_map_preferences,
+            get_side_panel,
+            set_side_panel,
             column_map,
             get_script_preferences,
             set_script_preferences,
@@ -6567,7 +6585,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             procedure_call,
             table_templates,
             join_sql,
-            editable_query_table,
             query_key_table,
             answer_interaction,
             transaction_status,

@@ -1,6 +1,7 @@
 # ADR-029: Connection types: a badge and safeguards per environment, decided in the core
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented; extended by ADR-071: one more safeguard,
+  `confirm_agent_writes`)
 - **Date:** 2026-11-07
 - **Builds on:** ADR-009 (configuration), ADR-022 (repository trust), ADR-028 (idle sessions)
 

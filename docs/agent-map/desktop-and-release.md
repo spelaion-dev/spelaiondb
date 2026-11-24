@@ -89,7 +89,9 @@
   `SPELAION_NO_UPDATES` switches them off, as the smoke test does). Update artifacts are signed only in the release workflow
   (`tauri.release.conf.json`, secret `TAURI_SIGNING_PRIVATE_KEY`); never commit a private key.
   Installers: `npx tauri build` (NSIS + MSI on Windows). Releases: pushing a tag `vX.Y.Z`
-  runs `.github/workflows/release.yml` (installers for every OS, the `spelaiondb` CLI, notes from
+  runs `.github/workflows/release.yml` (installers for every OS, the `spelaiondb` CLI built once
+  per platform by that platform's app job, which ships it inside the app and uploads its archive,
+  SDB-129, so a change to the CLI's packaging goes in both app jobs, notes from
   `docs/releases/vX.Y.Z.md` plus every commit since the previous tag, from
   `scripts/release-notes.sh`, so commit subjects must read well in a changelog); the tag must
   match the version in `Cargo.toml` and `tauri.conf.json`. Pushing a branch `release-test/<x>`
@@ -103,6 +105,15 @@
   the app or `spelaiondb` contact a new host, or contact one at another moment, updates its
   privacy section in the same pull request. `scripts/release-notes.sh` ends every release's
   notes with a link to it; keep that line.
+- The side column (SDB-451): what it shows is `sidebarSection` alone (`store.ts`; `null` is
+  hidden, `"mcp"` is the page that has no column), and `sidePanelToRestore` is only the panel
+  that Ctrl+B brings back. `view.sidePanel` (Ctrl+B, `sidePanel.ts`) toggles it and moves the
+  focus from a panel being hidden to that panel's activity-bar icon; the header's Hide side panel
+  (`SidePanelButtons.tsx`) runs it. Showing a panel is otherwise its activity-bar icon, as before.
+  Whether it is hidden and its width are personal preferences through the core
+  (`get_side_panel` / `set_side_panel`, `spelaion-store`'s `side_panel.rs`, which owns the
+  width limits); `App.tsx` restores them once the preferences are read and saves them as they
+  change. It appears and disappears at once: no slide.
 - Lifecycles in the app (ADR-060): `src-tauri` hands on the core's state types, and the page
   reads them from `bindings.ts`; it does not rebuild a state from events or derive it from
   flags. A state that exists only in the page (a dialog's phase, a value being loaded) is a

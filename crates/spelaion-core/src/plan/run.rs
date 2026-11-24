@@ -59,7 +59,7 @@ pub struct PlanCapabilities {
 fn supported(engine: &str) -> bool {
     matches!(
         engine,
-        "postgres" | "mysql" | "sqlserver" | "sqlite" | "duckdb"
+        "postgres" | "mysql" | "sqlserver" | "sqlite" | "duckdb" | "clickhouse"
     )
 }
 
@@ -110,6 +110,8 @@ pub fn plan_capabilities(session: &Session, policy: &ExplainPolicy) -> PlanCapab
             )
         } else if engine == "sqlite" {
             "SQLite plans are estimated only: EXPLAIN QUERY PLAN lists the steps without costs, row counts or timings, and SQLite has no ANALYZE that executes the query.".into()
+        } else if engine == "clickhouse" {
+            "ClickHouse plans are estimated only: EXPLAIN lists the steps and the indexes each read uses, without costs, row counts or timings, and ClickHouse has no ANALYZE that executes the query here.".into()
         } else if policy.read_only {
             "Read-only mode permits estimated read plans only. ANALYZE executes the query and is refused by the read-only barrier.".into()
         } else {
@@ -251,6 +253,12 @@ fn prepare(
             "SQLite has no ANALYZE that executes the query: its plans are estimated only".into(),
         ));
     }
+    if options.analyze && engine == "clickhouse" {
+        return Err(PlanError::Invalid(
+            "ClickHouse has no ANALYZE that executes the query here: its plans are estimated only"
+                .into(),
+        ));
+    }
     if options.analyze && policy.read_only {
         return Err(PlanError::Execution(
             "this connection is read-only: ANALYZE executes the query".into(),
@@ -284,6 +292,12 @@ fn prepare(
             ));
         }
         ("sqlserver", _, _) => sql.trim().to_owned(),
+        // One JSON cell: the steps, each read's indexes and each step's description. Its
+        // ANALYZE was refused above.
+        ("clickhouse", _, _) => format!(
+            "EXPLAIN json = 1, indexes = 1, description = 1\n{}",
+            sql.trim()
+        ),
         _ => return Err(PlanError::Unsupported(engine.into())),
     };
     if policy.read_only {

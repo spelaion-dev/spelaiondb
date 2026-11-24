@@ -190,6 +190,13 @@ export const commands = {
 	/**  Saves the map's preferences; the core checks the tile server first. */
 	setMapPreferences: (preferences: MapPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
 	/**
+	 *  The side panel as the user left it (SDB-451): hidden or not, its width, and the widths the
+	 *  core allows.
+	 */
+	getSidePanel: () => typedError<SidePanelItem, string>(__TAURI_INVOKE("get_side_panel")),
+	/**  Saves the side panel's state; the core refuses a width out of range. */
+	setSidePanel: (hidden: boolean, width: number) => typedError<null, string>(__TAURI_INVOKE("set_side_panel", { hidden, width })),
+	/**
 	 *  Every geometry of a result's column, in the current view, for one map (ADR-045): GeoJSON
 	 *  from the core, at most `MAP_MAX_SHAPES` shapes.
 	 */
@@ -1032,8 +1039,8 @@ export const commands = {
 	 */
 	queryPageSupported: (session: string, sql: string, sort: SortKeyItem[]) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql, sort })),
 	/**
-	 *  Run the first page, keeping the original SQL in the user's query history. `sort` is the
-	 *  grid's sort: the core writes the page's order from it.
+	 *  Run an editor query, using the first page when the core can page it exactly. A grid
+	 *  sort the page cannot follow falls back to the query's order, then to running as written.
 	 */
 	runQueryPage: (session: string, sql: string, limit: number, sort: SortKeyItem[], confirmed: boolean, options: RunOptionsItem_Deserialize, placement: ResultPlacementItem, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, sort, confirmed, options, placement, onEvent })),
 	/**
@@ -1141,11 +1148,10 @@ export const commands = {
 	 *  (`INNER JOIN … ON`, or the simple `FROM a, b WHERE`), to open in a new tab.
 	 */
 	joinSql: (session: string, tables: TableRefItem[], inner: boolean) => typedError<string, string>(__TAURI_INVOKE("join_sql", { session, tables, inner })),
-	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
-	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**
 	 *  The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
-	 *  none: the core matches the rows to one table, on a read-only connection too.
+	 *  none: the core matches the rows to one table, on a read-only connection too. The same
+	 *  answer says whether the session permits editing, so both actions share the catalog read.
 	 */
 	queryKeyTable: (session: string, result: number, sql: string) => typedError<KeyTableItem | null, string>(__TAURI_INVOKE("query_key_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
@@ -2643,12 +2649,6 @@ export type EditableColumnItem_Serialize = {
 	generated: boolean,
 };
 
-export type EditableTableItem = {
-	schema: string,
-	name: string,
-	primaryKey: string[],
-};
-
 /**  A connection opened in the editor. */
 export type EditedConnectionItem = EditedConnectionItem_Serialize | EditedConnectionItem_Deserialize;
 
@@ -3546,6 +3546,10 @@ export type ImportOptionsItem = {
 export type ImportPlanItem = {
 	statements: string[],
 	insert: string,
+	/**  Run once every row is in: on ClickHouse, what puts the loaded table in place (ADR-066). */
+	finish: string[],
+	/**  Tables that unfinished imports into this database left behind (ClickHouse, ADR-066). */
+	leftovers: string[],
 	schema: string,
 	table: string,
 	columns: string[],
@@ -3807,6 +3811,8 @@ export type KeyRefItem = {
 export type KeyTableItem = {
 	schema: string,
 	name: string,
+	primaryKey: string[],
+	writable: boolean,
 };
 
 /**  Where a followed key leads: a table data tab of `schema.table` with the core's `filter`. */
@@ -5974,9 +5980,9 @@ export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 export type ScriptEvent_Deserialize = 
 /**
  *  The run was accepted, before any of its statements: the result tabs it replaced,
- *  already freed by the core (SDB-378).
+ *  already freed by the core (SDB-378). Paged runs also report the effective grid sort.
  */
-{ kind: "runStarted"; closed: number[] } | 
+{ kind: "runStarted"; closed: number[]; pageSort?: SortKeyItem[] | null } | 
 /**  Byte range of the statement within the script. */
 { kind: "statementStarted"; index: number; start: number; end: number } | 
 /**
@@ -6008,9 +6014,9 @@ end: StatementEndItem } |
 export type ScriptEvent_Serialize = 
 /**
  *  The run was accepted, before any of its statements: the result tabs it replaced,
- *  already freed by the core (SDB-378).
+ *  already freed by the core (SDB-378). Paged runs also report the effective grid sort.
  */
-{ kind: "runStarted"; closed: number[] } | 
+{ kind: "runStarted"; closed: number[]; pageSort: SortKeyItem[] | null } | 
 /**  Byte range of the statement within the script. */
 { kind: "statementStarted"; index: number; start: number; end: number } | 
 /**
@@ -6290,6 +6296,15 @@ export type ShortcutOverrideItem_Deserialize = {
 export type ShortcutOverrideItem_Serialize = {
 	command: string,
 	keys: string | null,
+};
+
+/**  The side panel as the user left it (SDB-451), with the widths the core allows it. */
+export type SidePanelItem = {
+	hidden: boolean,
+	width: number,
+	minWidth: number,
+	maxWidth: number,
+	defaultWidth: number,
 };
 
 /**
@@ -6704,10 +6719,23 @@ export type TextSpan = {
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 
-/**  A connection whose TLS does not check its server (SDB-395), as the core decided it. */
+/**
+ *  A connection whose TLS does not check its server (SDB-395), as the core decided it.
+ *  What a connection's TLS leaves unchecked (SDB-395), as the core decides it.
+ */
+export type TlsRiskItem = 
+/**  `disable`: nothing is encrypted. */
+"unencrypted" | 
+/**  `prefer` or `require`: encrypted, but the server's certificate is not checked. */
+"unverified" | 
+/**
+ *  A SQL login to a LocalDB instance: its password crosses the local pipe without TLS
+ *  (ADR-068).
+ */
+"localDbPassword";
+
 export type TlsWarningItem = {
-	/**  `unencrypted` (`disable`) or `unverified` (`prefer`, `require`). */
-	risk: string,
+	risk: TlsRiskItem,
 	/**  The TLS mode as the connection file writes it. */
 	mode: string,
 	host: string,

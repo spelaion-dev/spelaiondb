@@ -13,6 +13,7 @@
     "cockroachdb": "cockroachlabs.svg",
     "yugabytedb": "yugabytedb-plain.svg",
     "timescaledb": "timescale.svg",
+    "cratedb": "cratedb.svg",
     "duckdb": "duckdb.svg",
     "clickhouse": "clickhouse.svg",
     "trino": "trino.svg",
@@ -38,6 +39,9 @@
   "without": {
     "file-folder": { "shows": "folder", "why": "not a server: a folder of CSV, TSV and Parquet files read through DuckDB" },
     "oceanbase": { "shows": "base", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0: MySQL's, whose protocol it speaks" },
+    "risingwave": { "shows": "base", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0: PostgreSQL's, whose protocol it speaks" },
+    "starrocks": { "shows": "base", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0: MySQL's, whose protocol it speaks" },
+    "materialize": { "shows": "base", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0: PostgreSQL's, whose protocol it speaks" },
     "valkey": { "shows": "base", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0: Redis's, whose protocol it speaks" },
     "databend": { "shows": "database", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0" },
     "dremio": { "shows": "database", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0" },

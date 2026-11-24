@@ -108,7 +108,8 @@
     "copySelectionInsert": "Copiar las celdas seleccionadas como SQL INSERT",
     "copySelectionSpecial": "Copiar las celdas seleccionadas con opciones…",
     "copySelectionUpdates": "Copiar las filas seleccionadas como sentencias UPDATE",
-    "exportSelection": "Exportar las celdas seleccionadas…"
+    "exportSelection": "Exportar las celdas seleccionadas…",
+    "toggleSidePanel": "Mostrar u ocultar el panel lateral"
   },
   "palette": {
     "title": "Paleta de comandos",
@@ -132,5 +133,9 @@
       "showInExplorer": "Mostrar en el explorador",
       "erDiagram": "Diagrama ER de las tablas relacionadas"
     }
+  },
+  "sidePanel": {
+    "hide": "Ocultar el panel lateral",
+    "show": "Mostrar el panel lateral"
   }
 }

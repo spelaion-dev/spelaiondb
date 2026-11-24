@@ -108,7 +108,8 @@
     "copySelectionInsert": "Copy the selected cells as SQL INSERT",
     "copySelectionSpecial": "Copy the selected cells with options…",
     "copySelectionUpdates": "Copy the selected rows as UPDATE statements",
-    "exportSelection": "Export the selected cells…"
+    "exportSelection": "Export the selected cells…",
+    "toggleSidePanel": "Toggle side panel"
   },
   "palette": {
     "title": "Command palette",
@@ -132,5 +133,9 @@
       "showInExplorer": "Show in explorer",
       "erDiagram": "ER diagram of related tables"
     }
+  },
+  "sidePanel": {
+    "hide": "Hide side panel",
+    "show": "Show side panel"
   }
 }

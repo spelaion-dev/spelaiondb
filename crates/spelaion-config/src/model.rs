@@ -177,11 +177,51 @@ pub const MAX_SHOWN_DATABASES: usize = 500;
 /// The longest database name it accepts, in characters.
 pub const MAX_DATABASE_NAME: usize = 128;
 
+/// What starts a SQL Server LocalDB instance's name in place of a host.
+const LOCALDB_PREFIX: &str = "(localdb)\\";
+
+/// The LocalDB instance a SQL Server connection names in place of a host, as SQL Server's own
+/// tools write it (`(localdb)\MSSQLLocalDB`; SDB-312, ADR-068): reached on this machine through
+/// the instance's pipe, which the plugin starts. `None` for any other connection.
+pub fn localdb_instance(engine: Engine, host: Option<&str>) -> Option<&str> {
+    if engine != Engine::Sqlserver {
+        return None;
+    }
+    let host = host?.trim();
+    let prefix = host.get(..LOCALDB_PREFIX.len())?;
+    prefix
+        .eq_ignore_ascii_case(LOCALDB_PREFIX)
+        .then(|| &host[LOCALDB_PREFIX.len()..])
+}
+
+/// A LocalDB instance's name as the plugin passes it to `SqlLocalDB`: letters, digits, spaces,
+/// `_`, `-` and `.`, up to 128 characters, starting with a letter, a digit or `_`.
+pub fn check_localdb_name(name: &str) -> Result<(), String> {
+    let ok = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        && name.chars().count() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "{name:?} is not a LocalDB instance name: use letters, digits, spaces, _, - and ., up to 128 characters"
+        ))
+    }
+}
+
 /// Base engine for a picker kind. This is presentation metadata, never a server capability.
 pub fn engine_kind_base(kind: &str) -> Option<Engine> {
     match kind {
-        "tidb" | "oceanbase" | "singlestore" | "greptimedb" => Some(Engine::Mysql),
-        "cockroachdb" | "yugabytedb" | "timescaledb" => Some(Engine::Postgres),
+        "localdb" => Some(Engine::Sqlserver),
+        "tidb" | "oceanbase" | "singlestore" | "greptimedb" | "starrocks" => Some(Engine::Mysql),
+        "cockroachdb" | "yugabytedb" | "timescaledb" | "risingwave" | "materialize" | "cratedb" => {
+            Some(Engine::Postgres)
+        }
         "influxdb" => Some(Engine::Flightsql),
         "valkey" => Some(Engine::Redis),
         "scylladb" => Some(Engine::Cassandra),

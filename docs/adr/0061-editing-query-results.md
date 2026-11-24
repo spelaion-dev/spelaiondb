@@ -14,10 +14,11 @@ the implementation uses to decide which results qualify and which rows an edit r
 
 ## Decision
 
-1. **The core decides which query results qualify.** The desktop asks `editable_query_table`
-   once a run with a single result has finished. The connection and session must be writable.
-   The core supports query result editing for the PostgreSQL, MySQL (including MariaDB), SQL
-   Server, SQLite and DuckDB dialects.
+1. **The core decides which query results qualify.** After a run with a single result finishes,
+   the desktop asks the core to match that result to a table once, for both editing and following
+   foreign keys. Editing also requires a writable connection and session. The core supports query
+   result editing for the PostgreSQL, MySQL (including MariaDB), SQL Server, SQLite and DuckDB
+   dialects.
 2. **One plain `SELECT` projects columns from one table.** `editable_query_source` accepts `*`
    without modifiers or a list of direct, unqualified column names. The query can still
    filter, order or limit the rows. Joins, derived tables, common table expressions,
