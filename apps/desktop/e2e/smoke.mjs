@@ -7913,7 +7913,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("heading", { name: "NoSQL" }).waitFor();
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "MySQL" }).isDisabled()));
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "MariaDB" }).isDisabled()));
-  assert.ok(!(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled()));
+  // The card named exactly so: "SQL Server LocalDB" is a card of its own on Windows (ADR-068).
+  assert.ok(!(await wizard.locator(".engine-card").filter({ has: page.locator(".engine-card-name", { hasText: /^SQL Server$/ }) }).isDisabled()));
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "DuckDB" }).isDisabled()));
   // Oracle is a plugin now (ADR-059); Snowflake is still planned.
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "Oracle" }).isDisabled()));
@@ -8485,7 +8486,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   step("SQL Server: a new connection, a batch with two result sets");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard");
-  await wizard.locator(".engine-card", { hasText: "SQL Server" }).click();
+  // Not "SQL Server LocalDB" (ADR-068): the card named exactly so.
+  await wizard.locator(".engine-card").filter({ has: page.locator(".engine-card-name", { hasText: /^SQL Server$/ }) }).click();
   await wizard.getByLabel("Name", { exact: true }).fill("SQL Server (Docker)");
   await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
   await wizard.getByLabel("Port", { exact: true }).fill("11433");
