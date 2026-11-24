@@ -1,6 +1,8 @@
 # ADR-036: SQL files in editor tabs, and open tabs that survive a restart
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented; amended by ADR-078, not implemented yet: a script's
+  `@include` line may name a `.sql` file inside the script's own folder tree, which the core
+  reads with point 1's rules although the user did not pick it)
 - **Date:** 2026-11-08
 - **Builds on:** ADR-011 (local storage), ADR-025 (personal state per workspace), ADR-028 (nothing
   is re-run after reconnecting), ADR-031 (transactions), ADR-035 (script runs)
