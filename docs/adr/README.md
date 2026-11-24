@@ -33,7 +33,7 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [021](0021-automatic-updates.md) | Automatic updates: signed, installed on the user's click, off until there is a public source | Accepted |
 | [022](0022-team-sharing.md) | Sharing connections with a team: trust pinned to content, shared host keys, passwordless logins | Accepted |
 | [023](0023-spelaion.md) | Rename SpelunkDB to SpelaionDB, under the Spelaion brand | Accepted |
-| [024](0024-explorer-folders.md) | The explorer groups objects in folders by type: routines, sequences, triggers, types and server objects | Accepted |
+| [024](0024-explorer-folders.md) | The explorer groups objects in folders by type: routines, sequences, triggers, types and server objects | Accepted (amended by ADR-074) |
 | [025](0025-explorer-filters.md) | Explorer filters: personal, matched in Rust, narrowed on the server | Accepted |
 | [026](0026-explorer-object-actions.md) | The explorer's object actions: SQL from the core, run only after it is shown | Accepted |
 | [027](0027-proxies-and-network-profiles.md) | SOCKS and HTTP proxies go in tunnel files, and tunnel files are the network profiles | Accepted |
@@ -46,7 +46,7 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [034](0034-streaming-exports.md) | Exports that stream to a file: a new read-only run in its own session, written batch by batch | Accepted |
 | [035](0035-script-runs.md) | Script runs that behave like a script runner: error modes, timeouts and server output | Accepted |
 | [036](0036-sql-files-and-restored-tabs.md) | SQL files in editor tabs, and open tabs that survive a restart | Accepted |
-| [037](0037-session-setup.md) | Every new session starts as its connection says: setup statements, default schema, isolation level | Accepted |
+| [037](0037-session-setup.md) | Every new session starts as its connection says: setup statements, default schema, isolation level | Accepted (amended by ADR-074) |
 | [038](0038-importing-data.md) | Importing data into a table: values bound, statements shown first, whole batches (point 13 superseded for ClickHouse by ADR-066) | Accepted |
 | [039](0039-importing-connections.md) | Importing connections from other clients: one flow, a reader per client | Accepted |
 | [040](0040-charts-from-a-result.md) | Charts from a result: points prepared in the core, drawn as plain SVG | Accepted |
@@ -79,3 +79,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [068](0068-sql-server-localdb.md) | SQL Server LocalDB: `host = '(localdb)\Instance'` (no new field, no protocol change); the SQL Server plugin starts the instance with `SqlLocalDB` (fixed program, no shell, checked name) and speaks TDS through its pipe; no user means the Windows account (LocalDB only); no tunnel, port or certificate to verify; Windows only, said so in the picker | Accepted (implemented) |
 | [071](0071-agents-writes-approved-in-the-app.md) | A person approves an agent's write in the app where the connection (`writes = "confirm"`), its type (`confirm_agent_writes`) or the user asks for it: only writes, never a way past a barrier, no editing; the server asks the running app over its local channel and refuses at once when the app is closed; built-in Production does not ask by default | Accepted (not implemented) |
 | [073](0073-no-built-in-ai-assistant.md) | No built-in AI assistant: no provider client, no model keys and no call from the app to a model; the user's own agent through MCP stays the way, the plan viewer's findings and `explain_query`'s structured plan already explain a plan, and the app only makes handing things to that agent shorter; what would reopen it, and the rules if it is ever built | Accepted |
+| [074](0074-several-postgresql-databases-under-one-connection.md) | A PostgreSQL connection may open the other databases of its server, only where its file names them (`databases`, or `all_databases`): a session per database through the same route, one set of settings for all of them, a database with a connection of its own opens only as that one, and agents keep to the connection's own database | Accepted (not implemented) |
