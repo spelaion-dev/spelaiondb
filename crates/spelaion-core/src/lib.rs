@@ -80,6 +80,7 @@ mod sort;
 mod sql_file;
 mod sql_mode;
 mod startup;
+pub mod table_copy;
 mod table_data;
 mod table_filters;
 mod table_pages;
