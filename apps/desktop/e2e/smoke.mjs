@@ -3999,7 +3999,10 @@ try {
     });
     const copyAll = async (target, grid) => {
       const before = await target.evaluate(() => window.__copied.length);
-      await grid.locator(".grid-canvas").click({ position: { x: 60, y: 40 } });
+      // The first data cell, as the copy step clicks it: below the 34 px header, right of the
+      // row numbers (the canvas sits under the scroller, which takes the pointer).
+      const box = await grid.locator(".grid-scroller").boundingBox();
+      await target.mouse.click(box.x + 80, box.y + 34 + 12);
       await target.keyboard.press("Control+a");
       await target.keyboard.press("Control+c");
       await target.waitForFunction((n) => window.__copied.length === n + 1, before);
@@ -4019,7 +4022,7 @@ try {
       context.waitForEvent("page"),
       panel.getByRole("button", { name: "Show results in a new window" }).click(),
     ]);
-    await resultsPage.locator(".results-window .grid-canvas").waitFor();
+    await resultsPage.locator(".results-window .grid-scroller").waitFor();
     await panel.locator(".results-detached").waitFor();
     assert.equal(await panel.locator(".results-pane").count(), 0);
     assert.match(await resultsPage.locator(".results-window-title").innerText(), /^Results of /);
