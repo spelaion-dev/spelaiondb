@@ -3981,7 +3981,8 @@ try {
       await target.keyboard.press("Control+a");
       await target.keyboard.press("Control+c");
       await target.waitForFunction((n) => window.__copied.length === n + 1, before);
-      return target.evaluate(() => window.__copied[window.__copied.length - 1]);
+      // Rows end with a line break, the last one too, as the copy step reads them.
+      return (await target.evaluate(() => window.__copied[window.__copied.length - 1])).trimEnd();
     };
     // random(): a second run could never copy the same numbers.
     const panel = await newQuery("Shop (SQLite)", "select abs(random()) as r union all select abs(random()) union all select abs(random())");

@@ -3,7 +3,7 @@
 // from the tab's window (`resultsWindow.ts`), and what it is asked to do goes back there, so
 // the tab stays the one owner of its run, its session and its results.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { call, commands, type ColumnFilterItem } from "../api";
@@ -20,10 +20,16 @@ import { refreshConnections } from "./Sidebar";
 
 type ResultsContext = Extract<WindowContextItem, { kind: "results" }>;
 
+/** How often the window asks the tab again until the tab first answers. */
+const HELLO_RETRY_MS = 400;
+
 export function ResultsWindow({ context }: { context: ResultsContext }) {
   useModalFocus();
   const { t } = useTranslation("editor");
   const [mirror, setMirror] = useState<ResultsMirror | null>(null);
+  /** Whether the tab's first word arrived, for the asking loop (which a render does not see). */
+  const shown = useRef(false);
+  shown.current = mirror !== null;
   const owner = useMemo(() => ownerClient(context.owner, context.tab), [context.owner, context.tab]);
 
   useEffect(() => {
@@ -32,9 +38,19 @@ export function ResultsWindow({ context }: { context: ResultsContext }) {
     const heard = getCurrentWebviewWindow().listen<ResultsMirror>(MIRROR_EVENT, (event) => {
       if (event.payload.tab === context.tab) setMirror(event.payload);
     });
-    // Once it listens, it asks the tab for what its panel shows.
-    void heard.then(() => owner.ask({ kind: "hello" }));
+    // Once it listens, it asks the tab for what its panel shows; again until it hears, since
+    // the tab may start listening only after this window first asks (and its first word may
+    // come before this window listens).
+    let asking: ReturnType<typeof setInterval> | undefined;
+    void heard.then(() => {
+      void owner.ask({ kind: "hello" });
+      asking = setInterval(() => {
+        if (shown.current) clearInterval(asking);
+        else void owner.ask({ kind: "hello" });
+      }, HELLO_RETRY_MS);
+    });
     return () => {
+      clearInterval(asking);
       void heard.then((unlisten) => unlisten());
       owner.close();
     };
