@@ -6216,6 +6216,8 @@ pub enum McpReadOnlyReasonItem {
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct McpAccessItem {
+    /// Its folder (ADR-075): the repository's canonical root, none for a personal connection.
+    pub folder: Option<String>,
     pub id: String,
     pub name: String,
     pub engine: String,
@@ -6231,15 +6233,10 @@ pub struct McpAccessItem {
 }
 
 impl McpAccessItem {
-    pub fn new(
-        entry: &spelaion_config::ConnectionEntry,
-        view: spelaion_core::AgentView,
-        kind: Option<ConnectionTypeItem>,
-        restriction_workspace: Option<String>,
-        read_only_override: Option<bool>,
-    ) -> Self {
+    pub fn new(connection: spelaion_core::ConnectionAgents) -> Self {
         use spelaion_core::{AgentAccess, AgentView, ReadOnlyBecause};
-        let (visibility, access, reason) = match view {
+        let entry = &connection.entry;
+        let (visibility, access, reason) = match connection.view {
             AgentView::NotExposed => (McpVisibilityItem::NotExposed, None, None),
             AgentView::UntrustedRepository => (McpVisibilityItem::Untrusted, None, None),
             AgentView::EngineWithoutBarrier | AgentView::FileFolder => {
@@ -6270,6 +6267,10 @@ impl McpAccessItem {
             ),
         };
         Self {
+            folder: connection
+                .key
+                .folder()
+                .map(|folder| folder.display().to_string()),
             id: entry.id.to_string(),
             name: entry.name(),
             engine: entry.file.engine.as_str().into(),
@@ -6277,9 +6278,57 @@ impl McpAccessItem {
             visibility,
             access,
             reason,
-            kind,
-            restriction_workspace,
-            read_only_override,
+            kind: connection.kind.as_ref().map(ConnectionTypeItem::from),
+            restriction_workspace: connection.override_scope,
+            read_only_override: connection.read_only_override,
+        }
+    }
+}
+
+/// Whose connections a group of the MCP page's Security tab holds (ADR-075).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum McpFolderItem {
+    /// An open repository folder: its canonical root, the path it was opened as, and whether
+    /// it is trusted.
+    Repository {
+        root: String,
+        path: String,
+        trusted: bool,
+    },
+    /// The personal connections, which every MCP server serves.
+    Personal,
+}
+
+/// One open folder's connections, or the personal ones, with what agents can do on each as
+/// that folder decides it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAccessGroupItem {
+    pub folder: McpFolderItem,
+    pub connections: Vec<McpAccessItem>,
+}
+
+impl From<spelaion_core::FolderAgents> for McpAccessGroupItem {
+    fn from(group: spelaion_core::FolderAgents) -> Self {
+        Self {
+            folder: match group.folder {
+                spelaion_core::AgentFolder::Repository {
+                    root,
+                    path,
+                    trusted,
+                } => McpFolderItem::Repository {
+                    root: root.display().to_string(),
+                    path: path.display().to_string(),
+                    trusted,
+                },
+                spelaion_core::AgentFolder::Personal => McpFolderItem::Personal,
+            },
+            connections: group
+                .connections
+                .into_iter()
+                .map(McpAccessItem::new)
+                .collect(),
         }
     }
 }
@@ -6329,6 +6378,18 @@ pub struct AuditFilterItem {
     pub tool: Option<String>,
     pub status: Option<AuditStatusItem>,
     pub session: Option<String>,
+    /// Only one folder's entries, or only those with none (ADR-075).
+    pub folder: Option<AuditFolderItem>,
+}
+
+/// The folder the Activity tab keeps (ADR-075).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AuditFolderItem {
+    /// Entries of this folder: its canonical root, as the log records it.
+    Folder { root: String },
+    /// Entries with no folder: on a personal connection, or written before 0.17.
+    NoFolder,
 }
 
 impl From<AuditFilterItem> for spelaion_core::AuditFilter {
@@ -6338,6 +6399,10 @@ impl From<AuditFilterItem> for spelaion_core::AuditFilter {
             tool: f.tool,
             decision: f.status.map(Into::into),
             session: f.session,
+            folder: f.folder.map(|folder| match folder {
+                AuditFolderItem::Folder { root } => spelaion_core::AuditFolder::Folder(root),
+                AuditFolderItem::NoFolder => spelaion_core::AuditFolder::NoFolder,
+            }),
         }
     }
 }
@@ -6361,6 +6426,9 @@ pub struct AuditEventItem {
     #[specta(type = Option<specta_typescript::Number>)]
     pub duration_ms: Option<i64>,
     pub detail: Option<String>,
+    /// The connection's folder (ADR-075); none for a personal connection, and for entries
+    /// written before 0.17.
+    pub folder: Option<String>,
 }
 
 impl From<spelaion_core::AuditRecord> for AuditEventItem {
@@ -6378,6 +6446,7 @@ impl From<spelaion_core::AuditRecord> for AuditEventItem {
             rows: e.rows,
             duration_ms: e.duration_ms,
             detail: e.detail,
+            folder: e.folder,
         }
     }
 }

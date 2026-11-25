@@ -536,6 +536,17 @@ pub struct AuditFilter {
     pub tool: Option<String>,
     pub decision: Option<Decision>,
     pub session: Option<String>,
+    /// Only the entries of one folder, or only those with none (ADR-075).
+    pub folder: Option<AuditFolder>,
+}
+
+/// The folder an audit filter keeps (ADR-075).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditFolder {
+    /// Entries whose connection is of this folder: its canonical root, as recorded.
+    Folder(String),
+    /// Entries with no folder: on a personal connection, or written before 0.17.
+    NoFolder,
 }
 
 /// An audit entry with its position in the log.
@@ -594,6 +605,14 @@ fn audit_where(filter: &AuditFilter) -> (String, Vec<String>) {
     if let Some(session) = &filter.session {
         params.push(session.clone());
         clauses.push(format!("session = ?{}", params.len()));
+    }
+    match &filter.folder {
+        Some(AuditFolder::Folder(folder)) => {
+            params.push(folder.clone());
+            clauses.push(format!("folder = ?{}", params.len()));
+        }
+        Some(AuditFolder::NoFolder) => clauses.push("folder is null".into()),
+        None => {}
     }
     let clause = if clauses.is_empty() {
         String::new()
@@ -1271,6 +1290,16 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare("select distinct tool from audit where tool is not null order by tool")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// The folders seen in the log (ADR-075), for the page's filter; entries with none are not
+    /// in it.
+    pub fn audit_folders(&self) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "select distinct folder from audit where folder is not null order by folder",
+        )?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
@@ -3832,6 +3861,51 @@ mod tests {
         assert_eq!(
             (old.session.as_deref(), old.tool.as_deref()),
             (Some("s0"), Some("run_query"))
+        );
+    }
+
+    #[test]
+    fn audit_entries_are_filtered_by_folder() {
+        // ADR-075: two servers started in two folders, both on `prod/orders`.
+        let path = temp("audit-by-folder");
+        let store = Store::open(&path).unwrap();
+        for (statement, folder) in [
+            ("select a", Some("/work/service-a")),
+            ("select b", Some("/work/service-b")),
+            ("select a2", Some("/work/service-a")),
+            ("select personal", None),
+        ] {
+            let mut entry =
+                AuditEntry::now("claude-code", "prod/orders", statement, Decision::Executed);
+            entry.folder = folder.map(Into::into);
+            store.record(&entry).unwrap();
+        }
+        let by = |folder: AuditFolder| {
+            let filter = AuditFilter {
+                folder: Some(folder),
+                ..AuditFilter::default()
+            };
+            let statements: Vec<String> = store
+                .audit_events(&filter, 10, 0)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.entry.statement)
+                .collect();
+            assert_eq!(store.audit_count(&filter).unwrap(), statements.len() as i64);
+            statements
+        };
+        assert_eq!(
+            by(AuditFolder::Folder("/work/service-a".into())),
+            ["select a2", "select a"]
+        );
+        assert_eq!(
+            by(AuditFolder::Folder("/work/service-b".into())),
+            ["select b"]
+        );
+        assert_eq!(by(AuditFolder::NoFolder), ["select personal"]);
+        assert_eq!(
+            store.audit_folders().unwrap(),
+            ["/work/service-a", "/work/service-b"]
         );
     }
 

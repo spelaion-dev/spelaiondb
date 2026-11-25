@@ -2,12 +2,12 @@
 // what agents may do. A thin adapter: the core finds the files, computes the change, writes it, and decides
 // every permission; this page only shows them and asks.
 
-import { useCallback, useEffect, useState } from "react";
-import { connectionKey } from "../connectionKey";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   call,
   commands,
+  type McpAccessGroupItem,
   type McpAccessItem,
   type McpClientItem,
   type McpClientsItem,
@@ -16,6 +16,7 @@ import {
   type ToolOutputItem,
 } from "../api";
 import { useApp } from "../store";
+import { folderLabels } from "../folderLabels";
 import { ActivityTab } from "./ActivityTab";
 import { TypeBadge } from "./TypeBadge";
 
@@ -248,10 +249,28 @@ function InstallDialog({ plan, name, onClose, onDone }: { plan: McpInstallPlanIt
 function SecurityTab() {
   const { t } = useTranslation("mcp");
   const [settings, setSettings] = useState<McpSettingsItem | null>(null);
-  const [access, setAccess] = useState<McpAccessItem[] | null>(null);
+  // Each open folder's connections under it, then the personal ones (ADR-075 point 9).
+  const [access, setAccess] = useState<McpAccessGroupItem[] | null>(null);
   const [savingRestriction, setSavingRestriction] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const connectionsRevision = useApp((s) => s.connections);
+  const groupNames = useMemo(() => {
+    const folders = (access ?? []).flatMap((group) => (group.folder.kind === "repository" ? [group.folder.path] : []));
+    const labels = folderLabels(folders);
+    let next = 0;
+    return (access ?? []).map((group) => {
+      switch (group.folder.kind) {
+        case "repository":
+          return labels[next++];
+        case "personal":
+          return t("security.access.personal");
+        default: {
+          const never: never = group.folder;
+          return never;
+        }
+      }
+    });
+  }, [access, t]);
 
   const load = useCallback(() => {
     call(commands.mcpSettings()).then(setSettings, (e: unknown) => setError(message(e)));
@@ -276,7 +295,8 @@ function SecurityTab() {
     setError(null);
     setSavingRestriction(true);
     try {
-      await call(commands.setMcpConnectionReadOnly(connectionKey(connection.id), connection.restrictionWorkspace, readOnly));
+      // By its folder and its id: another folder's connection of the same id keeps its own.
+      await call(commands.setMcpConnectionReadOnly({ folder: connection.folder, id: connection.id }, connection.restrictionWorkspace, readOnly));
       setAccess(await call(commands.mcpAccess()));
     } catch (e) {
       setError(message(e));
@@ -323,6 +343,7 @@ function SecurityTab() {
           <span>{t("security.readOnly.switch")}</span>
         </label>
         <p className="muted">{t("security.readOnly.hint")}</p>
+        <p className="muted">{t("security.access.oneFolder")}</p>
         <table className="mcp-access" aria-label={t("security.access.title")}>
           <thead>
             <tr>
@@ -332,13 +353,29 @@ function SecurityTab() {
               <th>{t("security.access.type")}</th>
             </tr>
           </thead>
-          <tbody>
-            {access?.length === 0 && (
+          {access?.every((group) => group.connections.length === 0) && (
+            <tbody>
               <tr>
                 <td colSpan={4} className="muted">{t("security.access.none")}</td>
               </tr>
-            )}
-            {access?.map((c) => (
+            </tbody>
+          )}
+          {access?.map((group, index) => {
+            const name = groupNames[index];
+            return group.connections.length === 0 && group.folder.kind === "personal" ? null : (
+            <tbody key={group.folder.kind === "repository" ? group.folder.root : ""} aria-label={name} data-folder={group.folder.kind === "repository" ? group.folder.root : ""}>
+              <tr className="mcp-folder-row">
+                <th colSpan={4} scope="rowgroup">
+                  <span title={group.folder.kind === "repository" ? group.folder.path : undefined}>{name}</span>
+                  {group.folder.kind === "repository" && !group.folder.trusted && <span className="muted"> · {t("security.access.folderUntrusted")}</span>}
+                </th>
+              </tr>
+              {group.connections.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="muted">{t("security.access.noneInFolder")}</td>
+                </tr>
+              )}
+            {group.connections.map((c) => (
               <tr key={c.id} data-connection={c.id}>
                 <td>
                   <div>{c.name}</div>
@@ -374,7 +411,9 @@ function SecurityTab() {
                 </td>
               </tr>
             ))}
-          </tbody>
+            </tbody>
+            );
+          })}
         </table>
         <p className="muted">{t("security.access.change")}</p>
       </section>

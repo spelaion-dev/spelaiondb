@@ -100,7 +100,11 @@
     "refusedCount_other": "{{count}} rechazadas",
     "failedCount_one": "{{count}} fallida",
     "failedCount_other": "{{count}} fallidas",
-    "openSession": "Ver llamadas"
+    "openSession": "Ver llamadas",
+    "folder": "Carpeta",
+    "allFolders": "Todas las carpetas",
+    "noFolder": "Sin carpeta",
+    "noFolderHint": "Una conexión personal, o una llamada registrada antes de que hubiera carpetas"
   },
   "security": {
     "output": {
@@ -122,6 +126,10 @@
       "agents": "Los agentes pueden",
       "type": "Tipo y sus salvaguardas en la aplicación",
       "none": "Todavía no hay conexiones.",
+      "oneFolder": "El servidor MCP de un agente sirve una carpeta, en la que se inicia o la que se le da con --workspace, y tus conexiones personales. Las conexiones de cada carpeta aparecen bajo ella tal como las ve un servidor iniciado allí.",
+      "personal": "Conexiones personales",
+      "folderUntrusted": "no es de confianza",
+      "noneInFolder": "No hay conexiones en esta carpeta.",
       "readOnly": "Solo leer",
       "readWrite": "Leer y escribir",
       "notExposed": "Nada: no está expuesta a los agentes",

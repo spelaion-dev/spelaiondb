@@ -6667,6 +6667,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             mcp::mcp_access,
             mcp::audit_events,
             mcp::audit_tools,
+            mcp::audit_folders,
             mcp::audit_sessions,
             mcp::export_audit,
             mcp::clear_audit,
