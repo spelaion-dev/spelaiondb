@@ -21,6 +21,9 @@ type Suggestion = { kind: "history"; text: string; isDefault: boolean } | { kind
 
 export function TableFilterBox(props: {
   connectionId: string | null;
+  /** The other database of the connection the table is in (ADR-074, SDB-505); null for its own:
+   *  a same-named table of two databases has filters of its own. */
+  database: string | null;
   /** The tab's session, which quotes a column name that needs it. */
   session: string;
   schema: string;
@@ -37,7 +40,7 @@ export function TableFilterBox(props: {
   columns: string[];
   disabled: boolean;
 }) {
-  const { connectionId, schema, name, applied, value } = props;
+  const { connectionId, database, schema, name, applied, value } = props;
   const { t } = useTranslation("editor");
   const [memory, setMemory] = useState<TableFiltersItem | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,10 +66,10 @@ export function TableFilterBox(props: {
 
   useEffect(() => {
     if (!connectionId) return;
-    void ask(() => call(commands.tableFilters(connectionKey(connectionId), schema, name))).catch(() => undefined);
+    void ask(() => call(commands.tableFilters(connectionKey(connectionId), database, schema, name))).catch(() => undefined);
     // `ask` only reads refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, schema, name]);
+  }, [connectionId, database, schema, name]);
 
   // A page that loaded used its filter: the core checks it and the store remembers it. Only
   // when a load ends, never for a filter that has not run yet.
@@ -75,10 +78,10 @@ export function TableFilterBox(props: {
     const before = wasLoaded.current;
     wasLoaded.current = props.loaded;
     if (before || !props.loaded || !connectionId || !applied.trim()) return;
-    void ask(() => call(commands.recordTableFilter(connectionKey(connectionId), schema, name, applied))).catch(() => undefined);
+    void ask(() => call(commands.recordTableFilter(connectionKey(connectionId), database, schema, name, applied))).catch(() => undefined);
     // `ask` only reads refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.loaded, connectionId, schema, name, applied]);
+  }, [props.loaded, connectionId, database, schema, name, applied]);
 
   // A page that failed has no columns: the last ones seen still name the table's.
   const [columns, setColumns] = useState(props.columns);
@@ -149,7 +152,7 @@ export function TableFilterBox(props: {
   async function forget(filter: string) {
     if (!connectionId) return;
     try {
-      await ask(() => call(commands.forgetTableFilter(connectionKey(connectionId), schema, name, filter)));
+      await ask(() => call(commands.forgetTableFilter(connectionKey(connectionId), database, schema, name, filter)));
     } catch (e) {
       failed(e);
     }
@@ -160,7 +163,7 @@ export function TableFilterBox(props: {
     if (!connectionId) return;
     setError(null);
     try {
-      await ask(() => call(commands.setTableDefaultFilter(connectionKey(connectionId), schema, name, filter)));
+      await ask(() => call(commands.setTableDefaultFilter(connectionKey(connectionId), database, schema, name, filter)));
     } catch (e) {
       failed(e);
     }

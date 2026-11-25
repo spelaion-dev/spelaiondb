@@ -14,8 +14,8 @@ use futures_util::StreamExt;
 use spelaion_config::{Config, ConnectionId, Resolver, Source, SystemBackend, TrustStore, load};
 use spelaion_core::{
     Configuration, ConnectionDatabases, CoreEvent, Engines, OpenConnection, OpenOptions,
-    OtherDatabaseError, ResultStore, Session, TunnelPool, connection_databases, database_owner,
-    open_connection, open_other_database,
+    OtherDatabaseError, ResultStore, RunState, Session, TunnelPool, change_session_database,
+    connection_databases, database_owner, open_connection, open_other_database,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, SecretRequest};
@@ -110,6 +110,23 @@ impl Workspace {
         )
         .await
         .unwrap_or_else(|e| panic!("opening {}: {e}", id.path))
+    }
+
+    /// A tab's change of database (SDB-505), from the session `current`.
+    async fn change(
+        &self,
+        current: &OpenConnection,
+        database: &str,
+    ) -> Result<OpenConnection, OtherDatabaseError> {
+        change_session_database(
+            current,
+            database,
+            &self.configuration(),
+            &Engines::builtin(),
+            self.options(),
+            Arc::new(ResultStore::new()),
+        )
+        .await
     }
 
     async fn other(
@@ -263,6 +280,8 @@ async fn postgres_other_database_opens_through_the_connections_tunnel_as_that_co
                 ),
             ),
             ("connections/owned.toml", connection(OWNED, "")),
+            // Another connection, same login, whose own database is `tenants`'s own.
+            ("connections/twin.toml", connection("spelaion", "")),
         ],
     );
     let own = ws.open("tenants").await;
@@ -290,6 +309,13 @@ async fn postgres_other_database_opens_through_the_connections_tunnel_as_that_co
             .unwrap(),
         BILLING
     );
+    // From a session on billing (a tab's picker, SDB-505) its connection's own database is
+    // still its own, though `twin` has it too; `owned`'s is still `owned`'s.
+    assert_eq!(
+        database_owner(&billing, "spelaion", &ws.configuration()),
+        None
+    );
+    assert!(database_owner(&billing, OWNED, &ws.configuration()).is_some());
     assert_eq!(
         ws.tunnels.active().await,
         1,
@@ -344,6 +370,30 @@ async fn postgres_other_database_opens_through_the_connections_tunnel_as_that_co
             .unwrap(),
         OWN_SCHEMA
     );
+    // A tab on another database goes back to the connection's own as its saved file opens it,
+    // its default schema included (SDB-505); and from there to another again.
+    let back = ws
+        .change(&billing, "spelaion")
+        .await
+        .expect("back to its own");
+    assert_eq!(
+        value(
+            &back.session,
+            "select current_database() || '.' || current_schema()"
+        )
+        .await
+        .unwrap(),
+        format!("spelaion.{OWN_SCHEMA}")
+    );
+    let forth = ws.change(&back, BILLING).await.expect("to billing again");
+    assert_eq!(
+        value(&forth.session, "select current_database()")
+            .await
+            .unwrap(),
+        BILLING
+    );
+    back.close().await;
+    forth.close().await;
 
     // A pooler (which a file cannot have with other databases) is refused here too.
     let mut pooled = ws.open("tenants").await;
@@ -406,6 +456,27 @@ async fn postgres_all_databases_are_what_the_server_lists_and_nothing_else() {
             .unwrap(),
         REPORTS
     );
+    // A tab's change of database is refused while its script runs (SDB-505): nothing the user
+    // ran is cut short.
+    let running = reports.session.run_script("select pg_sleep(2)");
+    let run = tokio::spawn(async move { running.collect::<Vec<CoreEvent>>().await });
+    let mut state = reports.session.run_state();
+    while !matches!(*state.borrow_and_update(), RunState::Running { .. }) {
+        state.changed().await.expect("the run's state");
+    }
+    assert!(matches!(
+        ws.change(&reports, OWNED).await,
+        Err(OtherDatabaseError::Running)
+    ));
+    run.await.expect("the run ended");
+    let owned = ws.change(&reports, OWNED).await.expect("after the run");
+    assert_eq!(
+        value(&owned.session, "select current_database()")
+            .await
+            .unwrap(),
+        OWNED
+    );
+    owned.close().await;
     // A template accepts connections, but the server does not list it: refused, as is a name
     // the server does not have.
     assert!(matches!(

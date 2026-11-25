@@ -238,8 +238,8 @@ pub use open::{
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
 pub use other_database::{
-    Configuration, ConnectionDatabases, OtherDatabaseError, connection_databases, database_owner,
-    file_opens_database, open_other_database,
+    Configuration, ConnectionDatabases, OtherDatabaseError, change_session_database,
+    connection_databases, database_owner, file_opens_database, open_other_database,
 };
 pub use panics::{INTERNAL_ERROR, Panicked, catch_panic, install_panic_log};
 pub use params::{ParamError, bind_params, script_params};

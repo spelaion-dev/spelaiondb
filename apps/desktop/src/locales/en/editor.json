@@ -1,4 +1,7 @@
 {
+  "databaseOwn": "{{name}} (its own)",
+  "databasePostgresHint": "Database: choosing another disconnects this tab and connects it to that one. Nothing is run again, and the rows on screen can no longer be edited.",
+  "databaseChangeFailed": "Could not connect to {{database}}: {{detail}}",
   "connection": "Connection",
   "editorMenu": {
     "run": "Run",
@@ -971,6 +974,7 @@
     "close": "Close"
   },
   "restore": {
+    "databaseMissing": "Its connection no longer opens {{database}}: it connects to the connection's own database.",
     "connectionMissing": "The connection “{{connection}}” no longer exists: choose another one to run this tab.",
     "fileMissing": "The file is no longer on disk: this is the text the tab had, unsaved.",
     "fileUnreadable": "The file could not be read ({{message}}): this is the text the tab had, unsaved.",

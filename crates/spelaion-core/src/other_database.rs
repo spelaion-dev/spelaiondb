@@ -89,6 +89,9 @@ pub enum OtherDatabaseError {
         connection: ConnectionId,
         name: String,
     },
+    /// A script runs in the session: it is not cut short to change database (SDB-505).
+    #[error("a script is running in this tab: cancel it, or wait for it, before changing database")]
+    Running,
     /// The server's list could not be read, so the name could not be checked.
     #[error("the server's databases could not be listed: {0}")]
     Unlisted(String),
@@ -168,12 +171,7 @@ pub async fn open_other_database(
     }
     // The connection's own database, asked from a session on another one (a tab's picker,
     // SDB-505): as its saved file opens it, its default schema included.
-    if let Ok(saved) = Resolver::new(
-        configuration.config,
-        configuration.trust,
-        configuration.backend,
-    )
-    .resolve(&own.resolved.id)
+    if let Some(saved) = saved(configuration, &own.resolved)
         && saved.params.database == database
     {
         return Ok(open_connection(saved, engines, options, results).await?);
@@ -217,9 +215,34 @@ pub async fn open_other_database(
     .await?)
 }
 
+/// A tab's change of database (ADR-074 point 4, SDB-505): on PostgreSQL a session never changes
+/// database, so this opens a new session on `database` of `current`'s connection, as
+/// [`open_other_database`] does with its refusals, for the caller to put in `current`'s place.
+/// Refused while `current` runs a script, waits on an error's answer, or is cancelling one:
+/// nothing the user ran is cut short or run again. The caller asks about an open transaction
+/// first; closing `current` rolls it back.
+pub async fn change_session_database(
+    current: &OpenConnection,
+    database: &str,
+    configuration: &Configuration<'_>,
+    engines: &Engines,
+    options: OpenOptions,
+    results: Arc<ResultStore>,
+) -> Result<OpenConnection, OtherDatabaseError> {
+    match *current.session.run_state().borrow() {
+        crate::RunState::Idle => {}
+        crate::RunState::Running { .. }
+        | crate::RunState::Paused { .. }
+        | crate::RunState::Cancelling { .. } => return Err(OtherDatabaseError::Running),
+    }
+    open_other_database(current, database, configuration, engines, options, results).await
+}
+
 /// The connection `database` opens only as (ADR-074 point 3), if another one of the
 /// configuration, with the same login as `own`'s, has it as its own database: the explorer
-/// shows it as such and leads there instead of opening it. `None` for `own`'s own database.
+/// shows it as such and leads there instead of opening it. `None` for the database `own` is on
+/// and for its connection's own (asked from a session on another database, a tab's picker,
+/// SDB-505), which [`open_other_database`] opens as the saved file does whoever else has it.
 pub fn database_owner(
     own: &OpenConnection,
     database: &str,
@@ -228,7 +251,24 @@ pub fn database_owner(
     if database == own.resolved.params.database || own.resolved.engine != Engine::Postgres {
         return None;
     }
+    if saved(configuration, &own.resolved).is_some_and(|saved| saved.params.database == database) {
+        return None;
+    }
     owner(configuration, &own.resolved, database)
+}
+
+/// `own`'s connection as its saved file resolves, on its own database with its default schema.
+fn saved(
+    configuration: &Configuration<'_>,
+    own: &ResolvedConnection,
+) -> Option<ResolvedConnection> {
+    Resolver::new(
+        configuration.config,
+        configuration.trust,
+        configuration.backend,
+    )
+    .resolve(&own.id)
+    .ok()
 }
 
 /// The connection's resolved definition on `database`: only the database changes, and the

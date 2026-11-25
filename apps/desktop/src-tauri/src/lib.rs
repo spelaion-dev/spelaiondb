@@ -6934,6 +6934,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connect_from_session,
             explorer_databases::connection_databases,
             explorer_databases::connect_database,
+            explorer_databases::change_tab_database,
             disconnect,
             list_processes,
             control_process,

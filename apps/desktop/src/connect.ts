@@ -3,8 +3,8 @@
 // backend; they are never kept in the state.
 
 import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
-import { explorerSession } from "./windowContext";
-import { connectionKey, listedConnection, tabKey, type ConnectionKey } from "./connectionKey";
+import { explorerConnectionOf, explorerSession } from "./windowContext";
+import { connectionKey, databaseOf, listedConnection, tabKey, type ConnectionKey } from "./connectionKey";
 import { runningOutsideTransactions } from "./closeQuestion";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
@@ -277,10 +277,38 @@ async function openSessionInner(session: string, key: ConnectionKey): Promise<st
 }
 
 /** Open an independent editor session from a connected explorer without exposing its password. */
+/**
+ * Opens an editor tab's session on its database (ADR-074, SDB-505): its connection's own, or
+ * the other one the tab is on, through the core (`changeTabDatabase`). Never quietly another:
+ * a tab whose database cannot be opened is left disconnected, with the core's reason.
+ */
+export async function openTabSession(tabId: string, connection: ConnectionKey): Promise<OpenedSession | null> {
+  const session = await openSession(tabId, connection);
+  if (session === null) return null;
+  const database = useApp.getState().tabs.find((tab) => tab.id === tabId)?.database ?? null;
+  if (database === null) return session;
+  try {
+    return { version: await call(commands.changeTabDatabase(tabId, database)) };
+  } catch (e) {
+    await call(commands.disconnect(tabId)).catch(() => undefined);
+    throw e;
+  }
+}
+
+/** The database a tab connected from `source` is on: the explorer session's database, or the
+ *  database of the tab `source` is (ADR-074, SDB-505); null for the connection's own. */
+function sourceDatabase(source: string): string | null {
+  const explorer = explorerConnectionOf(source);
+  if (explorer !== null) return databaseOf(explorer);
+  return useApp.getState().tabs.find((tab) => tab.id === source)?.database ?? null;
+}
+
 export function connectTabFromExplorer(tabId: string, source: string, database?: string) {
   const initial = useApp.getState().tabs.find((tab) => tab.id === tabId);
   if (!initial?.connectionId) return;
   const connectionId = initial.connectionId;
+  // A tab connected from another database's session is on that database (SDB-505).
+  useApp.getState().updateTab(tabId, { database: sourceDatabase(source) });
   useApp.getState().setConnection(tabId, CONNECTING);
   void (async () => {
     try {
@@ -289,7 +317,7 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
       // tab connects as a new one does, from the saved file, then to the database it wanted.
       const session = outcome.kind === "connected"
         ? await opened(tabId, outcome.serverVersion)
-        : await openSession(tabId, connectionKey(connectionId));
+        : await openTabSession(tabId, connectionKey(connectionId));
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) {
         if (session !== null) await call(commands.disconnect(tabId)).catch(() => undefined);

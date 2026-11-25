@@ -204,7 +204,14 @@
   connects from that session. `connect_database` opens it through the core's
   `open_other_database`; its `DesktopSession` is marked `other_database` (a session made from
   it, after an edit, is refused rather than opened on the own database) and records its
-  `explorer_parent`, so `disconnect` of the connection's explorer session closes it too. `DesktopSession::window` is set from the
+  `explorer_parent`, so `disconnect` of the connection's explorer session closes it too.
+  A tab's database (SDB-505) is `Tab.database` (null for the connection's own), set from the
+  source in `connectTabFromExplorer` and kept in `open_tabs.database`; every connect of an
+  editor tab goes through `openTabSession` (`connect.ts`), which opens its connection then moves
+  it to its database with `change_tab_database` (the core's `change_session_database`: refused
+  mid-run, then `open_other_database`), or leaves it disconnected, never on another database.
+  Bookmarks and table filters carry the database (`BookmarkItem.database`, the filters'
+  commands' `database`), empty in the store for the connection's own. `DesktopSession::window` is set from the
   calling window in `connect` / `connect_from_session`; `close_window_sessions` closes one
   window's sessions. An event meant for one window is sent with `emit_to` and heard with
   `events.x(getCurrentWebviewWindow()).listen` (a plain `listen` hears every target): SSH

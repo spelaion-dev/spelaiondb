@@ -1,4 +1,7 @@
 {
+  "databaseOwn": "{{name}} (la suya)",
+  "databasePostgresHint": "Base de datos: elegir otra desconecta esta pestaña y la conecta a esa. No se vuelve a ejecutar nada, y las filas en pantalla dejan de poder editarse.",
+  "databaseChangeFailed": "No se pudo conectar a {{database}}: {{detail}}",
   "connection": "Conexión",
   "editorMenu": {
     "run": "Ejecutar",
@@ -971,6 +974,7 @@
     "close": "Cerrar"
   },
   "restore": {
+    "databaseMissing": "Su conexión ya no abre {{database}}: se conecta a la base de datos propia de la conexión.",
     "connectionMissing": "La conexión «{{connection}}» ya no existe: elige otra para ejecutar esta pestaña.",
     "fileMissing": "El archivo ya no está en el disco: este es el texto que tenía la pestaña, sin guardar.",
     "fileUnreadable": "No se pudo leer el archivo ({{message}}): este es el texto que tenía la pestaña, sin guardar.",

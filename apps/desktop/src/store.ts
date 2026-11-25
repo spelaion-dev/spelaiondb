@@ -123,6 +123,10 @@ export interface Tab {
   /** The results panel fills the tab, hiding the SQL editor (UI only, never kept). */
   resultsMaximized?: boolean;
   connectionId: string | null;
+  /** The other database of its connection it is on (ADR-074, SDB-505): a PostgreSQL connection
+   *  that opens several. Absent or null for the connection's own. Kept with the tab, so a
+   *  restored tab connects to it when run. Changed only once the core opened it. */
+  database?: string | null;
   /** Its connection, one state (SDB-371): disconnected (and why it failed), connecting,
    *  connected (version, transaction, read-only for this session), lost, idle-closed. Read only
    *  through the selectors of `tabState.ts`; changed with `setConnection` and its transitions. */
@@ -648,6 +652,7 @@ export const useApp = create<AppStore>((set) => ({
         title: kept.title ?? undefined,
         pinned: kept.pinned || undefined,
         connectionId: kept.connection ?? null,
+        database: kept.connection ? (kept.database ?? null) : null,
         connectionState: DISCONNECTED,
         sql: kept.text,
         run: null,
