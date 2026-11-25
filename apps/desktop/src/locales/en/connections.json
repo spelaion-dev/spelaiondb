@@ -37,7 +37,8 @@
     "setup": "Setup statements",
     "onThisComputer": "On this computer",
     "masking": "Column masking",
-    "databases": "Databases shown"
+    "databases": "Databases shown",
+    "otherDatabases": "Databases"
   },
   "fields": {
     "name": "Name",
@@ -157,7 +158,15 @@
     "cleartextPasswordRoute": "As it is, this connection would not open: choose one of the “Verify” choices on the SSL tab, or connect through a network profile with SSH hops.",
     "databases": "Show only these databases",
     "databasesPlaceholder": "All databases",
-    "databasesHint": "One name per line, ignoring case. Empty: all of them. The connection's own database is always shown. This only hides the others from the explorer, the database picker and agents' lists: a statement can still use them, as the server allows."
+    "databasesHint": "One name per line, ignoring case. Empty: all of them. The connection's own database is always shown. This only hides the others from the explorer, the database picker and agents' lists: a statement can still use them, as the server allows.",
+    "otherDatabases": "Other databases it opens",
+    "otherDatabasesOwn": "Only {{database}}",
+    "otherDatabasesOwnUnnamed": "Only its own database",
+    "otherDatabasesNamed": "These databases too",
+    "otherDatabasesAll": "Every database of the server",
+    "otherDatabasesPlaceholder": "billing",
+    "otherDatabasesHint": "Each database opens in a session of its own, with this connection's settings: read-only mode, type, masking and route. Agents only ever reach the connection's own database. A database that needs other settings needs a connection of its own.",
+    "otherDatabasesPooler": "A connection through a pooler opens only its own database: a pooler routes by its own list of names."
   },
   "tls": {
     "disable": "Disabled",

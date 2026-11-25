@@ -3855,8 +3855,11 @@ pub struct ConnectionDraftItem {
     /// MySQL and MariaDB: allow the cleartext password plugin (SDB-396). The core opens such a
     /// connection only over a checked certificate or an SSH tunnel.
     pub cleartext_password: bool,
-    /// The databases the connection shows (SDB-396); empty for all of them.
+    /// MySQL, MariaDB and SQL Server: the databases the connection shows (SDB-396); empty for
+    /// all of them. PostgreSQL: the other databases it opens (ADR-074); empty for only its own.
     pub databases: Vec<String>,
+    /// PostgreSQL: it opens every database the server lists (ADR-074).
+    pub all_databases: bool,
     pub user: String,
     pub password_mode: PasswordMode,
     pub password_env: String,
@@ -3923,6 +3926,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             pooler: item.pooler.map(Into::into),
             cleartext_password: item.cleartext_password,
             databases: item.databases,
+            all_databases: item.all_databases,
             user: item.user,
             password: match item.password_mode {
                 PasswordMode::None => PasswordChoice::None,
@@ -4010,6 +4014,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             pooler: draft.pooler.map(Into::into),
             cleartext_password: draft.cleartext_password,
             databases: draft.databases,
+            all_databases: draft.all_databases,
             user: draft.user,
             password_mode,
             password_env,

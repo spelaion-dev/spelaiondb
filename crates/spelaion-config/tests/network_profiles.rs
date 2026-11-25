@@ -544,6 +544,7 @@ fn the_connection_form_keeps_the_profile_and_writes_only_its_own_fields() {
         pooler: None,
         cleartext_password: false,
         databases: Vec::new(),
+        all_databases: false,
         user: "app".into(),
         password: PasswordChoice::Prompt,
         tls_mode: spelaion_config::TlsModeConfig::Disable,

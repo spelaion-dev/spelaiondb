@@ -32,6 +32,7 @@ mod moves;
 mod network_profiles;
 mod pgadmin;
 mod poolers;
+mod postgres_databases;
 mod reader_properties;
 mod redis;
 mod search;

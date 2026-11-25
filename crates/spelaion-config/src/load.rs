@@ -699,8 +699,37 @@ pub(crate) fn validate_connection(
             "cleartext_password is for MySQL and MariaDB: the mysql_clear_password authentication plugin",
         ));
     }
+    // ADR-074: on PostgreSQL `databases` and `all_databases` say which other databases the
+    // connection opens. One or the other, and never behind a pooler, which routes by its own
+    // list of names, not the server's.
+    if file.all_databases {
+        if !file.engine.opens_other_databases() {
+            let label = file.engine.label();
+            return Err(ConfigError::new(
+                path,
+                format!(
+                    "all_databases is for PostgreSQL, whose connection may open the other databases of its server; {label} has no such list: remove `all_databases`"
+                ),
+            ));
+        }
+        if file.databases.is_some() {
+            return Err(ConfigError::new(
+                path,
+                "databases and all_databases cannot both be set: name the databases, or open all of them",
+            ));
+        }
+    }
+    if file.engine.opens_other_databases()
+        && file.pooler.is_some()
+        && (file.all_databases || file.databases.is_some())
+    {
+        return Err(ConfigError::new(
+            path,
+            "a connection through a pooler opens only its own database: a pooler routes by its own list of names, not the server's (remove `databases` and `all_databases`, or the `pooler`)",
+        ));
+    }
     if let Some(databases) = &file.databases {
-        if !file.engine.chooses_databases() {
+        if !file.engine.chooses_databases() && !file.engine.opens_other_databases() {
             let label = file.engine.label();
             return Err(ConfigError::new(
                 path,

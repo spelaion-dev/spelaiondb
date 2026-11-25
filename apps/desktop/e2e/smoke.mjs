@@ -608,6 +608,31 @@ try {
   await untrustedWizard.getByRole("button", { name: "Cancel" }).click();
   await untrustedWizard.waitFor({ state: "detached" });
 
+  step("PostgreSQL form: the other databases a connection opens (SDB-491)");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  const databasesWizard = page.locator(".modal.wizard");
+  await databasesWizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+  await databasesWizard.getByLabel("Database", { exact: true }).fill("app");
+  const otherDatabases = databasesWizard.getByRole("radiogroup", { name: "Databases" });
+  const pgOwnOnly = otherDatabases.getByRole("radio", { name: "Only app" });
+  const pgNamed = otherDatabases.getByRole("radio", { name: "These databases too" });
+  const pgAll = otherDatabases.getByRole("radio", { name: "Every database of the server" });
+  assert.ok(await pgOwnOnly.isChecked(), "a new PostgreSQL connection opens only its own database");
+  const otherList = databasesWizard.getByLabel("Other databases it opens");
+  assert.equal(await otherList.count(), 0);
+  await pgNamed.check();
+  await otherList.fill("billing\nreports");
+  await shot("sdb-491-other-databases");
+  await pgAll.check();
+  assert.equal(await otherList.count(), 0, "all databases need no list");
+  // Behind a pooler only its own database opens: the choice is off, and says why.
+  await databasesWizard.getByLabel("Pooler", { exact: true }).selectOption("session");
+  assert.ok(await pgOwnOnly.isDisabled() && await pgAll.isDisabled());
+  await databasesWizard.getByText(/A connection through a pooler opens only its own database/).waitFor();
+  await databasesWizard.getByLabel("Pooler", { exact: true }).selectOption("");
+  await databasesWizard.getByRole("button", { name: "Cancel" }).click();
+  await databasesWizard.waitFor({ state: "detached" });
+
   step("connections sidebar: drag, keyboard resizing, limits and reset");
   const sidebar = page.locator(".sidebar");
   const activities = page.getByRole("navigation", { name: "Activity bar" });

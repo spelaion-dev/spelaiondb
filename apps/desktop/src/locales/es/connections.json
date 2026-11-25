@@ -37,7 +37,8 @@
     "setup": "Sentencias de inicio",
     "onThisComputer": "En este equipo",
     "masking": "Enmascarado de columnas",
-    "databases": "Bases de datos que se muestran"
+    "databases": "Bases de datos que se muestran",
+    "otherDatabases": "Bases de datos"
   },
   "fields": {
     "name": "Nombre",
@@ -157,7 +158,15 @@
     "cleartextPasswordRoute": "Tal como está, esta conexión no se abriría: elige una de las opciones «Verificar» en la pestaña SSL, o conecta a través de un perfil de red con saltos SSH.",
     "databases": "Mostrar solo estas bases de datos",
     "databasesPlaceholder": "Todas las bases de datos",
-    "databasesHint": "Un nombre por línea, sin distinguir mayúsculas. Vacío: todas. La base de datos de la propia conexión se muestra siempre. Solo oculta las demás en el explorador, el selector de base de datos y las listas de los agentes: una sentencia puede seguir usándolas, según lo permita el servidor."
+    "databasesHint": "Un nombre por línea, sin distinguir mayúsculas. Vacío: todas. La base de datos de la propia conexión se muestra siempre. Solo oculta las demás en el explorador, el selector de base de datos y las listas de los agentes: una sentencia puede seguir usándolas, según lo permita el servidor.",
+    "otherDatabases": "Otras bases de datos que abre",
+    "otherDatabasesOwn": "Solo {{database}}",
+    "otherDatabasesOwnUnnamed": "Solo su propia base de datos",
+    "otherDatabasesNamed": "También estas bases de datos",
+    "otherDatabasesAll": "Todas las bases de datos del servidor",
+    "otherDatabasesPlaceholder": "facturacion",
+    "otherDatabasesHint": "Cada base de datos se abre en una sesión propia, con los ajustes de esta conexión: modo de solo lectura, tipo, enmascarado y ruta. Los agentes solo llegan a la base de datos propia de la conexión. Una base de datos que necesite otros ajustes necesita su propia conexión.",
+    "otherDatabasesPooler": "Una conexión a través de un pooler solo abre su propia base de datos: el pooler enruta según su propia lista de nombres."
   },
   "tls": {
     "disable": "Desactivado",

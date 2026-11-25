@@ -54,7 +54,8 @@ pub struct Pasted {
     pub name: String,
     /// Settings of the text that were not taken, by their file names: `password` (asked
     /// when connecting instead), `kubernetes.kubeconfig`, `kubernetes.kubectl`, `sqlite3`,
-    /// `mcp`, `tunnel` (no tunnel of that name here).
+    /// `session.setup`, PostgreSQL's `databases` and `all_databases` (ADR-074), `mcp`,
+    /// `masking.never`, `tunnel` (no tunnel of that name here).
     pub left_out: Vec<String>,
 }
 
@@ -216,6 +217,15 @@ fn sanitize(mut file: ConnectionFile) -> (ConnectionFile, Vec<String>) {
     if file.session.setup.take().is_some() {
         left_out.push("session.setup".to_string());
         file.session.ignore_setup_errors = false;
+    }
+    // On PostgreSQL these name other databases the connection opens (ADR-074): pasted text
+    // must not widen a connection by itself. MySQL's `databases` only narrows what is shown.
+    if file.engine.opens_other_databases() && file.databases.take().is_some() {
+        left_out.push("databases".to_string());
+    }
+    if file.all_databases {
+        left_out.push("all_databases".to_string());
+        file.all_databases = false;
     }
     if file.mcp != McpConfig::default() {
         left_out.push("mcp".to_string());

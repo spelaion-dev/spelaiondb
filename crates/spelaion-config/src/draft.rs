@@ -124,8 +124,12 @@ pub struct ConnectionDraft {
     pub pooler: Option<PoolerMode>,
     /// MySQL and MariaDB: allow the cleartext password plugin (SDB-396).
     pub cleartext_password: bool,
-    /// The databases the connection shows (SDB-396); empty for all of them.
+    /// MySQL, MariaDB and SQL Server: the databases the connection shows (SDB-396); empty for
+    /// all of them. PostgreSQL: the other databases it opens (ADR-074); empty for only its own.
     pub databases: Vec<String>,
+    /// PostgreSQL: it opens every database the server lists (ADR-074); `databases` is then
+    /// left out of the file.
+    pub all_databases: bool,
     pub user: String,
     pub password: PasswordChoice,
     pub tls_mode: TlsModeConfig,
@@ -158,12 +162,20 @@ pub struct ConnectionDraft {
     pub masking: MaskingConfig,
 }
 
-/// The databases a connection shows, as typed: trimmed, blank ones left out, each once
-/// (ignoring case); `None` for all of them.
-fn tidy_databases(names: &[String]) -> Option<Vec<String>> {
+/// The databases a connection names, as typed: trimmed, blank ones left out, each once;
+/// `None` for none. `ignore_case` where the engine matches them so (MySQL, MariaDB, SQL
+/// Server); PostgreSQL's names are case-sensitive (ADR-074).
+fn tidy_databases(names: &[String], ignore_case: bool) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
-        if !out.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        let same = |n: &String| {
+            if ignore_case {
+                n.eq_ignore_ascii_case(name)
+            } else {
+                n == name
+            }
+        };
+        if !out.iter().any(same) {
             out.push(name.to_string());
         }
     }
@@ -545,7 +557,13 @@ impl ConnectionDraft {
             pooler: self.pooler.filter(|_| self.engine == Engine::Postgres),
             cleartext_password: self.cleartext_password
                 && matches!(self.engine, Engine::Mysql | Engine::Mariadb),
-            databases: tidy_databases(&self.databases).filter(|_| self.engine.chooses_databases()),
+            databases: tidy_databases(&self.databases, self.engine.chooses_databases()).filter(
+                |_| {
+                    self.engine.chooses_databases()
+                        || (self.engine.opens_other_databases() && !self.all_databases)
+                },
+            ),
+            all_databases: self.all_databases && self.engine.opens_other_databases(),
             user: non_empty(&self.user).filter(|_| network),
             password: password
                 .filter(|_| network)
@@ -678,6 +696,7 @@ impl ConnectionDraft {
             pooler: file.pooler,
             cleartext_password: file.cleartext_password,
             databases: file.databases.clone().unwrap_or_default(),
+            all_databases: file.all_databases,
             user: file.user.clone().unwrap_or_default(),
             password,
             tls_mode: file.tls.mode,
@@ -998,6 +1017,13 @@ pub fn update_connection(
             new.databases
                 .as_ref()
                 .map(|names| Value::Array(names.iter().map(|name| name.as_str()).collect())),
+        );
+    }
+    if old.all_databases != new.all_databases {
+        put(
+            &mut doc,
+            &["all_databases"],
+            new.all_databases.then(|| Value::from(true)),
         );
     }
     if old.engine_kind != new.engine_kind {
