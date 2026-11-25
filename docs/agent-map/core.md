@@ -109,7 +109,14 @@
   closing a tab, disconnecting or quitting. The state is one enum, `TransactionLifecycle`
   (`transaction/lifecycle.rs`, SDB-372, ADR-060): not followed, or followed with a
   `CommitMode` (auto, manual, switched by smart commit) and a `TransactionPhase` (idle, open or
-  failed, with its statement count); it changes only through its own methods.
+  failed, with its statement count and its `IdleRollback`); it changes only through its own
+  methods. `idle_transaction.rs` (ADR-081) is the connection type's
+  `close_idle_transaction_after`: `Session::roll_back_idle_transactions` counts from the last
+  use (`Tracked::idle_since`; keep-alives and state reads are not uses), never while a run is
+  going, paused or cancelling or anything holds the connection, marks the phase warned before
+  the end, then holds the session as Commit does (`control`, `Tracked::try_hold`), asks the
+  driver and runs the engine's `ROLLBACK`; a rollback that cannot run marks the session lost.
+  Its test is `tests/transactions.rs`'s idle rollback on every engine.
   `TransactionStatus` is a read-only view made from it, and `closing_asks` is the one rule for
   "must closing ask" (`closing_asks_from_last_state` for the quit question, which leaves out a
   lost session). The page gets `TransactionStatusItem` (the state and the core's answers) and

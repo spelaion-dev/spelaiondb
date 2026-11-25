@@ -1230,6 +1230,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	idleTransactionRolledBack: makeEvent<IdleTransactionRolledBack, IdleTransactionRolledBack>("idle-transaction-rolled-back"),
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
 	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
@@ -2240,6 +2241,8 @@ export type ConnectionTypeDraft_Deserialize = {
 	confirmExecution: boolean,
 	confirmDataChanges: boolean,
 	closeIdleAfter?: number | null,
+	/**  Seconds before an idle open transaction is rolled back, after a warning (ADR-081). */
+	closeIdleTransactionAfter?: number | null,
 	manualCommit?: boolean,
 	smartCommit?: boolean,
 	/**  Column patterns every connection of the type masks (ADR-051). */
@@ -2257,6 +2260,8 @@ export type ConnectionTypeDraft_Serialize = {
 	confirmExecution: boolean,
 	confirmDataChanges: boolean,
 	closeIdleAfter: number | null,
+	/**  Seconds before an idle open transaction is rolled back, after a warning (ADR-081). */
+	closeIdleTransactionAfter: number | null,
 	manualCommit: boolean,
 	smartCommit: boolean,
 	/**  Column patterns every connection of the type masks (ADR-051). */
@@ -3522,6 +3527,28 @@ export type HopDraftItem_Serialize = {
 	passwordMode: PasswordMode,
 	passwordEnv: string,
 	passwordOther: string,
+};
+
+/**  Where an open transaction stands with its connection type's idle rollback (ADR-081). */
+export type IdleRollbackItem = 
+/**  No warning. */
+{ kind: "notDue" } | 
+/**
+ *  The tab is warned: rolled back at `at_ms` (milliseconds since the Unix epoch) unless
+ *  the session is used.
+ */
+{ kind: "warned"; atMs: number | null };
+
+/**
+ *  An editor tab's idle transaction was rolled back, as its connection type asks (ADR-081).
+ *  Sent once; the tab says it in its messages.
+ */
+export type IdleTransactionRolledBack = {
+	session: string,
+	/**  The connection type's time, in seconds. */
+	afterSeconds: number,
+	/**  Statements run in the transaction that were undone. */
+	statements: number,
 };
 
 export type IfExistsItem = "fail" | "append" | "replace";
@@ -6107,6 +6134,8 @@ export type SafeguardsItem_Deserialize = {
 	confirmDataChanges: boolean,
 	/**  Seconds. */
 	closeIdleAfter?: number | null,
+	/**  Seconds before an idle open transaction is rolled back, after a warning (ADR-081). */
+	closeIdleTransactionAfter?: number | null,
 	/**  Editor tabs start with auto-commit off (ADR-031). */
 	manualCommit: boolean,
 	/**  The first write switches a tab to manual commit (ADR-031). */
@@ -6119,6 +6148,8 @@ export type SafeguardsItem_Serialize = {
 	confirmDataChanges: boolean,
 	/**  Seconds. */
 	closeIdleAfter: number | null,
+	/**  Seconds before an idle open transaction is rolled back, after a warning (ADR-081). */
+	closeIdleTransactionAfter: number | null,
 	/**  Editor tabs start with auto-commit off (ADR-031). */
 	manualCommit: boolean,
 	/**  The first write switches a tab to manual commit (ADR-031). */
@@ -7094,9 +7125,9 @@ export type TransactionOutcomeItem = {
 /**  Whether a transaction is open, as the driver last said. */
 export type TransactionPhaseItem = { kind: "idle" } | 
 /**  Open with work a Commit would keep; `statements` run in it. */
-{ kind: "open"; statements: number } | 
+{ kind: "open"; statements: number; idleRollback: IdleRollbackItem } | 
 /**  Open, but the engine will only roll it back. */
-{ kind: "failed"; statements: number };
+{ kind: "failed"; statements: number; idleRollback: IdleRollbackItem };
 
 /**
  *  An editor tab's transaction, as the core keeps it (ADR-031, ADR-060): its state, and the

@@ -95,6 +95,16 @@ function TransactionBadge({ transaction }: { transaction: TransactionPhaseItem }
     case "idle":
       return null;
     case "open":
+    case "failed":
+      if (transaction.idleRollback.kind === "warned") return <IdleWarning atMs={transaction.idleRollback.atMs} />;
+      break;
+    default: {
+      const unknown: never = transaction;
+      return unknown;
+    }
+  }
+  switch (transaction.kind) {
+    case "open":
       return (
         <span className="tx-badge" role="status" title={t("transaction.openHint")}>
           {transaction.statements > 0 ? t("transaction.openCount", { count: transaction.statements }) : t("transaction.open")}
@@ -107,4 +117,16 @@ function TransactionBadge({ transaction }: { transaction: TransactionPhaseItem }
       return unknown;
     }
   }
+}
+
+/** The core warned that this idle transaction is rolled back at `atMs` unless the tab is used
+ *  (ADR-081). Commit and Rollback stay next to it. */
+function IdleWarning({ atMs }: { atMs: number | null }) {
+  const { t, i18n } = useTranslation("editor");
+  const time = atMs === null ? null : new Date(atMs).toLocaleTimeString(i18n.language);
+  return (
+    <span className="tx-badge tx-badge-warning" role="status" title={t("transaction.idleWarningHint", { time: time ?? "" })}>
+      {time === null ? t("transaction.idleWarningSoon") : t("transaction.idleWarning", { time })}
+    </span>
+  );
 }

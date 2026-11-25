@@ -243,6 +243,8 @@ pub struct Session {
     health: Health,
     keep_alive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     idle_close: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The connection type's idle transaction rollback (ADR-081), when started.
+    idle_rollback: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// The driver's dialect, as the session's `sql_mode` reads text (SDB-161).
     dialect: Arc<crate::sql_mode::SessionDialect>,
     results: Arc<ResultStore>,
@@ -335,6 +337,9 @@ impl Drop for Session {
         if let Some(task) = self.idle_close.lock().expect("lock poisoned").take() {
             task.abort();
         }
+        if let Some(task) = self.idle_rollback.lock().expect("lock poisoned").take() {
+            task.abort();
+        }
     }
 }
 
@@ -378,6 +383,7 @@ impl Session {
             health,
             keep_alive: std::sync::Mutex::new(None),
             idle_close: std::sync::Mutex::new(None),
+            idle_rollback: std::sync::Mutex::new(None),
             dialect: Arc::new(crate::sql_mode::SessionDialect::new(dialect)),
             results,
             options: ExecOptions::default(),
@@ -551,6 +557,41 @@ impl Session {
     pub fn close_when_idle(&self, after: std::time::Duration) {
         let task = self.tracked.close_when_idle(after);
         if let Some(previous) = self.idle_close.lock().expect("lock poisoned").replace(task) {
+            previous.abort();
+        }
+    }
+
+    /// Rolls back this editor session's transaction once it has stayed open `after` without
+    /// use, as its connection type asks (ADR-081): first the transaction's phase is marked
+    /// warned ([`TransactionLifecycle::idle_rollback_at`]), then the engine's `ROLLBACK` runs
+    /// and `on_rollback` is told once. A session in use is never touched, nothing is committed,
+    /// and a rollback that cannot run marks the session lost. Only for a session that follows
+    /// its transaction ([`Session::follow_transactions`]). Replaces a previous one.
+    pub fn roll_back_idle_transactions(
+        &self,
+        after: Duration,
+        on_rollback: impl Fn(crate::IdleRolledBack) + Send + Sync + 'static,
+    ) {
+        let parts = crate::idle_transaction::Parts {
+            tracked: Arc::downgrade(&self.tracked),
+            health: self.health.clone(),
+            control: self.control.clone(),
+            runs: self.runs.clone(),
+            transaction: self.transaction.clone(),
+            dialect: self.dialect.clone(),
+            options: self.options.clone(),
+        };
+        let task = tokio::spawn(crate::idle_transaction::run(
+            parts,
+            after,
+            Box::new(on_rollback),
+        ));
+        if let Some(previous) = self
+            .idle_rollback
+            .lock()
+            .expect("lock poisoned")
+            .replace(task)
+        {
             previous.abort();
         }
     }
@@ -1581,7 +1622,7 @@ fn seconds(duration: Duration) -> String {
 
 /// Runs a transaction statement the core sends itself (`BEGIN`, `COMMIT`, `ROLLBACK`) and
 /// returns the engine's notices.
-async fn run_control(
+pub(crate) async fn run_control(
     connection: &dyn Connection,
     sql: &str,
     options: &ExecOptions,

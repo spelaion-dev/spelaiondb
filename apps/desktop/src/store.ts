@@ -5,7 +5,7 @@ import type { EditorActionId } from "./editorActions";
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFormatItem, OnErrorItem, RestoreNoteItem, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
-import type { DiagramScopeItem_Deserialize, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
+import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
 import { DISCONNECTED, withReadOnly, withTransaction, type TabConnection } from "./tabState";
 
 export interface ResultMeta {
@@ -157,6 +157,9 @@ export interface Tab {
   file?: TabFile;
   /** What changed while the app was closed (a connection or file gone), shown until dismissed. */
   restoreNotes?: RestoreNoteItem[];
+  /** The core rolled back this tab's idle transaction, as its connection type asks (ADR-081):
+   *  said once, shown until dismissed. */
+  idleRolledBack?: IdleTransactionRolledBack;
   /** Session setup statements that failed and were skipped when the session opened (ADR-037),
    *  shown until dismissed or the next connection. */
   setupSkipped?: SkippedSetupItem[];

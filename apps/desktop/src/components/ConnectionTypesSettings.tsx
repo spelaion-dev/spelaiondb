@@ -29,6 +29,7 @@ const EMPTY: ConnectionTypeDraft = {
   confirmExecution: false,
   confirmDataChanges: false,
   closeIdleAfter: null,
+  closeIdleTransactionAfter: null,
   manualCommit: false,
   smartCommit: false,
   maskColumns: [],
@@ -146,6 +147,7 @@ function safeguardsText(type: ConnectionTypeItem, t: (key: string, options?: Rec
     s.manualCommit ? t("types.manualCommit") : null,
     s.smartCommit ? t("types.smartCommit") : null,
     s.closeIdleAfter ? t("types.closesAfter", { minutes: Math.max(1, Math.round(s.closeIdleAfter / 60)) }) : null,
+    s.closeIdleTransactionAfter ? t("types.rollsBackAfter", { minutes: Math.max(1, Math.round(s.closeIdleTransactionAfter / 60)) }) : null,
     type.maskColumns.length > 0 ? t("types.masks", { patterns: type.maskColumns.join(", ") }) : null,
   ].filter((p): p is string => p !== null);
   return parts.length > 0 ? parts.join(" · ") : t("types.noSafeguards");
@@ -163,6 +165,7 @@ function TypeEditor({ editing, onCancel, onSaved }: { editing: Editing; onCancel
   // What the badge looks like with this draft: another layer's tone when it leaves it empty.
   const shownTone: ToneItem = draft.tone ?? base?.tone ?? "neutral";
   const minutes = draft.closeIdleAfter ? String(Math.round(draft.closeIdleAfter / 60)) : "";
+  const transactionMinutes = draft.closeIdleTransactionAfter ? String(Math.round(draft.closeIdleTransactionAfter / 60)) : "";
 
   async function save() {
     setSaving(true);
@@ -280,7 +283,21 @@ function TypeEditor({ editing, onCancel, onSaved }: { editing: Editing; onCancel
             />
           </label>
           <p className="muted small">{t("types.closeIdleHint")}</p>
-          {(inherited?.confirmExecution || inherited?.confirmDataChanges || inherited?.closeIdleAfter || inherited?.manualCommit || inherited?.smartCommit) && (
+          {/* ADR-081: an idle open transaction is warned about, then rolled back. */}
+          <label className="field port">
+            <span>{t("types.closeIdleTransaction")}</span>
+            <input
+              type="number"
+              name="closeIdleTransaction"
+              min={0}
+              max={1440}
+              value={transactionMinutes}
+              placeholder={inherited?.closeIdleTransactionAfter ? String(Math.round(inherited.closeIdleTransactionAfter / 60)) : t("types.never")}
+              onChange={(e) => update({ closeIdleTransactionAfter: e.target.value ? Math.max(0, Math.trunc(Number(e.target.value))) * 60 : null })}
+            />
+          </label>
+          <p className="muted small">{t("types.closeIdleTransactionHint")}</p>
+          {(inherited?.confirmExecution || inherited?.confirmDataChanges || inherited?.closeIdleAfter || inherited?.closeIdleTransactionAfter || inherited?.manualCommit || inherited?.smartCommit) && (
             <p className="muted small">{t("types.inheritedHint")}</p>
           )}
         </fieldset>

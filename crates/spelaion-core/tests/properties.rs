@@ -861,6 +861,7 @@ const ASKS_FOR_NOTHING: Safeguards = Safeguards {
     confirm_execution: false,
     confirm_data_changes: false,
     close_idle_after: None,
+    close_idle_transaction_after: None,
     manual_commit: false,
     smart_commit: false,
 };

@@ -1040,6 +1040,11 @@ pub struct ConnectionTypeConfig {
     /// open; nothing reconnects by itself. Off when absent or 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_idle_after: Option<u32>,
+    /// Roll back an editor tab's transaction left open this many seconds without use, after a
+    /// warning in the tab (ADR-081). A session in use is never touched, and nothing is
+    /// committed. Off when absent or 0; otherwise 60 to 86400.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_idle_transaction_after: Option<u32>,
     /// Editor tabs start with auto-commit off: changes wait for Commit (ADR-031).
     #[serde(default, skip_serializing_if = "is_false")]
     pub manual_commit: bool,
@@ -1081,6 +1086,9 @@ impl Tone {
 impl ConnectionTypeConfig {
     /// Longest idle time accepted: a day.
     pub const MAX_CLOSE_IDLE_AFTER: u32 = 86_400;
+    /// Shortest time before an idle transaction is rolled back: a warning must come first,
+    /// and a result just run must be readable (ADR-081). The longest is a day too.
+    pub const MIN_CLOSE_IDLE_TRANSACTION_AFTER: u32 = 60;
     /// Longest name and description accepted, in characters.
     pub const MAX_NAME: usize = 40;
     pub const MAX_DESCRIPTION: usize = 200;

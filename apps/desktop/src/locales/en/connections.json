@@ -124,6 +124,7 @@
     "typeConfirmsExecution": "Asks before every run",
     "typeConfirmsChanges": "Asks before changing data",
     "typeClosesIdle": "Closes after {{minutes}} min idle",
+    "typeRollsBackIdle": "Rolls back idle transactions after {{minutes}} min",
     "typeNoSafeguards": "No safeguards: only its badge",
     "description": "Description",
     "descriptionPlaceholder": "What is this database for? Who owns it?",

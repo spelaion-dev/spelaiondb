@@ -673,6 +673,13 @@
     "committed": "Transacción confirmada.",
     "rolledBack": "Transacción deshecha.",
     "lostWithTransaction": "Había una transacción abierta: el servidor deshizo lo que no estaba confirmado.",
+    "idleWarning": "TX inactiva · se deshace a las {{time}}",
+    "idleWarningSoon": "TX inactiva · se deshace pronto",
+    "idleWarningHint": "Esta transacción está inactiva: su tipo de conexión la deshace a las {{time}} si no se usa esta pestaña. Confírmala o deshazla ahora.",
+    "idleRolledBack_one": "Deshecha tras {{duration}} de inactividad, como pide el tipo de esta conexión: se deshizo {{count}} sentencia.",
+    "idleRolledBack_other": "Deshecha tras {{duration}} de inactividad, como pide el tipo de esta conexión: se deshicieron {{count}} sentencias.",
+    "idleMinutes_one": "{{count}} minuto",
+    "idleMinutes_other": "{{count}} minutos",
     "tabBadge": "Transacción abierta"
   },
   "runOptions": {

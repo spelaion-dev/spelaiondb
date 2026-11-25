@@ -2210,6 +2210,25 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
         open.session
             .close_when_idle(std::time::Duration::from_secs(seconds.into()));
     }
+    // An idle open transaction is warned about, then rolled back (ADR-081); the warning
+    // travels with the transaction status, the rollback is told once.
+    if let Some(seconds) = open.resolved.safeguards().close_idle_transaction_after
+        && open.session.transaction_lifecycle().is_followed()
+    {
+        let app = app.clone();
+        let tab = session.clone();
+        open.session.roll_back_idle_transactions(
+            std::time::Duration::from_secs(seconds.into()),
+            move |done| {
+                let _ = IdleTransactionRolledBack {
+                    session: tab.clone(),
+                    after_seconds: u32::try_from(done.after.as_secs()).unwrap_or(u32::MAX),
+                    statements: done.statements,
+                }
+                .emit(&app);
+            },
+        );
+    }
     forward_transaction(app, session.clone(), open);
     forward_run(app, session.clone(), open);
     let mut health = open.session.health();
@@ -6642,6 +6661,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             InteractionClosed,
             SessionLost,
             TransactionChanged,
+            IdleTransactionRolledBack,
             RunChanged,
             QuitRequested,
             plugins::PluginInstallChanged,

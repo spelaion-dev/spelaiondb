@@ -1429,6 +1429,8 @@ pub struct SafeguardsItem {
     pub confirm_data_changes: bool,
     /// Seconds.
     pub close_idle_after: Option<u32>,
+    /// Seconds before an idle open transaction is rolled back, after a warning (ADR-081).
+    pub close_idle_transaction_after: Option<u32>,
     /// Editor tabs start with auto-commit off (ADR-031).
     pub manual_commit: bool,
     /// The first write switches a tab to manual commit (ADR-031).
@@ -1441,6 +1443,7 @@ impl From<spelaion_config::Safeguards> for SafeguardsItem {
             confirm_execution: s.confirm_execution,
             confirm_data_changes: s.confirm_data_changes,
             close_idle_after: s.close_idle_after,
+            close_idle_transaction_after: s.close_idle_transaction_after,
             manual_commit: s.manual_commit,
             smart_commit: s.smart_commit,
         }
@@ -1494,6 +1497,9 @@ pub struct ConnectionTypeDraft {
     pub confirm_execution: bool,
     pub confirm_data_changes: bool,
     pub close_idle_after: Option<u32>,
+    /// Seconds before an idle open transaction is rolled back, after a warning (ADR-081).
+    #[serde(default)]
+    pub close_idle_transaction_after: Option<u32>,
     #[serde(default)]
     pub manual_commit: bool,
     #[serde(default)]
@@ -1513,6 +1519,7 @@ impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
             confirm_execution: c.confirm_execution,
             confirm_data_changes: c.confirm_data_changes,
             close_idle_after: c.close_idle_after,
+            close_idle_transaction_after: c.close_idle_transaction_after,
             manual_commit: c.manual_commit,
             smart_commit: c.smart_commit,
             mask_columns: c.mask_columns.clone(),
@@ -1530,6 +1537,7 @@ impl From<ConnectionTypeDraft> for spelaion_config::ConnectionTypeConfig {
             confirm_execution: d.confirm_execution,
             confirm_data_changes: d.confirm_data_changes,
             close_idle_after: d.close_idle_after,
+            close_idle_transaction_after: d.close_idle_transaction_after,
             manual_commit: d.manual_commit,
             smart_commit: d.smart_commit,
             mask_columns: d.mask_columns,
@@ -3416,11 +3424,54 @@ pub enum TransactionPhaseItem {
     /// Open with work a Commit would keep; `statements` run in it.
     Open {
         statements: u32,
+        idle_rollback: IdleRollbackItem,
     },
     /// Open, but the engine will only roll it back.
     Failed {
         statements: u32,
+        idle_rollback: IdleRollbackItem,
     },
+}
+
+/// Where an open transaction stands with its connection type's idle rollback (ADR-081).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum IdleRollbackItem {
+    /// No warning.
+    #[default]
+    NotDue,
+    /// The tab is warned: rolled back at `at_ms` (milliseconds since the Unix epoch) unless
+    /// the session is used.
+    Warned { at_ms: f64 },
+}
+
+impl From<spelaion_core::IdleRollback> for IdleRollbackItem {
+    fn from(idle: spelaion_core::IdleRollback) -> Self {
+        match idle {
+            spelaion_core::IdleRollback::NotDue => Self::NotDue,
+            spelaion_core::IdleRollback::Warned { at } => Self::Warned {
+                at_ms: at
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_millis() as f64),
+            },
+        }
+    }
+}
+
+/// An editor tab's idle transaction was rolled back, as its connection type asks (ADR-081).
+/// Sent once; the tab says it in its messages.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct IdleTransactionRolledBack {
+    pub session: String,
+    /// The connection type's time, in seconds.
+    pub after_seconds: u32,
+    /// Statements run in the transaction that were undone.
+    pub statements: u32,
 }
 
 impl From<spelaion_core::TransactionLifecycle> for TransactionStatusItem {
@@ -3436,12 +3487,14 @@ impl From<spelaion_core::TransactionLifecycle> for TransactionStatusItem {
                 },
                 transaction: match phase {
                     TransactionPhase::Idle => TransactionPhaseItem::Idle,
-                    TransactionPhase::Open { statements } => {
-                        TransactionPhaseItem::Open { statements }
-                    }
-                    TransactionPhase::Failed { statements } => {
-                        TransactionPhaseItem::Failed { statements }
-                    }
+                    TransactionPhase::Open { statements, idle } => TransactionPhaseItem::Open {
+                        statements,
+                        idle_rollback: idle.into(),
+                    },
+                    TransactionPhase::Failed { statements, idle } => TransactionPhaseItem::Failed {
+                        statements,
+                        idle_rollback: idle.into(),
+                    },
                 },
                 smart_commit: lifecycle.smart_commit(),
                 in_transaction: lifecycle.in_transaction(),
