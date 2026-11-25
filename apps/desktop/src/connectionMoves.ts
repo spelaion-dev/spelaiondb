@@ -5,6 +5,7 @@
 
 import { call, commands, type ConnectionItem } from "./api";
 import { explorerSession } from "./windowContext";
+import { connectionKey } from "./connectionKey";
 import i18n from "./i18n";
 import { refreshConnections } from "./components/Sidebar";
 import { useApp } from "./store";
@@ -40,7 +41,7 @@ export async function moveConnection(connection: ConnectionItem, folder: string)
     await call(commands.disconnect(explorerSession(connection.id))).catch(() => undefined);
     app.setExplorerConnected(connection.id, false);
   }
-  const moved = await call(commands.moveConnection(connection.id, folder));
+  const moved = await call(commands.moveConnection(connectionKey(connection.id), folder));
   if (moved.id !== connection.id) {
     for (const tab of useApp.getState().tabs) {
       if (tab.connectionId === connection.id) app.updateTab(tab.id, { connectionId: moved.id });

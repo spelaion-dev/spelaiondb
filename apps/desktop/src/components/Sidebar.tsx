@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { explorerSession, windowConnection } from "../windowContext";
+import { connectionKey } from "../connectionKey";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { chooseFolder, workspaceParent } from "../dialogs";
@@ -849,7 +850,7 @@ const RELATION_KINDS = ["table", "partitioned_table", "view", "materialized_view
 /** Shows a bookmark's object in the tree, connecting first if needed: the user asked. */
 function showBookmark(bookmark: BookmarkItem) {
   useApp.getState().revealInExplorer({
-    connectionId: bookmark.connection,
+    connectionId: bookmark.connection.id,
     schema: bookmark.schema,
     name: bookmark.kind === "schema" ? undefined : bookmark.name,
     connect: true,
@@ -859,13 +860,13 @@ function showBookmark(bookmark: BookmarkItem) {
 /** Opens a bookmark's object (a table's rows, another object's DDL); a schema, or an object of
  *  a connection not connected in the explorer yet, is shown in the tree instead. */
 async function openBookmark(bookmark: BookmarkItem) {
-  if (bookmark.kind === "schema" || !explorerSessionOpen(useApp.getState().explorerConnected, bookmark.connection)) {
+  if (bookmark.kind === "schema" || !explorerSessionOpen(useApp.getState().explorerConnected, bookmark.connection.id)) {
     showBookmark(bookmark);
     return;
   }
   const { schema, name, kind } = bookmark;
   await openFound(
-    bookmark.connection,
+    bookmark.connection.id,
     RELATION_KINDS.includes(kind)
       ? { kind: "relation", object: { schema, name, kind, estimatedRows: null, comment: null } }
       : {
@@ -884,7 +885,7 @@ function BookmarksSection() {
     <div className="bookmarks">
       <Folder label={t("bookmarks")} count={bookmarks.length} initiallyOpen>
         {bookmarks.map((b) => (
-          <BookmarkRow key={`${b.connection}|${b.schema}|${b.name}|${b.kind}|${b.detail}`} bookmark={b} />
+          <BookmarkRow key={`${b.connection.folder ?? ""}|${b.connection.id}|${b.schema}|${b.name}|${b.kind}|${b.detail}`} bookmark={b} />
         ))}
       </Folder>
     </div>
@@ -893,7 +894,7 @@ function BookmarksSection() {
 
 function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
   const { t } = useTranslation("shell");
-  const connectionName = useApp((s) => s.connections.find((c) => c.id === bookmark.connection)?.name ?? bookmark.connection);
+  const connectionName = useApp((s) => s.connections.find((c) => c.id === bookmark.connection.id)?.name ?? bookmark.connection.id);
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
   const label = bookmark.kind === "schema" ? bookmark.schema : bookmark.name;
@@ -1889,7 +1890,7 @@ function ConnectionNode({
   /** "Hide" / "Show only": the filter changes and the tree is read again. */
   const filterName: FilterName = (kind, names, action) => {
     useApp.getState().clearExplorerSelection();
-    void call(commands.filterExplorerName(connection.id, kind, names, action))
+    void call(commands.filterExplorerName(connectionKey(connection.id), kind, names, action))
       .then((next) => {
         setFilters(next);
         void refreshAll();
@@ -1899,7 +1900,7 @@ function ConnectionNode({
   /** Opens the filter dialog with the saved patterns: one kind from a folder, or all. */
   function configureFilter(kind?: FilterKind) {
     setRowMenu(null);
-    void call(commands.getExplorerFilter(connection.id))
+    void call(commands.getExplorerFilter(connectionKey(connection.id)))
       .then((filter) => setEditingFilters({ filter, kind }))
       .catch((e: unknown) => setError(errorText(e)));
   }
@@ -1986,7 +1987,7 @@ function ConnectionNode({
     // The connection may have been edited to point to another engine; asked again now, so
     // tables' menus have the list before they open.
     forgetExplorerSession(session);
-    const filter = await call(commands.getExplorerFilter(connection.id));
+    const filter = await call(commands.getExplorerFilter(connectionKey(connection.id)));
     setFilters(filter);
     // Without its roles or logins the connection still shows its schemas.
     const [all, server] = await Promise.all([
@@ -2513,7 +2514,7 @@ function SchemaNode({
         <span className="twisty"><Icon name={open ? "chevronDown" : "chevronRight"} /></span>
         <TreeIcon kind="folder" />
         <span className="label">{schema}</span>
-        <BookmarkStar bookmark={{ connection: connectionId, schema, name: "", kind: "schema", detail: "" }} />
+        <BookmarkStar bookmark={{ connection: connectionKey(connectionId), schema, name: "", kind: "schema", detail: "" }} />
         {objects && (
           <span className="muted small">
             {(objects.length + others.length).toLocaleString(i18n.language)}

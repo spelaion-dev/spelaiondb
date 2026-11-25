@@ -3,6 +3,7 @@
 // every permission; this page only shows them and asks.
 
 import { useCallback, useEffect, useState } from "react";
+import { connectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import {
   call,
@@ -275,7 +276,7 @@ function SecurityTab() {
     setError(null);
     setSavingRestriction(true);
     try {
-      await call(commands.setMcpConnectionReadOnly(connection.id, connection.restrictionWorkspace, readOnly));
+      await call(commands.setMcpConnectionReadOnly(connectionKey(connection.id), connection.restrictionWorkspace, readOnly));
       setAccess(await call(commands.mcpAccess()));
     } catch (e) {
       setError(message(e));

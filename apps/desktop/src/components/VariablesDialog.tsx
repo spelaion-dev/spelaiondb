@@ -5,6 +5,7 @@
 // in the local store. Nothing here is sent anywhere.
 
 import { useEffect, useState } from "react";
+import { connectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import { useApp } from "../store";
@@ -36,7 +37,7 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
   useEffect(() => {
     if (!connectionId) return;
     let live = true;
-    call(commands.connectionVariables(connectionId))
+    call(commands.connectionVariables(connectionKey(connectionId)))
       .then((list) => { if (live) setSaved(list); })
       .catch((e: unknown) => { if (live) { setSaved([]); setError(t("variables.loadFailed", { detail: message(e) })); } });
     return () => { live = false; };
@@ -56,8 +57,8 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
       if (where === "tab") {
         setTab({ ...tabVariables, [variable]: text });
       } else if (connectionId) {
-        await call(commands.setConnectionVariable(connectionId, variable, text));
-        setSaved(await call(commands.connectionVariables(connectionId)));
+        await call(commands.setConnectionVariable(connectionKey(connectionId), variable, text));
+        setSaved(await call(commands.connectionVariables(connectionKey(connectionId))));
       }
       return true;
     } catch (e) {
@@ -79,8 +80,8 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
     if (!connectionId) return;
     setBusy(true);
     try {
-      await call(commands.setConnectionVariable(connectionId, variable, null));
-      setSaved(await call(commands.connectionVariables(connectionId)));
+      await call(commands.setConnectionVariable(connectionKey(connectionId), variable, null));
+      setSaved(await call(commands.connectionVariables(connectionKey(connectionId))));
     } catch (e) {
       setError(t("variables.saveFailed", { detail: message(e) }));
     } finally {

@@ -7,6 +7,7 @@
 
 import { create } from "zustand";
 import { explorerSession } from "./windowContext";
+import { connectionKey, sameConnection } from "./connectionKey";
 import {
   call,
   commands,
@@ -211,7 +212,7 @@ export async function openRoutineCall(connectionId: string, session: string, obj
 
 /** The object's bookmark (ADR-026), with its detail (a routine's arguments) to tell overloads apart. */
 export function schemaObjectBookmark(connectionId: string, object: SchemaObjectItem): BookmarkItem {
-  return { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind, detail: object.detail ?? "" };
+  return { connection: connectionKey(connectionId), schema: object.schema, name: object.name, kind: object.kind, detail: object.detail ?? "" };
 }
 
 /** Drop…: the core's SQL shown, with "Cascade" where the engine has it, then run (ADR-026). */
@@ -223,7 +224,7 @@ export function dropSchemaObject(connectionId: string, session: string, object: 
 
 /** A schema's bookmark (ADR-026). */
 export function schemaBookmark(connectionId: string, schema: string): BookmarkItem {
-  return { connection: connectionId, schema, name: "", kind: "schema", detail: "" };
+  return { connection: connectionKey(connectionId), schema, name: "", kind: "schema", detail: "" };
 }
 
 /** "Import into a new table…": the import dialog, its table still to be named. */
@@ -277,11 +278,11 @@ export function setEditorSchema(tabId: string, schema: string) {
 /** A relation's bookmark (ADR-026). Its kind comes from the driver as text; the core refuses one
  *  it does not know. */
 export function relationBookmark(connectionId: string, object: ObjectItem): BookmarkItem {
-  return { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind as BookmarkItem["kind"], detail: "" };
+  return { connection: connectionKey(connectionId), schema: object.schema, name: object.name, kind: object.kind as BookmarkItem["kind"], detail: "" };
 }
 
 export const sameBookmark = (a: BookmarkItem, b: BookmarkItem) =>
-  a.connection === b.connection && a.schema === b.schema && a.name === b.name && a.kind === b.kind && a.detail === b.detail;
+  sameConnection(a.connection, b.connection) && a.schema === b.schema && a.name === b.name && a.kind === b.kind && a.detail === b.detail;
 
 /** Whether an object is bookmarked now. */
 export function isBookmarked(bookmark: BookmarkItem): boolean {

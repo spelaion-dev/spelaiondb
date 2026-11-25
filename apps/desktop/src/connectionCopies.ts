@@ -3,6 +3,7 @@
 // ever passes through here or the clipboard: the clipboard text has none.
 
 import { call, commands, type ConnectionItem } from "./api";
+import { connectionKey } from "./connectionKey";
 import { readClipboardText } from "./clipboardText";
 import { fieldList } from "./fieldNames";
 import i18n from "./i18n";
@@ -15,18 +16,18 @@ import { useApp, useDialogs } from "./store";
  * for a repository connection that changed since it was trusted. False if the user refused.
  */
 export async function ensureEditorAccess(connectionId: string): Promise<boolean> {
-  let access = await call(commands.connectionEditorAccess(connectionId));
+  let access = await call(commands.connectionEditorAccess(connectionKey(connectionId)));
   if (access.kind === "untrusted") {
     const shown = useApp.getState().workspace?.workspace ?? null;
     if (!(await useDialogs.getState().askTrust(shown))) return false;
     useApp.getState().setWorkspace(await call(commands.trustWorkspace(shown ?? "")));
-    access = await call(commands.connectionEditorAccess(connectionId));
+    access = await call(commands.connectionEditorAccess(connectionKey(connectionId)));
   }
   if (access.kind === "changed") {
     const accepted = await useDialogs.getState().askChange({ item: access.item, isNew: access.new, fields: access.fields });
     if (!accepted) return false;
     await call(commands.acceptChange(access.root, access.item, access.new, access.fields));
-    access = await call(commands.connectionEditorAccess(connectionId));
+    access = await call(commands.connectionEditorAccess(connectionKey(connectionId)));
   }
   return access.kind === "ready";
 }
@@ -42,7 +43,7 @@ async function showNew(id: string, notice: string) {
 /** "Duplicate": the copy is made by the core, next to the original, and opened to edit. */
 export async function duplicateConnection(connection: ConnectionItem): Promise<void> {
   if (!(await ensureEditorAccess(connection.id))) return;
-  const copy = await call(commands.duplicateConnection(connection.id));
+  const copy = await call(commands.duplicateConnection(connectionKey(connection.id)));
   const notice = i18n.t(copy.passwordCopied ? "connections:copies.duplicatedWithPassword" : "connections:copies.duplicated", {
     name: connection.name,
     copy: copy.name,
@@ -53,7 +54,7 @@ export async function duplicateConnection(connection: ConnectionItem): Promise<v
 /** Ctrl+C on a connection: its text without secrets goes to the clipboard. */
 export async function copyConnection(connection: ConnectionItem): Promise<string> {
   if (!(await ensureEditorAccess(connection.id))) return "";
-  const copied = await call(commands.copyConnection(connection.id));
+  const copied = await call(commands.copyConnection(connectionKey(connection.id)));
   await navigator.clipboard.writeText(copied.text);
   return copied.leftOut.length > 0
     ? i18n.t("connections:copies.copiedWithout", { name: connection.name, fields: fieldList(copied.leftOut) })

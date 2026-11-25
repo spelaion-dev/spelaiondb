@@ -248,13 +248,28 @@ impl AppState {
     }
 }
 
-/// The id the page sent, read by the configuration crate (ADR-075: the text never holds a
-/// folder). Where things are kept comes from the connection's identity,
-/// `spelaion_config::ConnectionKey`: personal connections share them across folders, and
+/// The connection the page named by its identity (ADR-075, SDB-495), as `config` defines it
+/// now: refused when it is not defined, or when it belongs to another folder than the one its
+/// identity names. The one place a connection's id is read from the page: no command takes a
+/// bare id. Where its things are kept comes from the same identity
+/// (`spelaion_config::ConnectionKey`): personal connections share them across folders, and
 /// repository ones are kept under their canonical root, so identical ids in different projects
 /// never collide.
-fn parse_id(id: &str) -> ConnectionId {
-    ConnectionId::parse(id)
+fn connection_in(config: &Config, key: &ConnectionKeyItem) -> CmdResult<ConnectionId> {
+    let id = ConnectionId::parse(&key.id);
+    if config.connection(&id).is_none() {
+        return Err(format!("unknown connection: {}", key.id));
+    }
+    let folder = spelaion_config::ConnectionKey::of(config, &id)
+        .folder()
+        .map(|folder| folder.display().to_string());
+    if folder != key.folder {
+        return Err(format!(
+            "the connection {} belongs to another folder than the one open",
+            key.id
+        ));
+    }
+    Ok(id)
 }
 
 /// File where the last opened folder is remembered.
@@ -880,6 +895,12 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             .map_err(|e| e.to_string())?;
         items.push(ConnectionItem {
             id: c.id.to_string(),
+            // Its identity's folder (ADR-075): the open repository's canonical root, as
+            // `ConnectionKey` writes it, or none for a personal connection.
+            folder: match c.id.source {
+                Source::User => None,
+                Source::Workspace => Some(workspace.clone()),
+            },
             name: c.name(),
             description: c.file.description.clone(),
             tags: c.file.tags.clone(),
@@ -929,13 +950,18 @@ async fn list_history(
 async fn save_snippet(
     name: String,
     sql: String,
-    connection: Option<String>,
+    connection: Option<ConnectionKeyItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
     let workspace = spelaion_config::repository_scope(&*state.config.read().await);
     let id = state
         .history
-        .save_snippet(workspace, name, sql, connection.unwrap_or_default())
+        .save_snippet(
+            workspace,
+            name,
+            sql,
+            connection.map(|key| key.id).unwrap_or_default(),
+        )
         .await
         .map_err(|e| e.to_string())?;
     u32::try_from(id).map_err(|_| format!("saved query id out of range: {id}"))
@@ -965,20 +991,20 @@ async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> 
 
 #[command]
 async fn set_history_enabled(
-    connection: String,
+    connection: ConnectionKeyItem,
     enabled: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let id = parse_id(&connection);
+    let id = connection_in(&*state.config.read().await, &connection)?;
     let config = state.config.read().await;
     if config.connection(&id).is_none() {
-        return Err(format!("unknown connection: {connection}"));
+        return Err(format!("unknown connection: {}", connection.id));
     }
     let workspace = spelaion_config::ConnectionKey::of(&config, &id).store_scope();
     drop(config);
     state
         .history
-        .set_enabled(workspace, connection, enabled)
+        .set_enabled(workspace, id.to_string(), enabled)
         .await
         .map_err(|e| e.to_string())
 }
@@ -986,10 +1012,10 @@ async fn set_history_enabled(
 /// A connection's explorer filter (ADR-025), personal and per workspace.
 #[command]
 async fn get_explorer_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<ExplorerFilterItem> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     state
         .history
         .explorer_filter(workspace, connection)
@@ -1000,11 +1026,11 @@ async fn get_explorer_filter(
 
 #[command]
 async fn set_explorer_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
     filter: ExplorerFilterItem,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     state
         .history
         .set_explorer_filter(workspace, connection, filter.into())
@@ -1017,13 +1043,13 @@ async fn set_explorer_filter(
 /// new filter.
 #[command]
 async fn filter_explorer_name(
-    connection: String,
+    connection: ConnectionKeyItem,
     kind: FilterKindItem,
     names: Vec<String>,
     action: FilterActionItem,
     state: State<'_, AppState>,
 ) -> CmdResult<ExplorerFilterItem> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     let mut filter = state
         .history
         .explorer_filter(workspace.clone(), connection.clone())
@@ -1071,12 +1097,18 @@ async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkIte
             .map_err(|e| e.to_string())?;
         for bookmark in bookmarks {
             // Kept under this scope only if the connection of that id is still this scope's.
-            if connection_workspace(&state, &bookmark.connection)
-                .await
-                .ok()
-                == Some(workspace.clone())
-            {
-                all.push(BookmarkItem::from(bookmark));
+            let id = ConnectionId::parse(&bookmark.connection);
+            let key = {
+                let config = state.config.read().await;
+                config
+                    .connection(&id)
+                    .map(|_| spelaion_config::ConnectionKey::of(&config, &id))
+            };
+            if let Some(key) = key.filter(|key| key.store_scope() == workspace) {
+                all.push(BookmarkItem::stored(
+                    bookmark,
+                    ConnectionKeyItem::from(&key),
+                ));
             }
         }
     }
@@ -1085,7 +1117,7 @@ async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkIte
 
 #[command]
 async fn add_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> CmdResult<()> {
-    let workspace = connection_workspace(&state, &bookmark.connection).await?;
+    let (workspace, _) = connection_scope(&state, &bookmark.connection).await?;
     state
         .history
         .add_bookmark(workspace, bookmark.into())
@@ -1096,7 +1128,7 @@ async fn add_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> Cmd
 /// Whether the bookmark was there.
 #[command]
 async fn remove_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> CmdResult<bool> {
-    let workspace = connection_workspace(&state, &bookmark.connection).await?;
+    let (workspace, _) = connection_scope(&state, &bookmark.connection).await?;
     state
         .history
         .remove_bookmark(workspace, bookmark.into())
@@ -1104,14 +1136,18 @@ async fn remove_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> 
         .map_err(|e| e.to_string())
 }
 
-/// The scope a connection's personal preferences are kept under (see `history_workspace`).
-async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<String> {
-    let id = parse_id(connection);
+/// Where a connection's personal preferences are kept (its identity's store scope), and its id
+/// as the store keys them, once `connection_in` accepted it.
+async fn connection_scope(
+    state: &AppState,
+    connection: &ConnectionKeyItem,
+) -> CmdResult<(String, String)> {
     let config = state.config.read().await;
-    if config.connection(&id).is_none() {
-        return Err(format!("unknown connection: {connection}"));
-    }
-    Ok(spelaion_config::ConnectionKey::of(&config, &id).store_scope())
+    let id = connection_in(&config, connection)?;
+    Ok((
+        spelaion_config::ConnectionKey::of(&config, &id).store_scope(),
+        id.to_string(),
+    ))
 }
 
 /// Whether there is a system keychain. Without one (Linux with no Secret Service running) the
@@ -1163,7 +1199,7 @@ async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkPr
 async fn test_connection(
     draft: ConnectionDraftItem,
     password: Option<String>,
-    editing: Option<String>,
+    editing: Option<ConnectionKeyItem>,
     network_only: bool,
     job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
@@ -1178,7 +1214,7 @@ async fn test_connection(
         let config = state.config.read().await;
         let resolver = Resolver::new(&config, &trust, &SystemBackend);
         let resolved = match &editing {
-            Some(id) => resolver.resolve_edit(&parse_id(id), &draft),
+            Some(key) => resolver.resolve_edit(&connection_in(&config, key)?, &draft),
             None => resolver.resolve_draft(&draft),
         };
         match resolved {
@@ -1290,10 +1326,10 @@ fn check_setup_before_saving(
 /// Checks whether an existing connection can be opened in the editor.
 #[command]
 async fn connection_editor_access(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<EditorAccessOutcome> {
-    let id = parse_id(&connection);
+    let id = connection_in(&*state.config.read().await, &connection)?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
     match Resolver::new(&config, &trust, &SystemBackend).check_editor_access(id.source, Some(&id)) {
@@ -1322,18 +1358,18 @@ async fn connection_editor_access(
 /// The form of an existing connection, to edit it.
 #[command]
 async fn connection_draft(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<EditedConnectionItem> {
     let config = state.config.read().await;
-    let id = parse_id(&connection);
+    let id = connection_in(&config, &connection)?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     Resolver::new(&config, &trust, &SystemBackend)
         .check_editor_access(id.source, Some(&id))
         .map_err(|e| e.to_string())?;
     let entry = config
         .connection(&id)
-        .ok_or_else(|| format!("connection {connection} does not exist"))?;
+        .ok_or_else(|| format!("connection {} does not exist", connection.id))?;
     let revision = spelaion_config::connection_revision(entry).map_err(|e| e.to_string())?;
     Ok(EditedConnectionItem {
         draft: ConnectionDraft::from_entry(entry).into(),
@@ -1350,7 +1386,7 @@ async fn connection_draft(
 /// stored one) and reloads the configuration.
 #[command]
 async fn update_connection(
-    connection: String,
+    connection: ConnectionKeyItem,
     draft: ConnectionDraftItem,
     password: Option<String>,
     revision: String,
@@ -1360,12 +1396,12 @@ async fn update_connection(
     let password = password.map(Secret::new);
     {
         let config = state.config.read().await;
-        let id = parse_id(&connection);
+        let id = connection_in(&config, &connection)?;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
         check_setup_before_saving(&state, &config, &file)?;
         let written = spelaion_config::update_connection_at_revision(
             &config,
-            &parse_id(&connection),
+            &id,
             &draft,
             password.as_ref(),
             &SystemBackend,
@@ -1399,18 +1435,14 @@ fn change_connection_engine(
 /// copy's own keychain entry by the core; a repository connection must be as trusted.
 #[command]
 async fn duplicate_connection(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<DuplicatedItem> {
     let duplicated = {
         let config = state.config.read().await;
+        let id = connection_in(&config, &connection)?;
         state.change_trust(|trust| {
-            spelaion_config::duplicate_connection(
-                &config,
-                trust,
-                &parse_id(&connection),
-                &SystemBackend,
-            )
+            spelaion_config::duplicate_connection(&config, trust, &id, &SystemBackend)
         })?
     };
     state.reload().await;
@@ -1427,11 +1459,11 @@ async fn duplicate_connection(
 /// tabs follow. A connection in use is not moved: the UI disconnects it first.
 #[command]
 async fn move_connection(
-    connection: String,
+    connection: ConnectionKeyItem,
     folder: String,
     state: State<'_, AppState>,
 ) -> CmdResult<MovedItem> {
-    let id = parse_id(&connection);
+    let id = connection_in(&*state.config.read().await, &connection)?;
     let in_use = state
         .sessions
         .lock()
@@ -1474,7 +1506,7 @@ async fn move_connection(
     } else {
         state
             .history
-            .move_connection(workspace, connection, to.clone())
+            .move_connection(workspace, id.to_string(), to.clone())
             .await
     };
     state.reload().await;
@@ -1490,18 +1522,14 @@ async fn move_connection(
 /// The text Ctrl+C puts on the clipboard for a connection: without secrets or programs.
 #[command]
 async fn copy_connection(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<ClipboardConnectionItem> {
     let config = state.config.read().await;
+    let id = connection_in(&config, &connection)?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let copied = spelaion_config::connection_clipboard_text(
-        &config,
-        &trust,
-        &parse_id(&connection),
-        &SystemBackend,
-    )
-    .map_err(|e| e.to_string())?;
+    let copied = spelaion_config::connection_clipboard_text(&config, &trust, &id, &SystemBackend)
+        .map_err(|e| e.to_string())?;
     Ok(ClipboardConnectionItem {
         text: copied.text,
         left_out: copied.left_out,
@@ -1629,10 +1657,14 @@ async fn suggest_connection_name(
 
 /// Deletes a connection file and its stored password. The UI closes its sessions first.
 #[command]
-async fn delete_connection(connection: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn delete_connection(
+    connection: ConnectionKeyItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     {
         let config = state.config.read().await;
-        spelaion_config::delete_connection(&config, &parse_id(&connection), &SystemBackend)
+        let id = connection_in(&config, &connection)?;
+        spelaion_config::delete_connection(&config, &id, &SystemBackend)
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
@@ -1767,7 +1799,10 @@ async fn check_kube_editor(
             editing,
             profile: Some(profile),
         } => {
-            let id = editing.as_deref().map(parse_id);
+            let id = editing
+                .as_ref()
+                .map(|key| connection_in(&config, key))
+                .transpose()?;
             let resolver = spelaion_config::Resolver::new(&config, &trust, &SystemBackend);
             resolver
                 .check_editor_access(source_of(personal), id.as_ref())
@@ -1794,7 +1829,10 @@ async fn check_kube_editor(
             editing,
             profile: None,
         } => {
-            let id = editing.as_deref().map(parse_id);
+            let id = editing
+                .as_ref()
+                .map(|key| connection_in(&config, key))
+                .transpose()?;
             spelaion_core::kube::editor_spec(
                 &config,
                 &trust,
@@ -1952,7 +1990,7 @@ async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>)
 #[command]
 async fn connect(
     session: String,
-    connection: String,
+    connection: ConnectionKeyItem,
     password: Option<String>,
     remember: bool,
     editor: bool,
@@ -1963,7 +2001,7 @@ async fn connect(
     let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
     };
-    let id = parse_id(&connection);
+    let id = connection_in(&*state.config.read().await, &connection)?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let (resolved, history_workspace, definition) = {
         let config = state.config.read().await;
@@ -3170,10 +3208,10 @@ async fn substitute_variables(
 /// A connection's variables, by name (SDB-383): local values, kept in the local store.
 #[command]
 async fn connection_variables(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<VariableItem>> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     Ok(state
         .history
         .connection_variables(workspace, connection)
@@ -3188,12 +3226,12 @@ async fn connection_variables(
 /// a value that cannot be one.
 #[command]
 async fn set_connection_variable(
-    connection: String,
+    connection: ConnectionKeyItem,
     name: String,
     value: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     state
         .history
         .set_connection_variable(workspace, connection, name, value)
@@ -4503,22 +4541,22 @@ async fn column_top_values(
 /// with (the connection's engine: the tab may not be connected yet).
 async fn filtered_table(
     state: &AppState,
-    connection: String,
+    connection: ConnectionKeyItem,
     schema: String,
     name: String,
 ) -> CmdResult<(spelaion_core::FilteredTable, Arc<dyn Dialect>)> {
-    let id = parse_id(&connection);
+    let id = connection_in(&*state.config.read().await, &connection)?;
     let config = state.config.read().await;
     let entry = config
         .connection(&id)
-        .ok_or_else(|| format!("unknown connection: {connection}"))?;
+        .ok_or_else(|| format!("unknown connection: {}", connection.id))?;
     let dialect =
         spelaion_core::dialect_of(entry.file.engine).ok_or("no driver for this engine")?;
     let workspace = spelaion_config::ConnectionKey::of(&config, &id).store_scope();
     Ok((
         spelaion_core::FilteredTable {
             workspace,
-            connection,
+            connection: id.to_string(),
             schema,
             name,
         },
@@ -4532,7 +4570,7 @@ async fn filtered_table(
 /// filter.
 #[command]
 async fn table_filters(
-    connection: String,
+    connection: ConnectionKeyItem,
     schema: String,
     name: String,
     state: State<'_, AppState>,
@@ -4549,7 +4587,7 @@ async fn table_filters(
 /// Remembers a filter the tab just used, checked by the core first.
 #[command]
 async fn record_table_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
     schema: String,
     name: String,
     filter: String,
@@ -4567,7 +4605,7 @@ async fn record_table_filter(
 /// Takes one filter out of a table's history.
 #[command]
 async fn forget_table_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
     schema: String,
     name: String,
     filter: String,
@@ -4585,7 +4623,7 @@ async fn forget_table_filter(
 /// Saves the filter a table's tab opens with (checked by the core), or drops it (`None`).
 #[command]
 async fn set_table_default_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
     schema: String,
     name: String,
     filter: Option<String>,
@@ -7141,4 +7179,66 @@ pub fn run() {
             tauri::async_runtime::block_on(tunnels.close_all());
         }
     });
+}
+
+#[cfg(test)]
+mod connection_identity_tests {
+    use super::*;
+
+    /// A repository with a connection `orders`, and a personal `local` beside it.
+    fn folders(name: &str) -> (PathBuf, PathBuf) {
+        let base =
+            std::env::temp_dir().join(format!("spelaion-identity-{name}-{}", std::process::id()));
+        let repo = base.join("repo");
+        let user = base.join("user");
+        for (dir, file) in [
+            (repo.join(".spelaion/connections"), "orders.toml"),
+            (user.join("connections"), "local.toml"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(file),
+                "schema_version = 1\nname = \"N\"\nengine = \"sqlite\"\ndatabase = 'n.db'\n",
+            )
+            .unwrap();
+        }
+        (repo, user)
+    }
+
+    fn key(folder: Option<&str>, id: &str) -> ConnectionKeyItem {
+        ConnectionKeyItem {
+            folder: folder.map(str::to_owned),
+            id: id.to_owned(),
+        }
+    }
+
+    /// ADR-075 (SDB-495): a command takes a connection by its folder and its id, and a pair
+    /// that names another folder, or no connection, is refused.
+    #[test]
+    fn a_command_takes_a_connection_by_its_folder_and_its_id() {
+        let (repo, user) = folders("commands");
+        let config = load(Some(&repo), &user);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        let root = std::fs::canonicalize(&repo).unwrap().display().to_string();
+        let orders = connection_in(&config, &key(Some(&root), "orders")).unwrap();
+        assert_eq!(orders.to_string(), "orders");
+        let local = connection_in(&config, &key(None, "~/local")).unwrap();
+        assert_eq!(local.to_string(), "~/local");
+        // The same id in another folder, a repository connection without its folder, and a
+        // personal one given a folder are not this connection.
+        for wrong in [
+            key(Some("/elsewhere/service-b"), "orders"),
+            key(None, "orders"),
+            key(Some(&root), "~/local"),
+        ] {
+            let error = connection_in(&config, &wrong).unwrap_err();
+            assert!(error.contains("another folder"), "{error}");
+        }
+        assert!(
+            connection_in(&config, &key(Some(&root), "missing"))
+                .unwrap_err()
+                .contains("unknown connection")
+        );
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
 }

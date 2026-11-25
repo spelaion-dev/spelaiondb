@@ -3,6 +3,7 @@
 // same for personal and repository connections. The connection form changes it on Save.
 
 import { call, commands } from "./api";
+import { connectionKey } from "./connectionKey";
 import i18n from "./i18n";
 import { useApp } from "./store";
 
@@ -17,7 +18,7 @@ export async function saveHistoryPreference(connectionId: string, enabled: boole
   }
   app.setHistorySaving(connectionId, true);
   try {
-    await call(commands.setHistoryEnabled(connectionId, enabled));
+    await call(commands.setHistoryEnabled(connectionKey(connectionId), enabled));
     const current = useApp.getState();
     current.setConnections(current.connections.map((c) => (c.id === connectionId ? { ...c, historyEnabled: enabled } : c)));
   } finally {

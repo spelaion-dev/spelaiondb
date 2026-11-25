@@ -205,6 +205,14 @@
   side, `ownerClient` on the other); a new callback of `Results` is a new `ResultsRequest`
   kind, handled in `EditorTab`'s bridge, whose `switch` ends in a `never` check. Only the main
   window restores and saves tabs, changes folder and checks for updates.
+- A connection crosses to and from the page as its identity (ADR-075, SDB-495): every command
+  that takes a connection takes a `ConnectionKeyItem` (its folder and its id), never the id's
+  text, and reads it only through `connection_in` in `lib.rs`, which refuses a pair whose
+  folder is not the connection's (or that names no connection). `ConnectionItem` carries the
+  folder; bookmarks carry the identity. The page builds the pair with `connectionKey(id)`
+  (`src/connectionKey.ts`) and compares two with `sameConnection`, never `===` on objects.
+  Its own keys (rows, explorer sessions, caches) are still the bare id while one folder is
+  open.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import { explorerSession } from "../windowContext";
+import { connectionKey } from "../connectionKey";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem } from "../api";
 import { useApp } from "../store";
@@ -34,7 +35,7 @@ export function DeleteConnection({ connection }: { connection: ConnectionItem })
         ),
       );
       for (const tab of tabs) app.updateTab(tab.id, { connectionId: null, connectionState: DISCONNECTED });
-      await call(commands.deleteConnection(connection.id));
+      await call(commands.deleteConnection(connectionKey(connection.id)));
       await refreshConnections();
       close();
     } catch (e) {

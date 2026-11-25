@@ -52,11 +52,31 @@ pub struct TableRefItem {
     pub name: String,
 }
 
+/// A connection's identity as the page holds it and sends it back (ADR-075, SDB-495): its
+/// folder (the repository's canonical root as the core wrote it, none for a personal
+/// connection) and its id's text. The core checks both against what is open before using it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionKeyItem {
+    pub folder: Option<String>,
+    pub id: String,
+}
+
+impl From<&spelaion_config::ConnectionKey> for ConnectionKeyItem {
+    fn from(key: &spelaion_config::ConnectionKey) -> Self {
+        Self {
+            folder: key.folder().map(|folder| folder.display().to_string()),
+            id: key.id().to_string(),
+        }
+    }
+}
+
 /// An object bookmarked in the explorer (ADR-026).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct BookmarkItem {
-    pub connection: String,
+    /// The connection's identity (ADR-075).
+    pub connection: ConnectionKeyItem,
     /// The schema the object is in, or the schema itself (with an empty `name`).
     pub schema: String,
     pub name: String,
@@ -154,10 +174,11 @@ impl From<BookmarkKindItem> for spelaion_core::BookmarkKind {
     }
 }
 
-impl From<spelaion_core::Bookmark> for BookmarkItem {
-    fn from(b: spelaion_core::Bookmark) -> Self {
+impl BookmarkItem {
+    /// A stored bookmark, on the connection whose identity is `connection` (ADR-075).
+    pub fn stored(b: spelaion_core::Bookmark, connection: ConnectionKeyItem) -> Self {
         let spelaion_core::Bookmark {
-            connection,
+            connection: _,
             schema,
             name,
             kind,
@@ -173,6 +194,7 @@ impl From<spelaion_core::Bookmark> for BookmarkItem {
     }
 }
 
+/// What the store keeps: the connection's id, under its identity's scope.
 impl From<BookmarkItem> for spelaion_core::Bookmark {
     fn from(b: BookmarkItem) -> Self {
         let BookmarkItem {
@@ -183,7 +205,7 @@ impl From<BookmarkItem> for spelaion_core::Bookmark {
             detail,
         } = b;
         Self {
-            connection,
+            connection: connection.id,
             schema,
             name,
             kind: kind.into(),
@@ -1600,6 +1622,9 @@ impl From<&spelaion_config::ConnectionType> for ConnectionTypeItem {
 pub struct ConnectionItem {
     /// `prod/orders`, or `~/local` if it is personal.
     pub id: String,
+    /// The folder of its identity (ADR-075): the repository's canonical root, or none for a
+    /// personal connection. With `id`, what every command that takes a connection is given.
+    pub folder: Option<String>,
     pub name: String,
     /// What the database is for, in the user's words; may span lines.
     pub description: Option<String>,
@@ -4184,11 +4209,11 @@ impl From<KubernetesDraftItem> for spelaion_config::KubernetesDraft {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum KubeEditor {
-    /// The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
-    /// the Kubernetes network profile it uses, whose settings come first.
+    /// The connection form's Kubernetes tab; `editing` is the connection's identity, and
+    /// `profile` the Kubernetes network profile it uses, whose settings come first.
     Connection {
         personal: bool,
-        editing: Option<String>,
+        editing: Option<ConnectionKeyItem>,
         profile: Option<String>,
     },
     /// The network profile editor; `editing` is the profile's name.

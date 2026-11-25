@@ -4,6 +4,7 @@
 // before it keeps it and again when it reads it back, and the page checks it once more.
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { connectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { TableFiltersItem } from "../bindings";
@@ -62,7 +63,7 @@ export function TableFilterBox(props: {
 
   useEffect(() => {
     if (!connectionId) return;
-    void ask(() => call(commands.tableFilters(connectionId, schema, name))).catch(() => undefined);
+    void ask(() => call(commands.tableFilters(connectionKey(connectionId), schema, name))).catch(() => undefined);
     // `ask` only reads refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, schema, name]);
@@ -74,7 +75,7 @@ export function TableFilterBox(props: {
     const before = wasLoaded.current;
     wasLoaded.current = props.loaded;
     if (before || !props.loaded || !connectionId || !applied.trim()) return;
-    void ask(() => call(commands.recordTableFilter(connectionId, schema, name, applied))).catch(() => undefined);
+    void ask(() => call(commands.recordTableFilter(connectionKey(connectionId), schema, name, applied))).catch(() => undefined);
     // `ask` only reads refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.loaded, connectionId, schema, name, applied]);
@@ -148,7 +149,7 @@ export function TableFilterBox(props: {
   async function forget(filter: string) {
     if (!connectionId) return;
     try {
-      await ask(() => call(commands.forgetTableFilter(connectionId, schema, name, filter)));
+      await ask(() => call(commands.forgetTableFilter(connectionKey(connectionId), schema, name, filter)));
     } catch (e) {
       failed(e);
     }
@@ -159,7 +160,7 @@ export function TableFilterBox(props: {
     if (!connectionId) return;
     setError(null);
     try {
-      await ask(() => call(commands.setTableDefaultFilter(connectionId, schema, name, filter)));
+      await ask(() => call(commands.setTableDefaultFilter(connectionKey(connectionId), schema, name, filter)));
     } catch (e) {
       failed(e);
     }
