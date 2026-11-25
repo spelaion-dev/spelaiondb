@@ -398,6 +398,60 @@ async fn encrypted_keys_ask_for_the_passphrase() {
     );
 }
 
+/// PuTTY keys (`.ppk`, SDB-528) as puttygen writes them, RSA and Ed25519, versions 2 and 3
+/// (Argon2id), with Windows line endings too: each logs in to the bastion, and one with a
+/// passphrase asks for it as an OpenSSH key does, again after a wrong one.
+#[tokio::test]
+async fn putty_keys_log_in_and_ask_for_their_passphrase() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("putty");
+    for name in [
+        "ppk_rsa_v2.ppk",
+        "ppk_rsa_v3.ppk",
+        "ppk_ed25519_v2.ppk",
+        "ppk_ed25519_v3.ppk",
+        "ppk_rsa_v2_pass.ppk",
+        "ppk_rsa_v3_pass.ppk",
+        "ppk_ed25519_v2_pass.ppk",
+        "ppk_ed25519_v3_pass.ppk",
+        "ppk_rsa_v2_pass_crlf.ppk",
+        "ppk_ed25519_v3_pass_crlf.ppk",
+    ] {
+        let encrypted = name.contains("_pass");
+        let mut first = hop(&host, port, "id_ed25519");
+        first.identity_file = Some(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/ppk")
+                .join(name),
+        );
+        let spec = TunnelSpec {
+            hops: vec![first],
+            ..Default::default()
+        };
+        let ui = TestUi::answering(if encrypted {
+            vec![Some("wrong"), Some("spelaion-test")]
+        } else {
+            Vec::new()
+        });
+        let tunnel = Tunnel::connect(&spec, &known.known(), ui.clone())
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let questions = ui.questions.lock().unwrap().clone();
+        let retries: Vec<bool> = questions
+            .iter()
+            .map(|q| match q {
+                SecretRequest::KeyPassphrase { retry, .. } => *retry,
+                other => panic!("{name}: only the key's passphrase is asked: {other:?}"),
+            })
+            .collect();
+        let expected: &[bool] = if encrypted { &[false, true] } else { &[] };
+        assert_eq!(retries, expected, "{name}");
+        tunnel.close().await;
+    }
+}
+
 #[tokio::test]
 async fn auth_failures_say_which_hop_and_what_was_tried() {
     let Some((host, port)) = bastion() else {
