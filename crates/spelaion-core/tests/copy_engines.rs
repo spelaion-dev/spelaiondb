@@ -16,9 +16,7 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
-use spelaion_core::table_copy::{
-    Blocked, CopyError, CopyHow, CopyRequest, Loss, plan_copy, run_copy,
-};
+use spelaion_core::table_copy::{CopyHow, CopyRequest, Loss, plan_copy, run_copy};
 use spelaion_core::{CoreEvent, IfExists, JobCancel, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
 
@@ -528,7 +526,7 @@ async fn a_table_of_every_common_type_copies_between_every_pair_of_engines() {
                 &format!("drop table if exists {target_table}"),
             )
             .await;
-            let mut request = CopyRequest {
+            let request = CopyRequest {
                 source_schema: source.schema.into(),
                 source_table: source_table.clone(),
                 target_schema: target.schema.into(),
@@ -542,29 +540,16 @@ async fn a_table_of_every_common_type_copies_between_every_pair_of_engines() {
                 commit_every: 2,
             };
             let pair = format!("{} → {}", source.label, target.label);
-            let mut plan = plan_copy(&source.session, &target.session, &request, &NONE, false)
+            let plan = plan_copy(&source.session, &target.session, &request, &NONE, false)
                 .await
                 .unwrap_or_else(|e| panic!("{pair}: {e}"));
-            // The binary column goes as bytes to a connection that loads them, and as hex text
-            // to PostgreSQL and DuckDB, which read it as bytes; elsewhere it is refused until it
-            // is left out (ADR-069's point 8). Until every plugin pinned loads bytes (SDB-464),
-            // such a pair goes without it.
-            let loads_bytes = target.session.connection().capabilities().insert_bytes
-                || matches!(target.session.dialect().name(), "postgres" | "duckdb");
-            let mut with_bytes = has_bytes(source);
-            if with_bytes && !loads_bytes {
-                assert_eq!(
-                    plan.blocked,
-                    [(BYTES.to_string(), Blocked::Binary)],
-                    "{pair}"
-                );
-                eprintln!("{pair}: without the binary column (the target loads no bytes)");
-                request.skip = vec![BYTES.into()];
-                with_bytes = false;
-                plan = plan_copy(&source.session, &target.session, &request, &NONE, false)
-                    .await
-                    .unwrap_or_else(|e| panic!("{pair}: {e}"));
-            }
+            // Every target's connection loads bytes (SDB-464): the binary column goes as its
+            // bytes on every pair, and is never refused (ADR-069's point 8).
+            assert!(
+                target.session.connection().capabilities().insert_bytes,
+                "{pair}: the target's connection loads no bytes"
+            );
+            let with_bytes = has_bytes(source);
             assert!(plan.blocked.is_empty(), "{pair}: {:?}", plan.blocked);
             // A zone the target cannot keep is said.
             let tz = plan.columns.iter().find(|c| c.name == "tz").unwrap();
@@ -617,10 +602,10 @@ async fn a_table_of_every_common_type_copies_between_every_pair_of_engines() {
     }
 }
 
-/// Binary goes where the target's connection loads bytes (SDB-464) or reads hex text as bytes,
-/// and is refused, saying so, elsewhere (ADR-069's point 8); a left-out column lets the rest go.
+/// Binary goes to every target as its bytes, every target's connection loading them (SDB-464,
+/// ADR-069's point 8); a left-out column lets the rest go.
 #[tokio::test(flavor = "multi_thread")]
-async fn binary_copies_where_the_target_reads_it_and_is_refused_elsewhere() {
+async fn binary_copies_to_every_target_as_its_bytes() {
     let _turn = crate::serial::file_turn(module_path!());
     let sources = sides("binary-source").await;
     let sides = sides_again("binary-target").await;
@@ -664,11 +649,13 @@ async fn binary_copies_where_the_target_reads_it_and_is_refused_elsewhere() {
             types: Vec::new(),
             commit_every: 0,
         };
-        // As bytes where the connection loads them (SDB-464), as hex text where the engine reads
-        // it as bytes.
-        let reads_bytes = target.session.connection().capabilities().insert_bytes
-            || matches!(target.session.dialect().name(), "postgres" | "duckdb");
-        let outcome = run_copy(
+        // Every target's connection loads bytes (SDB-464).
+        assert!(
+            target.session.connection().capabilities().insert_bytes,
+            "{}: the target's connection loads no bytes",
+            target.label
+        );
+        run_copy(
             &duck.session,
             &target.session,
             &request,
@@ -678,41 +665,32 @@ async fn binary_copies_where_the_target_reads_it_and_is_refused_elsewhere() {
             &JobCancel::new(),
             &|_| {},
         )
-        .await;
-        if reads_bytes {
-            outcome.unwrap_or_else(|e| panic!("{}: {e}", target.label));
-            let hex = match target.session.dialect().name() {
-                "postgres" => {
-                    format!("select encode(payload, 'hex') from {target_table} where id = 1")
-                }
-                "sqlserver" => format!(
-                    "select convert(varchar(max), payload, 2) from {target_table} where id = 1"
-                ),
-                _ => format!("select hex(payload) from {target_table} where id = 1"),
-            };
-            let read = rows_one(&target.session, &hex).await;
-            assert_eq!(read.to_ascii_lowercase(), "007fff", "{}", target.label);
-        } else {
-            assert!(
-                matches!(&outcome, Err(CopyError::Blocked(columns)) if columns == "payload"),
-                "{}: {outcome:?}",
-                target.label
-            );
-            // Nothing was created.
-            request.skip = vec!["payload".into()];
-            run_copy(
-                &duck.session,
-                &target.session,
-                &request,
-                &NONE,
-                false,
-                false,
-                &JobCancel::new(),
-                &|_| {},
-            )
-            .await
-            .unwrap_or_else(|e| panic!("{} without the column: {e}", target.label));
-        }
+        .await
+        .unwrap_or_else(|e| panic!("{}: {e}", target.label));
+        let hex = match target.session.dialect().name() {
+            "postgres" => format!("select encode(payload, 'hex') from {target_table} where id = 1"),
+            "sqlserver" => {
+                format!("select convert(varchar(max), payload, 2) from {target_table} where id = 1")
+            }
+            _ => format!("select hex(payload) from {target_table} where id = 1"),
+        };
+        let read = rows_one(&target.session, &hex).await;
+        assert_eq!(read.to_ascii_lowercase(), "007fff", "{}", target.label);
+        // Left out, the rest still goes.
+        run(&target.session, &format!("drop table {target_table}")).await;
+        request.skip = vec!["payload".into()];
+        run_copy(
+            &duck.session,
+            &target.session,
+            &request,
+            &NONE,
+            false,
+            false,
+            &JobCancel::new(),
+            &|_| {},
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{} without the column: {e}", target.label));
         run(
             &target.session,
             &format!("drop table if exists {target_table}"),

@@ -1,6 +1,6 @@
 # ADR-069: Copying tables between connections: an import whose source is a read
 
-- **Status:** Accepted (implemented; binary as bytes once every SQL plugin pinned speaks
+- **Status:** Accepted (implemented; binary as bytes since every SQL plugin pinned speaks
   protocol 1.3, SDB-464)
 - **Date:** 2026-11-24
 - **Builds on:** ADR-020 (read barriers), ADR-029 (connection types), ADR-031 (transactions),
