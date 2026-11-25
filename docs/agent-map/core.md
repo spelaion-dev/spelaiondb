@@ -231,6 +231,15 @@
   `processes.rs`'s `control_process`), `server_settings.rs` the settings, variables and status,
   `table_stats.rs` a table's sizes and row estimate from the catalog; `tests/server_observation.rs`
   makes one session wait for another's row lock on every engine and checks the pair.
+  `dashboard.rs` (SDB-192) is the monitor's live dashboard: a sampler job the core owns
+  (ADR-060), one `DashboardState` with its `DashboardPhase` (sampling, paused, failed, stopped)
+  published on a watch and moved only by its task. It reads one statement per sample through
+  `observe::read` (PostgreSQL's `pg_stat_activity`, `pg_stat_database` and WAL position, MySQL's
+  and MariaDB's `SHOW GLOBAL STATUS`, SQL Server's `sys.dm_os_performance_counters`), turns
+  counters into rates, keeps the last 360 samples in memory only, reads nothing while hidden
+  (`set_visible`), holds its session weakly and stops when its handle is dropped. The desktop's
+  `dashboard.rs` keeps one sampler per monitor session and only forwards its state;
+  `tests/server_dashboard.rs` samples around known work on every engine.
   `geometry.rs` (ADR-045) reads geometry values into GeoJSON for the cell panel's map: PostGIS's
   EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs,
   DuckDB's WKB and SQL Server's CLR serialization (MS-SSCLRT, SDB-213), as untrusted bytes

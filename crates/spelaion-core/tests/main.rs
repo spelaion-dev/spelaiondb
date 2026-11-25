@@ -78,6 +78,7 @@ mod result_jumps;
 mod run_from_cursor;
 mod schema_compare;
 mod script_runs;
+mod server_dashboard;
 mod server_messages;
 mod server_observation;
 mod session_duckdb;

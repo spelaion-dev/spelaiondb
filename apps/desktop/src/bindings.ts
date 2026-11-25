@@ -1054,6 +1054,17 @@ export const commands = {
 	/**  Every setting, variable, status counter or property the server exposes. */
 	serverSettings: (session: string) => typedError<ServerSettingItem_Serialize[], string>(__TAURI_INVOKE("server_settings", { session })),
 	/**
+	 *  Shows the dashboard of the monitor session `session`: its sampler, shown, with the samples
+	 *  it kept while hidden, or a new one sampling every few seconds
+	 *  (`spelaion_core::DASHBOARD_INTERVAL`) when it has none or the one it had stopped. Its state
+	 *  goes to `on_state` (and no longer to an earlier channel) each time it changes.
+	 */
+	startDashboard: (session: string, onState: Channel<DashboardStateItem_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("start_dashboard", { session, onState })),
+	/**  Whether the dashboard of `session` is shown: hidden, its sampler reads nothing. */
+	setDashboardVisible: (session: string, visible: boolean) => typedError<null, string>(__TAURI_INVOKE("set_dashboard_visible", { session, visible })),
+	/**  Stops the sampler of `session` and forgets its samples. */
+	stopDashboard: (session: string) => typedError<null, string>(__TAURI_INVOKE("stop_dashboard", { session })),
+	/**
 	 *  A table's size on disk, index size and row estimate, from the catalog's statistics;
 	 *  `None` when the engine keeps none or the object is not a table.
 	 */
@@ -2431,6 +2442,74 @@ export type CopySpecialItem = {
 
 /**  What "Create" in the explorer can start (see `spelaion_core::CreateKind`). */
 export type CreateKindItem = "table" | "view" | "materializedView" | "sequence" | "schema";
+
+/**  Where a sampler stands (`spelaion_core::DashboardPhase`). */
+export type DashboardPhaseItem = 
+/**  Shown: it reads every interval. */
+{ kind: "sampling" } | 
+/**  Hidden: it reads nothing. */
+{ kind: "paused" } | 
+/**  A read failed: it stopped, with the server's words. */
+{ kind: "failed"; message: string } | 
+/**  It stopped. */
+{ kind: "stopped" };
+
+/**
+ *  One sample (`spelaion_core::DashboardSample`): gauges at that moment, rates since the one
+ *  before; `null` where the server gives nothing or there is nothing to compare with.
+ */
+export type DashboardSampleItem = DashboardSampleItem_Serialize | DashboardSampleItem_Deserialize;
+
+/**
+ *  One sample (`spelaion_core::DashboardSample`): gauges at that moment, rates since the one
+ *  before; `null` where the server gives nothing or there is nothing to compare with.
+ */
+export type DashboardSampleItem_Deserialize = {
+	/**  Milliseconds since the sampler started (49 days fit). */
+	atMs: number,
+	/**  The first sample after a start or a pause: the line breaks before it. */
+	gap: boolean,
+	sessions?: number | null,
+	active?: number | null,
+	waiting?: number | null,
+	transactionsPerSecond?: number | null,
+	readsPerSecond?: number | null,
+	logBytesPerSecond?: number | null,
+};
+
+/**
+ *  One sample (`spelaion_core::DashboardSample`): gauges at that moment, rates since the one
+ *  before; `null` where the server gives nothing or there is nothing to compare with.
+ */
+export type DashboardSampleItem_Serialize = {
+	/**  Milliseconds since the sampler started (49 days fit). */
+	atMs: number,
+	/**  The first sample after a start or a pause: the line breaks before it. */
+	gap: boolean,
+	sessions: number | null,
+	active: number | null,
+	waiting: number | null,
+	transactionsPerSecond: number | null,
+	readsPerSecond: number | null,
+	logBytesPerSecond: number | null,
+};
+
+/**  The sampler's state as the page draws it, sent whole each time it changes. */
+export type DashboardStateItem = DashboardStateItem_Serialize | DashboardStateItem_Deserialize;
+
+/**  The sampler's state as the page draws it, sent whole each time it changes. */
+export type DashboardStateItem_Deserialize = {
+	phase: DashboardPhaseItem,
+	intervalMs: number,
+	samples: DashboardSampleItem_Deserialize[],
+};
+
+/**  The sampler's state as the page draws it, sent whole each time it changes. */
+export type DashboardStateItem_Serialize = {
+	phase: DashboardPhaseItem,
+	intervalMs: number,
+	samples: DashboardSampleItem_Serialize[],
+};
 
 /**  What a data search tells while it runs. */
 export type DataSearchEventItem = DataSearchEventItem_Serialize | DataSearchEventItem_Deserialize;

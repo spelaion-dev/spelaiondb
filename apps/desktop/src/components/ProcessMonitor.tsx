@@ -9,11 +9,12 @@ import { CONNECTING, DISCONNECTED, connectedWith, isConnected, isConnecting } fr
 import { EngineIcon } from "./EngineIcon";
 import { Icon } from "./Icons";
 import { LockView, SettingsView, type ProcessActions } from "./ServerObservation";
+import { ServerDashboard } from "./ServerDashboard";
 import { HideSidePanelButton } from "./SidePanelButtons";
 
-/** The monitor's views: its processes, their locks, and the server's settings. */
-type MonitorView = "processes" | "locks" | "settings";
-const VIEWS: MonitorView[] = ["processes", "locks", "settings"];
+/** The monitor's views: its processes, their locks, the server's activity over time and its settings. */
+type MonitorView = "processes" | "locks" | "dashboard" | "settings";
+const VIEWS: MonitorView[] = ["processes", "locks", "dashboard", "settings"];
 
 function supported(engine: string) { return ["mysql", "mariadb", "postgres", "sqlserver"].includes(engine); }
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
@@ -54,6 +55,8 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
   const [database, setDatabase] = useState("");
   const [updated, setUpdated] = useState<Date | null>(null);
   const session = useRef<string | null>(null);
+  /** The monitor session once it is open, for the dashboard, whose sampler reads on it. */
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const inFlight = useRef(false);
   const sequence = useRef(0);
   const translate = useRef(t);
@@ -71,6 +74,12 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     // Each view reads only what it shows; the lock view also needs the processes, for the
     // sessions' details and for the same checked actions as the process table.
     const current = viewRef.current;
+    // The dashboard's sampler is the core's: nothing to read from here.
+    if (current === "dashboard") {
+      inFlight.current = false;
+      setBusy(false);
+      return;
+    }
     try {
       if (current === "settings") {
         const next = await call(commands.serverSettings(id));
@@ -124,6 +133,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
           return;
         }
         session.current = id;
+        setSessionId(id);
         await refresh();
       } catch (e) {
         if (!disposed) { setBusy(false); setError(message(e)); }
@@ -133,6 +143,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     return () => {
       disposed = true;
       if (session.current === id) session.current = null;
+      setSessionId((current) => current === id ? null : current);
       if (opened) void call(commands.disconnect(id)).catch(() => undefined);
     };
   }, [attempt, connection.id, refresh]);
@@ -231,13 +242,13 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         <div className="segmented" role="radiogroup" aria-label={t("processMonitor.view")}>
           {VIEWS.map((name) => <button key={name} type="button" role="radio" aria-checked={view === name} className={view === name ? "active" : ""} onClick={() => setView(name)}>{t(`processMonitor.views.${name}`)}</button>)}
         </div>
-        <label className="process-refresh-label">{t("processMonitor.autoRefresh")}
+        {view !== "dashboard" && <><label className="process-refresh-label">{t("processMonitor.autoRefresh")}
           <select aria-label={t("processMonitor.autoRefresh")} value={intervalSeconds} onChange={(e) => setIntervalSeconds(Number(e.target.value))}>
             <option value={0}>{t("processMonitor.off")}</option><option value={5}>5 s</option><option value={10}>10 s</option><option value={30}>30 s</option>
           </select>
         </label>
         <span className="muted small process-status" role="status">{busy ? t("processMonitor.loading") : updated ? t("processMonitor.updated", { time: updated.toLocaleTimeString(i18n.language) }) : ""}</span>
-        <button onClick={() => void refresh()} disabled={busy || !session.current} title={t("processMonitor.refresh")}><Icon name="refresh" /> {t("processMonitor.refresh")}</button>
+        <button onClick={() => void refresh()} disabled={busy || !session.current} title={t("processMonitor.refresh")}><Icon name="refresh" /> {t("processMonitor.refresh")}</button></>}
       </div>
     </header>
     {view === "processes" && <div className="process-toolbar">
@@ -251,9 +262,10 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
       </select>
     </div>}
     {error && <div className="banner banner-warn" role="alert">{error}{!session.current && <button onClick={() => { setError(null); setBusy(true); setAttempt((n) => n + 1); }}>{t("processMonitor.retry")}</button>}</div>}
-    {snapshot?.limited && view !== "settings" && <div className="banner banner-warn" role="status">{t("processMonitor.limitedVisibility")}</div>}
+    {snapshot?.limited && (view === "processes" || view === "locks") && <div className="banner banner-warn" role="status">{t("processMonitor.limitedVisibility")}</div>}
     {view === "locks" && <LockView snapshot={locks} processes={rows} busy={busy} actions={actions} />}
     {view === "settings" && <SettingsView settings={settings} busy={busy} />}
+    {view === "dashboard" && <ServerDashboard session={sessionId} engine={connection.engine} />}
     {view === "processes" && <><div className="process-content">
       <div className="process-table-wrap">
         <table className="process-table">

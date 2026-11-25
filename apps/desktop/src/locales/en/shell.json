@@ -78,6 +78,7 @@
     "views": {
       "processes": "Processes",
       "locks": "Locks",
+      "dashboard": "Dashboard",
       "settings": "Settings"
     }
   },
@@ -762,6 +763,36 @@
     "waitCount_one": "{{count}} wait",
     "waitCount_other": "{{count}} waits",
     "visibility": "Seeing every session's locks needs permissions: PROCESS and performance_schema on MySQL, VIEW SERVER STATE on SQL Server."
+  },
+  "serverDashboard": {
+    "starting": "Starting…",
+    "sampling": "Sampling every {{seconds}} s while this view is shown",
+    "paused": "Paused while hidden",
+    "failedStatus": "Stopped after an error",
+    "stopped": "Stopped",
+    "memoryOnly": "Kept in memory only, for the last 30 minutes.",
+    "failed": "Could not read the server's counters: {{detail}}",
+    "tryAgain": "Try again",
+    "firstSample": "Taking the first sample…",
+    "chartLabel": "{{title}}, {{count}} samples. Left and right arrows move between samples.",
+    "sessions": "Sessions",
+    "connected": "Connected",
+    "active": "Active",
+    "waiting": "Waiting",
+    "transactions": "Transactions",
+    "perSecond": "Per second",
+    "reads": "Logical reads",
+    "pagesPerSecond": "Pages per second",
+    "readsHint": "Blocks or pages read, from memory or from disk.",
+    "log": "Log writes",
+    "written": "Written",
+    "logHint": "Bytes written to the server's log (WAL, redo log or transaction log): what every change costs.",
+    "waitingHint": {
+      "postgres": "Waiting: active sessions waiting on a lock, I/O or another server event. This monitor's own session is left out.",
+      "mysql": "Waiting: InnoDB row-lock waits. This monitor's own connection is left out.",
+      "mariadb": "Waiting: InnoDB row-lock waits. This monitor's own connection is left out.",
+      "sqlserver": "Waiting: user requests with a wait type. This monitor's own session is left out."
+    }
   },
   "serverSettings": {
     "search": "Search settings…",
