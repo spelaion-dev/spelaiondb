@@ -1,6 +1,6 @@
 # ADR-070: Schema compare: two catalogs read by the core, a report per object, a script opened in the editor
 
-- **Status:** Accepted (not implemented)
+- **Status:** Accepted (implemented)
 - **Date:** 2026-11-24
 - **Builds on:** ADR-024 (the explorer's catalog: `list_objects`, `describe_table`,
   `list_schema_objects`, `object_definition`, `relation_definition`), ADR-026 (SQL from the
