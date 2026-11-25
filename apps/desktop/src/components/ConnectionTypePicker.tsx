@@ -77,6 +77,7 @@ function describe(type: ConnectionTypeItem, t: (key: string, options?: Record<st
     s.confirmExecution ? t("fields.typeConfirmsExecution") : null,
     s.confirmDataChanges ? t("fields.typeConfirmsChanges") : null,
     s.closeIdleAfter ? t("fields.typeClosesIdle", { minutes: Math.max(1, Math.round(s.closeIdleAfter / 60)) }) : null,
+    s.closeIdleTransactionAfter ? t("fields.typeRollsBackIdle", { minutes: Math.max(1, Math.round(s.closeIdleTransactionAfter / 60)) }) : null,
   ].filter((p): p is string => p !== null);
   return parts.length > 0 ? parts.join(" · ") : t("fields.typeNoSafeguards");
 }

@@ -371,6 +371,18 @@ pub(crate) fn validate_type(id: &str, kind: &ConnectionTypeConfig) -> Result<(),
             ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER
         ));
     }
+    if kind.close_idle_transaction_after.is_some_and(|s| {
+        s != 0
+            && !(ConnectionTypeConfig::MIN_CLOSE_IDLE_TRANSACTION_AFTER
+                ..=ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER)
+                .contains(&s)
+    }) {
+        return Err(format!(
+            "connection type {id:?}: close_idle_transaction_after is in seconds, from {} to {} (0 turns it off)",
+            ConnectionTypeConfig::MIN_CLOSE_IDLE_TRANSACTION_AFTER,
+            ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER
+        ));
+    }
     crate::masking::check_patterns("mask_columns", &kind.mask_columns)
         .map_err(|m| format!("connection type {id:?}: {m}"))?;
     Ok(())

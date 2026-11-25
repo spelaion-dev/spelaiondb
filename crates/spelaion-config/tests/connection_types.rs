@@ -723,3 +723,91 @@ fn switching_a_team_commit_safeguard_off_or_on_is_reviewed() {
     .unwrap();
     fx.resolve(&trust, &ws("l")).unwrap();
 }
+
+#[test]
+fn the_shortest_idle_transaction_time_wins_and_none_switches_it_off() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let fx = Fixture::new("idle-tx");
+    // The team asks for 10 minutes on Production; the user writes 0 (off) there and a shorter
+    // time on Test (ADR-081).
+    fx.write(
+        "repo/.spelaion/connection-types.toml",
+        "schema_version = 1\n[types.prod]\nclose_idle_transaction_after = 600\n",
+    );
+    fx.write(
+        "user/connection-types.toml",
+        "schema_version = 1\n[types.prod]\nclose_idle_transaction_after = 0\n[types.test]\nclose_idle_transaction_after = 120\n",
+    );
+    fx.write("repo/.spelaion/connections/p.toml", &sqlite("prod"));
+    fx.write("repo/.spelaion/connections/t.toml", &sqlite("test"));
+    fx.write("repo/.spelaion/connections/d.toml", &sqlite("dev"));
+    let trust = fx.trusted();
+    let safeguards = |id: &str| fx.resolve(&trust, &ws(id)).unwrap().safeguards();
+    assert_eq!(safeguards("p").close_idle_transaction_after, Some(600));
+    assert_eq!(safeguards("t").close_idle_transaction_after, Some(120));
+    assert_eq!(safeguards("d").close_idle_transaction_after, None);
+    // The user may shorten the team's time for themselves.
+    fx.write(
+        "user/connection-types.toml",
+        "schema_version = 1\n[types.prod]\nclose_idle_transaction_after = 90\n",
+    );
+    assert_eq!(safeguards("p").close_idle_transaction_after, Some(90));
+}
+
+#[test]
+fn idle_transaction_times_are_validated_and_reviewed() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let fx = Fixture::new("idle-tx-review");
+    for content in [
+        "[types.x]\nclose_idle_transaction_after = 30\n",
+        "[types.x]\nclose_idle_transaction_after = 100000\n",
+    ] {
+        let path = fx.write("user/connection-types.toml", content);
+        let config = load(None, &fx.user());
+        assert!(
+            config.problems.iter().any(|p| p.file == path
+                && p.message.contains("close_idle_transaction_after")
+                && p.message.contains("from 60")),
+            "{content}: {:?}",
+            config.problems
+        );
+    }
+    std::fs::remove_file(fx.user().join("connection-types.toml")).unwrap();
+
+    // Trusted before the setting existed: writing 0 changes nothing to review.
+    let plain = "schema_version = 1\n[types.ledger]\nname = \"Ledger\"\n";
+    let team = fx.write("repo/.spelaion/connection-types.toml", plain);
+    fx.write("repo/.spelaion/connections/l.toml", &sqlite("ledger"));
+    let trust = fx.trusted();
+    std::fs::write(&team, format!("{plain}close_idle_transaction_after = 0\n")).unwrap();
+    fx.resolve(&trust, &ws("l")).unwrap();
+    // Setting it, or changing it once trusted, is a change to review.
+    std::fs::write(
+        &team,
+        format!("{plain}close_idle_transaction_after = 300\n"),
+    )
+    .unwrap();
+    let change = changed(fx.resolve(&trust, &ws("l")));
+    assert!(
+        change
+            .fields
+            .iter()
+            .any(|f| f.field == "types.ledger.close_idle_transaction_after"),
+        "{:?}",
+        change.fields
+    );
+    let trust = fx.trusted();
+    assert_eq!(
+        fx.resolve(&trust, &ws("l"))
+            .unwrap()
+            .safeguards()
+            .close_idle_transaction_after,
+        Some(300)
+    );
+    std::fs::write(
+        &team,
+        format!("{plain}close_idle_transaction_after = 900\n"),
+    )
+    .unwrap();
+    changed(fx.resolve(&trust, &ws("l")));
+}

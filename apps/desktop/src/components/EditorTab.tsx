@@ -1656,6 +1656,17 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
           <button className="ghost small" onClick={() => updateTab(tab.id, { setupSkipped: undefined })}>{t("restore.dismiss")}</button>
         </div>
       )}
+      {tab.idleRolledBack && (
+        <div className="banner restore-notes" role="status">
+          <span>
+            {t("transaction.idleRolledBack", {
+              count: tab.idleRolledBack.statements,
+              duration: t("transaction.idleMinutes", { count: Math.max(1, Math.round(tab.idleRolledBack.afterSeconds / 60)) }),
+            })}
+          </span>
+          <button className="ghost small" onClick={() => updateTab(tab.id, { idleRolledBack: undefined })}>{t("restore.dismiss")}</button>
+        </div>
+      )}
       {tab.restoreNotes && tab.restoreNotes.length > 0 && (
         <div className="banner restore-notes" role="status">
           <ul>

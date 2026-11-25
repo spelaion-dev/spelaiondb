@@ -1483,6 +1483,13 @@ select {
   background: var(--danger);
   color: var(--danger-text);
 }
+/* ADR-081: the connection type rolls this idle transaction back soon. A soft danger badge, so
+   it stands out from the plain TX badge without reading as a failure. */
+.tx-badge-warning {
+  background: var(--danger-soft);
+  color: var(--danger-fg);
+  border: 1px solid var(--danger);
+}
 /* A connection type's badge (ADR-029), soft (docs/ui-guidelines.md "Badges"): the tone's `-soft`
    background and `-fg` text from the fixed palette, legible in both themes. Production's is the
    only solid one. `--type-badge-color` lets a place that greys its text keep the badge's. */

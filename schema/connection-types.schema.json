@@ -65,6 +65,15 @@
           "format": "uint32",
           "minimum": 0
         },
+        "close_idle_transaction_after": {
+          "description": "Roll back an editor tab's transaction left open this many seconds without use, after a\nwarning in the tab (ADR-081). A session in use is never touched, and nothing is\ncommitted. Off when absent or 0; otherwise 60 to 86400.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
         "manual_commit": {
           "description": "Editor tabs start with auto-commit off: changes wait for Commit (ADR-031).",
           "type": "boolean"

@@ -223,6 +223,24 @@ impl Tracked {
         tokio::spawn(keep_alive_loop(connection, activity, health, interval))
     }
 
+    /// When the connection was last used, or `None` while something uses it now (a statement
+    /// whose rows are still read, one of the core's reads). Keep-alives and reads of the
+    /// transaction state are not uses (ADR-081).
+    pub(crate) fn idle_since(&self) -> Option<Instant> {
+        (self.activity.busy.load(Ordering::SeqCst) == 0).then(|| self.activity.last_use())
+    }
+
+    /// The connection held for the core alone, as a keep-alive holds it: no user operation
+    /// starts until it is dropped. `None` when something holds it now. Its calls go to the
+    /// driver directly and are not uses.
+    pub(crate) fn try_hold(&self) -> Option<Held> {
+        let permit = self.activity.gate.clone().try_write_owned().ok()?;
+        (self.activity.busy.load(Ordering::SeqCst) == 0).then(|| Held {
+            connection: self.inner.clone(),
+            _permit: permit,
+        })
+    }
+
     /// Closes the session (marks it [`SessionHealth::IdleClosed`]) once it has not been used
     /// for `after` (ADR-029).
     pub(crate) fn close_when_idle(&self, after: Duration) -> tokio::task::JoinHandle<()> {
@@ -231,6 +249,12 @@ impl Tracked {
         let health = self.health.clone();
         tokio::spawn(idle_close_loop(connection, activity, health, after))
     }
+}
+
+/// The connection, held by [`Tracked::try_hold`] until dropped.
+pub(crate) struct Held {
+    pub(crate) connection: Arc<dyn Connection>,
+    _permit: tokio::sync::OwnedRwLockWriteGuard<()>,
 }
 
 /// SQLSTATEs that end the session: class 08 (connection exceptions, also MySQL's `08S01`) and

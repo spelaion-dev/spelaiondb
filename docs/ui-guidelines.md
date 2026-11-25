@@ -221,7 +221,10 @@ animate data, the grid, layout changes or anything while the user types. Under
   transaction and read-only rules.
 - Keep a tab's transaction mode and its driver-reported transaction state visible, and make
   Commit, Rollback and the consequences of closing an open transaction clear (ADR-031). Never
-  infer transaction state or decide its safeguards in the UI.
+  infer transaction state or decide its safeguards in the UI. When the core warns that an idle
+  transaction is rolled back soon (ADR-081), the TX badge says when ("TX idle · rolls back at
+  …", soft danger) with Commit and Rollback beside it; the rollback itself is said once in a
+  dismissible banner of the tab, with how many statements were undone.
 - State a filter's scope where it matters: the current table page, loaded query rows, or the
   full result. Do not imply a local result filter searches data that has not been loaded.
   Keep filtering, copying and exporting consistent with the core's view of the result.

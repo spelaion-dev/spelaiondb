@@ -673,6 +673,13 @@
     "committed": "Transaction committed.",
     "rolledBack": "Transaction rolled back.",
     "lostWithTransaction": "A transaction was open: the server rolled back what was not committed.",
+    "idleWarning": "TX idle · rolls back at {{time}}",
+    "idleWarningSoon": "TX idle · rolls back soon",
+    "idleWarningHint": "This transaction has been idle: its connection type rolls it back at {{time}} unless this tab is used. Commit or roll it back now.",
+    "idleRolledBack_one": "Rolled back after {{duration}} idle, as this connection’s type asks: {{count}} statement was undone.",
+    "idleRolledBack_other": "Rolled back after {{duration}} idle, as this connection’s type asks: {{count}} statements were undone.",
+    "idleMinutes_one": "{{count}} minute",
+    "idleMinutes_other": "{{count}} minutes",
     "tabBadge": "Transaction open"
   },
   "runOptions": {

@@ -180,6 +180,11 @@ fn connection_types_snapshot(file: &ConnectionTypesFile) -> Snapshot {
                 out.insert(field(name), "true".into());
             }
         }
+        // ADR-081's idle transaction rollback, only when set: older snapshots stay unchanged,
+        // and setting, changing or removing it is a change to review.
+        if let Some(seconds) = kind.close_idle_transaction_after.filter(|s| *s > 0) {
+            out.insert(field("close_idle_transaction_after"), seconds.to_string());
+        }
         // ADR-051's masked columns, only when there are some: older snapshots stay unchanged,
         // and adding, changing or removing one is a change to review.
         if !kind.mask_columns.is_empty() {
