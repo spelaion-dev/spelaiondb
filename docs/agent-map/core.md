@@ -228,6 +228,24 @@
   page's before it is kept and again each time it is read, and a stored default that no longer
   passes is handed back as refused, never as a filter. Like `table_data.rs`, any change there
   needs tests that try to get around it.
+  `other_database.rs` (ADR-074, SDB-493) is a PostgreSQL connection's other databases, every
+  decision in the core. `connection_databases` answers what a connection opens: its own
+  database first, then what the server lists (`list_databases` on its own session) narrowed
+  exactly to the file's `databases` (or all of them with `all_databases`); a plugin or a
+  server that cannot list them leaves `OwnOnly` with the reason. `open_other_database` opens
+  a new session (never a switch) from the connection's resolved definition with only
+  `params.database` changed and the default schema unset (it is the own database's), through
+  `open_connection`, so the route (the same `TunnelPool` entry), the read-only mode, masking,
+  the type and the setup statements are the connection's. It refuses, each with its own
+  `OtherDatabaseError`: an engine or a server family that is not PostgreSQL itself (asked to
+  the server, never the file), a pooler, a file that names no other database, a name it does
+  not name (exactly: PostgreSQL's names are case-sensitive), a name the server does not list
+  for the user (templates included), and a database another connection with the same login
+  (`session_source::same_login`, or its file's host, port and user when it does not resolve)
+  has as its own, naming that connection. Agents never come here: the MCP server opens the
+  file's `database` only. `tests/postgres_other_databases.rs` opens one through the two-hop
+  tunnel and tries each refusal; `spelaion-mcp`'s tests keep an agent on `all_databases` to
+  its own database.
   Server observation (the process monitor's other views): `observe.rs` runs each statement
   only after `classify_read_only` accepts it, as session metadata; `locks.rs` reads each
   engine's locks and waits and builds the blocking tree (ending a blocker always goes through
