@@ -259,9 +259,23 @@
   `reload` loads each folder again on its own and installs it only into the same opening of
   that folder. Each `DesktopSession` records its connection's folder; `close_folder` closes
   that folder's sessions and no other (`open_folders::sessions_of`), personal ones stay.
-  Commands: `add_folder` (closes nothing), `close_folder`, `list_folders` (each with its
-  trust), `trust_workspace(root)` for any open folder, and `open_workspace`, which the page
-  uses while it shows one folder: it closes every other open folder first. Adding or closing
+  Commands: `add_folder` (closes nothing; returns the folder's root and whether it was not
+  open before), `close_folder`, `list_folders` (each with its trust), `trust_workspace(root)`
+  for any open folder (as opened or its canonical root), and `open_workspace`, which closes
+  every other open folder first (the page no longer calls it; kept for raw callers). In the
+  page (SDB-502), `folders.ts`'s `addFolder` and `closeFolder` are the only ways folders
+  change: from the folder menu, a recent folder, the palette, a launch, an explorer group's
+  Close. Both run inside `tabPersistence.ts`'s `whileFoldersChange`, which writes the tabs
+  first and sends none until the tabs on screen match the open folders again: adding puts the
+  folder's kept tabs back (`restore_tabs_for_workspace(folder)`, each at its kept
+  `position`), closing takes its tabs out without letting Ctrl+Shift+T reopen them. Closing
+  asks only about that folder's tabs (`confirmLeaving`'s `among`). The store's `openFolders`
+  is refreshed with the connections (`refreshConnections`). The explorer groups by folder only
+  with two or more open; a connection's folder-tree keys and drops carry its scope (its
+  folder's root, `""` for personal: `scopeOf`, `data-drop-scope`), so it moves only among its
+  own folder's folders. `folderNames.ts` (pure, tested) names folders and, where two share a
+  name, connections in pickers (`useConnectionName`). `SaveInChoices.tsx` is the folder choice
+  of the add and import forms. Adding or closing
   a folder is a switch of `AppState::folder` (SDB-377), so a connection started before lands
   nowhere. The open folders are remembered in `desktop-open-folders.json` and opened again at
   start (a launch that names a folder opens that one); `desktop-last-workspace.txt` is read

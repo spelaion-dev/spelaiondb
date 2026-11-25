@@ -32,11 +32,11 @@ it. The local store's keys (`store_scope`: the root's text, or empty) and the ke
 (`repo:<root>/<id>/password`, `~/<id>/password`) come from it, unchanged from before it existed,
 and every new audit entry records the folder beside the id. A PostgreSQL connection's database
 sits beside this identity, never inside it (ADR-074). Every desktop command that takes a
-connection takes the pair (`ConnectionKeyItem`) and checks it against the folder open
-(`connection_in`). In the page, the explorer, its sessions (`meta:` and the pair's tag), the
-catalog and completion caches, and the dialogs and pickers the explorer opens hold the pair
-(`connectionIdentity.ts`); a tab still names its connection by its id until tabs belong to a
-folder (ADR-075 point 7). Still one folder open.
+connection takes the pair (`ConnectionKeyItem`) and checks it against the open folders
+(`connection_config`, `connection_in`). In the page, the explorer, its sessions (`meta:` and the
+pair's tag), the catalog and completion caches, the tabs (`connectionId` and
+`connectionFolder`), the history and saved queries (their stored `identity`), and the dialogs
+and pickers hold the pair (`connectionIdentity.ts`).
 
 **What a connection sees with several folders open (ADR-075)**
 Each folder is one `Config`, loaded alone with the personal layer: no configuration or resolver
@@ -46,7 +46,22 @@ its type's safeguards add up across every trusted folder, every folder's `known_
 its tunnel (a key any of them pins differently blocks), and a network profile it names is a
 personal one, else the one folder's that has it (two refuse it). The tunnel pool never shares a
 chain between two folders' profiles, nor between different folders' host keys. With one folder
-open this is what it always was; the desktop opens several in a later step.
+open this is what it always was.
+
+**Several folders in one window (ADR-075, SDB-500 to SDB-502)**
+The desktop holds up to ten open folders (`open_folders.rs`), remembered and opened again at the
+next start, each trusted or not as it was. Opening a folder (the folder menu's Add folder…, a
+recent folder, the palette or a launch) adds it and closes nothing, so it asks nothing; its kept
+tabs come back among the ones on screen (`restore_tabs_for_workspace` with that folder). Closing
+one asks what would be lost in its tabs (ADR-031) and closes only its sessions; its tabs are
+written under it first and come back when it opens again, while personal connections' sessions
+and tabs stay. The page (`folders.ts`) holds tab sending while folders change
+(`whileFoldersChange`), so a folder's kept tabs are never written as none. With several open,
+the explorer has a group per folder (named after it, with its parent when two names collide),
+each with its own "not trusted" banner and configuration problems, and the personal group once;
+pickers add the folder to a connection's name where another has the same name
+(`folderNames.ts`). Adding or importing a connection asks which open repository folder, or
+personal (`add_connection`'s and `ImportTarget`'s `repository`); a pasted one is personal.
 
 **Opening a connection**
 1. `spelaion-config` loads `.spelaion/` and the personal directory, and resolves the
@@ -135,13 +150,14 @@ reports, and checks first that an injected inline script does not run.
 words (`spelaion-core`'s `launch.rs`). A folder must exist. A file must be an existing `.sql`
 file no bigger than the editor opens, then read like a picked one (ADR-036). A connection is
 only selected in the explorer. What is not accepted is said in a banner. Nothing is
-connected or run: the files open as tabs without a connection, and a folder goes through
-repository trust (ADR-022).
+connected or run: the files open as tabs without a connection, and a folder is added beside the
+open ones, asking nothing since nothing closes, then goes through repository trust (ADR-022,
+ADR-075). A connection is looked up in the launched folder, then among the personal ones.
 
 One app runs per personal folder (`instance.rs`). The first listens on a local port and writes
 the port and a random token, owner-only, to `desktop-instance.json`. A later launch with the
 same personal folder sends its arguments and its folder there with the token, and ends. The
-running window opens them as above (a folder after the same questions as the folder menu).
+running window opens them as above (a folder is added, as from the folder menu).
 Keyed by the personal folder, so a second profile or the smoke test's folder never sends
 anything to the user's app. No dependency was added for it. The installers register `.sql`
 files (`tauri.conf.json`'s `fileAssociations`); macOS's Finder sends them as an event, read

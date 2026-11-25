@@ -13,6 +13,7 @@ import { errorText } from "../dialogState";
 import { EngineIcon } from "./EngineIcon";
 import { useApp } from "../store";
 import { refreshConnections } from "./Sidebar";
+import { SaveInChoices, defaultRepository } from "./SaveInChoices";
 
 /** The clients connections can be imported from (the core's `ImportClient`). */
 export type ImportClientId = "dbeaver" | "datagrip" | "tableplus" | "heidisql" | "workbench" | "pgadmin" | "beekeeper";
@@ -80,6 +81,8 @@ export function ConnectionImport(props: {
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [duplicates, setDuplicates] = useState<Record<string, DuplicateChoice>>({});
   const [personal, setPersonal] = useState(!hasWorkspace);
+  /** The open folder repository connections go into (its root, ADR-075). */
+  const [repository, setRepository] = useState<string | null>(() => defaultRepository(useApp.getState().openFolders));
   const [savePasswords, setSavePasswords] = useState(true);
   const [folder, setFolder] = useState("");
   const [keepFolders, setKeepFolders] = useState(true);
@@ -94,7 +97,8 @@ export function ConnectionImport(props: {
     let active = true;
     setScan({ kind: "reading" });
     setImporting({ kind: "idle" });
-    call(commands.scanConnections(props.client, dir, filePassword || null, null))
+    // Duplicates are looked for in the chosen folder.
+    call(commands.scanConnections(props.client, dir, filePassword || null, repository))
       .then((answer) => {
         if (!active) return;
         setDefaultSource(answer.defaultSource);
@@ -106,7 +110,7 @@ export function ConnectionImport(props: {
     return () => {
       active = false;
     };
-  }, [dir, props.client, filePassword]);
+  }, [dir, props.client, filePassword, repository]);
 
   function choose(picked: string | null) {
     setTypedPassword("");
@@ -119,7 +123,7 @@ export function ConnectionImport(props: {
   useEffect(() => {
     if (!found) return;
     setChosen(new Set(found.items.filter((c) => c.engine && !existingOf(c)).map((c) => c.id)));
-  }, [found, personal]);
+  }, [found, personal, repository]);
 
   async function pickFolder() {
     const picked = await chooseFolder(t("importer.chooseFolder"));
@@ -144,6 +148,7 @@ export function ConnectionImport(props: {
       const outcome = await call(
         commands.importConnections(props.client, dir, filePassword || null, choices, {
           personal,
+          repository: personal ? null : repository,
           savePasswords: found.canSavePasswords && savePasswords,
           folder,
           keepClientFolders: keepFolders,
@@ -367,13 +372,16 @@ export function ConnectionImport(props: {
           </div>
           <fieldset className="conn-import-options">
             <legend>{t("fields.saveIn")}</legend>
-            <label>
-              <input type="radio" name="import-save-in" checked={!personal} disabled={!hasWorkspace} onChange={() => setPersonal(false)} />{" "}
-              {t("fields.project")}
-            </label>
-            <label>
-              <input type="radio" name="import-save-in" checked={personal} onChange={() => setPersonal(true)} /> {t("fields.personal")}
-            </label>
+            <SaveInChoices
+              name="import-save-in"
+              personal={personal}
+              repository={repository}
+              disabled={false}
+              onChoose={(choice) => {
+                setPersonal(choice.personal);
+                if (!choice.personal) setRepository(choice.repository);
+              }}
+            />
           </fieldset>
           <fieldset className="conn-import-options">
             <legend>{t("importer.folder")}</legend>

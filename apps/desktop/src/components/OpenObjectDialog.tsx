@@ -1,6 +1,7 @@
 // "Open object by name" (Ctrl+Shift+D, DBeaver's Open Database Object): searches the
 // connections connected in the explorer and opens what is chosen, showing it in the tree.
 
+import { useConnectionName } from "../folders";
 import { useEffect, useRef, useState } from "react";
 import { explorerSession } from "../windowContext";
 import { type ConnectionKey, connectionOfTag, connectionTag, holdsConnection, keyOf, listedConnection, tabConnection } from "../connectionKey";
@@ -44,6 +45,7 @@ export async function openFound(connection: ConnectionKey, found: FoundObjectIte
 
 export function OpenObjectDialog({ initialConnection, onClose }: { initialConnection: ConnectionKey | null; onClose(): void }) {
   const { t } = useTranslation("shell");
+  const shownName = useConnectionName();
   const connections = useApp((s) => s.connections);
   const connected = useApp((s) => s.explorerConnected);
   const activeTab = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab));
@@ -158,7 +160,7 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
                 >
                   {choices.map((c) => (
                     <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))}>
-                      {c.name}
+                      {shownName(c)}
                     </option>
                   ))}
                 </select>

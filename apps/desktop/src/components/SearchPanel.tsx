@@ -7,6 +7,7 @@
 //   only names the tables and options, shows what the core reports and can cancel it. Each hit
 //   opens the table data tab filtered to its row by the core's filter.
 
+import { useConnectionName } from "../folders";
 import { Channel } from "@tauri-apps/api/core";
 import { explorerSession } from "../windowContext";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
@@ -221,6 +222,7 @@ function NameSearch({ query, hidden, openFirst }: { query: string; hidden: boole
 
 function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; start: React.MutableRefObject<(() => void) | null> }) {
   const { t } = useTranslation("shell");
+  const shownName = useConnectionName();
   const schemas = useCatalog((s) => s.schemas);
   const connections = useApp((s) => s.connections);
   const connected = useApp((s) => s.explorerConnected);
@@ -260,9 +262,11 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
       // The data search writes a SELECT per table: only engines queried with SQL (ADR-056).
       if (key === null || !listed?.sql || !explorerSessionOpen(connected, key)) return [];
       const database = databaseOf(key);
-      return [{ tag, key, name: database === null ? listed.name : `${listed.name} · ${database}` }];
+      // With the folder where another listed connection has the same name (ADR-075).
+      const name = shownName(listed);
+      return [{ tag, key, name: database === null ? name : `${name} · ${database}` }];
     }).sort((a, b) => a.name.localeCompare(b.name));
-  }, [connections, connected, list]);
+  }, [connections, connected, list, shownName]);
   // The active tab's connection first, then the first one with tables loaded.
   useEffect(() => {
     if (choices.some((c) => c.tag === connectionTagValue)) return;

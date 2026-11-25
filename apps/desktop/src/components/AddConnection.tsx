@@ -37,6 +37,7 @@ import { fieldList } from "../fieldNames";
 import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
 import { ImportSources } from "./ImportSources";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
+import { SaveInChoices, defaultRepository } from "./SaveInChoices";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 import { installText, openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
@@ -534,6 +535,8 @@ function ConnectionForm(props: {
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** The open folder a new repository connection goes into (its root, ADR-075). */
+  const [repository, setRepository] = useState<string | null>(() => defaultRepository(useApp.getState().openFolders));
   const [draft, setDraft] = useState<Omit<ConnectionDraft, "passwordMode" | "tunnel" | "kubernetes">>(() => initial ?? {
     personal: !hasWorkspace,
     folder: "",
@@ -838,8 +841,8 @@ function ConnectionForm(props: {
         if (historyEnabled !== savedHistory) await saveHistoryPreference(editing, historyEnabled);
         await call(commands.updateConnection(editing, request, stored, props.revision ?? ""));
       } else {
-        // The shown folder until the page offers a choice of folder (SDB-502).
-        const key = await call(commands.addConnection(request, stored, null));
+        // Into the open folder chosen above, or personal (ADR-075).
+        const key = await call(commands.addConnection(request, stored, draft.personal ? null : repository));
         await refreshConnections();
         // The store remembers it per connection (enabled unless set otherwise).
         const added = listedConnection(useApp.getState().connections, key);
@@ -1464,19 +1467,25 @@ function ConnectionForm(props: {
             <legend>{t("sections.organization")}</legend>
             <div className="form-row" role="radiogroup" aria-label={t("fields.saveIn")}>
               <span>{t("fields.saveIn")}</span>
-              <label className="check">
-                <input type="radio" name="save-in" checked={!draft.personal} disabled={!hasWorkspace || Boolean(editing)} onChange={() => {
+              {/* One of the open repository folders, or personal (ADR-075). */}
+              <SaveInChoices
+                name="save-in"
+                personal={draft.personal}
+                repository={repository}
+                disabled={Boolean(editing)}
+                labelClassName="check"
+                onChoose={(choice) => {
+                  if (choice.personal) {
+                    update({ personal: true });
+                    return;
+                  }
                   void (async () => {
                     if (useKubernetes && !(await trustForKubernetes())) return;
+                    setRepository(choice.repository);
                     update({ personal: false });
                   })();
-                }} />
-                {t("fields.project")}
-              </label>
-              <label className="check">
-                <input type="radio" name="save-in" checked={draft.personal} disabled={Boolean(editing)} onChange={() => update({ personal: true })} />
-                {t("fields.personal")}
-              </label>
+                }}
+              />
             </div>
             <p className="muted small">
               {editing ? t("fields.fixedLocationHint") : draft.personal ? t("fields.personalHint") : t("fields.projectHint")}

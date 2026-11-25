@@ -377,6 +377,27 @@ try {
     await settled();
     await page.screenshot({ path: join(shots, `${name}.png`) });
   };
+  // The folder menu (SDB-397, ADR-075): Add folder… adds a folder beside the open ones
+  // (`__spelaionOpenFolder` answers the folder chooser); each open folder has its Close.
+  const folderMenu = () => page.getByRole("menu", { name: "Folders" });
+  const addFolderFromMenu = async (folder) => {
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
+    await page.getByTitle("Add or close folders").click();
+    await folderMenu().getByRole("menuitem", { name: "Add folder…" }).click();
+    await folderMenu().waitFor({ state: "detached" });
+    // Open once the core lists it and the menu's button is usable again.
+    await page.waitForFunction(async (target) => {
+      const { folders } = await window.__TAURI_INTERNALS__.invoke("list_folders");
+      const fold = (path) => path.replace(/[\\/]+$/, "").replaceAll("\\", "/").toLowerCase();
+      return folders.some((f) => fold(f.path) === fold(target)) && !document.querySelector(".folder-menu-button")?.disabled;
+    }, folder);
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+  };
+  const closeFolderFromMenu = async (name) => {
+    await page.getByTitle("Add or close folders").click();
+    await folderMenu().getByRole("menuitem", { name: `Close ${name}`, exact: true }).click();
+    await folderMenu().waitFor({ state: "detached" });
+  };
   // SPELAION_E2E_UNTIL=<the start of a step's text>: the run stops as a pass when the step
   // after that one begins, to repeat one step without the whole run.
   let untilReached = false;
@@ -795,6 +816,48 @@ try {
   await page.keyboard.press("Escape");
   await connectionFilter.waitFor({ state: "detached" });
 
+  step("several folders open: a group per folder with its own trust, the same id in both, closing one (SDB-502)");
+  {
+    // A second repository with a connection of the same id and name as the demo's Shop
+    // (SQLite), never trusted: its group says so, the demo's does not (ADR-075).
+    const second = join(userDir, "second-repo");
+    mkdirSync(join(second, ".spelaion", "connections"), { recursive: true });
+    writeFileSync(join(second, ".spelaion", "connections", "shop.toml"), readFileSync(shopFile, "utf8"));
+    const tabsBefore = await page.locator(".tabbar .tab").count();
+    await addFolderFromMenu(second);
+    const demoGroup = page.getByRole("group", { name: "Connections of demo" });
+    const secondGroup = page.getByRole("group", { name: "Connections of second-repo" });
+    await demoGroup.waitFor();
+    await secondGroup.waitFor();
+    assert.equal(await page.locator(".tabbar .tab").count(), tabsBefore, "adding a folder closes no tab");
+    await page.locator(".workspace-name", { hasText: "2 folders" }).waitFor();
+    await demoGroup.locator(".connection-row", { hasText: "Shop (SQLite)" }).first().waitFor();
+    await secondGroup.locator(".connection-row", { hasText: "Shop (SQLite)" }).waitFor();
+    await secondGroup.getByText("This repository is not trusted", { exact: false }).waitFor();
+    assert.equal(await demoGroup.getByText("This repository is not trusted", { exact: false }).count(), 0);
+    await shot("sdb-502-two-folders");
+    // The folder menu lists both open folders, each with its Close.
+    await page.getByTitle("Add or close folders").click();
+    await folderMenu().getByRole("menuitem", { name: "Close second-repo", exact: true }).waitFor();
+    await folderMenu().getByRole("menuitem", { name: "Close demo", exact: true }).waitFor();
+    await shot("sdb-502-folder-menu");
+    await page.keyboard.press("Escape");
+    await folderMenu().waitFor({ state: "detached" });
+    // A tab's picker names each Shop (SQLite) with its folder: the same name in two folders.
+    await page.keyboard.press("Control+t");
+    const options = await page.locator(".tab-panel:not([hidden])").getByRole("combobox", { name: "Connection", exact: true }).locator("option").allInnerTexts();
+    assert.ok(options.some((text) => text.startsWith("Shop (SQLite) · demo")), options.join(" | "));
+    assert.ok(options.some((text) => text.startsWith("Shop (SQLite) · second-repo")), options.join(" | "));
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((count) => document.querySelectorAll(".tabbar .tab").length === count, tabsBefore);
+    // Closing the second folder from its group: only its connections go.
+    await secondGroup.getByRole("button", { name: "Close second-repo" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".folder-group").length === 0);
+    assert.equal(await page.locator(".connection-row", { hasText: "Shop (SQLite)" }).count(), 1);
+    assert.equal(await page.locator(".tabbar .tab").count(), tabsBefore);
+    await shot("sdb-502-one-folder-again");
+  }
+
   step("move a repository connection between folders: drag and drop, Move to folder…, still trusted");
   const shopBefore = readFileSync(shopFile, "utf8");
   const movedShop = join(demo, ".spelaion", "connections", "docker", "shop.toml");
@@ -1041,7 +1104,9 @@ try {
   await panel.locator('.cm-search button[name="next"]', { hasText: "siguiente" }).waitFor();
   await panel.getByRole("textbox", { name: "Editor SQL" }).waitFor();
   await panel.locator(".statusline", { hasText: "6 filas" }).waitFor();
-  await page.getByRole("tab", { name: /Consulta 1/ }).waitFor();
+  // The tab's label in Spanish; its number depends on the tabs earlier steps opened (the
+  // SDB-502 step opens one to read its connection picker).
+  await page.getByRole("tab", { name: /Consulta \d+/ }).waitFor();
   await shot("03-espanol");
   await setLanguage("en");
   await panel.locator('.cm-search button[name="close"]').click();
@@ -10966,10 +11031,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.press("Control+o");
     await page.locator(".tabbar .tab.active .tab-label", { hasText: "restart.sql" }).waitFor();
     await page.evaluate(() => { delete window.__spelaionOpenPath; });
-    // A tab belongs to its connection's folder (ADR-075, SDB-501). With another folder open,
-    // the tab on the demo folder's Shop (SQLite) is kept for it and goes; a tab on the personal
-    // analytics connection, the console without one and the file stay. Coming back brings the
-    // demo folder's tab back, in its place.
+    // A tab belongs to its connection's folder (ADR-075, SDB-501, SDB-502). Adding another
+    // folder closes nothing. Closing the demo folder keeps its tab on Shop (SQLite) for it and
+    // takes it out; a tab on the personal analytics connection, the console without one and the
+    // file stay. Adding the demo folder again brings its tab back, in its place.
     await newQuery(/^analytics$/, "select 'personal_tab_marker';");
     const firstLines = async () => {
       const lines = [];
@@ -10981,26 +11046,28 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       }
       return lines;
     };
-    const openFolder = async (folder) => {
-      await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
-      await page.getByTitle("Open another folder").click();
-      await page.getByRole("menu", { name: "Folders" }).getByRole("menuitem", { name: "Open folder…" }).click();
-      await page.waitForFunction((expected) => document.querySelectorAll('.connection-row').length > 0
-        && [...document.querySelectorAll(".connection-row")].some((row) => row.textContent.includes("analytics"))
-        && [...document.querySelectorAll(".connection-row")].some((row) => row.textContent.includes("Shop (SQLite)")) === expected, folder === demo);
-      await page.evaluate(() => delete window.__spelaionOpenFolder);
-    };
+    const shopShown = (expected) => page.waitForFunction((shown) => [...document.querySelectorAll(".connection-row")].some((row) => row.textContent.includes("analytics"))
+      && [...document.querySelectorAll(".connection-row")].some((row) => row.textContent.includes("Shop (SQLite)")) === shown, expected);
     const inDemo = ["select 'restart_console_marker' as restored;", "-- second console, no connection", "select 'restart_file_marker';", "select 'personal_tab_marker';"];
     assert.deepEqual(await firstLines(), inDemo);
     const elsewhere = join(userDir, "tabs-elsewhere");
     mkdirSync(elsewhere, { recursive: true });
-    await openFolder(elsewhere);
+    await addFolderFromMenu(elsewhere);
+    await page.getByRole("group", { name: "Connections of tabs-elsewhere" }).waitFor();
+    assert.equal(await page.locator(".tabbar .tab").count(), 4, "adding a folder closes no tab");
+    await closeFolderFromMenu("demo");
     await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 3);
+    await shopShown(false);
     assert.deepEqual(await firstLines(), inDemo.slice(1));
     await shot("sdb-501-personal-tabs-in-another-folder");
-    await openFolder(demo);
+    await addFolderFromMenu(demo);
     await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 4);
+    await shopShown(true);
     assert.deepEqual(await firstLines(), inDemo);
+    // Back to the demo folder alone.
+    await closeFolderFromMenu("tabs-elsewhere");
+    await page.waitForFunction(() => document.querySelectorAll(".folder-group").length === 0);
+    assert.equal(await page.locator(".tabbar .tab").count(), 4);
     // Back to the three tabs this step keeps: the personal one closes, the file is shown.
     await page.locator(".tabbar .tab").nth(3).click();
     await page.keyboard.press("Control+w");
@@ -11626,7 +11693,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
   }
 
-  step("quitting or opening another folder with unapplied row edits or a running query asks first; Cancel keeps everything");
+  step("quitting or closing a folder with unapplied row edits or a running query asks first; Cancel keeps everything");
   {
     const shown = page.locator(".tab-panel:not([hidden])");
     const activeTab = page.locator(".tabbar .tab.active");
@@ -11663,22 +11730,16 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await quitEdits.waitFor({ state: "detached" });
     assert.equal(app.exitCode, null, "Cancel keeps the app open");
     await shown.getByText("Updated: 1", { exact: false }).waitFor();
-    // Opening another folder asks the same before changing anything; Cancel keeps this one.
-    const otherFolder = join(userDir, "other-folder");
-    mkdirSync(otherFolder, { recursive: true });
-    await page.evaluate((target) => (window.__spelaionOpenFolder = target), otherFolder);
-    await page.getByTitle("Open another folder").click();
-    // The folder's menu (SDB-397): Open folder… and the recent folders.
-    const folderMenu = page.getByRole("menu", { name: "Folders" });
-    await folderMenu.getByRole("menuitem", { name: "Open folder…" }).click();
-    const folderEdits = page.getByRole("dialog", { name: "Open another folder with unsaved row changes?" });
+    // Closing the folder asks the same before changing anything; Cancel keeps it (ADR-075:
+    // adding a folder closes nothing, so it asks nothing).
+    await closeFolderFromMenu("demo");
+    const folderEdits = page.getByRole("dialog", { name: "Close the folder with unsaved row changes?" });
     await folderEdits.waitFor();
     assert.deepEqual(await folderEdits.locator(".unsaved-edits-list li").allInnerTexts(), [editTab]);
-    await folderEdits.getByRole("button", { name: "Open and discard" }).waitFor();
-    await shotBoth("11d-open-folder-unsaved-edits");
+    await folderEdits.getByRole("button", { name: "Close folder and discard" }).waitFor();
+    await shotBoth("11d-close-folder-unsaved-edits");
     await folderEdits.getByRole("button", { name: "Cancel", exact: true }).click();
     await folderEdits.waitFor({ state: "detached" });
-    await page.evaluate(() => delete window.__spelaionOpenFolder);
     await shown.getByText("Updated: 1", { exact: false }).waitFor();
     await activeTab.locator(".dot-connected").waitFor();
     await page.locator('.connection-row:has-text("Shop (SQLite)")').waitFor();
