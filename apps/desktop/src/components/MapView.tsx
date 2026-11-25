@@ -1,8 +1,10 @@
 // A map of geometries (ADR-045), drawn as plain SVG: the core turns every engine's values into
 // GeoJSON, and this view only projects and draws them. Without tiles (the default) the shapes
 // sit on a plain background and nothing is asked of the network; with tiles turned on in
-// Settings and coordinates in longitude and latitude (or Web Mercator), images from the user's
-// own tile server go behind them, sent without a referrer.
+// Settings and coordinates in longitude and latitude (or Web Mercator), tiles of the chosen
+// server go behind them. The core fetches and caches each tile under the server's policy
+// (ADR-085): this view asks it for a tile by its numbers, once the view has stopped moving, and
+// draws the `data:` image it gets; the page never fetches an image itself.
 //
 // Pan by dragging or with the arrow keys, zoom with the wheel or + and −, 0 fits the shapes.
 // Paths are built once per "base" view and moved with a transform while the user pans or
@@ -12,7 +14,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { fitted as fittedAt, moved, shouldFit, sizeKey, type FitMemory } from "../mapFit";
 import { useTranslation } from "react-i18next";
 import type { Geometry, MapCrs, MapPreferencesItem } from "../bindings";
+import { call, commands } from "../api";
 import { Icon } from "./Icons";
+
+/** Each map asks the core for tiles under its own number: its requests are bounded (ADR-085). */
+let nextMapView = 1;
+/** How long the view must stay still before its tiles are asked for, in milliseconds. */
+const TILE_SETTLE_MS = 150;
 
 export interface MapFeature {
   geometry: Geometry;
@@ -161,14 +169,19 @@ function paths(f: Projected, view: View, width: number, height: number): { area:
 }
 
 interface Tile {
+  /** The tile the core is asked for: `z/x/y`, with `x` wrapped around the world. */
   key: string;
-  url: string;
+  z: number;
+  x: number;
+  y: number;
+  /** Where it is drawn (`x` not wrapped: the world repeats sideways). */
+  place: string;
   left: number;
   top: number;
   size: number;
 }
 
-function tilesFor(view: View, width: number, height: number, template: string): Tile[] {
+function tilesFor(view: View, width: number, height: number): Tile[] {
   const worldPx = view.scale * WORLD;
   const z = Math.max(0, Math.min(MAX_ZOOM, Math.round(Math.log2(worldPx / TILE_SIZE))));
   const n = 2 ** z;
@@ -186,8 +199,11 @@ function tilesFor(view: View, width: number, height: number, template: string): 
       if (tiles.length >= MAX_TILES) return tiles;
       const x = ((tx % n) + n) % n;
       tiles.push({
-        key: `${z}/${tx}/${ty}`,
-        url: template.replaceAll("{z}", String(z)).replaceAll("{x}", String(x)).replaceAll("{y}", String(ty)),
+        key: `${z}/${x}/${ty}`,
+        z,
+        x,
+        y: ty,
+        place: `${z}/${tx}/${ty}`,
         left: ox + tx * size,
         top: oy + ty * size,
         size,
@@ -219,6 +235,12 @@ export function MapView(props: {
   const [pointer, setPointer] = useState<XY | null>(null);
   const [tilesShown, setTilesShown] = useState(true);
   const [tileFailures, setTileFailures] = useState(0);
+  const [tileError, setTileError] = useState<string | null>(null);
+  /** The tiles the core sent, by `z/x/y`; asked for once per map. */
+  const [tileImages, setTileImages] = useState<ReadonlyMap<string, string>>(new Map());
+  const requested = useRef(new Set<string>());
+  const mapView = useRef(0);
+  if (mapView.current === 0) mapView.current = nextMapView++;
   const drag = useRef<{ x: number; y: number; view: View; moved: boolean } | null>(null);
 
   useLayoutEffect(() => {
@@ -368,8 +390,34 @@ export function MapView(props: {
 
   const tileServer = preferences.tiles && preferences.tileUrl !== "" && canShowTiles(crs);
   const showTiles = tileServer && tilesShown && view !== null && size.width > 0;
-  const tiles = showTiles && view ? tilesFor(view, size.width, size.height, preferences.tileUrl) : [];
-  useEffect(() => setTileFailures(0), [preferences.tileUrl]);
+  const tiles = showTiles && view ? tilesFor(view, size.width, size.height) : [];
+  const wanted = tiles.map((tile) => tile.key).join(" ");
+  // Another server: what was fetched from the old one is not shown, and it is all asked again.
+  useEffect(() => {
+    setTileFailures(0);
+    setTileError(null);
+    setTileImages(new Map());
+    requested.current = new Set();
+  }, [preferences.tileUrl]);
+  // The tiles of the viewport, asked of the core once the view has stopped moving.
+  useEffect(() => {
+    if (wanted === "") return;
+    // A view that keeps moving asks for nothing: only where it stops.
+    const timer = window.setTimeout(() => {
+      for (const key of wanted.split(" ")) {
+        if (requested.current.has(key)) continue;
+        requested.current.add(key);
+        const [z = 0, x = 0, y = 0] = key.split("/").map(Number);
+        call(commands.mapTile(mapView.current, z, x, y))
+          .then((image) => setTileImages((images) => new Map(images).set(key, image)))
+          .catch((e: unknown) => {
+            setTileFailures((n) => n + 1);
+            setTileError(e instanceof Error ? e.message : String(e));
+          });
+      }
+    }, TILE_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [wanted]);
 
   // The transform from the base view to the current one.
   const transform = (() => {
@@ -402,17 +450,19 @@ export function MapView(props: {
       >
         {tiles.length > 0 && (
           <div className="map-tiles" aria-hidden="true">
-            {tiles.map((tile) => (
-              <img
-                key={tile.key}
-                src={tile.url}
-                alt=""
-                draggable={false}
-                referrerPolicy="no-referrer"
-                style={{ left: tile.left, top: tile.top, width: tile.size, height: tile.size }}
-                onError={(e) => { e.currentTarget.style.visibility = "hidden"; setTileFailures((n) => n + 1); }}
-              />
-            ))}
+            {tiles.map((tile) => {
+              const image = tileImages.get(tile.key);
+              return image ? (
+                <img
+                  key={tile.place}
+                  src={image}
+                  alt=""
+                  draggable={false}
+                  data-tile={tile.key}
+                  style={{ left: tile.left, top: tile.top, width: tile.size, height: tile.size }}
+                />
+              ) : null;
+            })}
           </div>
         )}
         <svg className="map-svg" width={size.width} height={size.height} aria-hidden="true">
@@ -438,7 +488,23 @@ export function MapView(props: {
           )}
         </div>
         {showTiles && (
-          <div className="map-attribution">{preferences.tileAttribution ? `${preferences.tileName} · ${preferences.tileAttribution}` : preferences.tileName}</div>
+          // Shown whenever the server's tiles are, never behind a toggle (ADR-085); its link is the
+          // stored one, opened by the core.
+          <div className="map-attribution" onPointerDown={(e) => e.stopPropagation()}>
+            {preferences.tileName}
+            {preferences.tileAttribution && (
+              <>
+                {" · "}
+                {preferences.tileAttributionUrl ? (
+                  <button type="button" className="link map-attribution-link" title={preferences.tileAttributionUrl} onClick={() => void call(commands.openTileAttribution()).catch(() => undefined)}>
+                    {preferences.tileAttribution}
+                  </button>
+                ) : (
+                  preferences.tileAttribution
+                )}
+              </>
+            )}
+          </div>
         )}
         {hoveredRow !== undefined && (
           <div className="map-hover" role="status">{t("viewer.map.row", { number: (hoveredRow + 1).toLocaleString(i18n.language) })}</div>
@@ -447,7 +513,9 @@ export function MapView(props: {
       <p className="muted small map-caption">
         {pointer ? (isLonLat(crs) ? t("viewer.map.lonLat", { lon: fmt.format(pointer[0]), lat: fmt.format(pointer[1]) }) : t("viewer.map.xy", { x: fmt.format(pointer[0]), y: fmt.format(pointer[1]) })) : " "}
       </p>
-      {tileFailures > 0 && showTiles && <p className="muted small">{t("viewer.map.tileFailures", { name: preferences.tileName })}</p>}
+      {tileFailures > 0 && showTiles && (
+        <p className="muted small" role="status">{t("viewer.map.tileFailures", { name: preferences.tileName })}{tileError ? ` ${tileError}` : ""}</p>
+      )}
     </div>
   );
 }

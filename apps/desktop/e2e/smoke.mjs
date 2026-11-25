@@ -5847,11 +5847,13 @@ try {
     const away = requests.filter((url) => /^https?:/.test(url) && !new URL(url).hostname.endsWith("localhost"));
     assert.deepEqual(away, [], "the map without tiles asks nothing of the network");
 
-    // Tiles from a server of the user's own (here a local one): sent without a referrer.
+    // Tiles from a server of the user's own (here a local one), fetched by the core (ADR-085):
+    // with its User-Agent and without a referrer. Never tile.openstreetmap.org.
     const tileRequests = [];
+    let tileCacheControl = "no-store";
     const tileServer = createHttpServer((req, res) => {
-      tileRequests.push({ url: req.url, referer: req.headers.referer ?? null });
-      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      tileRequests.push({ url: req.url, referer: req.headers.referer ?? null, userAgent: req.headers["user-agent"] ?? "" });
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": tileCacheControl });
       res.end(tilePng());
     });
     await new Promise((done) => tileServer.listen(0, "127.0.0.1", done));
@@ -5884,11 +5886,55 @@ try {
       for (const request of tileRequests) {
         assert.match(request.url, /^\/\d+\/\d+\/\d+\.png$/);
         assert.equal(request.referer, null, "tiles go without a referrer");
+        assert.match(request.userAgent, /^SpelaionDB\/\d+\.\d+\.\d+ \(\+https:\/\/github\.com\/spelaion-dev\/spelaiondb\)$/, "the core's own User-Agent");
       }
       await shot("sdb-60-map-tiles");
-      // Hidden for this map with its toggle.
+      // Hidden for this map with its toggle: its attribution goes with its tiles.
       await mapHost.getByRole("button", { name: "Tiles" }).click();
       await mapHost.locator(".map-tiles").waitFor({ state: "detached" });
+      assert.equal(await mapHost.locator(".map-attribution").count(), 0);
+
+      // SDB-212: "Use OpenStreetMap" fills the server and turns tiles on. No map is open while
+      // OpenStreetMap is the server, so nothing is asked of it: the address is then pointed at
+      // the local server, keeping OpenStreetMap's name, attribution and its link.
+      await viewerToggle.click();
+      await viewer.waitFor({ state: "detached" });
+      await withSettings("map", async (settings) => {
+        await settings.getByRole("button", { name: "Use OpenStreetMap" }).click();
+        await page.waitForFunction(() => document.querySelector('input[name="tileUrl"]')?.value === "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+        assert.equal(await settings.locator('input[name="tileName"]').inputValue(), "OpenStreetMap");
+        assert.equal(await settings.locator('input[name="tileAttribution"]').inputValue(), "© OpenStreetMap contributors");
+        assert.equal(await settings.locator('input[name="tileAttributionUrl"]').inputValue(), "https://www.openstreetmap.org/copyright");
+        assert.ok(await settings.locator('input[name="mapTiles"]').isChecked(), "choosing it turns tiles on");
+        await settings.getByText(/^SpelaionDB fetches each tile itself/).waitFor();
+        await shot("sdb-212-settings-openstreetmap");
+        await settings.locator('input[name="tileUrl"]').fill(`http://127.0.0.1:${tilePort}/{z}/{x}/{y}.png`);
+        await page.keyboard.press("Enter");
+        await page.waitForFunction((port) => !document.querySelector(".settings-page input:disabled") && document.querySelector('input[name="tileUrl"]')?.value.includes(`:${port}/`), tilePort);
+      });
+      // Kept for an hour now: a map opened again asks nothing more for the same tiles.
+      tileCacheControl = "max-age=3600";
+      const openMap = async () => {
+        await viewerToggle.click();
+        await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
+        await mapHost.locator(".map-tiles img").first().waitFor();
+        await page.waitForFunction(() => [...document.querySelectorAll(".map-tiles img")].some((img) => img.complete && img.naturalWidth === 256));
+      };
+      await openMap();
+      const attribution = mapHost.locator(".map-attribution", { hasText: "OpenStreetMap · © OpenStreetMap contributors" });
+      await attribution.waitFor();
+      await attribution.getByRole("button", { name: "© OpenStreetMap contributors" }).waitFor();
+      await shot("sdb-212-map-attribution");
+      await setTheme("dark", "dark");
+      await shot("sdb-212-map-attribution-dark");
+      await setTheme("light", "light");
+      await page.waitForTimeout(500);
+      const asked = tileRequests.length;
+      await viewerToggle.click();
+      await viewer.waitFor({ state: "detached" });
+      await openMap();
+      await page.waitForTimeout(500);
+      assert.equal(tileRequests.length, asked, "the tiles kept by the core are not asked again");
     } finally {
       // A dialog left open by a failure above is closed first, so the cleanup cannot hide it.
       if (await page.locator(".settings-dialog").count()) await page.locator(".settings-dialog .wizard-header button").click();

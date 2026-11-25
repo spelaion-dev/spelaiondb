@@ -91,6 +91,7 @@ mod table_stats;
 mod temporal;
 #[cfg(all(test, unix))]
 mod test_files;
+pub mod tiles;
 mod tls_warning;
 mod transaction;
 mod transpose;
@@ -289,7 +290,7 @@ pub use spelaion_store::{
     FilterKind, FilteredTable, GridPreferences, INTERFACE_SIZES, MapPreferences, RecentFile,
     SIDE_PANEL_DEFAULT_WIDTH, SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, SavedFile, SavedTab,
     SavedTabs, ScriptErrorMode, ScriptPreferences, SidePanelPreferences, TILE_ATTRIBUTION_MAX,
-    TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
+    TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_attribution_link, check_tile_server,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,

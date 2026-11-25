@@ -370,7 +370,12 @@
     "url": "Dirección de las teselas",
     "urlHint": "Una dirección https:// con {z}, {x} e {y} donde el servidor pone el zoom y la tesela, tal como la da su documentación (http:// solo para un servidor en este equipo). Comprueba que sus condiciones permiten usarlo desde una aplicación.",
     "attribution": "Atribución",
-    "attributionHint": "El crédito que el servidor pide mostrar en los mapas. Se muestra en el mapa.",
+    "attributionHint": "El crédito que el servidor pide mostrar en los mapas. Se muestra en el mapa siempre que se ven sus teselas.",
+    "attributionUrl": "Enlace de la atribución",
+    "attributionUrlHint": "La página https:// a la que enlaza la atribución, como la página de derechos de autor del servidor. Opcional.",
+    "whatIsSent": "SpelaionDB pide cada tesela por sí mismo y la guarda en este equipo el tiempo que el servidor permite. Cada petición le dice al servidor la dirección desde la que llega, qué cuadro del mapa estás mirando y cuándo, y que viene de SpelaionDB y de qué versión. No se envía nada más: ni cookies, ni cuentas, ni nada de tus datos.",
+    "useOpenStreetMap": "Usar OpenStreetMap",
+    "openStreetMapHint": "Rellena el servidor con las teselas estándar de OpenStreetMap y activa las teselas. Las sirven voluntarios bajo la política de teselas de OpenStreetMap, que SpelaionDB sigue: pocas peticiones, teselas guardadas el tiempo que dice el servidor y su atribución en el mapa.",
     "remove": "Quitar el servidor de teselas"
   },
   "shortcuts": {

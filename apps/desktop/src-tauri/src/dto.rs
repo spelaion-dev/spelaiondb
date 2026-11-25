@@ -1165,6 +1165,8 @@ pub struct MapPreferencesItem {
     /// An image address with `{z}`, `{x}` and `{y}`.
     pub tile_url: String,
     pub tile_attribution: String,
+    /// Where the attribution links to; empty for no link (ADR-085).
+    pub tile_attribution_url: String,
 }
 
 impl From<spelaion_core::MapPreferences> for MapPreferencesItem {
@@ -1174,12 +1176,14 @@ impl From<spelaion_core::MapPreferences> for MapPreferencesItem {
             tile_name,
             tile_url,
             tile_attribution,
+            tile_attribution_url,
         } = p;
         Self {
             tiles,
             tile_name,
             tile_url,
             tile_attribution,
+            tile_attribution_url,
         }
     }
 }
@@ -1191,12 +1195,14 @@ impl From<MapPreferencesItem> for spelaion_core::MapPreferences {
             tile_name,
             tile_url,
             tile_attribution,
+            tile_attribution_url,
         } = p;
         Self {
             tiles,
             tile_name,
             tile_url,
             tile_attribution,
+            tile_attribution_url,
         }
     }
 }

@@ -1,0 +1,21 @@
+[package]
+name = "spelaion-tile-http"
+description = "The transport the desktop app gives the core to fetch map tiles (ADR-085). It only moves bytes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+spelaion-core.workspace = true
+async-trait.workspace = true
+# The client `spelaion-https` and Tauri's updater already bring, with the same TLS and proxies:
+# no new client in the app. No cookie store: that feature is never enabled.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
+
+[lints]
+workspace = true

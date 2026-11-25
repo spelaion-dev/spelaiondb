@@ -222,6 +222,21 @@ export const commands = {
 	/**  Saves the map's preferences; the core checks the tile server first. */
 	setMapPreferences: (preferences: MapPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
 	/**
+	 *  Tile `z/x/y` of map view `view`, from the stored tile server, as a `data:` image. Refused with
+	 *  tiles off, past the view's requests, or when the server sends no image.
+	 */
+	mapTile: (view: number, z: number, x: number, y: number) => typedError<string, string>(__TAURI_INVOKE("map_tile", { view, z, x, y })),
+	/**
+	 *  The preferences that choose OpenStreetMap's tiles, with tiles on (the user's opt-in): the
+	 *  page saves them as they come, and the core checks them again then.
+	 */
+	openstreetmapTiles: () => __TAURI_INVOKE<MapPreferencesItem>("openstreetmap_tiles"),
+	/**
+	 *  Opens the stored tile server's attribution link in the system's browser, on the user's click:
+	 *  an `https://` address checked when it was saved and again here.
+	 */
+	openTileAttribution: () => typedError<null, string>(__TAURI_INVOKE("open_tile_attribution")),
+	/**
 	 *  The side panel as the user left it (SDB-451): hidden or not, its width, and the widths the
 	 *  core allows.
 	 */
@@ -4411,6 +4426,8 @@ export type MapPreferencesItem = {
 	/**  An image address with `{z}`, `{x}` and `{y}`. */
 	tileUrl: string,
 	tileAttribution: string,
+	/**  Where the attribution links to; empty for no link (ADR-085). */
+	tileAttributionUrl: string,
 };
 
 /**  One shape of a column's map and the row of the current view it is on. */

@@ -1,6 +1,7 @@
 # ADR-045: Geometry values on a map: GeoJSON from the core, drawn as SVG, tiles only when the user names a server
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented); how tiles are fetched (point 6's requests from the web view,
+  and the alternative of fetching them through the core) superseded by ADR-085
 - **Date:** 2026-11-10
 - **Builds on:** ADR-010 (results live in the core), ADR-040 (plain SVG, no chart library),
   ADR-041 / ADR-042 (anything a driver adds travels as owned data)
