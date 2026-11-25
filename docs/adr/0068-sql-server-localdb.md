@@ -46,12 +46,19 @@ not reach LocalDB (SDB-312).
 4. **Nothing of a network route applies.** A LocalDB connection loads with no tunnel,
    Kubernetes, port, `local_port`, `verify-ca`/`verify-full` or CA; the configuration refuses
    each, saying why, and the plugin refuses a forwarded address too.
-5. **No TLS inside the pipe.** LocalDB closed the pipe as soon as tiberius started TLS inside
-   it, in every mode, while the same login without TLS connected (GitHub's Windows runners,
-   SQL Server 2025's LocalDB). The pipe is communication within the machine that only the
-   instance's owner can open. With the Windows account no password travels; a SQL login's
-   password crosses that local pipe unencrypted. `disable`, `prefer` and `require` all log in
-   that way, and `verify-*` is refused, never quietly ignored.
+5. **No TLS inside the pipe, because LocalDB offers none.** LocalDB answers every PRELOGIN
+   through its pipe with `ENCRYPT_NOT_SUP`, whatever the client asks for (SDB-462, traced on
+   GitHub's Windows runners with SQL Server 2025's LocalDB, 17.0.4025). It loads no certificate
+   (its error log names none) and has no setting to give it one, so no client can encrypt the
+   login there. A full TLS handshake started anyway (login-only `ENCRYPT_OFF` in tiberius, or
+   TDS 8's strict mode) makes LocalDB close the pipe at the ClientHello, which is what SDB-312
+   first saw. The pipe is communication within the machine that only the instance's owner can
+   open. With the Windows account no password travels; a SQL login's password crosses that
+   local pipe unencrypted. `disable`, `prefer` and `require` all log in that way, and
+   `verify-*` is refused, never quietly ignored. A connection over
+   TCP never drops from TLS to plain: there, a server that declines encryption fails the login.
+   The plugin's LocalDB test checks that the session is unencrypted
+   (`sys.dm_exec_connections.encrypt_option`), so a LocalDB that starts offering TLS shows.
 6. **Windows only, and said so.** The picker lists "SQL Server LocalDB" on Windows. Elsewhere it
    is listed as "(Windows only)" and cannot be picked. A LocalDB connection in a shared
    repository still loads on macOS and Linux, and connecting there fails, saying LocalDB runs
@@ -68,6 +75,7 @@ not reach LocalDB (SDB-312).
   - stops `MSSQLLocalDB` first, so the plugin is the one that starts it;
   - logs in with the Windows account, runs a batch and a rolled-back transaction, cancels a
     `WAITFOR` through the pipe, and opens a second connection;
+  - checks that each session is unencrypted (`encrypt_option` is `FALSE`), as point 5 says;
   - checks the refusals: a bad name, a missing instance, a tunnel's address, and a certificate
     to verify.
 - Without `SqlLocalDB` the test says so and stops, which does not count as tested. On Linux it
@@ -88,7 +96,8 @@ not reach LocalDB (SDB-312).
 ## What would change this
 - If users need Windows authentication to SQL Servers on their network, an ADR of its own
   (Kerberos, NTLM, and how they work through a tunnel).
-- If TLS inside the pipe can be made to work (a tiberius change, or what LocalDB expects of it),
-  encrypting the login as over TCP.
+- If a LocalDB release offers encryption on its pipe (its PRELOGIN answer stops being
+  `ENCRYPT_NOT_SUP`; the plugin's test then fails on `encrypt_option`), encrypting the login
+  as over TCP.
 - If `SqlLocalDB` is not on the PATH for many installations, finding it through the registry
   key LocalDB's installer writes.
