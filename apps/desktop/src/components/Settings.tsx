@@ -271,6 +271,11 @@ function ScriptSettings() {
         ))}
       </fieldset>
       <p className="muted small">{t("scripts.onErrorHint")}</p>
+      <label className="check">
+        <input type="checkbox" name="scriptStatementSavepoints" checked={script.statementSavepoints} disabled={busy} onChange={(e) => void setScript({ ...script, statementSavepoints: e.target.checked })} />
+        {t("scripts.statementSavepoints")}
+      </label>
+      <p className="muted small">{t("scripts.statementSavepointsHint")}</p>
       <label className="field port">
         <span>{t("scripts.confirmDelay")}</span>
         <input

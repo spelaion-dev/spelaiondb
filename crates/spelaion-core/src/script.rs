@@ -29,6 +29,12 @@ pub struct ScriptOptions {
     /// A statement that runs longer is cancelled, and fails as timed out. It counts from the
     /// moment the statement is sent until its last row.
     pub statement_timeout: Option<Duration>,
+    /// In a transaction the core opened or the user began, each statement runs after a
+    /// savepoint of the core's, rolled back to when the statement fails and released when it
+    /// succeeds (ADR-086): a failed statement then leaves the transaction open without it, on
+    /// the engines whose errors abort the whole transaction ([`crate::statement_savepoints`]).
+    /// Off by default: one more round trip per statement.
+    pub statement_savepoints: bool,
 }
 
 /// The user's answer to a paused run ([`OnError::Ask`]).

@@ -1026,6 +1026,18 @@ impl Session {
         let losing = self.health.clone();
         let losing_in_run = self.health.clone();
         let total_statements = spans.len();
+        // A run that rolls back only its failed statements (ADR-086): a user's run, asked for,
+        // on an engine whose errors abort the whole transaction and that keeps savepoints in
+        // it, reached on a server known to keep them too.
+        let savepoint = match kind {
+            RunKind::User
+                if run_options.statement_savepoints
+                    && keeps_savepoints(self.server_family.as_ref()) =>
+            {
+                transaction::statement_savepoint(engine)
+            }
+            RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
+        };
 
         let run = Box::pin(async_stream::stream! {
             if let Some(refusal) = refusal {
@@ -1117,6 +1129,19 @@ impl Session {
                     }
                     before = Some(status);
                 }
+                // The core's savepoint before a statement of the user's in a transaction
+                // (ADR-086). A user's own BEGIN, COMMIT, ROLLBACK [TO], SAVEPOINT or RELEASE runs
+                // as written, never wrapped: rolling back to a savepoint of theirs would take
+                // the core's with it. If the core's cannot be set, the statement runs as before.
+                let wrapped = match savepoint {
+                    Some(points)
+                        if kind == StatementKind::Other
+                            && before.is_some_and(|b| b.in_transaction()) =>
+                    {
+                        run_control(&*connection, points.set, &options).await.is_ok().then_some(points)
+                    }
+                    Some(_) | None => None,
+                };
 
                 // The statement, with its timeout: once it fires the statement is cancelled
                 // and its error says it timed out.
@@ -1365,6 +1390,26 @@ impl Session {
                 for notice in notices {
                     yield CoreEvent::Notice { index, notice };
                 }
+                // The core's savepoint (ADR-086): a failed statement is rolled back to it, which
+                // leaves the transaction open without that statement; a statement that ran is
+                // kept by releasing it. These are the core's statements: never in the history,
+                // never counted. Each waits for a cancel still on its way, which must not reach
+                // it (SDB-266). A savepoint the statement itself ended (a function that commits)
+                // is not there any more: then the state read below says what happened.
+                if let Some(points) = wrapped {
+                    cancel_gate.settled().await;
+                    if failure.is_some() {
+                        if run_control(&*connection, points.rollback_to, &options).await.is_ok() {
+                            let _ = run_control(&*connection, points.release, &options).await;
+                            yield CoreEvent::Notice {
+                                index,
+                                notice: transaction::rolled_back_to_savepoint_notice(),
+                            };
+                        }
+                    } else {
+                        let _ = run_control(&*connection, points.release, &options).await;
+                    }
+                }
 
                 // After: what the driver says now.
                 let mut after = None;
@@ -1498,6 +1543,35 @@ impl Session {
             yield CoreEvent::finished(summary);
         });
         end_on_panic(run, losing, total_statements, self.results.clone())
+    }
+}
+
+/// Whether the server a session reached keeps savepoints inside a transaction (ADR-086).
+/// Unknown (a session opened without reading its server) is the engine itself; of
+/// PostgreSQL's protocol only the servers that keep them, the others' errors would abort the
+/// transaction on the core's own `SAVEPOINT`. The MySQL family and Babelfish never get here:
+/// their engines undo only the failed statement.
+fn keeps_savepoints(family: Option<&crate::ServerFamily>) -> bool {
+    use crate::ServerFamily as F;
+    match family {
+        None => true,
+        Some(F::PostgreSql | F::CockroachDb | F::YugabyteDb) => true,
+        Some(
+            F::RisingWave
+            | F::Materialize
+            | F::CrateDb
+            | F::Unchecked(_)
+            | F::MySql
+            | F::MariaDb
+            | F::OceanBase
+            | F::TiDb
+            | F::SingleStore
+            | F::Doris
+            | F::GreptimeDb
+            | F::Databend
+            | F::StarRocks
+            | F::Babelfish,
+        ) => false,
     }
 }
 

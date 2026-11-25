@@ -1,6 +1,7 @@
 # ADR-035: Script runs that behave like a script runner: error modes, timeouts and server output
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented); going on inside an aborted transaction with a savepoint per
+  statement, which it left out, is decided by ADR-086
 - **Date:** 2026-11-07
 - **Builds on:** ADR-008 (splitting and classification in the core), ADR-028 (idle sessions),
   ADR-029 (connection types and their confirmations), ADR-031 (transactions)

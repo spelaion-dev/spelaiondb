@@ -3,8 +3,11 @@
 - `crates/spelaion-core`: `open_connection` (resolved configuration → tunnel from the
   `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts: stop,
   continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
-  ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
-  IPC windows).
+  ticket are in `script.rs`, ADR-035; with `ScriptOptions::statement_savepoints`, the user's
+  setting, a savepoint of the core's around each of the user's statements in a transaction on
+  PostgreSQL rolls back only a failed one, ADR-086: never around transaction control, never in
+  the history, `transaction::statement_savepoint` says which engines, `tests/script_runs.rs`)
+  and `ResultStore` (results in the core, served in Arrow IPC windows).
   A stored result's end is one type, `ResultEnd` (SDB-367, ADR-060): `Loading`, `Whole`, or
   `Partial(PartialReason)` (cancelled, failed, timed out, connection lost). Only `session.rs`
   sets it, where a statement's stream stops (and `end_on_panic` for a run that panics), and it

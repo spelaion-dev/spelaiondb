@@ -297,6 +297,8 @@
       "continue": "Seguir con la siguiente sentencia",
       "ask": "Preguntar: detener, saltar o saltar todos"
     },
+    "statementSavepoints": "En una transacción, deshacer solo la sentencia que falla",
+    "statementSavepointsHint": "En PostgreSQL una sentencia que falla aborta toda la transacción, así que la ejecución no puede seguir y solo queda deshacerla. Con esto activado, SpelaionDB pone un punto de guardado antes de cada sentencia y vuelve a él si la sentencia falla: la transacción sigue abierta sin esa sentencia, la ejecución continúa según su modo y Confirmar guarda el resto. Cuesta un viaje de ida y vuelta más por sentencia. MySQL, MariaDB, SQL Server y SQLite ya deshacen solo la sentencia que falla; DuckDB no tiene puntos de guardado, así que allí una sentencia que falla sigue terminando la transacción.",
     "onErrorHint": "Cada pestaña del editor puede elegir otro modo para sus ejecuciones. Una ejecución cancelada siempre se detiene, igual que una sentencia fallida que abortó o deshizo su transacción. Las sentencias peligrosas se siguen confirmando antes de ejecutar.",
     "notifications": "Notificaciones",
     "notify": "Avisarme cuando termine una ejecución larga con la aplicación en segundo plano",

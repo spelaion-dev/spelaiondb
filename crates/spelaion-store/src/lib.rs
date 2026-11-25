@@ -1108,6 +1108,10 @@ pub struct ScriptPreferences {
     /// never pressed on reflex; 0 (the default) enables it at once. Only a pause: whether to
     /// confirm is the core's decision (`guard.rs`), never this setting's.
     pub confirm_delay_seconds: u32,
+    /// In a transaction, roll back only a failed statement, with a savepoint the core sets
+    /// before each one (ADR-086), on the engines whose errors abort the whole transaction; off
+    /// by default: one more round trip per statement.
+    pub statement_savepoints: bool,
 }
 
 impl ScriptPreferences {
@@ -1124,6 +1128,7 @@ impl Default for ScriptPreferences {
             notify: false,
             notify_after_seconds: 30,
             confirm_delay_seconds: 0,
+            statement_savepoints: false,
         }
     }
 }
@@ -2157,6 +2162,8 @@ impl Store {
             notify: self.get_flag("script.notify", defaults.notify)?,
             notify_after_seconds,
             confirm_delay_seconds,
+            statement_savepoints: self
+                .get_flag("script.statement_savepoints", defaults.statement_savepoints)?,
         })
     }
 
@@ -2169,6 +2176,7 @@ impl Store {
             notify,
             notify_after_seconds,
             confirm_delay_seconds,
+            statement_savepoints,
         } = *preferences;
         if !(1..=ScriptPreferences::MAX_NOTIFY_AFTER).contains(&notify_after_seconds) {
             return Err(StoreError::new(format!(
@@ -2185,6 +2193,7 @@ impl Store {
         self.set_personal_setting("script.on_error", on_error.as_str())?;
         self.set_personal_setting("script.confirm_delay", &confirm_delay_seconds.to_string())?;
         self.set_flag("script.notify", notify)?;
+        self.set_flag("script.statement_savepoints", statement_savepoints)?;
         self.set_personal_setting("script.notify_after", &notify_after_seconds.to_string())
     }
 
@@ -3393,6 +3402,7 @@ mod tests {
                 notify: true,
                 notify_after_seconds: 120,
                 confirm_delay_seconds: 3,
+                statement_savepoints: true,
             };
             store.set_script_preferences(&changed).unwrap();
             assert_eq!(store.get_script_preferences().unwrap(), changed);

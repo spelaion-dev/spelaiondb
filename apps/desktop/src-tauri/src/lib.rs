@@ -2805,6 +2805,13 @@ async fn start_script(
             .await?,
     );
     let _ = on_event.send(placed.started(page_sort));
+    // Whether to roll back only failed statements in a transaction (ADR-086): the user's
+    // setting, read by the core for every run; one that cannot be read is off.
+    let statement_savepoints = state
+        .history
+        .script_preferences()
+        .await
+        .is_ok_and(|p| p.statement_savepoints);
     let events = state.history.run_script_in_context(
         &open.session,
         &sql,
@@ -2830,6 +2837,7 @@ async fn start_script(
                 Some(seconds) => Some(std::time::Duration::from_secs(seconds.into())),
                 None => open.resolved.statement_timeout,
             },
+            statement_savepoints,
         },
     );
     // A big result streams hundreds of batches a second: the window gets its row count a few

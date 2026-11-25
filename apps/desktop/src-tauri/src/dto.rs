@@ -2398,6 +2398,9 @@ pub struct ScriptPreferencesItem {
     pub notify_after_seconds: u32,
     /// Seconds before "Run anyway" is enabled in a risky statement's confirmation.
     pub confirm_delay_seconds: u32,
+    /// Roll back only a failed statement in a transaction, with a savepoint per statement
+    /// (ADR-086); off by default.
+    pub statement_savepoints: bool,
 }
 
 impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
@@ -2407,6 +2410,7 @@ impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
             notify: p.notify,
             notify_after_seconds: p.notify_after_seconds,
             confirm_delay_seconds: p.confirm_delay_seconds,
+            statement_savepoints: p.statement_savepoints,
         }
     }
 }
@@ -2418,6 +2422,7 @@ impl From<ScriptPreferencesItem> for spelaion_core::ScriptPreferences {
             notify: p.notify,
             notify_after_seconds: p.notify_after_seconds,
             confirm_delay_seconds: p.confirm_delay_seconds,
+            statement_savepoints: p.statement_savepoints,
         }
     }
 }

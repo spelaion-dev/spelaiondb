@@ -311,7 +311,7 @@ pub use tls_warning::{
 };
 pub use transaction::{
     CommitMode, IdleRollback, TransactionError, TransactionLifecycle, TransactionOutcome,
-    TransactionPhase, TransactionState, TransactionStatus,
+    TransactionPhase, TransactionState, TransactionStatus, statement_savepoints,
 };
 pub use transpose::{MAX_TRANSPOSED_ROWS, TransposeError, Transposed, transpose};
 pub use value_pick::{

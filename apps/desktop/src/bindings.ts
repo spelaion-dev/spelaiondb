@@ -6470,6 +6470,11 @@ export type ScriptPreferencesItem = {
 	notifyAfterSeconds: number,
 	/**  Seconds before "Run anyway" is enabled in a risky statement's confirmation. */
 	confirmDelaySeconds: number,
+	/**
+	 *  Roll back only a failed statement in a transaction, with a savepoint per statement
+	 *  (ADR-086); off by default.
+	 */
+	statementSavepoints: boolean,
 };
 
 /**  Why a run stopped before going through every statement its mode let it run. */

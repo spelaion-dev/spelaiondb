@@ -125,6 +125,7 @@ fn start(session: &Session, script: &str, on_error: OnError) -> JoinHandle<Vec<C
         ScriptOptions {
             on_error,
             statement_timeout: None,
+            statement_savepoints: false,
         },
     );
     tokio::spawn(run.collect::<Vec<_>>())
@@ -371,6 +372,7 @@ async fn a_statement_that_runs_past_its_timeout_ends_timed_out() {
         ScriptOptions {
             on_error: OnError::Stop,
             statement_timeout: Some(Duration::from_millis(50)),
+            statement_savepoints: false,
         },
     );
     let events = tokio::time::timeout(LIMIT, run.collect::<Vec<_>>())
