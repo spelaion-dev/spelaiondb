@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use spelaion_driver_api::{
-    Capabilities, DriverError, InsertTarget, NameFilter, PlanMode, SchemaObject, TlsMode,
+    Capabilities, DriverError, InsertTarget, NameFilter, PlanMode, SchemaObject, ServerObject,
+    TlsMode,
 };
 
 /// The id of a stream of data frames, chosen by the core and unique in the plugin's process.
@@ -57,6 +58,8 @@ pub mod method {
     pub const OBJECT_PROPERTIES: &str = "object_properties";
     pub const TABLE_PARTITIONS: &str = "table_partitions";
     pub const OBJECT_DEPENDENCIES: &str = "object_dependencies";
+    // 1.3 (ADR-082).
+    pub const SERVER_OBJECT_DEFINITION: &str = "server_object_definition";
 
     // Notifications from the plugin.
     pub const SESSION_CLOSED: &str = "session.closed";
@@ -505,6 +508,9 @@ pub struct CatalogRequest {
     pub filter: Option<NameFilter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object: Option<SchemaObject>,
+    /// The object of `server_object_definition` (1.3, ADR-082).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_object: Option<ServerObject>,
 }
 
 #[cfg(test)]

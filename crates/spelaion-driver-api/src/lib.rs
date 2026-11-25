@@ -37,7 +37,7 @@ pub use introspect::{
     ServerObjectKind, TableInfo, check_definition, property, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
-pub use rows::{TextRows, TextRowsBuilder};
+pub use rows::{Cell, ColumnKind, TextRows, TextRowsBuilder};
 pub use secret::Secret;
 pub use value::{LogicalType, Value};
 
@@ -60,6 +60,12 @@ pub struct Capabilities {
     /// [`Connection::execute_bound`] works: a read can take values bound as parameters (the
     /// data search of ADR-043).
     pub bound_params: bool,
+    /// [`Connection::insert_rows`] takes columns of bytes ([`ColumnKind::Bytes`]) and binds them
+    /// as the engine's binary type, so a copy carries binary columns (SDB-464, ADR-069). Rows
+    /// with bytes are never sent to a connection without it. Absent from a plugin before
+    /// protocol 1.3, which reads as false.
+    #[serde(default)]
+    pub insert_bytes: bool,
 }
 
 /// Fully resolved connection parameters (variables and secrets already substituted).
@@ -405,6 +411,13 @@ pub trait Connection: Send + Sync {
         objects.retain(|o| filter.matches(&o.name));
         Ok(objects)
     }
+    /// The DDL of an object from [`Connection::list_server_objects`], ending in `;`, for the
+    /// kinds that may have one ([`ServerObjectKind::has_definition`], ADR-082).
+    async fn server_object_definition(&self, _object: &ServerObject) -> Result<String> {
+        Err(DriverError::Other(
+            "this engine has no definitions for objects outside a schema".into(),
+        ))
+    }
     /// The DDL of an object from [`Connection::list_schema_objects`], ending in `;`.
     async fn object_definition(&self, _object: &SchemaObject) -> Result<String> {
         Err(DriverError::Other(
@@ -429,10 +442,11 @@ pub trait Connection: Send + Sync {
     /// Inserts `rows` into a table (data imports, ADR-038). Every value travels as a bound
     /// parameter or as the data of the engine's bulk path (PostgreSQL's `COPY … FROM STDIN`),
     /// never written into SQL text: only the quoted table and column names are. Values are
-    /// text, or `None` for NULL, and the server converts them to each column's type. They come
-    /// as columns of text ([`TextRows`]), read in place: the same rows whether the driver is
-    /// compiled in or a plugin. It runs inside whatever transaction the session has open and
-    /// opens none itself. Returns the rows inserted.
+    /// text, or `None` for NULL, and the server converts them to each column's type; with
+    /// [`Capabilities::insert_bytes`], a column may instead carry bytes ([`ColumnKind::Bytes`]),
+    /// bound as the engine's binary type. They come as columns ([`TextRows`]), read in place:
+    /// the same rows whether the driver is compiled in or a plugin. It runs inside whatever
+    /// transaction the session has open and opens none itself. Returns the rows inserted.
     async fn insert_rows(&self, _target: &InsertTarget, _rows: TextRows) -> Result<u64> {
         Err(DriverError::Other(
             "this connection cannot import rows".into(),

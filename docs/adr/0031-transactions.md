@@ -1,6 +1,6 @@
 # ADR-031: Transactions you can see and control: manual commit per tab, smart commit per type
 
-- **Status:** Accepted (implemented)
+- **Status:** Accepted (implemented; extended by ADR-081: idle transactions rolled back)
 - **Date:** 2026-11-07
 - **Builds on:** ADR-028 (idle sessions), ADR-029 (connection types), ADR-014 (table edits),
   ADR-019 (agents' writes)
@@ -96,7 +96,8 @@ transaction id of two consecutive statements.
 
 ## Left out
 - **Close idle transactions after N seconds** (DBeaver's setting): it rolls back the user's
-  work, so it needs its own warning design. Tracked in the backlog.
+  work, so it needs its own warning design. Done in ADR-081: a warning first, then a rollback
+  that keeps the session.
 - **Rollback to the last good statement on error** (psql's `ON_ERROR_ROLLBACK`): with savepoints
   around every statement; a later option.
 - **Isolation levels** in the toolbar: `SET TRANSACTION` typed in the editor works.

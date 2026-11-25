@@ -216,6 +216,150 @@ fn qualified_range(tokens: &[Token], mut i: usize) -> Result<(usize, usize), Ddl
     Ok((start, tokens[i].end))
 }
 
+/// A `CREATE [OR REPLACE | OR ALTER] VIEW`, `FUNCTION`, `PROCEDURE` or `MACRO` text (a view's or
+/// a routine's definition as its engine writes it; DuckDB's functions are macros) with the
+/// object's (maybe qualified) name replaced by `new_name`, written by the caller quoted for the
+/// engine: what a schema compare compares and moves to the other schema (ADR-070). Anything
+/// else in the text stays as it is.
+pub(crate) fn rename_defined(
+    sql: &str,
+    flavor: Flavor,
+    new_name: &str,
+) -> Result<String, DdlError> {
+    let tokens = tokenize(sql, flavor)?;
+    let keyword = tokens
+        .iter()
+        .position(|t| {
+            ["VIEW", "FUNCTION", "PROCEDURE", "MACRO"]
+                .iter()
+                .any(|word| word_is(sql, t, word))
+        })
+        .ok_or(DdlError::Unreadable(
+            "not a view's, function's or procedure's definition",
+        ))?;
+    let mut i = keyword + 1;
+    // IF NOT EXISTS
+    if tokens.get(i).is_some_and(|t| word_is(sql, t, "IF")) {
+        i += 3;
+    }
+    let (start, end) = qualified_range(&tokens, i)?;
+    let mut out = sql.to_string();
+    out.replace_range(start..end, new_name);
+    Ok(out)
+}
+
+/// `sql` with each run of blanks between two tokens (spaces, tabs, line breaks) written as one
+/// space, and none at the end: what a schema compare ignores in a view's or routine's source
+/// (ADR-070; SQL Server keeps `CREATE OR ALTER VIEW` as `CREATE   VIEW`, and engines lay a
+/// view's text out on lines their own way). Strings, quoted names and comments keep their inner
+/// blanks, and a line comment keeps the line break that ends it. A text the tokenizer cannot
+/// read is returned as it is.
+pub(crate) fn collapse_blanks(sql: &str, flavor: Flavor) -> String {
+    let Ok(tokens) = tokenize(sql, flavor) else {
+        return sql.to_string();
+    };
+    let mut out = String::with_capacity(sql.len());
+    let mut at = 0;
+    for token in tokens.iter().map(Some).chain([None]) {
+        let end = token.map_or(sql.len(), |t| t.start);
+        // Between two tokens there are only blanks and comments.
+        let gap = &sql[at..end];
+        let mut i = 0;
+        let bytes = gap.as_bytes();
+        let mut after_line_comment = false;
+        while i < bytes.len() {
+            if gap[i..].starts_with("--") {
+                let stop = gap[i..].find('\n').map_or(gap.len(), |n| i + n);
+                out.push_str(&gap[i..stop]);
+                i = stop;
+                after_line_comment = true;
+            } else if gap[i..].starts_with("/*") {
+                let stop = gap[i + 2..].find("*/").map_or(gap.len(), |n| i + 2 + n + 2);
+                out.push_str(&gap[i..stop]);
+                i = stop;
+                after_line_comment = false;
+            } else if matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+                let mut line_break = false;
+                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+                    line_break |= bytes[i] == b'\n';
+                    i += 1;
+                }
+                if line_break && after_line_comment {
+                    out.push('\n');
+                } else if token.is_some() || i < bytes.len() {
+                    out.push(' ');
+                }
+                after_line_comment = false;
+            } else {
+                let c = gap[i..].chars().next().expect("a character");
+                out.push(c);
+                i += c.len_utf8();
+                after_line_comment = false;
+            }
+        }
+        if let Some(t) = token {
+            out.push_str(&sql[t.start..t.end]);
+            at = t.end;
+        }
+    }
+    out
+}
+
+/// Whether a string literal of `sql` holds `schema` as a qualifier (`'DELETE FROM schema.t'`):
+/// dynamic SQL that [`requalified`] does not move (ADR-070). Matched without case.
+pub(crate) fn strings_qualify_with(sql: &str, flavor: Flavor, schema: &str) -> bool {
+    let needle = format!("{}.", schema.to_lowercase());
+    tokenize(sql, flavor).is_ok_and(|tokens| {
+        tokens.iter().any(|t| {
+            t.kind == Tok::String
+                && sql[t.start..t.end]
+                    .to_lowercase()
+                    .replace(['"', '`', '[', ']'], "")
+                    .contains(&needle)
+        })
+    })
+}
+
+/// `sql` with every name that qualifies another with `schema` (`schema.t`, `"schema".t`) put
+/// in `replacement`, written by the caller quoted for the engine. Only names followed by a dot
+/// are touched, found as tokens: a string, a comment or a name that is not a qualifier keeps
+/// the schema's name (ADR-070). A bare name is matched without case, a quoted one exactly.
+pub(crate) fn requalified(
+    sql: &str,
+    flavor: Flavor,
+    schema: &str,
+    replacement: &str,
+) -> Result<String, DdlError> {
+    let tokens = tokenize(sql, flavor)?;
+    let mut ranges = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        // A schema qualifies what follows it, also as the middle of a three-part name.
+        if !tokens.get(i + 1).is_some_and(|t| t.kind == Tok::Dot) {
+            continue;
+        }
+        let text = &sql[token.start..token.end];
+        let names_it = match token.kind {
+            Tok::Word => text.eq_ignore_ascii_case(schema),
+            Tok::Quoted => unquote(text) == schema,
+            Tok::String
+            | Tok::Open
+            | Tok::Close
+            | Tok::Comma
+            | Tok::Dot
+            | Tok::Semicolon
+            | Tok::Other => false,
+        };
+        if names_it {
+            ranges.push(token.start..token.end);
+        }
+    }
+    let mut out = sql.to_string();
+    for range in ranges.into_iter().rev() {
+        out.replace_range(range, replacement);
+    }
+    Ok(out)
+}
+
 /// A kept `CREATE TABLE` or `CREATE INDEX` text with the object's (maybe qualified) name
 /// replaced by `new_name`, and for an index the table after `ON` replaced by `on_table`: the
 /// copy of a table and of its indexes (SDB-394). Both replacements are written by the caller,
@@ -796,6 +940,73 @@ pub(crate) fn qualify_create(sql: &str, quoted_schema: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_definition_is_renamed_whatever_creates_it() {
+        for (sql, renamed) in [
+            (
+                "CREATE OR REPLACE VIEW public.v AS SELECT 1",
+                "CREATE OR REPLACE VIEW X AS SELECT 1",
+            ),
+            (
+                "CREATE DEFINER=`root`@`%` FUNCTION `f`(x INT) RETURNS INT RETURN x",
+                "CREATE DEFINER=`root`@`%` FUNCTION X(x INT) RETURNS INT RETURN x",
+            ),
+            (
+                "CREATE MACRO s.f(x) AS (x + 1);",
+                "CREATE MACRO X(x) AS (x + 1);",
+            ),
+            (
+                "create procedure [dbo].[p] as select 1",
+                "create procedure X as select 1",
+            ),
+        ] {
+            assert_eq!(rename_defined(sql, Flavor::Sqlite, "X").unwrap(), renamed);
+        }
+        assert!(rename_defined("SELECT 1", Flavor::Sqlite, "X").is_err());
+    }
+
+    #[test]
+    fn only_blanks_between_tokens_are_collapsed() {
+        assert_eq!(
+            collapse_blanks(
+                "CREATE   VIEW v AS\r\n  SELECT 'a  b' AS \"x  y\",\t[p  q] -- two  spaces\n  FROM t /* a  b */  ",
+                Flavor::Sqlite
+            ),
+            "CREATE VIEW v AS SELECT 'a  b' AS \"x  y\", [p  q] -- two  spaces\nFROM t /* a  b */"
+        );
+        // A line break inside a string is the string's.
+        assert_eq!(
+            collapse_blanks("SELECT  'a\n  b'\n\n  FROM t", Flavor::Sqlite),
+            "SELECT 'a\n  b' FROM t"
+        );
+        assert_eq!(
+            collapse_blanks("SELECT 'it''s  ok',  `a  b`", Flavor::Mysql),
+            "SELECT 'it''s  ok', `a  b`"
+        );
+    }
+
+    #[test]
+    fn only_qualifiers_of_the_schema_are_put_in_the_other() {
+        let sql = "CREATE VIEW src.v AS SELECT src.t.a, \"src\".u.b, src FROM src.t \
+                   JOIN other.src x ON 'src.t' = x.c -- src.t\nJOIN db.src.w ON 1 = 1";
+        assert_eq!(
+            requalified(sql, Flavor::Sqlite, "src", "dst").unwrap(),
+            "CREATE VIEW dst.v AS SELECT dst.t.a, dst.u.b, src FROM dst.t \
+             JOIN other.src x ON 'src.t' = x.c -- src.t\nJOIN db.dst.w ON 1 = 1"
+        );
+        // MySQL's backquotes, and a bare name matched without case.
+        assert_eq!(
+            requalified(
+                "SELECT `Src`.`t`.a FROM SRC.t",
+                Flavor::Mysql,
+                "Src",
+                "`dst`"
+            )
+            .unwrap(),
+            "SELECT `dst`.`t`.a FROM `dst`.t"
+        );
+    }
 
     fn column(sql: &str, flavor: Flavor) -> (ColumnDef, Vec<(ClauseKind, String)>) {
         let def = parse_column(sql, flavor).unwrap();

@@ -16,12 +16,14 @@ import {
   type ObjectItem,
   type ObjectTargetItem,
   type SchemaObjectItem,
+  type ServerObjectItem,
   type SqlTemplateItem,
 } from "./api";
 import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase, SET_ACTIVE_SCHEMA_EVENT } from "./connect";
 import { openDiagram } from "./diagramTabs";
 import { useApp } from "./store";
 import { useExport } from "./components/ExportDialog";
+import { useCopy } from "./components/CopyDialog";
 import { useImport } from "./components/ImportDialog";
 import { isConnected, isRunning } from "./tabState";
 
@@ -157,6 +159,11 @@ export function importIntoTable(connectionId: string, session: string, object: O
   useImport.getState().open({ session, connectionId, schema: object.schema, table: object.name, text: null });
 }
 
+/** Copies the table or view to another connection (ADR-069). */
+export function copyToConnection(connectionId: string, session: string, object: ObjectItem) {
+  useCopy.getState().open({ session, connectionId, schema: object.schema, table: object.name });
+}
+
 /** The ER diagram of the table's related tables, or of the tables chosen with Ctrl+click. */
 export function openRelationDiagram(connectionId: string, session: string, object: ObjectItem, chosen: { schema: string; name: string }[] | null = null) {
   openDiagram(connectionId, chosen ? { kind: "tables", tables: chosen } : { kind: "focus", schema: object.schema, table: object.name }, session);
@@ -182,6 +189,12 @@ export const canGenerateCall = (object: SchemaObjectItem, actions: ObjectActions
 /** The object's definition, written by the driver, in a new tab: nothing runs. */
 export async function openObjectDefinition(connectionId: string, session: string, object: SchemaObjectItem) {
   openSqlTab(connectionId, session, object.schema, await call(commands.objectDefinition(session, object)));
+}
+
+/** An object outside every schema (a Materialize cluster, ADR-082), its definition written by
+ *  the driver, in a new tab: nothing runs. */
+export async function openServerObjectDefinition(connectionId: string, session: string, object: ServerObjectItem) {
+  openSqlTab(connectionId, session, undefined, await call(commands.serverObjectDefinition(session, object)));
 }
 
 /** "Edit source": the core writes the routine as the statement that replaces it (ADR-047). */

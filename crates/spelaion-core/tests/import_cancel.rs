@@ -148,6 +148,7 @@ const NONE: Safeguards = Safeguards {
     confirm_execution: false,
     confirm_data_changes: false,
     close_idle_after: None,
+    close_idle_transaction_after: None,
     manual_commit: false,
     smart_commit: false,
 };
@@ -174,6 +175,7 @@ fn session(engine: &Arc<Engine>) -> Arc<Session> {
             schemas: true,
             insert_rows: true,
             bound_params: false,
+            insert_bytes: false,
         },
     };
     Arc::new(Session::new(

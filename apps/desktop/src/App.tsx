@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import { ExportDialog } from "./components/ExportDialog";
 import { BackupDialog } from "./components/BackupDialog";
+import { CopyDialog } from "./components/CopyDialog";
+import { SchemaCompareDialog } from "./components/SchemaCompareDialog";
 import { ImportDialog } from "./components/ImportDialog";
 import { RunFileDialog } from "./components/RunFileDialog";
 import { ActivityBar } from "./components/ActivityBar";
@@ -163,6 +165,10 @@ export default function App() {
     const unlistenTransaction = events.transactionChanged.listen((e) => {
       useApp.getState().setTransaction(e.payload.session, e.payload.status);
     });
+    // The core rolled back a tab's idle transaction (ADR-081): the tab says so once.
+    const unlistenIdleRollback = events.idleTransactionRolledBack.listen((e) => {
+      useApp.getState().updateTab(e.payload.session, { idleRolledBack: e.payload });
+    });
     // The core keeps each editor tab's run state (SDB-370); the tab only shows it.
     const unlistenRun = events.runChanged.listen((e) => {
       useApp.getState().updateTab(e.payload.session, { runState: e.payload.state });
@@ -191,6 +197,7 @@ export default function App() {
       void unlistenClosed.then((f) => f());
       void unlistenLost.then((f) => f());
       void unlistenTransaction.then((f) => f());
+      void unlistenIdleRollback.then((f) => f());
       void unlistenRun.then((f) => f());
       void unlistenQuit.then((f) => f());
       void unlistenLaunch.then((f) => f());
@@ -302,7 +309,9 @@ export default function App() {
       <ExplorerDialogHost />
       <ExportDialog />
       <ImportDialog />
+      <CopyDialog />
       <BackupDialog />
+      <SchemaCompareDialog />
       <RunFileDialog />
       <Dialogs />
     </div>

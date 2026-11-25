@@ -236,6 +236,9 @@ pub struct ImportPreviewItem {
     pub suggested_table: String,
     /// The worksheets of a workbook (XLSX), in order; empty for the other formats.
     pub sheets: Vec<String>,
+    /// The core puts the rows in place whole or not at all (ADR-066): no batches to commit, so
+    /// the dialog offers no "Commit every".
+    pub kept_whole: bool,
 }
 
 fn count(n: usize) -> u32 {
@@ -423,6 +426,7 @@ pub async fn import_preview(
         more: preview.more,
         suggested_table: preview.suggested_table,
         sheets: preview.sheets,
+        kept_whole: preview.kept_whole,
     })
 }
 
@@ -445,7 +449,13 @@ pub async fn import_plan(
     )
     .await
     .map_err(|e| e.to_string())?;
-    Ok(ImportPlanItem {
+    Ok(plan_item(plan))
+}
+
+/// What the core will run, for the page: an import's plan, or the target side of a copy's
+/// (ADR-069).
+pub(crate) fn plan_item(plan: spelaion_core::ImportPlan) -> ImportPlanItem {
+    ImportPlanItem {
         risks: plan
             .risks
             .iter()
@@ -462,7 +472,7 @@ pub async fn import_plan(
         table: plan.table,
         columns: plan.columns,
         creates_table: plan.creates_table,
-    })
+    }
 }
 
 /// A new session for an import, opened from the `source` session's resolved connection and

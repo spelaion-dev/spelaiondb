@@ -655,11 +655,18 @@ function ImportForm({ request }: { request: ImportRequest }) {
                 </tbody>
               </table>
             </div>
-            <label className="field">
-              {t("import.commitEvery")}
-              <input type="text" inputMode="numeric" value={commitEvery} onChange={(e) => setCommitEvery(e.target.value.replace(/[^0-9]/g, ""))} />
-            </label>
-            <p className="muted small">{t("import.commitHint")}</p>
+            {preview?.keptWhole ? (
+              // The core loads the rows aside and puts them in place in one step (ADR-066).
+              <p className="muted small">{t("import.keptWhole")}</p>
+            ) : (
+              <>
+                <label className="field">
+                  {t("import.commitEvery")}
+                  <input type="text" inputMode="numeric" value={commitEvery} onChange={(e) => setCommitEvery(e.target.value.replace(/[^0-9]/g, ""))} />
+                </label>
+                <p className="muted small">{t("import.commitHint")}</p>
+              </>
+            )}
             <div className="modal-actions">
               <button onClick={() => setStep("source")}>{t("import.back")}</button>
               <button className="primary" disabled={!targetReady} onClick={() => void review()}>

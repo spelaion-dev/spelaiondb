@@ -35,6 +35,7 @@ mod group;
 mod guard;
 mod health;
 mod history;
+mod idle_transaction;
 mod import;
 pub mod instance;
 mod job;
@@ -44,7 +45,7 @@ mod load_rows;
 mod locks;
 pub mod masking;
 mod mongodb_srv;
-mod objects;
+pub(crate) mod objects;
 mod observe;
 mod open;
 mod open_tabs;
@@ -66,6 +67,7 @@ mod run_state;
 #[cfg(test)]
 mod run_state_tests;
 mod save_name;
+mod schema_compare;
 mod script;
 mod selection_stats;
 mod server_family;
@@ -80,6 +82,7 @@ mod sort;
 mod sql_file;
 mod sql_mode;
 mod startup;
+pub mod table_copy;
 mod table_data;
 mod table_filters;
 mod table_pages;
@@ -179,6 +182,7 @@ pub use guard::{
 };
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, HistoryScope, QueryHistory};
+pub use idle_transaction::{IDLE_ROLLBACK_LEAD, IdleRolledBack, idle_rollback_lead};
 pub use import::{
     ColumnKind, ColumnMapping, DEFAULT_COMMIT_EVERY, DEFAULT_SAMPLE_ROWS, IMPORT_BATCH_ROWS,
     IMPORT_PREVIEW_CHARS, IMPORT_PREVIEW_ROWS, IfExists, ImportError, ImportFormat, ImportPlan,
@@ -245,6 +249,14 @@ pub use results::{
     RevealError, RevealedCell, StoredResult,
 };
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
+pub use schema_compare::{
+    CompareError, CompareObjectKind, CompareProgress, CompareSide, ComparedPart, ComparedSchemas,
+    ConstraintKindCompared, ConstraintSnapshot, IndexSnapshot, MigrationOptions, MigrationScript,
+    NotCompared, NotScripted, ObjectChanges, ObjectComparison, ObjectStatus, PartComparison,
+    PartStatus, Property, PropertyChange, RoutineKind, RoutineSnapshot, SchemaComparison,
+    SchemaSnapshot, TableSnapshot, ViewSnapshot, compare, compare_schemas, compare_support,
+    migration_script, read_snapshot,
+};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
 };
@@ -292,8 +304,8 @@ pub use tls_warning::{
     draft_tls_warning, file_tls_warning, is_local_host, tls_warning,
 };
 pub use transaction::{
-    CommitMode, TransactionError, TransactionLifecycle, TransactionOutcome, TransactionPhase,
-    TransactionState, TransactionStatus,
+    CommitMode, IdleRollback, TransactionError, TransactionLifecycle, TransactionOutcome,
+    TransactionPhase, TransactionState, TransactionStatus,
 };
 pub use transpose::{MAX_TRANSPOSED_ROWS, TransposeError, Transposed, transpose};
 pub use value_pick::{

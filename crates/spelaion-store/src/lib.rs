@@ -761,10 +761,13 @@ pub enum BookmarkKind {
     Type,
     Event,
     Synonym,
+    Sink,
+    Connection,
+    Secret,
 }
 
 impl BookmarkKind {
-    pub const ALL: [BookmarkKind; 19] = [
+    pub const ALL: [BookmarkKind; 22] = [
         Self::Schema,
         Self::Table,
         Self::PartitionedTable,
@@ -784,6 +787,9 @@ impl BookmarkKind {
         Self::Type,
         Self::Event,
         Self::Synonym,
+        Self::Sink,
+        Self::Connection,
+        Self::Secret,
     ];
 
     /// Its text in the store: the kind's name as the drivers give it.
@@ -808,6 +814,9 @@ impl BookmarkKind {
             Self::Type => "type",
             Self::Event => "event",
             Self::Synonym => "synonym",
+            Self::Sink => "sink",
+            Self::Connection => "connection",
+            Self::Secret => "secret",
         }
     }
 

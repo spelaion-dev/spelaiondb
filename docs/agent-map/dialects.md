@@ -26,9 +26,19 @@
   dialect's own `code_ranges`). A new dialect gets its pieces there (`extra_atoms`, and a
   property of its own for blocks or separators); a change to a splitter keeps them passing.
   `SPELAION_FUZZ_CASES=<n>` runs a long local fuzz (see `CONTRIBUTING.md`).
-- ADR-065 (SDB-157, not implemented yet): each SQL dialect is to get one lexical scanner,
-  a lazy sequence of regions that the splitter, `code_ranges`, `copy_data` and the guard's
-  fallback all read, instead of each scanning the text its own way. Until a dialect moves,
-  a rule its splitter learns (a quote, a meta line, white space) must be copied into its other
-  readers (`code_ranges`'s skip function, PostgreSQL's `copy_stdio`) in the same change: that
-  gap is what SDB-436, 437 and 439 were.
+  `readers_agree_with_the_splitter` (ADR-065 step 1, SDB-452) compares each dialect's readers
+  with its splitter: every statement reads alike with `code_ranges` alone and in its script,
+  and COPY data follows only a statement whose first word, read the splitter's way, is `COPY`.
+  A disagreement it finds gets a bug card and an entry in `KNOWN`, which lets through only
+  statements of that shape; the card's fix takes the entry out, and no other change to a
+  dialect goes in with the test.
+- ADR-065 (SDB-157): each SQL dialect gets one lexical scanner, a lazy sequence of regions
+  (`scanner.rs`: `Region`, `RegionKind`) that the splitter, `code_ranges`, `copy_data` and the
+  guard's fallback all read, instead of each scanning the text its own way. PostgreSQL has moved
+  (SDB-453): `PostgresScanner` in `postgres.rs` is its only reader of quotes, comments, `$tag$`
+  bodies, psql lines and COPY data; `split_statements`, `code_ranges` and `copy_stdio`'s word
+  reader read its regions, and a new PostgreSQL rule goes into the scanner alone. `copy_data`
+  reads one span's text (the scanner on that text), never the whole script, so a dump is not
+  scanned once per statement. Until another dialect moves, a rule its splitter learns (a quote,
+  a meta line, white space) must be copied into its other readers (`code_ranges`'s skip
+  function) in the same change: that gap is what SDB-436, 437 and 439 were.

@@ -29,6 +29,9 @@ pub struct Safeguards {
     /// Close the session after this many seconds without use (never while a transaction is
     /// open); `None`: never.
     pub close_idle_after: Option<u32>,
+    /// Roll back an editor session's transaction left open this many seconds without use,
+    /// after a warning (ADR-081); `None`: never.
+    pub close_idle_transaction_after: Option<u32>,
     /// Editor sessions start with auto-commit off (ADR-031).
     pub manual_commit: bool,
     /// The first write switches an auto-commit session to manual commit until that
@@ -37,15 +40,20 @@ pub struct Safeguards {
 }
 
 impl Safeguards {
-    /// Both sets together: what either asks for, and the shorter idle time.
+    /// Both sets together: what either asks for, and the shorter idle times.
     pub fn tighten(self, other: Safeguards) -> Safeguards {
+        let shorter = |a: Option<u32>, b: Option<u32>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         Safeguards {
             confirm_execution: self.confirm_execution || other.confirm_execution,
             confirm_data_changes: self.confirm_data_changes || other.confirm_data_changes,
-            close_idle_after: match (self.close_idle_after, other.close_idle_after) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            },
+            close_idle_after: shorter(self.close_idle_after, other.close_idle_after),
+            close_idle_transaction_after: shorter(
+                self.close_idle_transaction_after,
+                other.close_idle_transaction_after,
+            ),
             manual_commit: self.manual_commit || other.manual_commit,
             smart_commit: self.smart_commit || other.smart_commit,
         }
@@ -56,6 +64,7 @@ impl Safeguards {
             confirm_execution: config.confirm_execution,
             confirm_data_changes: config.confirm_data_changes,
             close_idle_after: config.close_idle_after.filter(|s| *s > 0),
+            close_idle_transaction_after: config.close_idle_transaction_after.filter(|s| *s > 0),
             manual_commit: config.manual_commit,
             smart_commit: config.smart_commit,
         }
@@ -110,6 +119,7 @@ const BUILT_IN: [BuiltIn; 3] = [
             confirm_execution: false,
             confirm_data_changes: false,
             close_idle_after: None,
+            close_idle_transaction_after: None,
             manual_commit: false,
             smart_commit: false,
         },
@@ -123,6 +133,7 @@ const BUILT_IN: [BuiltIn; 3] = [
             confirm_execution: false,
             confirm_data_changes: false,
             close_idle_after: None,
+            close_idle_transaction_after: None,
             manual_commit: false,
             smart_commit: false,
         },
@@ -136,6 +147,7 @@ const BUILT_IN: [BuiltIn; 3] = [
             confirm_execution: false,
             confirm_data_changes: true,
             close_idle_after: None,
+            close_idle_transaction_after: None,
             manual_commit: false,
             smart_commit: true,
         },

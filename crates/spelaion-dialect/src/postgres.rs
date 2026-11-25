@@ -1,5 +1,9 @@
+use std::collections::VecDeque;
+use std::ops::Range;
+
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::scanner::{Region, RegionKind};
 use crate::{is_white_space_at, trimmed, white_space_before};
 
 /// PostgreSQL dialect.
@@ -11,12 +15,14 @@ impl Dialect for PostgresDialect {
     }
 
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
-        split(script).0
+        PostgresScanner::script(script)
+            .filter_map(|region| region.kind.statement())
+            .collect()
     }
 
     /// The data of a `COPY … FROM STDIN` (SDB-162): from the line after its `;` up to the line
     /// `\.`, as `psql` reads it.
-    fn copy_data(&self, script: &str, span: &StatementSpan) -> Option<std::ops::Range<usize>> {
+    fn copy_data(&self, script: &str, span: &StatementSpan) -> Option<Range<usize>> {
         if copy_stdio(span.text(script)) != Some(CopyStdio::FromStdin) {
             return None;
         }
@@ -39,29 +45,15 @@ impl Dialect for PostgresDialect {
     }
 
     /// What lies outside strings, quoted names and comments, and outside the data of every
-    /// `COPY … FROM STDIN` (SDB-162). The splitter's psql lines are read as it reads them: a
-    /// meta-command line is code as a whole, with no strings or comments in it (SDB-436), and
-    /// COPY data is no code at all. Each piece of SQL between them is read on its own, so a
-    /// quote in a psql line never changes how the SQL after it is read.
-    fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        let (_, apart) = split(script);
+    /// `COPY … FROM STDIN` (SDB-162), as the scanner reads them: a psql meta-command line is
+    /// code as a whole, with no strings or comments in it (SDB-436), and COPY data is no code
+    /// at all.
+    fn code_ranges(&self, script: &str) -> Vec<Range<usize>> {
         let mut ranges = Vec::new();
-        let mut start = 0;
-        let pieces = apart.iter().map(|piece| match piece {
-            Apart::Meta(line) => (line.clone(), true),
-            Apart::Copy(block) => (block.data.start..block.resume, false),
-        });
-        // The end of the script closes the last piece of SQL.
-        for (skipped, code) in pieces.chain(std::iter::once((script.len()..script.len(), false))) {
-            for range in
-                spelaion_driver_api::code_ranges(&script[start..skipped.start], skip_non_code)
-            {
-                push_code(&mut ranges, range.start + start..range.end + start);
+        for region in PostgresScanner::script(script) {
+            if region.kind.is_code() {
+                push_code(&mut ranges, region.range);
             }
-            if code {
-                push_code(&mut ranges, skipped.clone());
-            }
-            start = skipped.end;
         }
         ranges
     }
@@ -169,6 +161,17 @@ fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80
 }
 
+/// Whether a word starts at byte `i`: a letter, `_` or a byte outside ASCII that no name byte
+/// comes before. White space outside ASCII is no part of a word, and a word may follow it
+/// (SDB-434).
+fn word_starts(script: &str, i: usize) -> bool {
+    let b = script.as_bytes();
+    let c = b[i];
+    (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
+        && (i == 0 || !is_ident_byte(b[i - 1]) || white_space_before(script, i))
+        && !is_white_space_at(script, i)
+}
+
 /// The byte after the word that starts at `i`: at the first byte no name holds, or at white
 /// space (SDB-434).
 fn word_end(script: &str, i: usize) -> usize {
@@ -204,6 +207,14 @@ fn at_line_start(b: &[u8], i: usize) -> bool {
         .all(|&c| c == b' ' || c == b'\t' || c == b'\r')
 }
 
+/// The newline that ends the line byte `i` is on, or the end of the script.
+fn line_end(b: &[u8], i: usize) -> usize {
+    b[i..]
+        .iter()
+        .position(|&c| c == b'\n')
+        .map_or(b.len(), |p| i + p)
+}
+
 /// `\restrict <key>` or `\unrestrict <key>`, the lines a plain pg_dump file starts and ends with.
 fn is_restrict(line: &str) -> bool {
     let command = line[1..].split_ascii_whitespace().next().unwrap_or("");
@@ -214,23 +225,13 @@ fn is_restrict(line: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CopyBlock {
     /// The data lines, without the terminating `\.` line.
-    data: std::ops::Range<usize>,
+    data: Range<usize>,
     /// The byte after the terminating line (or the end of the script): where SQL goes on.
     resume: usize,
 }
 
-/// What the splitter reads apart from SQL, in the script's order: psql's lines, not the
-/// server's.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Apart {
-    /// A psql meta-command line, from its `\` to the end of its line (without the newline).
-    Meta(std::ops::Range<usize>),
-    /// The data of a `COPY … FROM STDIN`, with its terminating line.
-    Copy(CopyBlock),
-}
-
 /// Adds `range` to `ranges`, joined to the last one when they touch: code ranges never touch.
-fn push_code(ranges: &mut Vec<std::ops::Range<usize>>, range: std::ops::Range<usize>) {
+fn push_code(ranges: &mut Vec<Range<usize>>, range: Range<usize>) {
     if range.is_empty() {
         return;
     }
@@ -246,10 +247,7 @@ fn push_code(ranges: &mut Vec<std::ops::Range<usize>>, range: std::ops::Range<us
 /// `\r` before its newline allowed), or at the end of the script.
 fn copy_block(script: &str, after: usize) -> CopyBlock {
     let b = script.as_bytes();
-    let line_end = b[after..]
-        .iter()
-        .position(|&c| c == b'\n')
-        .map_or(b.len(), |p| after + p);
+    let line_end = line_end(b, after);
     let rest = script[after..line_end].trim();
     let start = if rest.is_empty() || rest.starts_with("--") {
         (line_end + 1).min(b.len())
@@ -258,10 +256,7 @@ fn copy_block(script: &str, after: usize) -> CopyBlock {
     };
     let mut line = start;
     while line < b.len() {
-        let end = b[line..]
-            .iter()
-            .position(|&c| c == b'\n')
-            .map_or(b.len(), |p| line + p);
+        let end = self::line_end(b, line);
         let text = &script[line..end];
         if text.strip_suffix('\r').unwrap_or(text) == "\\." {
             return CopyBlock {
@@ -277,122 +272,275 @@ fn copy_block(script: &str, after: usize) -> CopyBlock {
     }
 }
 
-/// Splits at `;` outside quotes, comments and `$tag$` bodies. In a `CREATE FUNCTION` or
-/// `PROCEDURE`, as `psql` does, an unquoted `BEGIN` or `CASE` opens a block and `END` closes
-/// one, and a `;` inside a block does not split: a `BEGIN ATOMIC` body stays whole, and its
-/// `END` (a synonym of `COMMIT` on its own) is never sent alone. Elsewhere `BEGIN;` and `END;`
-/// are statements of their own. The data after a `COPY … FROM STDIN` (SDB-162) and each psql
-/// meta-command line are returned apart too: they are not SQL.
-fn split(script: &str) -> (Vec<StatementSpan>, Vec<Apart>) {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut apart = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    // The first words of the current statement, lowercased, and its block depth.
-    let mut words: Vec<String> = Vec::new();
-    let mut depth = 0usize;
-    let mut i = 0;
+/// PostgreSQL's lexical scanner (ADR-065): the one reader of what is code in PostgreSQL text.
+/// The splitter, `code_ranges` and `copy_stdio`'s word reader all read it.
+///
+/// Statements end at `;` outside quotes, comments and `$tag$` bodies. In a `CREATE FUNCTION`
+/// or `PROCEDURE`, as `psql` does, an unquoted `BEGIN` or `CASE` opens a block and `END` closes
+/// one, and a `;` inside a block ends nothing: a `BEGIN ATOMIC` body stays whole, and its `END`
+/// (a synonym of `COMMIT` on its own) is never sent alone. Elsewhere `BEGIN;` and `END;` are
+/// statements of their own. The data after a `COPY … FROM STDIN` (SDB-162) and each psql
+/// meta-command line are regions of their own: they are not SQL.
+struct PostgresScanner<'a> {
+    script: &'a str,
+    /// Where the next region starts.
+    i: usize,
+    /// Whether the data after a `COPY … FROM STDIN;` is read as such (a script), or the text
+    /// is one statement read on its own (`copy_stdio`).
+    reads_copy_data: bool,
+    /// Where the current statement starts.
+    start: usize,
+    /// Whether the current statement holds code yet: a string, a name, a word or any other
+    /// character that is not white space. Comments do not count.
+    has_code: bool,
+    /// The current statement's first words, lowercased (up to four).
+    words: Vec<String>,
+    /// The current statement's block depth (`BEGIN ATOMIC … END`).
+    depth: usize,
+    /// Regions already read, given before anything else: what follows a COPY's `;`.
+    queued: VecDeque<Region>,
+    /// The end of the script was reached.
+    ended: bool,
+}
 
-    while i < b.len() {
-        match b[i] {
-            // A psql meta-command, on a line of its own before a statement: not SQL. A plain
-            // pg_dump file (PostgreSQL 17.6 and later) wraps itself in `\restrict <key>` and
-            // `\unrestrict <key>`, which only keep psql from running other meta-commands, and
-            // SpelaionDB runs none: they are skipped. Any other is a statement of its own,
-            // which the session refuses (`refuse_statement`), never glued to the next one.
-            b'\\' if !has_code && at_line_start(b, i) => {
-                let end = b[i..]
-                    .iter()
-                    .position(|&c| c == b'\n')
-                    .map_or(b.len(), |p| i + p);
-                if !is_restrict(&script[i..end]) {
-                    spans.extend(trimmed(script, i, end));
-                }
-                apart.push(Apart::Meta(i..end));
-                i = (end + 1).min(b.len());
-                start = i;
-                words.clear();
-            }
-            b'\'' => {
-                // E'…' supports backslash escapes.
-                i = skip_quoted(b, i, b'\'', escape_string(b, i));
-                has_code = true;
-            }
-            b'"' => {
-                i = skip_quoted(b, i, b'"', false);
-                has_code = true;
-            }
-            b'-' if b.get(i + 1) == Some(&b'-') => {
-                i = b[i..]
-                    .iter()
-                    .position(|&c| c == b'\n')
-                    .map_or(b.len(), |p| i + p + 1);
-            }
-            b'/' if b.get(i + 1) == Some(&b'*') => i = block_comment_end(b, i),
-            b'$' if i == 0 || !is_ident_byte(b[i - 1]) => match dollar_tag(b, i) {
-                Some(tag_end) => {
-                    let tag = &script[i..=tag_end];
-                    i = script[tag_end + 1..]
-                        .find(tag)
-                        .map_or(b.len(), |p| tag_end + 1 + p + tag.len());
-                    has_code = true;
-                }
-                None => {
-                    i += 1;
-                    has_code = true;
-                }
-            },
-            b';' if depth == 0 => {
-                i += 1;
-                if let Some(span) = trimmed(script, start, i - 1).filter(|_| has_code) {
-                    spans.push(span);
-                    // Its data follows: skipped, never read as SQL.
-                    if words.first().map(String::as_str) == Some("copy")
-                        && copy_stdio(span.text(script)) == Some(CopyStdio::FromStdin)
-                    {
-                        let block = copy_block(script, i);
-                        i = block.resume;
-                        apart.push(Apart::Copy(block));
-                    }
-                }
-                start = i;
-                has_code = false;
-                words.clear();
-            }
-            // White space outside ASCII is no part of a word, and a word may follow it
-            // (SDB-434).
-            c if (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
-                && (i == 0 || !is_ident_byte(b[i - 1]) || white_space_before(script, i))
-                && !is_white_space_at(script, i) =>
-            {
-                let end = word_end(script, i);
-                let word = script[i..end].to_ascii_lowercase();
-                if words.len() < 4 {
-                    words.push(word.clone());
-                }
-                if is_routine(&words) {
-                    match word.as_str() {
-                        "begin" | "case" => depth += 1,
-                        "end" => depth = depth.saturating_sub(1),
-                        _ => {}
-                    }
-                }
-                has_code = true;
-                i = end;
-            }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
-                }
-                i += 1;
-            }
+/// What starts at the scanner's position, other than code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Opening {
+    MetaLine,
+    String,
+    QuotedName,
+    Comment,
+    QuotedBody,
+    StatementEnd,
+}
+
+impl<'a> PostgresScanner<'a> {
+    /// A script: statements, psql lines and COPY data.
+    fn script(script: &'a str) -> Self {
+        Self {
+            script,
+            i: 0,
+            reads_copy_data: true,
+            start: 0,
+            has_code: false,
+            words: Vec::with_capacity(4),
+            depth: 0,
+            queued: VecDeque::with_capacity(4),
+            ended: false,
         }
     }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
+
+    /// One statement's text, read on its own: no COPY data follows a `;` in it.
+    fn statement(sql: &'a str) -> Self {
+        Self {
+            reads_copy_data: false,
+            ..Self::script(sql)
+        }
     }
-    (spans, apart)
+
+    /// What starts at the position, other than code, and the byte after it.
+    fn opening(&self) -> Option<(Opening, usize)> {
+        let script = self.script;
+        let b = script.as_bytes();
+        let i = self.i;
+        match b[i] {
+            // A psql meta-command, on a line of its own before a statement: not SQL.
+            b'\\' if !self.has_code && at_line_start(b, i) => {
+                Some((Opening::MetaLine, line_end(b, i)))
+            }
+            // E'…' supports backslash escapes.
+            b'\'' => Some((
+                Opening::String,
+                skip_quoted(b, i, b'\'', escape_string(b, i)),
+            )),
+            b'"' => Some((Opening::QuotedName, skip_quoted(b, i, b'"', false))),
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                Some((Opening::Comment, (line_end(b, i) + 1).min(b.len())))
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                Some((Opening::Comment, block_comment_end(b, i)))
+            }
+            // `$1` and a `$` that opens no tag are code.
+            b'$' if i == 0 || !is_ident_byte(b[i - 1]) => {
+                let tag_end = dollar_tag(b, i)?;
+                let tag = &script[i..=tag_end];
+                let end = script[tag_end + 1..]
+                    .find(tag)
+                    .map_or(b.len(), |p| tag_end + 1 + p + tag.len());
+                Some((Opening::QuotedBody, end))
+            }
+            b';' if self.depth == 0 => Some((Opening::StatementEnd, i + 1)),
+            _ => None,
+        }
+    }
+
+    /// Reads the region that `opening` starts at the position, up to `end`.
+    fn take(&mut self, opening: Opening, end: usize) -> Region {
+        let range = self.i..end;
+        let kind = match opening {
+            // A plain pg_dump file (PostgreSQL 17.6 and later) wraps itself in
+            // `\restrict <key>` and `\unrestrict <key>`, which only keep psql from running
+            // other meta-commands, and SpelaionDB runs none: they are skipped. Any other is a
+            // statement of its own, which the session refuses (`refuse_statement`), never
+            // glued to the next one. Its newline is code of what follows.
+            Opening::MetaLine => {
+                let line = &self.script[range.clone()];
+                let statement = if is_restrict(line) {
+                    None
+                } else {
+                    trimmed(self.script, range.start, range.end)
+                };
+                self.start = end;
+                self.words.clear();
+                RegionKind::MetaLine { statement }
+            }
+            Opening::String => {
+                self.has_code = true;
+                RegionKind::String
+            }
+            Opening::QuotedName => {
+                self.has_code = true;
+                RegionKind::QuotedName
+            }
+            Opening::Comment => RegionKind::Comment,
+            Opening::QuotedBody => {
+                self.has_code = true;
+                RegionKind::QuotedBody
+            }
+            Opening::StatementEnd => {
+                let statement =
+                    trimmed(self.script, self.start, range.start).filter(|_| self.has_code);
+                let mut next = end;
+                // Its data follows: a region of its own, never read as SQL.
+                if let Some(span) = statement
+                    && self.reads_copy_data
+                    && self.words.first().map(String::as_str) == Some("copy")
+                    && copy_stdio(span.text(self.script)) == Some(CopyStdio::FromStdin)
+                {
+                    let block = copy_block(self.script, end);
+                    self.queue_copy(end, &block);
+                    next = block.resume;
+                }
+                self.start = next;
+                self.has_code = false;
+                self.words.clear();
+                self.i = next;
+                return Region {
+                    kind: RegionKind::StatementEnd { statement },
+                    range,
+                };
+            }
+        };
+        self.i = end;
+        Region { kind, range }
+    }
+
+    /// Queues what follows a `COPY … FROM STDIN` whose `;` ends just before `after`: the rest
+    /// of the statement's line (blanks, perhaps a `--` comment), its data and the line that ends
+    /// it.
+    fn queue_copy(&mut self, after: usize, block: &CopyBlock) {
+        let data = block.data.clone();
+        if data.start > after {
+            let rest = &self.script[after..data.start];
+            let comment = after + (rest.len() - rest.trim_start().len());
+            if comment < data.start && self.script[comment..].starts_with("--") {
+                if after < comment {
+                    self.queued.push_back(Region {
+                        kind: RegionKind::Code,
+                        range: after..comment,
+                    });
+                }
+                self.queued.push_back(Region {
+                    kind: RegionKind::Comment,
+                    range: comment..data.start,
+                });
+            } else {
+                self.queued.push_back(Region {
+                    kind: RegionKind::Code,
+                    range: after..data.start,
+                });
+            }
+        }
+        self.queued.push_back(Region {
+            kind: RegionKind::CopyData,
+            range: data.clone(),
+        });
+        if data.end < block.resume {
+            self.queued.push_back(Region {
+                kind: RegionKind::CopyEnd,
+                range: data.end..block.resume,
+            });
+        }
+    }
+
+    /// Reads one byte of code, or a whole word: a word may open or close a routine's block.
+    fn code_step(&mut self) {
+        let script = self.script;
+        let i = self.i;
+        if word_starts(script, i) {
+            let end = word_end(script, i);
+            let word = &script[i..end];
+            if self.words.len() < 4 {
+                self.words.push(word.to_ascii_lowercase());
+            }
+            if is_routine(&self.words) {
+                if word.eq_ignore_ascii_case("begin") || word.eq_ignore_ascii_case("case") {
+                    self.depth += 1;
+                } else if word.eq_ignore_ascii_case("end") {
+                    self.depth = self.depth.saturating_sub(1);
+                }
+            }
+            self.has_code = true;
+            self.i = end;
+        } else {
+            if !is_white_space_at(script, i) {
+                self.has_code = true;
+            }
+            self.i += 1;
+        }
+    }
+}
+
+impl Iterator for PostgresScanner<'_> {
+    type Item = Region;
+
+    fn next(&mut self) -> Option<Region> {
+        if let Some(region) = self.queued.pop_front() {
+            return Some(region);
+        }
+        let len = self.script.len();
+        let code = self.i;
+        while self.i < len {
+            if let Some((opening, end)) = self.opening() {
+                if code < self.i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..self.i,
+                    });
+                }
+                return Some(self.take(opening, end));
+            }
+            self.code_step();
+        }
+        if code < len {
+            return Some(Region {
+                kind: RegionKind::Code,
+                range: code..len,
+            });
+        }
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        // The end of the script ends the last statement.
+        let statement = trimmed(self.script, self.start, len).filter(|_| self.has_code)?;
+        Some(Region {
+            kind: RegionKind::StatementEnd {
+                statement: Some(statement),
+            },
+            range: len..len,
+        })
+    }
 }
 
 /// A `COPY` whose data goes through the connection, apart from the statement.
@@ -408,78 +556,42 @@ pub enum CopyStdio {
 /// outside quotes, comments, `$tag$` bodies and parentheses (a query or a column list),
 /// `FROM STDIN` or `TO STDOUT` follow. `COPY … FROM` / `TO` a file or a `PROGRAM` is neither,
 /// and nor is psql's `\copy` (SDB-437): a meta-command, which the session refuses before
-/// anything is sent, never a `COPY` with data of its own.
+/// anything is sent, never a `COPY` with data of its own. Read from the scanner's regions, so
+/// its words are the splitter's (SDB-439).
 pub fn copy_stdio(sql: &str) -> Option<CopyStdio> {
     let b = sql.as_bytes();
+    // Each word, lowercased, and an empty one for each string, name or `$tag$` body.
     let mut words: Vec<String> = Vec::new();
     let mut parens = 0usize;
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'\\' if words.is_empty() => return None,
-            b'\'' => {
-                i = skip_quoted(b, i, b'\'', escape_string(b, i));
-                words.push(String::new());
-            }
-            b'"' => {
-                i = skip_quoted(b, i, b'"', false);
-                words.push(String::new());
-            }
-            b'-' if b.get(i + 1) == Some(&b'-') => {
-                i = b[i..]
-                    .iter()
-                    .position(|&c| c == b'\n')
-                    .map_or(b.len(), |p| i + p + 1);
-            }
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                let mut depth = 0usize;
-                while i < b.len() {
-                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
-                        depth += 1;
-                        i += 2;
-                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
-                        depth -= 1;
-                        i += 2;
-                        if depth == 0 {
-                            break;
+    for region in PostgresScanner::statement(sql) {
+        match region.kind {
+            RegionKind::Code => {
+                let mut i = region.range.start;
+                while i < region.range.end {
+                    match b[i] {
+                        b'\\' if words.is_empty() => return None,
+                        b'(' => parens += 1,
+                        b')' => parens = parens.saturating_sub(1),
+                        _ if word_starts(sql, i) => {
+                            let end = word_end(sql, i);
+                            if words.is_empty() || parens == 0 {
+                                words.push(sql[i..end].to_ascii_lowercase());
+                            }
+                            i = end;
+                            continue;
                         }
-                    } else {
-                        i += 1;
+                        _ => {}
                     }
+                    i += 1;
                 }
             }
-            b'$' if i == 0 || !is_ident_byte(b[i - 1]) => match dollar_tag(b, i) {
-                Some(tag_end) => {
-                    let tag = &sql[i..=tag_end];
-                    i = sql[tag_end + 1..]
-                        .find(tag)
-                        .map_or(b.len(), |p| tag_end + 1 + p + tag.len());
-                    words.push(String::new());
-                }
-                None => i += 1,
-            },
-            b'(' => {
-                parens += 1;
-                i += 1;
+            RegionKind::String | RegionKind::QuotedName | RegionKind::QuotedBody => {
+                words.push(String::new());
             }
-            b')' => {
-                parens = parens.saturating_sub(1);
-                i += 1;
-            }
-            // Words as the splitter reads them (SDB-439): one may follow white space outside
-            // ASCII, and ends at it, so both agree on a statement's first word.
-            c if (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
-                && (i == 0 || !is_ident_byte(b[i - 1]) || white_space_before(sql, i))
-                && !is_white_space_at(sql, i) =>
-            {
-                let end = word_end(sql, i);
-                if words.is_empty() || parens == 0 {
-                    words.push(sql[i..end].to_ascii_lowercase());
-                }
-                i = end;
-            }
-            b';' => break,
-            _ => i += 1,
+            RegionKind::Comment => {}
+            // A meta-command line only comes before any word: psql's, not a COPY.
+            RegionKind::MetaLine { .. } => return None,
+            RegionKind::StatementEnd { .. } | RegionKind::CopyData | RegionKind::CopyEnd => break,
         }
     }
     if words.first().map(String::as_str) != Some("copy") {
@@ -517,33 +629,6 @@ fn block_comment_end(b: &[u8], mut i: usize) -> usize {
 /// Whether the `'` at `i` opens an `E'…'` string, where backslashes escape.
 fn escape_string(b: &[u8], i: usize) -> bool {
     i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]))
-}
-
-/// The byte after the string, quoted name, comment or `$tag$` body that starts at `i`, read as
-/// the splitter reads it; `None` when none starts there.
-fn skip_non_code(script: &str, i: usize) -> Option<usize> {
-    let b = script.as_bytes();
-    match *b.get(i)? {
-        b'\'' => Some(skip_quoted(b, i, b'\'', escape_string(b, i))),
-        b'"' => Some(skip_quoted(b, i, b'"', false)),
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(
-            b[i..]
-                .iter()
-                .position(|&c| c == b'\n')
-                .map_or(b.len(), |p| i + p + 1),
-        ),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i)),
-        b'$' if i == 0 || !is_ident_byte(b[i - 1]) => {
-            let tag_end = dollar_tag(b, i)?;
-            let tag = &script[i..=tag_end];
-            Some(
-                script[tag_end + 1..]
-                    .find(tag)
-                    .map_or(b.len(), |p| tag_end + 1 + p + tag.len()),
-            )
-        }
-        _ => None,
-    }
 }
 
 /// Skips a quoted string starting at `i` (the opening quote).
@@ -584,7 +669,11 @@ mod tests {
     use super::*;
 
     fn parts(script: &str) -> Vec<&str> {
-        split(script).0.iter().map(|s| s.text(script)).collect()
+        PostgresDialect
+            .split_statements(script)
+            .iter()
+            .map(|s| s.text(script))
+            .collect()
     }
 
     #[test]

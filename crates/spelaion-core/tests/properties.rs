@@ -16,12 +16,12 @@ use proptest::strategy::Union;
 use proptest::test_runner::{Config, RngSeed};
 use spelaion_config::Safeguards;
 use spelaion_core::{
-    ImportFormat, ImportSource, ParseOptions, SourceEncoding, bind_params, check_read_only,
+    ImportFormat, ImportSource, ParseOptions, Risk, SourceEncoding, bind_params, check_read_only,
     check_script, classify_read_only, classify_read_only_connection, guess_options, preview,
-    read_sql_file, script_params,
+    read_sql_file, script_params, script_risks,
 };
 use spelaion_dialect::{MysqlDialect, for_engine};
-use spelaion_driver_api::Dialect;
+use spelaion_driver_api::{Dialect, StatementSpan};
 
 fn config(cases: u32) -> Config {
     let fuzz = std::env::var("SPELAION_FUZZ_CASES")
@@ -851,5 +851,206 @@ proptest! {
         }
         prop_assert_eq!(spans.len(), counted, "{:?}", script);
         prop_assert_eq!(contents(&one_by_one), contents(&whole), "{:?}", script);
+    }
+}
+
+// ------------------------------------------------- the guard's first word against the splitter
+
+/// Safeguards that ask for nothing but what is destructive.
+const ASKS_FOR_NOTHING: Safeguards = Safeguards {
+    confirm_execution: false,
+    confirm_data_changes: false,
+    close_idle_after: None,
+    close_idle_transaction_after: None,
+    manual_commit: false,
+    smart_commit: false,
+};
+
+/// Whether each byte of `script` is code for the dialect's `code_ranges`.
+fn code_bytes(dialect: &dyn Dialect, script: &str) -> Vec<bool> {
+    let mut code = vec![false; script.len()];
+    for range in dialect.code_ranges(script) {
+        code[range].fill(true);
+    }
+    code
+}
+
+/// Whether the dialect's block comments nest, as its own `code_ranges` reads them.
+fn nests_comments(dialect: &dyn Dialect) -> bool {
+    let probe = "/* /* */ x */";
+    let x = probe.find('x').unwrap();
+    !dialect.code_ranges(probe).iter().any(|r| r.contains(&x))
+}
+
+/// The length of the block comment `text` starts with, nested or not.
+fn block_comment_len(text: &str, nested: bool) -> usize {
+    let b = text.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i..].starts_with(b"/*") && (nested || depth == 0) {
+            depth += 1;
+            i += 2;
+        } else if b[i..].starts_with(b"*/") {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    b.len()
+}
+
+/// The first word of the statement `span` of `script`, read the splitter's way, as
+/// `spelaion-dialect`'s split properties read it: after white space and comments, the first run
+/// of letters, digits and `_` at a byte the dialect's code ranges call code, lowercased; a
+/// string, a quoted name or any other character first gives an empty word.
+fn splitter_first_word(dialect: &dyn Dialect, script: &str, span: &StatementSpan) -> String {
+    let code = code_bytes(dialect, script);
+    let nested = nests_comments(dialect);
+    let mut i = span.start;
+    while i < span.end {
+        let rest = &script[i..span.end];
+        let c = rest.chars().next().expect("inside the span");
+        if code[i] {
+            if c.is_whitespace() {
+                i += c.len_utf8();
+                continue;
+            }
+            return rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+                .to_lowercase();
+        }
+        if ["--", "#", "//"].iter().any(|o| rest.starts_with(o)) {
+            i += rest.find('\n').map_or(rest.len(), |n| n + 1);
+        } else if rest.starts_with("/*") {
+            i += block_comment_len(rest, nested);
+        } else {
+            return String::new();
+        }
+    }
+    String::new()
+}
+
+/// What may come before a statement's first word: white space of every kind, each dialect's
+/// comments, strings and names, separators.
+fn before_a_statement() -> S {
+    const PIECES: &[&str] = &[
+        " ",
+        "\n",
+        "\t",
+        "\r\n",
+        "\u{a0}",
+        "\u{b}",
+        "\u{85}",
+        "\u{3000}",
+        "-- c\n",
+        "--c\n",
+        "--\n",
+        "# c\n",
+        "#c\n",
+        "#!c\n",
+        "// c\n",
+        "/* c */",
+        "/* a /* b */ c */",
+        "/*! c */",
+        "/*M! c */",
+        "'s' ",
+        "\"n\" ",
+        "`n` ",
+        "[n] ",
+        "$$b$$ ",
+        ";",
+        ";\n",
+        "(",
+        "\nGO\n",
+        "\n/\n",
+        "select 1;\n",
+        "x ",
+    ];
+    prop::collection::vec(prop::sample::select(PIECES), 0..6)
+        .prop_map(|p| p.concat())
+        .boxed()
+}
+
+/// Statements the guard asks about from their first word alone: a `DROP` always, and a
+/// `TRUNCATE`, `DELETE` or `UPDATE` the SQL parser cannot read (the `((` keeps it from it).
+const RISKY: &[(&str, &str)] = &[
+    ("drop", "drop table t"),
+    ("truncate", "truncate table t (("),
+    ("delete", "delete from t (("),
+    ("update", "update t set (("),
+];
+
+/// Disagreements this property has found, each with the bug card that fixes it (ADR-065,
+/// step 1): `(labels, card, shape)`. Only a statement of the known shape is let through.
+type GuardKnown = (&'static [&'static str], &'static str, fn(&str) -> bool);
+
+/// Found here and fixed: the guard's own comment reading (SDB-517: `#` taken for a comment on
+/// every engine; SDB-518: block comments ended at their first `*/`, and the parser nesting them
+/// where the dialect does not). The guard now reads comments through the dialect.
+const GUARD_KNOWN: &[GuardKnown] = &[];
+
+fn guard_known(label: &str, statement: &str) -> bool {
+    GUARD_KNOWN.iter().any(|(labels, card, shape)| {
+        labels.contains(&label) && !card.is_empty() && shape(statement)
+    })
+}
+
+proptest! {
+    #![proptest_config(config(512))]
+
+    /// The guard reads a statement's first word as the splitter does (ADR-065, step 1): a
+    /// statement whose first word, read the splitter's way, is `DROP` (or an unreadable
+    /// `TRUNCATE`, `DELETE`, `UPDATE`) is one the guard asks about; and where the guard asks about
+    /// a `DROP` from the statement alone, its first word is `DROP`. SQL Server, Oracle,
+    /// ClickHouse and HiveQL's engines read more of an unreadable statement than its first word,
+    /// so only the first half holds for them; CQL and TDengine have lists of their own.
+    #[test]
+    fn the_guard_reads_the_splitters_first_word(
+        before in before_a_statement(),
+        risky in prop::sample::select(RISKY),
+    ) {
+        let _turn = crate::serial::file_turn(module_path!());
+        let (word, statement) = risky;
+        let script = format!("{before}{statement}");
+        for (label, dialect) in sql_dialects() {
+            if dialect.statement_class("select 1").is_some() {
+                continue;
+            }
+            let reads_more = matches!(label.as_str(), "sqlserver" | "oracle" | "clickhouse" | "hive");
+            let risks = script_risks(dialect.as_ref(), &script, &ASKS_FOR_NOTHING);
+            for (index, span) in dialect.split_statements(&script).iter().enumerate() {
+                let text = span.text(&script);
+                let first = splitter_first_word(dialect.as_ref(), &script, span);
+                let risk = risks.iter().find(|r| r.index == index).map(|r| r.risk);
+                if guard_known(&label, text) {
+                    continue;
+                }
+                if first == word && text.ends_with(statement) {
+                    prop_assert!(
+                        risk.is_some(),
+                        "{}: the guard does not ask about {:?}, whose first word is {:?}",
+                        label,
+                        text,
+                        word
+                    );
+                }
+                if !reads_more && risk == Some(Risk::Drop) {
+                    prop_assert_eq!(
+                        first.as_str(),
+                        "drop",
+                        "{}: the guard asks about a DROP in {:?}",
+                        label,
+                        text
+                    );
+                }
+            }
+        }
     }
 }

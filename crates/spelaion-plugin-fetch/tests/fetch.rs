@@ -71,6 +71,11 @@ fn archive_name() -> String {
 /// A release in `scratch`: an archive that holds `members` (paths inside it, with their
 /// contents). Returns the archive's path.
 fn release(scratch: &Scratch, members: &[(&str, &[u8])]) -> PathBuf {
+    release_named(scratch, &archive_name(), members)
+}
+
+/// The same, with the archive named `archive` (its extension says its format).
+fn release_named(scratch: &Scratch, archive: &str, members: &[(&str, &[u8])]) -> PathBuf {
     let pack = scratch.0.join("pack");
     let _ = std::fs::remove_dir_all(&pack);
     for (member, contents) in members {
@@ -87,7 +92,7 @@ fn release(scratch: &Scratch, members: &[(&str, &[u8])]) -> PathBuf {
         .join("download")
         .join(format!("v{VERSION}"));
     std::fs::create_dir_all(&folder).unwrap();
-    let archive = folder.join(archive_name());
+    let archive = folder.join(archive);
     let _ = std::fs::remove_file(&archive);
     let mut command = Command::new(tar());
     // `-a`: the format the name says (zip on Windows, gzip elsewhere).
@@ -111,6 +116,23 @@ fn release(scratch: &Scratch, members: &[(&str, &[u8])]) -> PathBuf {
 
 /// The pins of that release, with whatever hashes and size the test gives.
 fn pins(archive_sha256: &str, archive_size: u64, program_sha256: &str) -> Pins {
+    pins_for(
+        here(),
+        &archive_name(),
+        archive_sha256,
+        archive_size,
+        program_sha256,
+    )
+}
+
+/// The same, for `platform`'s build in `archive`.
+fn pins_for(
+    platform: &str,
+    archive: &str,
+    archive_sha256: &str,
+    archive_size: u64,
+    program_sha256: &str,
+) -> Pins {
     Pins::parse(&format!(
         r#"schema_version = 1
 
@@ -128,8 +150,6 @@ archive_sha256 = "{archive_sha256}"
 archive_size = {archive_size}
 program_sha256 = "{program_sha256}"
 "#,
-        platform = here(),
-        archive = archive_name(),
     ))
     .expect("the test's pins")
 }
@@ -212,6 +232,42 @@ fn only_this_platforms_builds_are_fetched() {
     let fetched = fetch(&pins, other, &scratch.base(), &scratch.programs()).unwrap();
     assert!(fetched.is_empty());
     nothing_arrived(&scratch);
+}
+
+/// `--platform` for another platform's installer (SDB-463): the program is named as on that
+/// platform, whatever this machine is, so a Linux build and a Windows build both arrive from
+/// here. Both archives are `.tar.gz`, which every host's `tar` writes and reads: the test is
+/// about the program's name, not the archive's format.
+#[test]
+fn another_platforms_program_is_named_as_there() {
+    for (target, file) in [
+        ("x86_64-unknown-linux-gnu", NAME.to_string()),
+        ("x86_64-pc-windows-msvc", format!("{NAME}.exe")),
+    ] {
+        assert_eq!(spelaion_plugin_fetch::program_file_for(NAME, target), file);
+        let scratch = Scratch::new(&format!("target-{target}"));
+        let archive_name = format!("{NAME}-{VERSION}-{target}.tar.gz");
+        let archive = release_named(&scratch, &archive_name, &[(&file, PROGRAM)]);
+        let program = scratch.0.join("the-program");
+        std::fs::write(&program, PROGRAM).unwrap();
+        let pins = pins_for(
+            target,
+            &archive_name,
+            &sha256_of(&archive).unwrap(),
+            std::fs::metadata(&archive).unwrap().len(),
+            &sha256_of(&program).unwrap(),
+        );
+
+        let fetched = fetch(&pins, target, &scratch.base(), &scratch.programs())
+            .unwrap_or_else(|e| panic!("{target}: {e}"));
+        assert_eq!(fetched.len(), 1, "{target}");
+        assert_eq!(
+            fetched[0].program,
+            scratch.programs().join(&file),
+            "{target}"
+        );
+        assert_eq!(std::fs::read(&fetched[0].program).unwrap(), PROGRAM);
+    }
 }
 
 /// The release was replaced after it was pinned: the same size, other bytes.

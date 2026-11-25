@@ -22,6 +22,22 @@ export const commands = {
 	saveDiagramText: (diagram: number, format: DiagramTextFormatItem, path: string) => typedError<null, string>(__TAURI_INVOKE("save_diagram_text", { diagram, format, path })),
 	/**  Forgets a diagram's model (its tab closed or read it again under another id). */
 	closeDiagram: (diagram: number) => typedError<null, string>(__TAURI_INVOKE("close_diagram", { diagram })),
+	/**  Whether `session` can take part in a comparison: `None`, or the core's reason why not. */
+	schemaCompareSupport: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("schema_compare_support", { session })),
+	/**
+	 *  Compares `source_schema` of `source`'s connection with `target_schema` of `target`'s (both
+	 *  explorer sessions), each read in a new session opened for reads only. Progress goes to
+	 *  `on_progress`, the ticket to `job`; `cancel_job` stops it. The comparison is kept until
+	 *  `forget_schema_comparison`.
+	 */
+	compareSchemas: (source: string, sourceSchema: string, target: string, targetSchema: string, job: Channel<JobTicket>, onProgress: Channel<CompareProgressItem>) => typedError<JobOutcome<SchemaComparisonItem_Serialize, null>, string>(__TAURI_INVOKE("compare_schemas", { source, sourceSchema, target, targetSchema, job, onProgress })),
+	/**
+	 *  The script that makes the comparison's target like its source, written against the
+	 *  target's catalog now. Nothing runs: the page opens it in an editor tab (ADR-070, point 7).
+	 */
+	schemaCompareScript: (comparison: number, drops: boolean) => typedError<MigrationScriptItem, string>(__TAURI_INVOKE("schema_compare_script", { comparison, drops })),
+	/**  Forgets a comparison (its dialog closed, or it compared again). */
+	forgetSchemaComparison: (comparison: number) => typedError<null, string>(__TAURI_INVOKE("forget_schema_comparison", { comparison })),
 	explainPreflight: (session: string, sql: string, options: ExplainOptions_Deserialize) => typedError<ExplainCheck, string>(__TAURI_INVOKE("explain_preflight", { session, sql, options })),
 	planCapabilities: (session: string) => typedError<PlanCapabilities_Serialize, string>(__TAURI_INVOKE("plan_capabilities", { session })),
 	explainQuery: (session: string, sql: string, options: ExplainOptions_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("explain_query", { session, sql, options, onEvent })),
@@ -84,6 +100,22 @@ export const commands = {
 	 *  in transactions, reporting progress on `on_progress`.
 	 */
 	runImport: (source: string, job: Channel<JobTicket>, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<JobOutcome<ImportDoneItem, number | null>, string>(__TAURI_INVOKE("run_import", { source, job, request, confirmed, onProgress })),
+	/**  The engines a copy can write to, by the configuration's name (ADR-069). */
+	copyTargets: () => __TAURI_INVOKE<string[]>("copy_targets"),
+	/**
+	 *  What copying `request` from `source`'s connection to `target`'s will do. The source is read
+	 *  on a session of the plan's own, opened and closed here (never the explorer's: its read
+	 *  barrier may be a setting that stays); the target's plan only reads its catalog, on its
+	 *  explorer session, as an import's does.
+	 */
+	copyPlan: (source: string, target: string, request: CopyRequestItem) => typedError<CopyPlanItem_Serialize, string>(__TAURI_INVOKE("copy_plan", { source, target, request })),
+	/**
+	 *  Runs a copy on sessions of its own (a reading one from the source's connection, one from the
+	 *  target's), for a job whose ticket goes to `job` at once so `cancel_job` can stop it while
+	 *  they open. The core writes the plan again, refuses blocked columns, a read-only target and an
+	 *  unconfirmed plan that needs a confirmation, and reports progress on `on_progress`.
+	 */
+	runCopy: (source: string, target: string, job: Channel<JobTicket>, request: CopyRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<JobOutcome<ImportDoneItem, number | null>, string>(__TAURI_INVOKE("run_copy", { source, target, job, request, confirmed, onProgress })),
 	/**
 	 *  Stops the running job `id`, which must be a `kind`: the ticket its command sent. A job that
 	 *  has ended is not an error; an id of another kind is refused and stops nothing.
@@ -1132,6 +1164,11 @@ export const commands = {
 	/**  The DDL of an object, to open in a new tab (nothing runs). */
 	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
 	/**
+	 *  The DDL of an object outside every schema (a Materialize cluster, ADR-082), to open in a
+	 *  new tab (nothing runs). The explorer asks only for kinds the core says may have one.
+	 */
+	serverObjectDefinition: (session: string, object: ServerObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("server_object_definition", { session, object })),
+	/**
 	 *  The DDL of a table or view (`CREATE TABLE` with its constraints, indexes and comments),
 	 *  to open in a new tab (nothing runs).
 	 */
@@ -1193,6 +1230,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	idleTransactionRolledBack: makeEvent<IdleTransactionRolledBack, IdleTransactionRolledBack>("idle-transaction-rolled-back"),
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
 	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
@@ -1400,6 +1438,9 @@ export type BlockItem = {
 	columns: number[],
 };
 
+/**  Why a column cannot be copied as it is. */
+export type BlockedItem = "binary" | "masked";
+
 /**  A row of the blocking tree, in display order. */
 export type BlockingNodeItem = {
 	session: string,
@@ -1422,7 +1463,7 @@ export type BookmarkItem = {
  *  What a bookmark points at: `schema`, a relation's kind or another object's, as the drivers
  *  name them. Any other word is refused when the command is called (SDB-376).
  */
-export type BookmarkKindItem = "schema" | "table" | "partitioned_table" | "view" | "materialized_view" | "foreign_table" | "collection" | "node_label" | "relationship_type" | "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
+export type BookmarkKindItem = "schema" | "table" | "partitioned_table" | "view" | "materialized_view" | "foreign_table" | "collection" | "node_label" | "relationship_type" | "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym" | "sink" | "connection" | "secret";
 
 /**  A rectangle in the geometry's own units. */
 export type Bounds = {
@@ -1858,6 +1899,21 @@ export type CommitModeItem =
 /**  Smart commit turned manual commit on: it ends with the transaction. */
 "smartSwitched";
 
+export type CompareObjectKindItem = "table" | "view" | "materializedView" | "function" | "procedure";
+
+export type CompareProgressItem = {
+	side: CompareSideItem,
+	done: number,
+	total: number,
+};
+
+export type ComparePropertyItem = "type" | "nullable" | "default" | "comment" | "generated" | "columns" | "definition" | "referencedTable" | "referencedColumns" | "unique" | "source";
+
+export type CompareSideItem = "source" | "target";
+
+/**  A part of an object, by its name where it has one. */
+export type ComparedPartItem = { kind: "object" } | { kind: "column"; name: string } | { kind: "primaryKey" } | { kind: "constraint"; name: string } | { kind: "index"; name: string } | { kind: "foreignKey"; name: string };
+
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
 
 export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string; engineMark?: string | null; 
@@ -2185,6 +2241,8 @@ export type ConnectionTypeDraft_Deserialize = {
 	confirmExecution: boolean,
 	confirmDataChanges: boolean,
 	closeIdleAfter?: number | null,
+	/**  Seconds before an idle open transaction is rolled back, after a warning (ADR-081). */
+	closeIdleTransactionAfter?: number | null,
 	manualCommit?: boolean,
 	smartCommit?: boolean,
 	/**  Column patterns every connection of the type masks (ADR-051). */
@@ -2202,6 +2260,8 @@ export type ConnectionTypeDraft_Serialize = {
 	confirmExecution: boolean,
 	confirmDataChanges: boolean,
 	closeIdleAfter: number | null,
+	/**  Seconds before an idle open transaction is rolled back, after a warning (ADR-081). */
+	closeIdleTransactionAfter: number | null,
 	manualCommit: boolean,
 	smartCommit: boolean,
 	/**  Column patterns every connection of the type masks (ADR-051). */
@@ -2283,6 +2343,78 @@ export type ConstraintDetails_Serialize = {
 };
 
 export type ConstraintKindItem = "primary_key" | "unique" | "check";
+
+/**  One source column and what it becomes. */
+export type CopyColumnItem = CopyColumnItem_Serialize | CopyColumnItem_Deserialize;
+
+/**  One source column and what it becomes. */
+export type CopyColumnItem_Deserialize = {
+	name: string,
+	sourceType: string,
+	targetType: string,
+	losses: LossItem[],
+	/**  Left out by the user. */
+	skipped: boolean,
+	/**  Why it cannot be copied as it is, if it cannot (and is not left out). */
+	blocked?: BlockedItem | null,
+};
+
+/**  One source column and what it becomes. */
+export type CopyColumnItem_Serialize = {
+	name: string,
+	sourceType: string,
+	targetType: string,
+	losses: LossItem[],
+	/**  Left out by the user. */
+	skipped: boolean,
+	/**  Why it cannot be copied as it is, if it cannot (and is not left out). */
+	blocked: BlockedItem | null,
+};
+
+/**  What the copy does with the target. */
+export type CopyHowItem = 
+/**  A new table with the source's rows. */
+"structureAndData" | 
+/**  A new table, empty. */
+"structureOnly" | 
+/**  The rows into a table that is there. */
+"dataOnly";
+
+/**  What a copy will do, written by the core, to show before it runs. */
+export type CopyPlanItem = CopyPlanItem_Serialize | CopyPlanItem_Deserialize;
+
+/**  What a copy will do, written by the core, to show before it runs. */
+export type CopyPlanItem_Deserialize = {
+	columns: CopyColumnItem_Deserialize[],
+	primaryKey: string[],
+	notCopied: NotCopiedItem,
+	/**  What runs on the target, as an import shows it. */
+	target: ImportPlanItem,
+};
+
+/**  What a copy will do, written by the core, to show before it runs. */
+export type CopyPlanItem_Serialize = {
+	columns: CopyColumnItem_Serialize[],
+	primaryKey: string[],
+	notCopied: NotCopiedItem,
+	/**  What runs on the target, as an import shows it. */
+	target: ImportPlanItem,
+};
+
+/**  One table to copy, from a connection's explorer session to another's. */
+export type CopyRequestItem = {
+	sourceSchema: string,
+	sourceTable: string,
+	targetSchema: string,
+	targetTable: string,
+	how: CopyHowItem,
+	ifExists: IfExistsItem,
+	/**  Source columns left out. */
+	skip: string[],
+	/**  Target types typed instead of the mapped ones: `[column, type]`. */
+	types: ([string, string])[],
+	commitEvery: number | null,
+};
 
 /**
  *  "Copy special…" options, which are also the copy defaults (SDB-388). The core checks
@@ -3397,6 +3529,28 @@ export type HopDraftItem_Serialize = {
 	passwordOther: string,
 };
 
+/**  Where an open transaction stands with its connection type's idle rollback (ADR-081). */
+export type IdleRollbackItem = 
+/**  No warning. */
+{ kind: "notDue" } | 
+/**
+ *  The tab is warned: rolled back at `at_ms` (milliseconds since the Unix epoch) unless
+ *  the session is used.
+ */
+{ kind: "warned"; atMs: number | null };
+
+/**
+ *  An editor tab's idle transaction was rolled back, as its connection type asks (ADR-081).
+ *  Sent once; the tab says it in its messages.
+ */
+export type IdleTransactionRolledBack = {
+	session: string,
+	/**  The connection type's time, in seconds. */
+	afterSeconds: number,
+	/**  Statements run in the transaction that were undone. */
+	statements: number,
+};
+
 export type IfExistsItem = "fail" | "append" | "replace";
 
 /**
@@ -3569,6 +3723,11 @@ export type ImportPreviewItem = {
 	suggestedTable: string,
 	/**  The worksheets of a workbook (XLSX), in order; empty for the other formats. */
 	sheets: string[],
+	/**
+	 *  The core puts the rows in place whole or not at all (ADR-066): no batches to commit, so
+	 *  the dialog offers no "Commit every".
+	 */
+	keptWhole: boolean,
 };
 
 export type ImportProgressItem = {
@@ -3737,6 +3896,8 @@ export type JobKind =
 "export" | "dataSearch" | 
 /**  A column's statistics or its top values. */
 "columnStats" | "import" | 
+/**  A copy of a table to another connection (ADR-069). */
+"copy" | 
 /**  A backup, with its vendor's tool or the engine's own. */
 "backup" | 
 /**  A restore, or an import of a DuckDB export. */
@@ -3744,7 +3905,9 @@ export type JobKind =
 /**  "Run SQL file…". */
 "fileRun" | "connectionTest" | 
 /**  "Load every row", a page or a row jump of a query's result. */
-"rowLoad" | "pluginInstall";
+"rowLoad" | "pluginInstall" | 
+/**  A schema comparison's reads (ADR-070). */
+"schemaCompare";
 
 /**
  *  How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
@@ -4023,6 +4186,9 @@ export type LockWaitItem = {
 	blocking: string,
 };
 
+/**  What a column loses on its way, for the page to word. */
+export type LossItem = { kind: "zoneToUtc" } | { kind: "uuidAsText" } | { kind: "jsonAsText" } | { kind: "timeAsText" } | { kind: "asText" } | { kind: "decimalNarrowed"; precision: number; scale: number } | { kind: "decimalBounded"; precision: number; scale: number } | { kind: "decimalApproximate" } | { kind: "lengthDropped" } | { kind: "binaryNotYet" };
+
 /**  An action of the explorer's Maintenance menu (SDB-392). */
 export type MaintenanceKindItem = "vacuum" | "analyze" | "refreshMaterializedView" | "truncate" | "enableTriggers" | "disableTriggers" | "check" | "repair" | "optimize" | "rebuildTable" | "rebuildIndexes" | "integrityCheck" | "checkpoint";
 
@@ -4286,6 +4452,13 @@ export type McpVisibilityItem = "visible" | "notExposed" | "untrusted" |
 /**  The engine has no agents' barrier yet (ADR-056). */
 "noAgents";
 
+export type MigrationScriptItem = {
+	sql: string,
+	irreversible: string[],
+	leftInPlace: string[],
+	notScripted: NotScriptedItem[],
+};
+
 /**  A connection moved to another folder. */
 export type MovedItem = {
 	/**  Its identifier now. */
@@ -4467,6 +4640,22 @@ export type NewTableItem_Serialize = {
 	indexes: NewIndexItem[],
 };
 
+export type NotComparedItem = "foreignKeyActions" | "columnAttributes" | "columnOrder" | "otherObjects";
+
+/**  What of the source table the copy does not bring, counted. */
+export type NotCopiedItem = {
+	indexes: number,
+	foreignKeys: number,
+	constraints: number,
+	defaults: number,
+	primaryKey: boolean,
+};
+
+export type NotScriptedItem = {
+	object: string,
+	reason: string,
+};
+
 export type NoticeItem = {
 	severity: string,
 	message: string,
@@ -4503,6 +4692,22 @@ export type ObjectChangeItem_Serialize = { action: "rename"; target: ObjectTarge
 export type ObjectChangePreview = {
 	sql: string,
 	cascade: boolean,
+};
+
+export type ObjectComparisonItem = ObjectComparisonItem_Serialize | ObjectComparisonItem_Deserialize;
+
+export type ObjectComparisonItem_Deserialize = {
+	kind: CompareObjectKindItem,
+	name: string,
+	detail?: string | null,
+	status: ObjectStatusItem_Deserialize,
+};
+
+export type ObjectComparisonItem_Serialize = {
+	kind: CompareObjectKindItem,
+	name: string,
+	detail: string | null,
+	status: ObjectStatusItem_Serialize,
 };
 
 export type ObjectItem = ObjectItem_Serialize | ObjectItem_Deserialize;
@@ -4564,6 +4769,12 @@ export type ObjectPropertyItem = {
 	name: string,
 	value: string,
 };
+
+export type ObjectStatusItem = ObjectStatusItem_Serialize | ObjectStatusItem_Deserialize;
+
+export type ObjectStatusItem_Deserialize = { kind: "onlyInSource" } | { kind: "onlyInTarget" } | { kind: "changed"; parts: PartComparisonItem_Deserialize[]; sourceDiff: McpDiffLineItem[]; namesSourceSchema: boolean };
+
+export type ObjectStatusItem_Serialize = { kind: "onlyInSource" } | { kind: "onlyInTarget" } | { kind: "changed"; parts: PartComparisonItem_Serialize[]; sourceDiff: McpDiffLineItem[]; namesSourceSchema: boolean };
 
 /**
  *  An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
@@ -4655,6 +4866,24 @@ export type OutlineItem = {
 	/**  How many statements the script has. */
 	total: number,
 };
+
+export type PartComparisonItem = PartComparisonItem_Serialize | PartComparisonItem_Deserialize;
+
+export type PartComparisonItem_Deserialize = {
+	part: ComparedPartItem,
+	status: PartStatusItem_Deserialize,
+};
+
+export type PartComparisonItem_Serialize = {
+	part: ComparedPartItem,
+	status: PartStatusItem_Serialize,
+};
+
+export type PartStatusItem = PartStatusItem_Serialize | PartStatusItem_Deserialize;
+
+export type PartStatusItem_Deserialize = { kind: "onlyInSource"; definition: string } | { kind: "onlyInTarget"; definition: string } | { kind: "changed"; changes: PropertyChangeItem_Deserialize[] };
+
+export type PartStatusItem_Serialize = { kind: "onlyInSource"; definition: string } | { kind: "onlyInTarget"; definition: string } | { kind: "changed"; changes: PropertyChangeItem_Serialize[] };
 
 /**  Why a result was cut short. */
 export type PartialReasonItem = "cancelled" | "failed" | "timedOut" | "connectionLost";
@@ -5524,6 +5753,20 @@ export type ProcessTargetItem_Serialize = {
 	identity: string | null,
 };
 
+export type PropertyChangeItem = PropertyChangeItem_Serialize | PropertyChangeItem_Deserialize;
+
+export type PropertyChangeItem_Deserialize = {
+	property: ComparePropertyItem,
+	source?: string | null,
+	target?: string | null,
+};
+
+export type PropertyChangeItem_Serialize = {
+	property: ComparePropertyItem,
+	source: string | null,
+	target: string | null,
+};
+
 /**  The proxy section of the tunnel editor. Its password, if typed, travels apart. */
 export type ProxyDraftItem = ProxyDraftItem_Serialize | ProxyDraftItem_Deserialize;
 
@@ -5891,6 +6134,8 @@ export type SafeguardsItem_Deserialize = {
 	confirmDataChanges: boolean,
 	/**  Seconds. */
 	closeIdleAfter?: number | null,
+	/**  Seconds before an idle open transaction is rolled back, after a warning (ADR-081). */
+	closeIdleTransactionAfter?: number | null,
 	/**  Editor tabs start with auto-commit off (ADR-031). */
 	manualCommit: boolean,
 	/**  The first write switches a tab to manual commit (ADR-031). */
@@ -5903,6 +6148,8 @@ export type SafeguardsItem_Serialize = {
 	confirmDataChanges: boolean,
 	/**  Seconds. */
 	closeIdleAfter: number | null,
+	/**  Seconds before an idle open transaction is rolled back, after a warning (ADR-081). */
+	closeIdleTransactionAfter: number | null,
 	/**  Editor tabs start with auto-commit off (ADR-031). */
 	manualCommit: boolean,
 	/**  The first write switches a tab to manual commit (ADR-031). */
@@ -5923,6 +6170,29 @@ export type SchemaColumnItem = {
 	table: string,
 	name: string,
 	nativeType: string,
+};
+
+/**  A comparison's report, under the id its script is asked for with. */
+export type SchemaComparisonItem = SchemaComparisonItem_Serialize | SchemaComparisonItem_Deserialize;
+
+/**  A comparison's report, under the id its script is asked for with. */
+export type SchemaComparisonItem_Deserialize = {
+	comparison: number,
+	sourceSchema: string,
+	targetSchema: string,
+	objects: ObjectComparisonItem_Deserialize[],
+	same: number,
+	notCompared: NotComparedItem[],
+};
+
+/**  A comparison's report, under the id its script is asked for with. */
+export type SchemaComparisonItem_Serialize = {
+	comparison: number,
+	sourceSchema: string,
+	targetSchema: string,
+	objects: ObjectComparisonItem_Serialize[],
+	same: number,
+	notCompared: NotComparedItem[],
 };
 
 export type SchemaItem = {
@@ -5963,7 +6233,7 @@ export type SchemaObjectItem_Serialize = {
 };
 
 /**  The kinds of `list_schema_objects` (ADR-024): the explorer has a folder for each. */
-export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
+export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym" | "sink" | "connection" | "secret";
 
 /**  A screen that failed, as the page's error boundary saw it. */
 export type ScreenFailureItem = {
@@ -6188,28 +6458,43 @@ export type SelectionStatsItem_Serialize = {
 	modeCount: number | null,
 };
 
-/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+/**
+ *  A role, login, tablespace, extension or cluster: outside every schema (ADR-024). The UI
+ *  sends it back unchanged to ask for its definition (ADR-082).
+ */
 export type ServerObjectItem = ServerObjectItem_Serialize | ServerObjectItem_Deserialize;
 
-/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+/**
+ *  A role, login, tablespace, extension or cluster: outside every schema (ADR-024). The UI
+ *  sends it back unchanged to ask for its definition (ADR-082).
+ */
 export type ServerObjectItem_Deserialize = {
 	name: string,
 	kind: ServerObjectKindItem,
 	detail?: string | null,
 	/**  Built into the engine: shown only with "Show system objects". */
 	system: boolean,
+	/**  The core says this kind may have a definition: the explorer offers to open it. */
+	hasDefinition: boolean,
 };
 
-/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+/**
+ *  A role, login, tablespace, extension or cluster: outside every schema (ADR-024). The UI
+ *  sends it back unchanged to ask for its definition (ADR-082).
+ */
 export type ServerObjectItem_Serialize = {
 	name: string,
 	kind: ServerObjectKindItem,
 	detail: string | null,
 	/**  Built into the engine: shown only with "Show system objects". */
 	system: boolean,
+	/**  The core says this kind may have a definition: the explorer offers to open it. */
+	hasDefinition: boolean,
 };
 
-export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension";
+export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension" | 
+/**  Materialize's clusters and their replicas (ADR-082). */
+"cluster" | "cluster_replica";
 
 /**  One server setting, variable, status counter or property. */
 export type ServerSettingItem = ServerSettingItem_Serialize | ServerSettingItem_Deserialize;
@@ -6840,9 +7125,9 @@ export type TransactionOutcomeItem = {
 /**  Whether a transaction is open, as the driver last said. */
 export type TransactionPhaseItem = { kind: "idle" } | 
 /**  Open with work a Commit would keep; `statements` run in it. */
-{ kind: "open"; statements: number } | 
+{ kind: "open"; statements: number; idleRollback: IdleRollbackItem } | 
 /**  Open, but the engine will only roll it back. */
-{ kind: "failed"; statements: number };
+{ kind: "failed"; statements: number; idleRollback: IdleRollbackItem };
 
 /**
  *  An editor tab's transaction, as the core keeps it (ADR-031, ADR-060): its state, and the

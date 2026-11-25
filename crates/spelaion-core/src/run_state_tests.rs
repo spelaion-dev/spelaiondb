@@ -106,6 +106,7 @@ fn session() -> (Session, Arc<Engine>) {
             schemas: false,
             insert_rows: false,
             bound_params: false,
+            insert_bytes: false,
         },
     );
     let session = Session::new(

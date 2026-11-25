@@ -22,6 +22,7 @@ const SMART: Safeguards = Safeguards {
     confirm_execution: false,
     confirm_data_changes: true,
     close_idle_after: None,
+    close_idle_transaction_after: None,
     manual_commit: false,
     smart_commit: true,
 };
@@ -810,4 +811,183 @@ async fn sessions_that_do_not_follow_transactions_run_as_before() {
         .unwrap();
     assert_eq!(session.transaction_status().state, None);
     assert!(!session.close_needs_confirmation().await);
+}
+
+/// Waits until `rolled` holds `n` rollbacks, at most 15 s.
+async fn rollbacks(
+    rolled: &std::sync::Mutex<Vec<spelaion_core::IdleRolledBack>>,
+    n: usize,
+    name: &str,
+) -> Vec<spelaion_core::IdleRolledBack> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let now = rolled.lock().unwrap().clone();
+        if now.len() >= n {
+            return now;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{name}: no idle rollback came ({now:?})"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// ADR-081 on every engine: an idle open transaction is warned about, then rolled back with
+/// the session kept, and the tab is told what was undone. A session used regularly, used after
+/// the warning, or holding a statement whose rows are still being read is never touched.
+#[tokio::test]
+async fn an_idle_transaction_is_warned_about_then_rolled_back_but_never_one_in_use() {
+    let _turn = crate::serial::file_turn(module_path!());
+    use std::time::Duration;
+    // The warning comes 2 s before (half the time, below the 60 s lead).
+    const AFTER: Duration = Duration::from_secs(4);
+    assert_eq!(
+        spelaion_core::idle_rollback_lead(AFTER),
+        Duration::from_secs(2)
+    );
+    for engine in engines().await {
+        let name = engine.name;
+        let table = unique("tx_idle");
+        let body = async {
+            run(
+                &engine.a,
+                &format!("create table {table} (id int primary key, v varchar(20))"),
+            )
+            .await
+            .unwrap();
+            let manual = Safeguards {
+                manual_commit: true,
+                ..Safeguards::default()
+            };
+            assert!(
+                engine.a.follow_transactions(&manual).await.supported,
+                "{name}"
+            );
+            let rolled = Arc::new(std::sync::Mutex::new(Vec::new()));
+            {
+                let rolled = rolled.clone();
+                engine
+                    .a
+                    .roll_back_idle_transactions(AFTER, move |r| rolled.lock().unwrap().push(r));
+            }
+
+            // Left idle: warned with the moment, then rolled back; the session stays open.
+            let started = std::time::Instant::now();
+            run(&engine.a, &format!("insert into {table} values (1, 'a')"))
+                .await
+                .unwrap();
+            assert!(engine.a.transaction_status().is_open(), "{name}");
+            tokio::time::sleep(Duration::from_millis(2600)).await;
+            let at = engine.a.transaction_lifecycle().idle_rollback_at();
+            assert!(at.is_some(), "{name}: warned before the rollback");
+            assert!(
+                rolled.lock().unwrap().is_empty(),
+                "{name}: not before its time"
+            );
+            let done = rollbacks(&rolled, 1, name).await;
+            assert!(
+                started.elapsed() >= AFTER,
+                "{name}: {:?}",
+                started.elapsed()
+            );
+            assert_eq!(
+                done[0],
+                spelaion_core::IdleRolledBack {
+                    after: AFTER,
+                    statements: 1
+                },
+                "{name}"
+            );
+            let lifecycle = engine.a.transaction_lifecycle();
+            assert!(!lifecycle.in_transaction(), "{name}");
+            assert_eq!(lifecycle.idle_rollback_at(), None, "{name}");
+            assert!(!lifecycle.auto_commit(), "{name}: manual stays manual");
+            assert!(
+                matches!(*engine.a.health().borrow(), SessionHealth::Alive),
+                "{name}: the session is kept"
+            );
+            assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
+
+            // Used every second: never warned, never rolled back.
+            run(&engine.a, &format!("insert into {table} values (2, 'b')"))
+                .await
+                .unwrap();
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                run(&engine.a, &format!("select count(*) from {table}"))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    engine.a.transaction_lifecycle().idle_rollback_at(),
+                    None,
+                    "{name}"
+                );
+            }
+            assert!(engine.a.transaction_status().is_open(), "{name}");
+            assert_eq!(rolled.lock().unwrap().len(), 1, "{name}");
+            engine.a.commit().await.unwrap();
+            assert_eq!(count(&engine, &engine.b, &table).await, "1", "{name}");
+
+            // Used after the warning: the warning ends and the time starts again.
+            run(&engine.a, &format!("insert into {table} values (3, 'c')"))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(2600)).await;
+            assert!(
+                engine
+                    .a
+                    .transaction_lifecycle()
+                    .idle_rollback_at()
+                    .is_some(),
+                "{name}"
+            );
+            run(&engine.a, &format!("select count(*) from {table}"))
+                .await
+                .unwrap();
+            assert_eq!(
+                engine.a.transaction_lifecycle().idle_rollback_at(),
+                None,
+                "{name}: a use ends the warning"
+            );
+            tokio::time::sleep(Duration::from_millis(2600)).await;
+            assert_eq!(rolled.lock().unwrap().len(), 1, "{name}");
+            engine.a.commit().await.unwrap();
+            assert_eq!(count(&engine, &engine.b, &table).await, "2", "{name}");
+
+            // A statement whose rows are still being read holds the session: untouched however
+            // long it takes; once it is let go, the time counts from there.
+            run(&engine.a, &format!("insert into {table} values (4, 'd')"))
+                .await
+                .unwrap();
+            let reading = engine
+                .a
+                .connection()
+                .execute(&format!("select id from {table}"), &ExecOptions::default())
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(6)).await;
+            assert!(engine.a.transaction_status().is_open(), "{name}");
+            assert_eq!(
+                engine.a.transaction_lifecycle().idle_rollback_at(),
+                None,
+                "{name}: no warning while it is in use"
+            );
+            assert_eq!(rolled.lock().unwrap().len(), 1, "{name}");
+            let released = std::time::Instant::now();
+            drop(reading);
+            let done = rollbacks(&rolled, 2, name).await;
+            assert!(
+                released.elapsed() >= AFTER,
+                "{name}: {:?}",
+                released.elapsed()
+            );
+            assert_eq!(done[1].statements, 1, "{name}");
+            assert_eq!(count(&engine, &engine.b, &table).await, "2", "{name}");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
+        .await;
+    }
 }

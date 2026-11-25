@@ -138,6 +138,7 @@ fn session(rows: i64, ending: Ending) -> (Session, Arc<ResultStore>) {
             schemas: false,
             insert_rows: false,
             bound_params: false,
+            insert_bytes: false,
         },
         rows,
         ending,

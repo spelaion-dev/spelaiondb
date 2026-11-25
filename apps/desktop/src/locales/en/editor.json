@@ -673,6 +673,13 @@
     "committed": "Transaction committed.",
     "rolledBack": "Transaction rolled back.",
     "lostWithTransaction": "A transaction was open: the server rolled back what was not committed.",
+    "idleWarning": "TX idle · rolls back at {{time}}",
+    "idleWarningSoon": "TX idle · rolls back soon",
+    "idleWarningHint": "This transaction has been idle: its connection type rolls it back at {{time}} unless this tab is used. Commit or roll it back now.",
+    "idleRolledBack_one": "Rolled back after {{duration}} idle, as this connection’s type asks: {{count}} statement was undone.",
+    "idleRolledBack_other": "Rolled back after {{duration}} idle, as this connection’s type asks: {{count}} statements were undone.",
+    "idleMinutes_one": "{{count}} minute",
+    "idleMinutes_other": "{{count}} minutes",
     "tabBadge": "Transaction open"
   },
   "runOptions": {
@@ -894,6 +901,7 @@
     "newColumn": "New column…",
     "commitEvery": "Commit every (rows)",
     "commitHint": "Each batch is committed when it is complete; a cancel or an error rolls back only the batch it happened in. 0 imports everything in one transaction.",
+    "keptWhole": "The rows load into a table of their own and are put in place in one step: the import is kept whole or not at all, so there are no batches to commit.",
     "reviewSql": "Review SQL…",
     "planning": "Checking the table…",
     "couldNotPlan": "Could not prepare the import: {{reason}}",
@@ -1650,5 +1658,63 @@
     "readOnlyChip": "Read-only session",
     "readOnlyHint": "This tab's session refuses writes, as a read-only connection does. Click to end it."
   },
-  "schemaPooled": "This connection goes through a pooler in transaction mode, which keeps no session settings: qualify names with their schema."
+  "schemaPooled": "This connection goes through a pooler in transaction mode, which keeps no session settings: qualify names with their schema.",
+  "copy": {
+    "title": "Copy {{table}} from {{connection}}",
+    "steps": "Steps",
+    "step": {
+      "target": "Where",
+      "review": "Review"
+    },
+    "target": "Copy to",
+    "connection": "Connection",
+    "chooseConnection": "Choose a connection",
+    "connecting": "Connecting…",
+    "schema": "Schema",
+    "what": "Copy",
+    "how": {
+      "structureAndData": "Structure and data: a new table with the rows",
+      "structureOnly": "Structure only: a new, empty table",
+      "dataOnly": "Data only: into a table that is there"
+    },
+    "existingTable": "Table",
+    "chooseTable": "Choose a table",
+    "tableName": "New table",
+    "ifExists": "If it exists",
+    "planning": "Reading the table and writing the copy…",
+    "couldNotPlan": "Could not prepare the copy: {{reason}}",
+    "columns": "Columns",
+    "copyColumn": "Copy",
+    "include": "Copy {{name}}",
+    "sourceType": "Type there",
+    "targetType": "Type here",
+    "losses": "What changes",
+    "existingColumn": "The table's column of that name",
+    "loss": {
+      "zoneToUtc": "No type keeps the time zone: stored as its UTC time.",
+      "uuidAsText": "No UUID type: stored as text.",
+      "jsonAsText": "No JSON type: stored as text.",
+      "timeAsText": "No time-of-day type: stored as text.",
+      "asText": "No matching type: stored as its text.",
+      "decimalNarrowed": "Wider than allowed: at most {{precision}} digits, {{scale}} after the point; a value that does not fit stops the copy.",
+      "decimalBounded": "No precision of its own: stored with {{precision}} digits, {{scale}} after the point.",
+      "decimalApproximate": "SQLite stores it as its own number: digits past the 15th may round.",
+      "lengthDropped": "No length limit here.",
+      "binaryNotYet": "Binary columns cannot be copied to this engine yet."
+    },
+    "blocked": {
+      "binary": "Binary columns cannot be copied to this engine yet: leave it out to copy the rest.",
+      "masked": "Masked on this connection: its values never leave it. Leave it out to copy the rest."
+    },
+    "notCopied": "Not copied: {{indexes}} indexes, {{foreignKeys}} foreign keys, {{constraints}} other constraints, {{defaults}} defaults.",
+    "primaryKeyNotCopied": "The primary key is not copied either (the target keeps none, or one of its columns is left out).",
+    "start": "Copy",
+    "again": "Copy again",
+    "cancel": "Cancel copy",
+    "done_one": "{{formattedCount}} row copied to {{table}} in {{seconds}} s.",
+    "done_other": "{{formattedCount}} rows copied to {{table}} in {{seconds}} s.",
+    "cancelled_one": "The copy was cancelled: {{formattedCount}} row was committed before.",
+    "cancelled_other": "The copy was cancelled: {{formattedCount}} rows were committed before.",
+    "failed": "The copy failed: {{reason}}"
+  }
 }

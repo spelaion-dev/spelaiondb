@@ -19,7 +19,9 @@ mod mcp;
 mod panics;
 mod plans;
 mod plugins;
+mod schema_compare;
 mod startup;
+mod table_copy;
 mod update;
 mod update_state;
 mod webview_args;
@@ -88,6 +90,8 @@ struct AppState {
     jobs: jobs::Jobs,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
+    /// Schema comparisons, by their job's id, until the page forgets them (ADR-070).
+    comparisons: std::sync::Mutex<HashMap<u32, schema_compare::StoredComparison>>,
 }
 
 struct DesktopSession {
@@ -2206,6 +2210,25 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
         open.session
             .close_when_idle(std::time::Duration::from_secs(seconds.into()));
     }
+    // An idle open transaction is warned about, then rolled back (ADR-081); the warning
+    // travels with the transaction status, the rollback is told once.
+    if let Some(seconds) = open.resolved.safeguards().close_idle_transaction_after
+        && open.session.transaction_lifecycle().is_followed()
+    {
+        let app = app.clone();
+        let tab = session.clone();
+        open.session.roll_back_idle_transactions(
+            std::time::Duration::from_secs(seconds.into()),
+            move |done| {
+                let _ = IdleTransactionRolledBack {
+                    session: tab.clone(),
+                    after_seconds: u32::try_from(done.after.as_secs()).unwrap_or(u32::MAX),
+                    statements: done.statements,
+                }
+                .emit(&app);
+            },
+        );
+    }
     forward_transaction(app, session.clone(), open);
     forward_run(app, session.clone(), open);
     let mut health = open.session.health();
@@ -3521,6 +3544,19 @@ async fn open_export_session(
     Arc<JobCancel>,
     jobs::Job,
 )> {
+    let running = jobs::start(state, kind, job);
+    let cancel = running.cancel().clone();
+    let (source_open, open) = open_read_session(state, app, source).await?;
+    Ok((source_open, open, cancel, running))
+}
+
+/// A new session opened for reads only from the `source` session's resolved connection and
+/// in-memory password, as an export's is (ADR-034), with the source session itself.
+async fn open_read_session(
+    state: &AppState,
+    app: &AppHandle,
+    source: &str,
+) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>)> {
     let (source_open, password) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
@@ -3528,14 +3564,12 @@ async fn open_export_session(
             .ok_or("the connection of this export is closed")?;
         (source.open.clone(), source.password.clone())
     };
-    let running = jobs::start(state, kind, job);
-    let cancel = running.cancel().clone();
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password,
-        // Only a single read is ever run again there (ADR-034).
+        // Only reads are ever run there (ADR-034).
         read_only_session: true,
     };
     match open_connection(
@@ -3546,7 +3580,7 @@ async fn open_export_session(
     )
     .await
     {
-        Ok(open) => Ok((source_open, Arc::new(open), cancel, running)),
+        Ok(open) => Ok((source_open, Arc::new(open))),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -5114,6 +5148,22 @@ async fn object_definition(
         .map_err(|e| e.to_string())
 }
 
+/// The DDL of an object outside every schema (a Materialize cluster, ADR-082), to open in a
+/// new tab (nothing runs). The explorer asks only for kinds the core says may have one.
+#[command]
+async fn server_object_definition(
+    session: String,
+    object: ServerObjectItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .server_object_definition(&object.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
 /// none: the core matches the rows to one table, on a read-only connection too. The same
 /// answer says whether the session permits editing, so both actions share the catalog read.
@@ -6270,6 +6320,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             diagram::diagram_layout,
             diagram::save_diagram_text,
             diagram::close_diagram,
+            schema_compare::schema_compare_support,
+            schema_compare::compare_schemas,
+            schema_compare::schema_compare_script,
+            schema_compare::forget_schema_comparison,
             plans::explain_preflight,
             plans::plan_capabilities,
             plans::explain_query,
@@ -6300,6 +6354,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             import::import_preview,
             import::import_plan,
             import::run_import,
+            table_copy::copy_targets,
+            table_copy::copy_plan,
+            table_copy::run_copy,
             jobs::cancel_job,
             backup::backup_preferences,
             backup::set_backup_preferences,
@@ -6581,6 +6638,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             remove_bookmark,
             filter_explorer_name,
             object_definition,
+            server_object_definition,
             relation_definition,
             procedure_call,
             table_templates,
@@ -6603,6 +6661,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             InteractionClosed,
             SessionLost,
             TransactionChanged,
+            IdleTransactionRolledBack,
             RunChanged,
             QuitRequested,
             plugins::PluginInstallChanged,
@@ -6868,6 +6927,7 @@ pub fn run() {
         quit: app_lifecycle::Quit::default(),
         jobs: jobs::Jobs::new(),
         diagrams: std::sync::Mutex::new(HashMap::new()),
+        comparisons: std::sync::Mutex::new(HashMap::new()),
     };
 
     let typed = builder.invoke_handler();

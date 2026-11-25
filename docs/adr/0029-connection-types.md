@@ -1,7 +1,7 @@
 # ADR-029: Connection types: a badge and safeguards per environment, decided in the core
 
 - **Status:** Accepted (implemented; extended by ADR-071: one more safeguard,
-  `confirm_agent_writes`)
+  `confirm_agent_writes`; and by ADR-081: `close_idle_transaction_after`)
 - **Date:** 2026-11-07
 - **Builds on:** ADR-009 (configuration), ADR-022 (repository trust), ADR-028 (idle sessions)
 
@@ -91,7 +91,7 @@ like and which safeguards it carries.
 - **Future work, now done in ADR-031:** DBeaver's **auto-commit** and **smart commit** needed a
   manual-commit mode. ADR-031 adds it, and with it two type safeguards with the same "only add
   up" rule: `manual_commit` (sessions start with auto-commit off) and `smart_commit` (on for
-  Production). **Close idle transactions** is still in the backlog.
+  Production). **Close idle transactions** came with ADR-081 (`close_idle_transaction_after`).
 
 ## Alternatives
 - **Personal types only.** Simpler, but a team cannot agree on what production looks like or

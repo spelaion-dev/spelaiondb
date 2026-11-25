@@ -606,6 +606,7 @@ async fn continue_after_a_failed_write_under_smart_commit() {
         confirm_execution: false,
         confirm_data_changes: true,
         close_idle_after: None,
+        close_idle_transaction_after: None,
         manual_commit: false,
         smart_commit: true,
     };

@@ -66,6 +66,19 @@ services:
       interval: 3s
       retries: 60
 
+  # A Kafka broker Materialize reaches by this name, for a sink to write to (ADR-082): the
+  # PostgreSQL plugin's tests/materialize.rs creates one with
+  # SPELAION_TEST_MATERIALIZE_KAFKA=redpanda:9092 (the address as Materialize sees it).
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    command: ["redpanda", "start", "--mode", "dev-container", "--smp", "1", "--memory", "512M",
+              "--overprovisioned", "--kafka-addr", "PLAINTEXT://0.0.0.0:9092",
+              "--advertise-kafka-addr", "PLAINTEXT://redpanda:9092"]
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 3s
+      retries: 60
+
   cratedb:
     image: crate:6.5.1
     command: ["-Cdiscovery.type=single-node"]

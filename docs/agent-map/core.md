@@ -71,11 +71,19 @@
   destructive statement never passes the guard unasked; it also checks the `:name` scanner
   (`params.rs`: only placeholders in code are found and bound, a value stays in its literal),
   that pasted text, any import file and any `.sql` file read without a panic, and that SQLite
-  itself agrees with its splitter on where each statement ends. `guard.rs` lists the statements the app
+  itself agrees with its splitter on where each statement ends. It also checks that the guard
+  reads a statement's first word as the splitter does (ADR-065, SDB-452): a DROP, or an
+  unreadable TRUNCATE, DELETE or UPDATE, first to the splitter is asked about, and a DROP asked
+  about is first. What it has found and a card will fix is in `GUARD_KNOWN`, each entry let
+  through only in its own shape; the fix takes its entry out. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
   connection's type asks for: data changes on Production, every run where it confirms
   execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
-  decides it. A read-only connection runs only reads, session settings and transaction control
+  decides it. Its comments are the dialect's (`Lexical`, SDB-517/518): the first word is read
+  after the comments the dialect's `code_ranges` leaves out, and the SQL parser reads the
+  statement with them blanked, so neither a `#` the engine does not have nor a block comment
+  nested on one side only hides a statement or invents one; never a comment list of its own. A
+  read-only connection runs only reads, session settings and transaction control
   (ADR-053, `classify_read_only_connection`): `check_run` refuses anything else before the guard
   asks and whatever was confirmed, the session refuses it again (`Session::with_read_only`, set
   by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's
@@ -101,7 +109,14 @@
   closing a tab, disconnecting or quitting. The state is one enum, `TransactionLifecycle`
   (`transaction/lifecycle.rs`, SDB-372, ADR-060): not followed, or followed with a
   `CommitMode` (auto, manual, switched by smart commit) and a `TransactionPhase` (idle, open or
-  failed, with its statement count); it changes only through its own methods.
+  failed, with its statement count and its `IdleRollback`); it changes only through its own
+  methods. `idle_transaction.rs` (ADR-081) is the connection type's
+  `close_idle_transaction_after`: `Session::roll_back_idle_transactions` counts from the last
+  use (`Tracked::idle_since`; keep-alives and state reads are not uses), never while a run is
+  going, paused or cancelling or anything holds the connection, marks the phase warned before
+  the end, then holds the session as Commit does (`control`, `Tracked::try_hold`), asks the
+  driver and runs the engine's `ROLLBACK`; a rollback that cannot run marks the session lost.
+  Its test is `tests/transactions.rs`'s idle rollback on every engine.
   `TransactionStatus` is a read-only view made from it, and `closing_asks` is the one rule for
   "must closing ask" (`closing_asks_from_last_state` for the quit question, which leaves out a
   lost session). The page gets `TransactionStatusItem` (the state and the core's answers) and
@@ -182,6 +197,23 @@
   type, since it compares no float with a decimal); it has no unique key nor transactions, so
   its hits are filtered by their values and its reads need none. Metadata search is the app's
   (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
+  `schema_compare/` (ADR-070) compares two schemas of the same engine: `compare_support` says
+  which sessions can (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB proper; every
+  other engine and fork with the reason), `snapshot.rs` reads a side only through the catalog
+  reads the explorer and the structure forms use (`read_current` for tables), and `diff.rs`
+  decides every difference in one place with the forms' rules (`same_type`, `typed`), pairing
+  parts by name and then by what they are (SQL Server names constraints itself), and comparing
+  view and routine sources with their own name and their own schema's qualifiers left out
+  (`ddl::rename_defined`, `ddl::requalified`). `script.rs` writes the script that makes the
+  target like the source from both snapshots, through the existing writers only (ADR-047's
+  `alteration_plan` against the target's catalog, SQLite's rebuild included, `create_table_plan`,
+  ADR-026's drops and `new_table_element_sql`, "Edit source"'s `replace_form`, and the engine's
+  kept `CREATE TABLE` text on SQLite, MySQL and DuckDB), in an order the statements need (drops,
+  alterations, new tables, columns, constraints, foreign keys, views and routines last), with a
+  header of what cannot be undone, what is left in place and what is not scripted; SQL Server
+  gets one batch per piece. It never runs anything; `tests/schema_compare.rs` runs known
+  differences, and both round trips (without drops, and with drops keeping the target's rows),
+  on every engine it serves.
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
   the engine's read-only transaction (the export barrier) in a session of its own, sampled past
@@ -243,6 +275,17 @@
   (`spelaion-store`'s `export.rs`) only once `ExportDefaults::check` accepts them (what an
   export would accept) and read back part by part, a part this version cannot use at its
   default (formula escaping is on for a new user, and a damaged flag reads as on);
+  `table_copy/` (SDB-35, ADR-069) copies tables between connections: `types.rs` maps a source
+  column (logical and native type) to a portable kind and that kind to each target engine's type,
+  naming every loss (`Loss`); `values.rs` writes each value as the canonical text the target
+  reads; `run.rs` plans and runs a copy: the source read through `export_stream`'s
+  `read_only_transaction` (its own cancel, passed on from the job's), the rows loaded by the
+  import's `resolve_columns` and `run_resolved` (so its guard, transactions, #473's cancel rule
+  and ClickHouse's staging hold), binary and masked columns refused until left out. The read and
+  the load run at once, so a copy within one embedded file is refused up front
+  (`CopyError::SameFile`, by `Session::database_file`, which `open_connection` names). Any change
+  needs its unit tests (`types_tests.rs`), the every-pair copy test (`tests/copy_engines.rs`,
+  49 pairs of seven engines, data compared) and `tests/copy_same_file.rs`.
   `export_stream.rs` streams a query, a table data tab or explorer tables to a file
   (ADR-034): only a single read is ever run again, in its own session and inside the engine's
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
@@ -327,9 +370,9 @@
   restores a `pg_dump` of every common type and dumps it again identically, streams a million rows
   and cancels half-way. psql's `\copy` line is a meta-command, not a `COPY`: it has no data
   (`copy_stdio` is `None` for it), so the session refuses it before anything is sent (SDB-437).
-  `copy_stdio` reads words with the splitter's own rule (one may follow white space outside
-  ASCII, SDB-439): if they disagreed on a statement's first word, text after its `;` could be
-  taken both as COPY data and as SQL.
+  `copy_stdio` reads the words of PostgreSQL's one scanner (ADR-065, SDB-453), the splitter's
+  own: if they disagreed on a statement's first word, text after its `;` could be taken both as
+  COPY data and as SQL (SDB-439).
   `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads), and
   `xlsx.rs` a sheet of an XLSX file (SDB-390): every part's declared size, compression and
@@ -341,7 +384,9 @@
   `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
   the DDL, checks read-only and the guard, and loads the rows in transactions through
   `Connection::insert_rows`, which takes them as columns of text (`TextRows`: Arrow, read as
-  `&str`, never one `String` per cell, so they reach a plugin as they are) and binds every value (`COPY` on PostgreSQL, prepared inserts on
+  `&str`, never one `String` per cell, so they reach a plugin as they are; a copy's binary
+  column into a connection with `insert_bytes` is a column of bytes, sent as hex by
+  `table_copy` and decoded by the load, SDB-464) and binds every value (`COPY` on PostgreSQL, prepared inserts on
   MySQL, a TDS bulk load on SQL Server, the appender on DuckDB, TabSeparated data in the
   request's body on ClickHouse): never SQL text. ClickHouse has no transactions: `staged.rs`
   (ADR-066) loads into a table of our own (`__spelaion_import_` + a random UUID, created

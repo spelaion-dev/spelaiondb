@@ -21,7 +21,12 @@ pub(super) const TABLE_ENGINE: &str = "ENGINE = MergeTree ORDER BY tuple()";
 
 /// Whether an import on this dialect loads aside and swaps in, instead of in transactions.
 pub(super) fn applies(dialect: &dyn Dialect) -> bool {
-    dialect.name() == "clickhouse"
+    applies_to(dialect.name())
+}
+
+/// The same, by the dialect's name: what the preview tells the import dialog (SDB-460).
+pub(super) fn applies_to(engine: &str) -> bool {
+    engine == "clickhouse"
 }
 
 /// A new name for a table of our own: the prefix and a random v4 UUID (122 random bits). Its

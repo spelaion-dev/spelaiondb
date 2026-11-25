@@ -44,19 +44,40 @@ pub enum TransactionPhase {
     /// transaction control and internal metadata reads.
     Open {
         statements: u32,
+        idle: IdleRollback,
     },
     /// Open, but it can only be rolled back.
     Failed {
         statements: u32,
+        idle: IdleRollback,
     },
 }
 
+/// Where an open transaction stands with its connection type's idle rollback (ADR-081).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IdleRollback {
+    /// No warning: the session was used recently, or its type rolls nothing back.
+    #[default]
+    NotDue,
+    /// The tab is warned: the transaction is rolled back at `at` unless the session is used.
+    Warned { at: std::time::SystemTime },
+}
+
 impl TransactionPhase {
-    fn of(state: TransactionState, statements: u32) -> Self {
+    /// The phase the driver's answer means. An open transaction that stays open keeps its
+    /// warning: reading the state is not a use (ADR-081).
+    fn of(state: TransactionState, statements: u32, idle: IdleRollback) -> Self {
         match state {
             TransactionState::Idle => Self::Idle,
-            TransactionState::Open => Self::Open { statements },
-            TransactionState::Failed => Self::Failed { statements },
+            TransactionState::Open => Self::Open { statements, idle },
+            TransactionState::Failed => Self::Failed { statements, idle },
+        }
+    }
+
+    fn idle(self) -> IdleRollback {
+        match self {
+            Self::Idle => IdleRollback::NotDue,
+            Self::Open { idle, .. } | Self::Failed { idle, .. } => idle,
         }
     }
 
@@ -71,7 +92,7 @@ impl TransactionPhase {
     fn statements(self) -> u32 {
         match self {
             Self::Idle => 0,
-            Self::Open { statements } | Self::Failed { statements } => statements,
+            Self::Open { statements, .. } | Self::Failed { statements, .. } => statements,
         }
     }
 }
@@ -102,7 +123,7 @@ impl TransactionLifecycle {
             } else {
                 CommitMode::Auto { smart_commit }
             },
-            phase: TransactionPhase::of(state, 0),
+            phase: TransactionPhase::of(state, 0, IdleRollback::NotDue),
         }
     }
 
@@ -185,7 +206,10 @@ impl TransactionLifecycle {
         matches!(
             self,
             Self::Followed {
-                phase: TransactionPhase::Open { statements: 1.. },
+                phase: TransactionPhase::Open {
+                    statements: 1..,
+                    ..
+                },
                 ..
             }
         )
@@ -216,7 +240,7 @@ impl TransactionLifecycle {
         let Self::Followed { commit, phase } = self else {
             return;
         };
-        *phase = TransactionPhase::of(state, phase.statements());
+        *phase = TransactionPhase::of(state, phase.statements(), phase.idle());
         if *phase == TransactionPhase::Idle && *commit == CommitMode::SmartSwitched {
             *commit = CommitMode::Auto { smart_commit: true };
         }
@@ -254,14 +278,17 @@ impl TransactionLifecycle {
     /// The core's own `BEGIN` opened a transaction: open, with nothing run in it yet.
     pub(crate) fn opened_by_core(&mut self) {
         if let Self::Followed { phase, .. } = self {
-            *phase = TransactionPhase::Open { statements: 0 };
+            *phase = TransactionPhase::Open {
+                statements: 0,
+                idle: IdleRollback::NotDue,
+            };
         }
     }
 
     /// The open transaction starts counting again (MySQL's `BEGIN` committed the previous one).
     pub(crate) fn restart_count(&mut self) {
         if let Self::Followed {
-            phase: TransactionPhase::Open { statements },
+            phase: TransactionPhase::Open { statements, .. },
             ..
         } = self
         {
@@ -269,14 +296,50 @@ impl TransactionLifecycle {
         }
     }
 
-    /// One more statement the user ran in the open transaction.
+    /// One more statement the user ran in the open transaction: a use, so a warning ends.
     pub(crate) fn count_statement(&mut self) {
         if let Self::Followed {
-            phase: TransactionPhase::Open { statements },
+            phase: TransactionPhase::Open { statements, idle },
             ..
         } = self
         {
             *statements += 1;
+            *idle = IdleRollback::NotDue;
+        }
+    }
+
+    /// When the open transaction is rolled back unless the session is used (ADR-081); `None`
+    /// without a warning.
+    pub fn idle_rollback_at(&self) -> Option<std::time::SystemTime> {
+        match self {
+            Self::NotFollowed => None,
+            Self::Followed { phase, .. } => match phase.idle() {
+                IdleRollback::NotDue => None,
+                IdleRollback::Warned { at } => Some(at),
+            },
+        }
+    }
+
+    /// Warns that the open transaction is rolled back at `at` unless the session is used. Does
+    /// nothing while no transaction is open, or when that warning is already given.
+    pub(crate) fn warn_idle_rollback(&mut self, at: std::time::SystemTime) {
+        if let Self::Followed {
+            phase: TransactionPhase::Open { idle, .. } | TransactionPhase::Failed { idle, .. },
+            ..
+        } = self
+        {
+            *idle = IdleRollback::Warned { at };
+        }
+    }
+
+    /// The session was used: the warning ends, and the idle time counts from that use.
+    pub(crate) fn clear_idle_warning(&mut self) {
+        if let Self::Followed {
+            phase: TransactionPhase::Open { idle, .. } | TransactionPhase::Failed { idle, .. },
+            ..
+        } = self
+        {
+            *idle = IdleRollback::NotDue;
         }
     }
 }
@@ -312,7 +375,10 @@ mod tests {
     fn a_smart_switch_ends_with_its_transaction() {
         let mut status = followed(
             CommitMode::SmartSwitched,
-            TransactionPhase::Open { statements: 2 },
+            TransactionPhase::Open {
+                statements: 2,
+                idle: IdleRollback::NotDue,
+            },
         );
         status.observe(TransactionState::Open);
         assert!(!status.auto_commit() && status.statements() == 2);
@@ -325,7 +391,10 @@ mod tests {
         // A manual mode the user chose stays manual.
         let mut chosen = followed(
             CommitMode::Manual { smart_commit: true },
-            TransactionPhase::Open { statements: 2 },
+            TransactionPhase::Open {
+                statements: 2,
+                idle: IdleRollback::NotDue,
+            },
         );
         chosen.observe(TransactionState::Idle);
         assert!(!chosen.auto_commit());
@@ -362,13 +431,19 @@ mod tests {
             (true, true, true, false, Some(TransactionState::Idle), 0)
         );
         assert_eq!(
-            view(manual(TransactionPhase::Open { statements: 3 })),
+            view(manual(TransactionPhase::Open {
+                statements: 3,
+                idle: IdleRollback::NotDue
+            })),
             (true, false, false, false, Some(TransactionState::Open), 3)
         );
         assert_eq!(
             view(followed(
                 CommitMode::SmartSwitched,
-                TransactionPhase::Failed { statements: 1 }
+                TransactionPhase::Failed {
+                    statements: 1,
+                    idle: IdleRollback::NotDue
+                }
             )),
             (true, false, true, true, Some(TransactionState::Failed), 1)
         );
@@ -387,7 +462,10 @@ mod tests {
             TransactionLifecycle::follow(&safeguards, TransactionState::Open),
             followed(
                 CommitMode::Manual { smart_commit: true },
-                TransactionPhase::Open { statements: 0 }
+                TransactionPhase::Open {
+                    statements: 0,
+                    idle: IdleRollback::NotDue
+                }
             )
         );
     }
@@ -461,10 +539,34 @@ mod tests {
 
     #[test]
     fn closing_asks_only_about_an_open_transaction_with_work_to_keep() {
-        assert!(manual(TransactionPhase::Open { statements: 0 }).closing_asks());
-        assert!(manual(TransactionPhase::Open { statements: 4 }).closing_asks());
-        assert!(auto(TransactionPhase::Open { statements: 1 }).closing_asks());
-        assert!(!manual(TransactionPhase::Failed { statements: 4 }).closing_asks());
+        assert!(
+            manual(TransactionPhase::Open {
+                statements: 0,
+                idle: IdleRollback::NotDue
+            })
+            .closing_asks()
+        );
+        assert!(
+            manual(TransactionPhase::Open {
+                statements: 4,
+                idle: IdleRollback::NotDue
+            })
+            .closing_asks()
+        );
+        assert!(
+            auto(TransactionPhase::Open {
+                statements: 1,
+                idle: IdleRollback::NotDue
+            })
+            .closing_asks()
+        );
+        assert!(
+            !manual(TransactionPhase::Failed {
+                statements: 4,
+                idle: IdleRollback::NotDue
+            })
+            .closing_asks()
+        );
         assert!(!manual(TransactionPhase::Idle).closing_asks());
         assert!(!TransactionLifecycle::NotFollowed.closing_asks());
     }
@@ -474,13 +576,66 @@ mod tests {
         let idle = auto(TransactionPhase::Idle);
         assert!(!idle.end_actions_shown() && !idle.auto_commit_locked());
         // A BEGIN typed in auto-commit: Commit and Rollback apply, the switch is not locked.
-        let typed = auto(TransactionPhase::Open { statements: 1 });
+        let typed = auto(TransactionPhase::Open {
+            statements: 1,
+            idle: IdleRollback::NotDue,
+        });
         assert!(typed.end_actions_shown() && !typed.auto_commit_locked());
         let manual_idle = manual(TransactionPhase::Idle);
         assert!(manual_idle.end_actions_shown() && !manual_idle.auto_commit_locked());
-        let manual_failed = manual(TransactionPhase::Failed { statements: 1 });
+        let manual_failed = manual(TransactionPhase::Failed {
+            statements: 1,
+            idle: IdleRollback::NotDue,
+        });
         assert!(manual_failed.end_actions_shown() && manual_failed.auto_commit_locked());
         assert!(!TransactionLifecycle::NotFollowed.end_actions_shown());
         assert!(!TransactionLifecycle::NotFollowed.auto_commit_locked());
+    }
+
+    /// ADR-081: the warning lives in the open phase. Reading the state again keeps it; a
+    /// statement, a clear or the end of the transaction removes it; nothing warns without one.
+    #[test]
+    fn an_idle_warning_lasts_until_a_use_or_the_end_of_its_transaction() {
+        let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        let mut status = manual(TransactionPhase::Idle);
+        status.warn_idle_rollback(at);
+        assert_eq!(
+            status.idle_rollback_at(),
+            None,
+            "no transaction, no warning"
+        );
+
+        status.opened_by_core();
+        status.count_statement();
+        status.warn_idle_rollback(at);
+        assert_eq!(status.idle_rollback_at(), Some(at));
+        status.observe(TransactionState::Open);
+        assert_eq!(
+            status.idle_rollback_at(),
+            Some(at),
+            "a state read is not a use"
+        );
+        assert_eq!(status.statements(), 1);
+        status.count_statement();
+        assert_eq!(status.idle_rollback_at(), None, "a statement is a use");
+
+        status.warn_idle_rollback(at);
+        status.observe(TransactionState::Failed);
+        assert_eq!(
+            status.idle_rollback_at(),
+            Some(at),
+            "a failed one is warned too"
+        );
+        status.clear_idle_warning();
+        assert_eq!(status.idle_rollback_at(), None);
+
+        status.warn_idle_rollback(at);
+        status.observe(TransactionState::Idle);
+        assert_eq!(
+            status.idle_rollback_at(),
+            None,
+            "it ends with the transaction"
+        );
+        assert_eq!(TransactionLifecycle::NotFollowed.idle_rollback_at(), None);
     }
 }

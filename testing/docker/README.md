@@ -213,7 +213,9 @@ readiness is visible. To inspect a local failure, run `bash testing/docker/diagn
 YugabyteDB, TimescaleDB, RisingWave, Materialize and CrateDB, each as its image starts and
 without a password, for `crates/spelaion-core/tests/postgres_family.rs` (SDB-169). Its images
 are large (RisingWave's is about 11 GB), so nothing starts them unless asked, and CI does not.
-The ports and variables are at the top of the file.
+The ports and variables are at the top of the file. It also starts Redpanda, a Kafka broker that
+only Materialize reaches (as `redpanda:9092`), so the PostgreSQL plugin's Materialize test can
+create a sink (ADR-082): run it with `SPELAION_TEST_MATERIALIZE_KAFKA=redpanda:9092`.
 
 ```bash
 docker compose -f testing/docker/pg-family/compose.yaml up -d --wait

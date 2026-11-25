@@ -24,11 +24,23 @@
   empty list; `Dependencies::untracked` names the kinds it does not record. A plugin of an older
   protocol is not asked (`spelaion-plugin-host`). SQLite's are `spelaion-sqlite-schema`'s
   `details.rs` (a view's tables read from the program `EXPLAIN` shows, by root page).
+  Protocol 1.3 (ADR-082) adds the schema object kinds `sink`, `connection` and `secret`, the
+  server object kinds `cluster` and `cluster_replica` (Materialize's), and
+  `server_object_definition`, asked only for the kinds `ServerObjectKind::has_definition` names.
+  The host never asks an older plugin for it; the SDK (`serve.rs`, `speaks`) leaves the new
+  kinds out of the lists it sends a core that chose 1.2 or older, which could not read them.
+  A new kind is a new minor version this way: the kind, the SDK's filter, the host's guard, the
+  spec's table and `spelaion-test-plugin`'s cases (`tests/protocol.rs`), then a `plugin-sdk-v*`
+  tag the plugins move to.
   `list_columns` is every
   column of a schema in one catalog query (metadata search, ADR-043), and `execute_bound` runs
   one read with text values bound to `bound_placeholder`'s placeholders (MySQL binds them to
   user variables with a prepared `SET`, then reads with the text protocol;
-  `Capabilities::bound_params` is false for SQLite over SSH).
+  `Capabilities::bound_params` is false for SQLite over SSH). `insert_rows`'s `TextRows` columns
+  are text, or bytes (`ColumnKind::Bytes`, read with `TextRows::cell`; `get` panics on one) for a
+  driver whose `Capabilities::insert_bytes` is true, which binds them as its binary type (SDB-464,
+  protocol 1.3); the host never sends bytes to a plugin below 1.3 or without it. A new SQL driver
+  sets it and its test loads every byte.
   `Dialect::code_ranges` is what lies outside a script's strings, quoted names and comments, as
   that engine's splitter reads them (each dialect builds it from its splitter's own pieces with
   `code_ranges`): the editor's `:name` placeholders (`spelaion-core`'s `params.rs`) are looked

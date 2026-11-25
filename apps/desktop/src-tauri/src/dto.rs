@@ -89,6 +89,9 @@ pub enum BookmarkKindItem {
     Type,
     Event,
     Synonym,
+    Sink,
+    Connection,
+    Secret,
 }
 
 impl From<spelaion_core::BookmarkKind> for BookmarkKindItem {
@@ -114,6 +117,9 @@ impl From<spelaion_core::BookmarkKind> for BookmarkKindItem {
             K::Type => Self::Type,
             K::Event => Self::Event,
             K::Synonym => Self::Synonym,
+            K::Sink => Self::Sink,
+            K::Connection => Self::Connection,
+            K::Secret => Self::Secret,
         }
     }
 }
@@ -141,6 +147,9 @@ impl From<BookmarkKindItem> for spelaion_core::BookmarkKind {
             K::Type => Self::Type,
             K::Event => Self::Event,
             K::Synonym => Self::Synonym,
+            K::Sink => Self::Sink,
+            K::Connection => Self::Connection,
+            K::Secret => Self::Secret,
         }
     }
 }
@@ -1420,6 +1429,8 @@ pub struct SafeguardsItem {
     pub confirm_data_changes: bool,
     /// Seconds.
     pub close_idle_after: Option<u32>,
+    /// Seconds before an idle open transaction is rolled back, after a warning (ADR-081).
+    pub close_idle_transaction_after: Option<u32>,
     /// Editor tabs start with auto-commit off (ADR-031).
     pub manual_commit: bool,
     /// The first write switches a tab to manual commit (ADR-031).
@@ -1432,6 +1443,7 @@ impl From<spelaion_config::Safeguards> for SafeguardsItem {
             confirm_execution: s.confirm_execution,
             confirm_data_changes: s.confirm_data_changes,
             close_idle_after: s.close_idle_after,
+            close_idle_transaction_after: s.close_idle_transaction_after,
             manual_commit: s.manual_commit,
             smart_commit: s.smart_commit,
         }
@@ -1485,6 +1497,9 @@ pub struct ConnectionTypeDraft {
     pub confirm_execution: bool,
     pub confirm_data_changes: bool,
     pub close_idle_after: Option<u32>,
+    /// Seconds before an idle open transaction is rolled back, after a warning (ADR-081).
+    #[serde(default)]
+    pub close_idle_transaction_after: Option<u32>,
     #[serde(default)]
     pub manual_commit: bool,
     #[serde(default)]
@@ -1504,6 +1519,7 @@ impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
             confirm_execution: c.confirm_execution,
             confirm_data_changes: c.confirm_data_changes,
             close_idle_after: c.close_idle_after,
+            close_idle_transaction_after: c.close_idle_transaction_after,
             manual_commit: c.manual_commit,
             smart_commit: c.smart_commit,
             mask_columns: c.mask_columns.clone(),
@@ -1521,6 +1537,7 @@ impl From<ConnectionTypeDraft> for spelaion_config::ConnectionTypeConfig {
             confirm_execution: d.confirm_execution,
             confirm_data_changes: d.confirm_data_changes,
             close_idle_after: d.close_idle_after,
+            close_idle_transaction_after: d.close_idle_transaction_after,
             manual_commit: d.manual_commit,
             smart_commit: d.smart_commit,
             mask_columns: d.mask_columns,
@@ -2686,6 +2703,9 @@ pub enum SchemaObjectKindItem {
     Type,
     Event,
     Synonym,
+    Sink,
+    Connection,
+    Secret,
 }
 
 impl From<SchemaObjectKind> for SchemaObjectKindItem {
@@ -2701,6 +2721,9 @@ impl From<SchemaObjectKind> for SchemaObjectKindItem {
             SchemaObjectKind::Type => Self::Type,
             SchemaObjectKind::Event => Self::Event,
             SchemaObjectKind::Synonym => Self::Synonym,
+            SchemaObjectKind::Sink => Self::Sink,
+            SchemaObjectKind::Connection => Self::Connection,
+            SchemaObjectKind::Secret => Self::Secret,
         }
     }
 }
@@ -2718,6 +2741,9 @@ impl From<SchemaObjectKindItem> for SchemaObjectKind {
             SchemaObjectKindItem::Type => Self::Type,
             SchemaObjectKindItem::Event => Self::Event,
             SchemaObjectKindItem::Synonym => Self::Synonym,
+            SchemaObjectKindItem::Sink => Self::Sink,
+            SchemaObjectKindItem::Connection => Self::Connection,
+            SchemaObjectKindItem::Secret => Self::Secret,
         }
     }
 }
@@ -2759,7 +2785,7 @@ impl From<SchemaObjectItem> for SchemaObject {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ServerObjectKindItem {
     Role,
@@ -2767,10 +2793,42 @@ pub enum ServerObjectKindItem {
     Login,
     Tablespace,
     Extension,
+    /// Materialize's clusters and their replicas (ADR-082).
+    Cluster,
+    ClusterReplica,
 }
 
-/// A role, login, tablespace or extension: outside every schema (ADR-024).
-#[derive(Debug, Clone, Serialize, Type)]
+impl From<ServerObjectKind> for ServerObjectKindItem {
+    fn from(kind: ServerObjectKind) -> Self {
+        match kind {
+            ServerObjectKind::Role => Self::Role,
+            ServerObjectKind::User => Self::User,
+            ServerObjectKind::Login => Self::Login,
+            ServerObjectKind::Tablespace => Self::Tablespace,
+            ServerObjectKind::Extension => Self::Extension,
+            ServerObjectKind::Cluster => Self::Cluster,
+            ServerObjectKind::ClusterReplica => Self::ClusterReplica,
+        }
+    }
+}
+
+impl From<ServerObjectKindItem> for ServerObjectKind {
+    fn from(kind: ServerObjectKindItem) -> Self {
+        match kind {
+            ServerObjectKindItem::Role => Self::Role,
+            ServerObjectKindItem::User => Self::User,
+            ServerObjectKindItem::Login => Self::Login,
+            ServerObjectKindItem::Tablespace => Self::Tablespace,
+            ServerObjectKindItem::Extension => Self::Extension,
+            ServerObjectKindItem::Cluster => Self::Cluster,
+            ServerObjectKindItem::ClusterReplica => Self::ClusterReplica,
+        }
+    }
+}
+
+/// A role, login, tablespace, extension or cluster: outside every schema (ADR-024). The UI
+/// sends it back unchanged to ask for its definition (ADR-082).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerObjectItem {
     pub name: String,
@@ -2778,19 +2836,27 @@ pub struct ServerObjectItem {
     pub detail: Option<String>,
     /// Built into the engine: shown only with "Show system objects".
     pub system: bool,
+    /// The core says this kind may have a definition: the explorer offers to open it.
+    pub has_definition: bool,
 }
 
 impl From<ServerObject> for ServerObjectItem {
     fn from(o: ServerObject) -> Self {
         Self {
             name: o.name,
-            kind: match o.kind {
-                ServerObjectKind::Role => ServerObjectKindItem::Role,
-                ServerObjectKind::User => ServerObjectKindItem::User,
-                ServerObjectKind::Login => ServerObjectKindItem::Login,
-                ServerObjectKind::Tablespace => ServerObjectKindItem::Tablespace,
-                ServerObjectKind::Extension => ServerObjectKindItem::Extension,
-            },
+            has_definition: o.kind.has_definition(),
+            kind: o.kind.into(),
+            detail: o.detail,
+            system: o.system,
+        }
+    }
+}
+
+impl From<ServerObjectItem> for ServerObject {
+    fn from(o: ServerObjectItem) -> Self {
+        Self {
+            name: o.name,
+            kind: o.kind.into(),
             detail: o.detail,
             system: o.system,
         }
@@ -3358,11 +3424,54 @@ pub enum TransactionPhaseItem {
     /// Open with work a Commit would keep; `statements` run in it.
     Open {
         statements: u32,
+        idle_rollback: IdleRollbackItem,
     },
     /// Open, but the engine will only roll it back.
     Failed {
         statements: u32,
+        idle_rollback: IdleRollbackItem,
     },
+}
+
+/// Where an open transaction stands with its connection type's idle rollback (ADR-081).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum IdleRollbackItem {
+    /// No warning.
+    #[default]
+    NotDue,
+    /// The tab is warned: rolled back at `at_ms` (milliseconds since the Unix epoch) unless
+    /// the session is used.
+    Warned { at_ms: f64 },
+}
+
+impl From<spelaion_core::IdleRollback> for IdleRollbackItem {
+    fn from(idle: spelaion_core::IdleRollback) -> Self {
+        match idle {
+            spelaion_core::IdleRollback::NotDue => Self::NotDue,
+            spelaion_core::IdleRollback::Warned { at } => Self::Warned {
+                at_ms: at
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_millis() as f64),
+            },
+        }
+    }
+}
+
+/// An editor tab's idle transaction was rolled back, as its connection type asks (ADR-081).
+/// Sent once; the tab says it in its messages.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct IdleTransactionRolledBack {
+    pub session: String,
+    /// The connection type's time, in seconds.
+    pub after_seconds: u32,
+    /// Statements run in the transaction that were undone.
+    pub statements: u32,
 }
 
 impl From<spelaion_core::TransactionLifecycle> for TransactionStatusItem {
@@ -3378,12 +3487,14 @@ impl From<spelaion_core::TransactionLifecycle> for TransactionStatusItem {
                 },
                 transaction: match phase {
                     TransactionPhase::Idle => TransactionPhaseItem::Idle,
-                    TransactionPhase::Open { statements } => {
-                        TransactionPhaseItem::Open { statements }
-                    }
-                    TransactionPhase::Failed { statements } => {
-                        TransactionPhaseItem::Failed { statements }
-                    }
+                    TransactionPhase::Open { statements, idle } => TransactionPhaseItem::Open {
+                        statements,
+                        idle_rollback: idle.into(),
+                    },
+                    TransactionPhase::Failed { statements, idle } => TransactionPhaseItem::Failed {
+                        statements,
+                        idle_rollback: idle.into(),
+                    },
                 },
                 smart_commit: lifecycle.smart_commit(),
                 in_transaction: lifecycle.in_transaction(),

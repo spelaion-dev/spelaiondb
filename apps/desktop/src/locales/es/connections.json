@@ -124,6 +124,7 @@
     "typeConfirmsExecution": "Pregunta antes de cada ejecución",
     "typeConfirmsChanges": "Pregunta antes de cambiar datos",
     "typeClosesIdle": "Se cierra tras {{minutes}} min inactiva",
+    "typeRollsBackIdle": "Deshace transacciones inactivas tras {{minutes}} min",
     "typeNoSafeguards": "Sin salvaguardas: solo su insignia",
     "description": "Descripción",
     "descriptionPlaceholder": "¿Para qué es esta base de datos? ¿Quién la mantiene?",

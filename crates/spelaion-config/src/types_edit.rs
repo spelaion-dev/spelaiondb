@@ -70,10 +70,18 @@ pub fn set_personal_type(
     flag(table, "confirm_data_changes", kind.confirm_data_changes);
     flag(table, "manual_commit", kind.manual_commit);
     flag(table, "smart_commit", kind.smart_commit);
-    match kind.close_idle_after {
-        Some(seconds) => table["close_idle_after"] = toml_edit::value(i64::from(seconds)),
-        None => {
-            table.remove("close_idle_after");
+    for (key, value) in [
+        ("close_idle_after", kind.close_idle_after),
+        (
+            "close_idle_transaction_after",
+            kind.close_idle_transaction_after,
+        ),
+    ] {
+        match value {
+            Some(seconds) => table[key] = toml_edit::value(i64::from(seconds)),
+            None => {
+                table.remove(key);
+            }
         }
     }
     save(&path, &doc)
@@ -107,6 +115,7 @@ fn tidy(kind: &ConnectionTypeConfig) -> ConnectionTypeConfig {
         confirm_execution: kind.confirm_execution,
         confirm_data_changes: kind.confirm_data_changes,
         close_idle_after: kind.close_idle_after.filter(|s| *s > 0),
+        close_idle_transaction_after: kind.close_idle_transaction_after.filter(|s| *s > 0),
         manual_commit: kind.manual_commit,
         smart_commit: kind.smart_commit,
         mask_columns: kind

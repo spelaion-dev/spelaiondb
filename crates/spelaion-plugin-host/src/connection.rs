@@ -17,8 +17,8 @@ use spelaion_driver_api::{
 };
 use spelaion_plugin_protocol::ipc::BatchEncoder;
 use spelaion_plugin_protocol::{
-    CatalogRequest, Connect, ConnectResult, DETAILS, Execute, InsertRows, REQUESTS, Run,
-    SessionRequest, StreamId, method,
+    BYTES, CATALOG_KINDS, CatalogRequest, Connect, ConnectResult, DETAILS, Execute, InsertRows,
+    REQUESTS, Run, SessionRequest, StreamId, method,
 };
 use tokio::sync::mpsc;
 
@@ -94,7 +94,10 @@ impl PluginConnection {
                 .map_err(|_| unexpected(method::CONNECT))
         });
         match capabilities {
-            Ok(capabilities) => {
+            Ok(mut capabilities) => {
+                // Bytes in `insert_rows` came with 1.3 (SDB-464): a plugin that chose an older
+                // version is never sent any, whatever it says.
+                capabilities.insert_bytes &= process.info().protocol >= BYTES;
                 opening.armed = false;
                 Ok(Self {
                     process: process.clone(),
@@ -489,6 +492,22 @@ impl Connection for PluginConnection {
         self.ask(method::OBJECT_DEFINITION, request, "sql").await
     }
 
+    // A plugin older than 1.3 is not asked: its engine has no such definitions, as a
+    // compiled-in driver without them would (ADR-082).
+    async fn server_object_definition(&self, object: &ServerObject) -> Result<String> {
+        if self.process.info().protocol < CATALOG_KINDS {
+            return Err(DriverError::Other(
+                "this engine has no definitions for objects outside a schema".into(),
+            ));
+        }
+        let request = CatalogRequest {
+            server_object: Some(object.clone()),
+            ..self.catalog()
+        };
+        self.ask(method::SERVER_OBJECT_DEFINITION, request, "sql")
+            .await
+    }
+
     async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
         let request = CatalogRequest {
             schema: Some(schema.to_string()),
@@ -508,6 +527,13 @@ impl Connection for PluginConnection {
 
     async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         target.check_rows(&rows)?;
+        // Checked here too, so no plugin is sent bytes it would read as something else.
+        if rows.has_bytes() && !self.capabilities.insert_bytes {
+            return Err(DriverError::Other(format!(
+                "the plugin {} cannot load columns of bytes (plugin protocol {BYTES} and its                  `insert_bytes`): install a newer build of it",
+                self.process.name()
+            )));
+        }
         let shared = self.process.shared();
         let unreadable = |e: arrow::error::ArrowError| DriverError::Other(e.to_string());
         // The rows are already the columns that travel: nothing is converted.

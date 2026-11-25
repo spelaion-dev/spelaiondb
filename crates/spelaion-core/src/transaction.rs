@@ -18,7 +18,7 @@ use crate::classify::classify_read_only;
 
 mod lifecycle;
 
-pub use lifecycle::{CommitMode, TransactionLifecycle, TransactionPhase};
+pub use lifecycle::{CommitMode, IdleRollback, TransactionLifecycle, TransactionPhase};
 
 /// What an editor session shows about its transaction: a read-only view of its
 /// [`TransactionLifecycle`], which is the state (ADR-060). It is only made from one, so its

@@ -46,6 +46,7 @@ import {
   explorerSession,
   exportRelations,
   importIntoNewTable,
+  copyToConnection,
   importIntoTable,
   isBookmarked,
   isPlainTable,
@@ -66,6 +67,7 @@ import {
   setEditorSchema,
   toggleBookmark,
 } from "./explorerActions";
+import { compareSchemas } from "./schemaCompare";
 import { useImport } from "./components/ImportDialog";
 import { ended } from "./resultEnd";
 import { canStartRun, explorerSessionOpen, isConnected, isRunning, sessionReadOnly } from "./tabState";
@@ -555,6 +557,7 @@ function relationActions(connectionId: string, object: ObjectItem): PaletteObjec
     { id: "openAsSql", label: "shell:sql.openAsSql", run: () => openRelationSql(connectionId, session, object, "preview", true) },
     { id: "export", label: "shell:exportTable", run: () => exportRelations(connectionId, session, [{ schema: object.schema, name: object.name }]) },
     ...(table ? [{ id: "import", label: "shell:importData", run: () => importIntoTable(connectionId, session, object) }] : []),
+    { id: "copyToConnection", label: "shell:copyToConnection", run: () => copyToConnection(connectionId, session, object) },
     ...(table ? [{ id: "erDiagram", label: "app:palette.actions.erDiagram", run: () => openRelationDiagram(connectionId, session, object) }] : []),
     ...(object.kind === "view" ? [{ id: "editSource", label: "shell:editSource", run: () => editViewSource(connectionId, session, object) }] : []),
     ...names,
@@ -620,6 +623,8 @@ function schemaActions(connectionId: string, schema: string, filter: NameFilter 
       ? [
           { id: "importNewTable", label: "shell:importNewTable", run: () => importIntoNewTable(connectionId, session, schema) },
           { id: "erDiagram", label: "shell:diagram.menuSchema", run: () => openSchemaDiagram(connectionId, session, schema, filter) },
+          // The dialog says why when the engine cannot be compared (ADR-070).
+          { id: "compareSchemas", label: "shell:compare.menu", run: () => compareSchemas(connectionId, schema) },
         ]
       : []),
     ...schemaCreateKinds(actions).map((kind) => ({
