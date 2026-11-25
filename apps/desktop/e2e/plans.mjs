@@ -238,15 +238,17 @@ try {
   // Invoke the same public command with the session from the real connect command; the
   // core must reject even a caller bypassing disabled React controls.
   const connections = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("list_connections"));
-  const readId = connections.find(item => item.name === "Read-only plan").id;
-  const denied = await page.evaluate(async id => {
+  // A connection is named by its folder and its id (ADR-075), as the page names it.
+  const readOnly = connections.find(item => item.name === "Read-only plan");
+  const readKey = { folder: readOnly.folder ?? null, id: readOnly.id };
+  const denied = await page.evaluate(async key => {
     const session = "plan-readonly-adversarial";
-    const outcome = await window.__TAURI_INTERNALS__.invoke("connect", { session, connection: id, password:null, remember:false, editor:true });
+    const outcome = await window.__TAURI_INTERNALS__.invoke("connect", { session, connection: key, password:null, remember:false, editor:true });
     if (outcome.kind !== "connected") throw new Error(JSON.stringify(outcome));
     try { await window.__TAURI_INTERNALS__.invoke("explain_preflight", { session, sql: "UPDATE plan_fixture.customers SET region='changed'", options: { analyze:true,buffers:true,analyzeConfirmed:true,confirmed:true,timeoutSeconds:null } }); return false; }
     catch (error) { return String(error).includes("read-only"); }
     finally { await window.__TAURI_INTERNALS__.invoke("disconnect", { session }); }
-  }, readId);
+  }, readKey);
   assert.ok(denied, "read-only UPDATE ANALYZE is rejected in core, independently of UI");
   assert.equal(sql("SELECT count(*) FROM plan_fixture.customers WHERE region='changed'"), before);
   await capture("after-readonly-dark-1400.png", "dark", 1400, 900);
