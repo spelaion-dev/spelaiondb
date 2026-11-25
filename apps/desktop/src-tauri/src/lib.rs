@@ -5,6 +5,7 @@ mod app_lifecycle;
 mod backup;
 mod clipboard_text;
 mod connection_import;
+mod dashboard;
 mod diagnostics;
 mod diagram;
 mod dto;
@@ -92,6 +93,8 @@ struct AppState {
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
     /// Schema comparisons, by their job's id, until the page forgets them (ADR-070).
     comparisons: std::sync::Mutex<HashMap<u32, schema_compare::StoredComparison>>,
+    /// The process monitor's live dashboards, by monitor session (SDB-192).
+    dashboards: dashboard::Dashboards,
 }
 
 struct DesktopSession {
@@ -2502,6 +2505,8 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
 
 #[command]
 async fn disconnect(session: String, state: State<'_, AppState>) -> CmdResult<()> {
+    // Its dashboard stops with it (SDB-192).
+    state.dashboards.stop(&session);
     let removed = state.sessions.lock().await.remove(&session);
     // A run waiting for an answer after an error stops: its tab is gone (ADR-035). A run
     // that is executing goes on to its end, as before.
@@ -6604,6 +6609,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             control_process,
             list_locks,
             server_settings,
+            dashboard::start_dashboard,
+            dashboard::set_dashboard_visible,
+            dashboard::stop_dashboard,
             table_stats,
             run_script,
             answer_script_error,
@@ -6928,6 +6936,7 @@ pub fn run() {
         jobs: jobs::Jobs::new(),
         diagrams: std::sync::Mutex::new(HashMap::new()),
         comparisons: std::sync::Mutex::new(HashMap::new()),
+        dashboards: dashboard::Dashboards::default(),
     };
 
     let typed = builder.invoke_handler();

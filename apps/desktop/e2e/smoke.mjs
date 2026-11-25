@@ -7269,6 +7269,43 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await monitor.getByLabel("Search settings…").fill("no-such-setting-marker");
     await monitor.getByText("No settings match this search.").waitFor();
     await monitor.getByLabel("Search settings…").fill("");
+
+    step("process monitor: the live dashboard samples while it is shown (SDB-192)");
+    await monitor.getByRole("radio", { name: "Dashboard", exact: true }).click();
+    await monitor.getByText("Sampling every 5 s while this view is shown").waitFor();
+    // No Auto refresh or Refresh here: the core's sampler decides when to read.
+    assert.equal(await monitor.getByLabel("Auto refresh").count(), 0, "the dashboard has no auto refresh of its own");
+    const dashboard = monitor.locator(".dashboard");
+    await dashboard.getByRole("heading", { name: "Sessions", exact: true }).waitFor({ timeout: 20_000 });
+    // Some work on the server; a second sample has rates, so the transactions show a number.
+    execFileSync("docker", psql("CREATE TABLE smoke_dashboard AS SELECT g FROM generate_series(1, 20000) g; DROP TABLE smoke_dashboard;"), { stdio: "ignore" });
+    const transactionsChart = dashboard.locator(".dashboard-chart", { has: page.getByRole("heading", { name: "Transactions", exact: true }) });
+    await transactionsChart.locator(".dashboard-value dd", { hasText: /\d/ }).waitFor({ timeout: 20_000 });
+    // What the chart has is drawn: a rate's first value is a dot until the next sample joins it
+    // in a line. Waited for as it is, never through a hover.
+    await transactionsChart.locator("svg circle.chart-dot, svg path.chart-line[d^='M']").first().waitFor({ state: "attached", timeout: 20_000 });
+    assert.equal(await dashboard.locator(".dashboard-chart").count(), 4, "sessions, transactions, reads and log writes");
+    await dashboard.getByText(/^Waiting: active sessions waiting on a lock/).waitFor();
+    await shot("sdb-192-dashboard");
+    await setTheme("dark", "dark");
+    await dashboard.getByRole("heading", { name: "Log writes", exact: true }).waitFor();
+    await shot("sdb-192-dashboard-dark");
+    await setTheme("light", "light");
+    // The keyboard moves between samples: Home shows the first one's time.
+    const transactionsSvg = transactionsChart.locator("svg");
+    await transactionsSvg.focus();
+    await page.keyboard.press("Home");
+    // A vertical guide has no width, so it never counts as visible: it is checked as present.
+    await transactionsChart.locator(".chart-guide").waitFor({ state: "attached" });
+    await page.keyboard.press("Escape");
+    assert.equal(await transactionsChart.locator(".chart-guide").count(), 0, "Escape goes back to the latest sample");
+    // Hidden, it pauses; shown again, it still has its samples.
+    await monitor.getByRole("radio", { name: "Settings", exact: true }).click();
+    await monitor.locator(".settings-table").waitFor();
+    await monitor.getByRole("radio", { name: "Dashboard", exact: true }).click();
+    await dashboard.getByRole("heading", { name: "Sessions", exact: true }).waitFor({ timeout: 2_000 });
+    assert.equal(await dashboard.getByText("Taking the first sample…").count(), 0, "the samples were kept while hidden");
+    await monitor.getByText("Sampling every 5 s while this view is shown").waitFor();
     await monitor.getByRole("radio", { name: "Processes", exact: true }).click();
     await monitor.locator(".process-table tbody tr:has(.process-own)").waitFor();
   } finally {

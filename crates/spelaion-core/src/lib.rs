@@ -15,6 +15,7 @@ mod column_stats;
 mod conn_test;
 mod copy_in;
 mod cursor;
+mod dashboard;
 mod data_search;
 pub mod diagnostics;
 mod display;
@@ -123,6 +124,10 @@ pub use cursor::{
     MAX_OUTLINE_ENTRIES, OUTLINE_SUMMARY_CHARS, Outline, OutlineEntry, PickedText, RunKind,
     RunPickError, RunTarget, from_cursor, neighbour_statement, outline, pick_statements,
     run_target, statement_at, statement_to_run,
+};
+pub use dashboard::{
+    DASHBOARD_INTERVAL, DASHBOARD_SAMPLES, DashboardPhase, DashboardSample, DashboardSampler,
+    DashboardState, start_dashboard,
 };
 pub use data_search::{
     ColumnMatch, DEFAULT_ROWS_PER_TABLE, DataSearchError, DataSearchEvent, DataSearchOptions,

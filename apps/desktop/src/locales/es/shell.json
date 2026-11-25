@@ -78,6 +78,7 @@
     "views": {
       "processes": "Procesos",
       "locks": "Bloqueos",
+      "dashboard": "Panel",
       "settings": "Configuración"
     }
   },
@@ -762,6 +763,36 @@
     "waitCount_one": "{{count}} espera",
     "waitCount_other": "{{count}} esperas",
     "visibility": "Ver los bloqueos de todas las sesiones requiere permisos: PROCESS y performance_schema en MySQL, VIEW SERVER STATE en SQL Server."
+  },
+  "serverDashboard": {
+    "starting": "Iniciando…",
+    "sampling": "Muestreando cada {{seconds}} s mientras esta vista está visible",
+    "paused": "En pausa mientras está oculta",
+    "failedStatus": "Detenido tras un error",
+    "stopped": "Detenido",
+    "memoryOnly": "Solo se guarda en memoria, los últimos 30 minutos.",
+    "failed": "No se pudieron leer los contadores del servidor: {{detail}}",
+    "tryAgain": "Reintentar",
+    "firstSample": "Tomando la primera muestra…",
+    "chartLabel": "{{title}}, {{count}} muestras. Las flechas izquierda y derecha recorren las muestras.",
+    "sessions": "Sesiones",
+    "connected": "Conectadas",
+    "active": "Activas",
+    "waiting": "En espera",
+    "transactions": "Transacciones",
+    "perSecond": "Por segundo",
+    "reads": "Lecturas lógicas",
+    "pagesPerSecond": "Páginas por segundo",
+    "readsHint": "Bloques o páginas leídos, de memoria o de disco.",
+    "log": "Escrituras en el log",
+    "written": "Escrito",
+    "logHint": "Bytes escritos en el log del servidor (WAL, redo log o log de transacciones): lo que cuesta cada cambio.",
+    "waitingHint": {
+      "postgres": "En espera: sesiones activas que esperan un bloqueo, E/S u otro evento del servidor. La sesión de este monitor no se cuenta.",
+      "mysql": "En espera: esperas de bloqueos de fila de InnoDB. La conexión de este monitor no se cuenta.",
+      "mariadb": "En espera: esperas de bloqueos de fila de InnoDB. La conexión de este monitor no se cuenta.",
+      "sqlserver": "En espera: peticiones de usuario con un tipo de espera. La sesión de este monitor no se cuenta."
+    }
   },
   "serverSettings": {
     "search": "Buscar configuración…",
