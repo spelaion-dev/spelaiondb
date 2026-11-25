@@ -26,6 +26,12 @@
   dialect's own `code_ranges`). A new dialect gets its pieces there (`extra_atoms`, and a
   property of its own for blocks or separators); a change to a splitter keeps them passing.
   `SPELAION_FUZZ_CASES=<n>` runs a long local fuzz (see `CONTRIBUTING.md`).
+  `readers_agree_with_the_splitter` (ADR-065 step 1, SDB-452) compares each dialect's readers
+  with its splitter: every statement reads alike with `code_ranges` alone and in its script,
+  and COPY data follows only a statement whose first word, read the splitter's way, is `COPY`.
+  A disagreement it finds gets a bug card and an entry in `KNOWN`, which lets through only
+  statements of that shape; the card's fix takes the entry out, and no other change to a
+  dialect goes in with the test.
 - ADR-065 (SDB-157): each SQL dialect gets one lexical scanner, a lazy sequence of regions
   (`scanner.rs`: `Region`, `RegionKind`) that the splitter, `code_ranges`, `copy_data` and the
   guard's fallback all read, instead of each scanning the text its own way. PostgreSQL has moved

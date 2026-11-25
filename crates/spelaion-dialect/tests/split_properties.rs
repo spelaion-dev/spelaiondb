@@ -870,6 +870,305 @@ proptest! {
     }
 }
 
+// ------------------------------------------------------------- readers against the splitter
+
+/// A disagreement one of the properties below has found, which a bug card will fix (ADR-065,
+/// step 1). The property keeps running on every label; only a statement of the known shape is
+/// let through, until the card lands and takes its entry out of [`KNOWN`].
+struct Known {
+    /// The labels it is found on.
+    labels: &'static [&'static str],
+    /// The property that finds it.
+    property: &'static str,
+    /// The bug card that fixes it.
+    card: &'static str,
+    /// Whether a statement that fails the property has the known shape.
+    shape: fn(&dyn Dialect, &str, &StatementSpan) -> bool,
+}
+
+const KNOWN: &[Known] = &[
+    // `/\ncopy t from stdin;` gets COPY data: PostgreSQL's splitter and `copy_stdio` take the
+    // first word after any leading punctuation, where the server reads the punctuation first.
+    Known {
+        labels: &["postgres"],
+        property: "copy_data_follows_copy",
+        card: "SDB-513",
+        shape: |dialect, script, span| {
+            // Before the `copy`, no word starts in the code: only punctuation and the like.
+            let code = code_bytes(dialect, script);
+            let lower = script[span.start..span.end].to_ascii_lowercase();
+            lower.find("copy").is_some_and(|at| {
+                (span.start..span.start + at).all(|i| !code[i] || !postgres_word_starts(script, i))
+            })
+        },
+    },
+    // `select 1;\echo 'x` : a `\` after a `;` on the same line is SQL to the splitter (a psql
+    // line starts a line), but the statement on its own starts with it, a psql line.
+    Known {
+        labels: &["postgres"],
+        property: "reads_alike_alone",
+        card: "SDB-514",
+        shape: |_, script, span| span.text(script).starts_with('\\'),
+    },
+    // `\u{a0}$$ … $$`: after white space outside ASCII, a `$` opens no `$tag$` body (nor an
+    // `N` or `q` one of Oracle's prefixed strings) in the script, because the byte before it
+    // counts as part of a name; the statement on its own starts with the `$`, which opens one.
+    Known {
+        labels: &["postgres", "duckdb", "clickhouse", "oracle"],
+        property: "reads_alike_alone",
+        card: "SDB-515",
+        shape: |_, script, span| unicode_space_before(script, span),
+    },
+    // `select 1 -- ;`: a comment that needs white space after its opener (MySQL's `-- `,
+    // ClickHouse's `# `) is a comment in the script, but the statement is trimmed of that
+    // white space, and on its own its last characters are code.
+    Known {
+        labels: &[
+            "clickhouse",
+            "mysql",
+            "mariadb",
+            "mysql[NO_BACKSLASH_ESCAPES]",
+            "mysql[ANSI_QUOTES]",
+            "mysql[ANSI,NO_BACKSLASH_ESCAPES]",
+        ],
+        property: "reads_alike_alone",
+        card: "SDB-516",
+        shape: |_, script, span| {
+            let text = span.text(script);
+            text.ends_with("--") || text.ends_with('#')
+        },
+    },
+];
+
+/// Whether a word starts at byte `i` by PostgreSQL's splitter's rule: a letter, `_` or a
+/// character outside ASCII that is not white space, after a byte no name holds or after white
+/// space.
+fn postgres_word_starts(script: &str, i: usize) -> bool {
+    if !script.is_char_boundary(i) {
+        return false;
+    }
+    let Some(c) = script[i..].chars().next() else {
+        return false;
+    };
+    let name_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80;
+    (c.is_ascii_alphabetic() || c == '_' || !c.is_ascii())
+        && !c.is_whitespace()
+        && (i == 0
+            || !name_byte(script.as_bytes()[i - 1])
+            || script[..i]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace))
+}
+
+/// Whether white space outside ASCII comes just before the statement `span`.
+fn unicode_space_before(script: &str, span: &StatementSpan) -> bool {
+    script[..span.start]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_whitespace() && !c.is_ascii())
+}
+
+/// Whether `span` of `script` fails `property` on `label` in a way a bug card already knows.
+fn known(
+    label: &str,
+    property: &str,
+    dialect: &dyn Dialect,
+    script: &str,
+    span: &StatementSpan,
+) -> bool {
+    KNOWN.iter().any(|k| {
+        k.property == property
+            && k.labels.contains(&label)
+            && !k.card.is_empty()
+            && (k.shape)(dialect, script, span)
+    })
+}
+
+/// Whether each byte of `script` is code for the dialect's `code_ranges`.
+fn code_bytes(dialect: &dyn Dialect, script: &str) -> Vec<bool> {
+    let mut code = vec![false; script.len()];
+    for range in dialect.code_ranges(script) {
+        code[range].fill(true);
+    }
+    code
+}
+
+/// Whether the dialect's block comments nest, as its own `code_ranges` reads them.
+fn nests_comments(dialect: &dyn Dialect) -> bool {
+    let probe = "/* /* */ x */";
+    let x = probe.find('x').unwrap();
+    !dialect.code_ranges(probe).iter().any(|r| r.contains(&x))
+}
+
+/// The first word of the statement `span` of `script`, read the splitter's way: after white
+/// space and comments, the first run of letters, digits and `_` at a byte the dialect's code
+/// ranges call code, lowercased. A string, a quoted name or any other character first gives an
+/// empty word: no statement starts with a word hidden behind one. What is code is the
+/// dialect's own reading (`code_ranges`, which the splitter agrees with: see
+/// `a_statement_reads_alike_alone_and_in_its_script`); a region that is not code is a comment
+/// only if it opens like one (`--`, `#`, `//`, `/*`), and ends where that comment ends.
+fn first_word(dialect: &dyn Dialect, script: &str, span: &StatementSpan) -> String {
+    let code = code_bytes(dialect, script);
+    let nested = nests_comments(dialect);
+    let mut i = span.start;
+    while i < span.end {
+        let rest = &script[i..span.end];
+        let c = rest.chars().next().expect("inside the span");
+        if code[i] {
+            if c.is_whitespace() {
+                i += c.len_utf8();
+                continue;
+            }
+            return rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+                .to_lowercase();
+        }
+        if ["--", "#", "//"].iter().any(|o| rest.starts_with(o)) {
+            i += rest.find('\n').map_or(rest.len(), |n| n + 1);
+        } else if rest.starts_with("/*") {
+            i += block_comment_len(rest, nested);
+        } else {
+            return String::new();
+        }
+    }
+    String::new()
+}
+
+/// The length of the block comment `text` starts with, nested or not.
+fn block_comment_len(text: &str, nested: bool) -> usize {
+    let b = text.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i..].starts_with(b"/*") && (nested || depth == 0) {
+            depth += 1;
+            i += 2;
+        } else if b[i..].starts_with(b"*/") {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    b.len()
+}
+
+/// Every statement reads alike alone and in its script: the bytes `code_ranges` calls code
+/// inside a statement are those it calls code in the statement's text on its own. The
+/// splitter decides where statements end, and each is checked, logged and sent as its own text;
+/// a quote, a comment or a client's line that `code_ranges` reads otherwise than the splitter
+/// carries its reading across a statement's end (SDB-436: a `'` in a psql line hid the next
+/// statement's `:x`), and then the two readings differ. What lies between statements is
+/// checked by `left_out`.
+fn reads_alike_alone(
+    label: &str,
+    dialect: &dyn Dialect,
+    script: &str,
+) -> Result<(), TestCaseError> {
+    let in_script = dialect.code_ranges(script);
+    for span in dialect.split_statements(script) {
+        let text = span.text(script);
+        let clipped: Vec<Range<usize>> = in_script
+            .iter()
+            .filter_map(|r| {
+                let start = r.start.max(span.start);
+                let end = r.end.min(span.end);
+                (start < end).then(|| start - span.start..end - span.start)
+            })
+            .collect();
+        let alone = dialect.code_ranges(text);
+        if clipped != alone && known(label, "reads_alike_alone", dialect, script, &span) {
+            continue;
+        }
+        prop_assert_eq!(
+            &clipped,
+            &alone,
+            "{}: {:?} reads otherwise in {:?} than on its own",
+            label,
+            text,
+            script
+        );
+    }
+    Ok(())
+}
+
+/// Every statement `copy_data` gives data to starts with `COPY`, read the splitter's way: the
+/// text after its `;` is taken out of the SQL only for a `COPY` (SDB-437, SDB-439).
+fn copy_data_follows_copy(
+    label: &str,
+    dialect: &dyn Dialect,
+    script: &str,
+) -> Result<(), TestCaseError> {
+    for span in dialect.split_statements(script) {
+        if dialect.copy_data(script, &span).is_some() {
+            let first = first_word(dialect, script, &span);
+            if first != "copy" && known(label, "copy_data_follows_copy", dialect, script, &span) {
+                continue;
+            }
+            prop_assert_eq!(
+                first.as_str(),
+                "copy",
+                "{}: {:?} has COPY data in {:?}",
+                label,
+                span.text(script),
+                script
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The examples the properties started from: each disagreement fixed so far.
+#[test]
+fn readers_agree_on_the_disagreements_already_fixed() {
+    let postgres = dialect("postgres");
+    // SDB-436: a quote in a psql line.
+    let script = "\\echo it's\nselect :x";
+    assert!(reads_alike_alone("postgres", postgres.as_ref(), script).is_ok());
+    // SDB-437 and SDB-439: no COPY data after `\copy`, nor after a word that only looks like
+    // the first.
+    for script in [
+        "\\copy t from stdin;\n;\nselect 1",
+        "$\u{85}a\u{b}copy t from stdin;\n'",
+        "copy t from stdin;\n1\n\\.\nselect 1",
+    ] {
+        assert!(copy_data_follows_copy("postgres", postgres.as_ref(), script).is_ok());
+    }
+    let spans = postgres.split_statements("-- rows\n/* a /* b */ */ CoPy t from stdin;\n1\n");
+    assert_eq!(
+        first_word(
+            postgres.as_ref(),
+            "-- rows\n/* a /* b */ */ CoPy t from stdin;\n1\n",
+            &spans[0]
+        ),
+        "copy"
+    );
+}
+
+proptest! {
+    #![proptest_config(config(512))]
+
+    /// Any text, on every SQL dialect: what `code_ranges` calls code in a statement is what it
+    /// calls code in that statement on its own, and COPY data follows only a `COPY` (ADR-065,
+    /// step 1).
+    #[test]
+    fn readers_agree_with_the_splitter(script in soup()) {
+        for (label, dialect) in every_dialect() {
+            if dialect.reads_requests() {
+                continue;
+            }
+            reads_alike_alone(&label, dialect.as_ref(), &script)?;
+            copy_data_follows_copy(&label, dialect.as_ref(), &script)?;
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------- PostgreSQL
 
 /// A piece of a PostgreSQL script: a statement, a `COPY … FROM STDIN` with its data, or a psql
