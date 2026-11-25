@@ -118,6 +118,7 @@ pub async fn run_sql_file(
         ScriptOptions {
             on_error,
             statement_timeout: None,
+            statement_savepoints: false,
         },
     );
     let Some(_attached) = cancel.attach(session) else {

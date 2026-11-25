@@ -281,6 +281,46 @@ pub(crate) fn ended_by_statement(engine: &str, failed: bool) -> Notice {
     }
 }
 
+/// The statements the core wraps a statement in when a run rolls back only failed statements
+/// (ADR-086): set before it, rolled back to when it fails, released when it succeeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StatementSavepoint {
+    pub set: &'static str,
+    pub rollback_to: &'static str,
+    pub release: &'static str,
+}
+
+/// The core's savepoint, named so that a user's own is never mistaken for it.
+const POSTGRES_SAVEPOINT: StatementSavepoint = StatementSavepoint {
+    set: "SAVEPOINT spelaion_statement",
+    rollback_to: "ROLLBACK TO SAVEPOINT spelaion_statement",
+    release: "RELEASE SAVEPOINT spelaion_statement",
+};
+
+/// The savepoint statements of `engine`, if a failed statement aborts its whole transaction
+/// and it keeps savepoints inside one (ADR-086). The others need none: MySQL, MariaDB, SQL
+/// Server and SQLite already undo only the failed statement (ADR-035's table), and an engine
+/// without savepoints keeps ADR-035's stop.
+pub(crate) fn statement_savepoint(engine: &str) -> Option<StatementSavepoint> {
+    match engine {
+        "postgres" => Some(POSTGRES_SAVEPOINT),
+        _ => None,
+    }
+}
+
+/// Whether runs on `engine` can roll back only a failed statement (ADR-086).
+pub fn statement_savepoints(engine: &str) -> bool {
+    statement_savepoint(engine).is_some()
+}
+
+/// The notice of a failed statement the core rolled back to its savepoint (ADR-086).
+pub(crate) fn rolled_back_to_savepoint_notice() -> Notice {
+    Notice {
+        severity: "NOTICE".into(),
+        message: "Only this statement was rolled back: the transaction goes on without it.".into(),
+    }
+}
+
 /// The notice of a Commit on a transaction that had failed: the engine only rolls it back.
 pub(crate) fn failed_commit_notice() -> Notice {
     Notice {
