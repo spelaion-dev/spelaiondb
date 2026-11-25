@@ -5,14 +5,13 @@
 use spelaion_desktop_macros::command;
 use std::path::Path;
 
-use spelaion_config::Source;
 use spelaion_core::{
     FileError, FileFormat, SaveCheck, SavedTabs, read_sql_file, restore_tabs, write_sql_file,
 };
 use tauri::State;
 
 use crate::dto::*;
-use crate::{AppState, CmdResult, history_workspace};
+use crate::{AppState, CmdResult};
 
 /// The last part of a path, for a tab's title.
 fn file_name(path: &str) -> String {
@@ -132,7 +131,7 @@ pub(crate) async fn restore_tabs_for_workspace(
     let (scope, connections) = {
         let config = state.config.read().await;
         (
-            history_workspace(&config, Source::Workspace),
+            spelaion_config::repository_scope(&config),
             config
                 .connections
                 .iter()

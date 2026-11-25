@@ -270,6 +270,9 @@ const MIGRATIONS: &[&str] = &["create table audit (
             'engine_without_barrier', 'plugin_missing', 'cancelled', 'timed_out',
             'statement_failed', 'invalid_arguments', 'internal')
         begin select raise(abort, 'unknown audit code'); end;",
+    // The folder of the connection an entry is about (ADR-075, SDB-495): two repositories may
+    // each have a `prod/orders`. Rows written before have none.
+    "alter table audit add column folder text;",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -409,6 +412,9 @@ pub struct AuditEntry {
     /// Why a refused or failed call ended so (SDB-374); `None` when it was executed, and for
     /// entries written before 0.13.
     pub code: Option<FailureCode>,
+    /// The folder of `connection` (ADR-075): the repository's canonical root as the MCP server
+    /// serves it; `None` for a personal connection, and for entries written before 0.17.
+    pub folder: Option<String>,
 }
 
 /// Why an agent's call was refused or failed, as a stable code agents and the Activity tab can
@@ -510,6 +516,7 @@ impl AuditEntry {
             session: None,
             tool: None,
             code: None,
+            folder: None,
         }
     }
 }
@@ -606,6 +613,7 @@ fn audit_row(r: &rusqlite::Row) -> rusqlite::Result<AuditRecord> {
             session: r.get(9)?,
             tool: r.get(10)?,
             code: code.as_deref().map(FailureCode::parse),
+            folder: r.get(12)?,
         },
     })
 }
@@ -1186,8 +1194,8 @@ impl Store {
             })?),
         };
         self.conn.execute(
-            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code, folder)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 entry.at_ms,
                 entry.client,
@@ -1199,7 +1207,8 @@ impl Store {
                 entry.detail,
                 entry.session,
                 entry.tool,
-                code
+                code,
+                entry.folder
             ],
         )?;
         Ok(())
@@ -1225,7 +1234,7 @@ impl Store {
         params.push(limit.min(i64::MAX as usize).to_string());
         params.push(offset.min(i64::MAX as usize).to_string());
         let sql = format!(
-            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code
+            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code, folder
              from audit {clause} order by id desc limit cast(?{} as integer) offset cast(?{} as integer)",
             params.len() - 1,
             params.len()
@@ -3747,6 +3756,65 @@ mod tests {
             )
             .unwrap();
         assert!(store.mcp_read_only().unwrap());
+    }
+
+    /// ADR-075 (SDB-495): an entry keeps its connection's folder, so two repositories'
+    /// `prod/orders` are told apart; a store from before the column opens with its entries
+    /// intact, without a folder.
+    #[test]
+    fn audit_entries_keep_their_folder_and_older_entries_survive_the_migration() {
+        let path = temp("audit-folder");
+        let before = MIGRATIONS.len() - 1;
+        {
+            let conn = Connection::open(&path).unwrap();
+            for migration in &MIGRATIONS[..before] {
+                conn.execute_batch(migration).unwrap();
+            }
+            conn.pragma_update(None, "user_version", before as i64)
+                .unwrap();
+            conn.execute(
+                "insert into audit (at_ms, client, connection, statement, decision, session, tool)
+                 values (1, 'claude-code', 'prod/orders', 'select 1', 'executed', 's0', 'run_query')",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let mut a = AuditEntry::now("claude-code", "prod/orders", "select 2", Decision::Executed);
+        a.folder = Some("/work/service-a".into());
+        let mut b = AuditEntry::now("claude-code", "prod/orders", "select 3", Decision::Executed);
+        b.folder = Some("/work/service-b".into());
+        store.record(&a).unwrap();
+        store.record(&b).unwrap();
+        store
+            .record(&AuditEntry::now(
+                "claude-code",
+                "~/local",
+                "select 4",
+                Decision::Executed,
+            ))
+            .unwrap();
+        let entries = store.audit_events(&AuditFilter::default(), 10, 0).unwrap();
+        let folders: Vec<(&str, Option<&str>)> = entries
+            .iter()
+            .rev()
+            .map(|r| (r.entry.statement.as_str(), r.entry.folder.as_deref()))
+            .collect();
+        assert_eq!(
+            folders,
+            [
+                ("select 1", None),
+                ("select 2", Some("/work/service-a")),
+                ("select 3", Some("/work/service-b")),
+                ("select 4", None),
+            ]
+        );
+        // The old entry is whole: its session and tool are still there.
+        let old = &entries.last().unwrap().entry;
+        assert_eq!(
+            (old.session.as_deref(), old.tool.as_deref()),
+            (Some("s0"), Some("run_query"))
+        );
     }
 
     fn call(session: &str, tool: &str, statement: &str, decision: Decision) -> AuditEntry {

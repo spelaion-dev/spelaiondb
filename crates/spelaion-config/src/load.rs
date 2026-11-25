@@ -32,6 +32,23 @@ pub struct ConnectionId {
     pub path: String,
 }
 
+impl ConnectionId {
+    /// An id from its text, as `Display` writes it: `~/<path>` is a personal connection, any
+    /// other text a repository one. The text never holds a folder (ADR-075).
+    pub fn parse(text: &str) -> Self {
+        match text.strip_prefix("~/") {
+            Some(path) => Self {
+                source: Source::User,
+                path: path.into(),
+            },
+            None => Self {
+                source: Source::Workspace,
+                path: text.into(),
+            },
+        }
+    }
+}
+
 impl fmt::Display for ConnectionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.source {

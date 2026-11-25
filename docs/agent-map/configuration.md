@@ -7,6 +7,12 @@
   through `TrustStore::update`, one at a time, so none saves over another it did not see
   (`tests/trust_updates.rs`); `TrustStore::load` is for reading. If you change `model.rs`,
   regenerate the schema: `SPELAION_UPDATE_SCHEMA=1 cargo test -p spelaion-config`.
+  A connection's identity is `identity.rs`'s `ConnectionKey` (ADR-075, SDB-495): its folder
+  (the canonical root, none for a personal connection; `new` refuses a mismatch) and its
+  `ConnectionId`, whose text form is `ConnectionId::parse` / `Display` and never holds a folder.
+  The store's keys (`store_scope`, `folder_scope`, `repository_scope`) and the connection's
+  keychain name (`keychain_account`, behind `accounts::connection_account`) come from it: never
+  build one from `workspace_root` by hand. Never put a database in it (ADR-074).
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
   Every password written to the keychain goes through `secrets::store`, which reads it back

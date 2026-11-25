@@ -55,8 +55,9 @@ use rmcp::{
 };
 use serde::Deserialize;
 use spelaion_config::{
-    Config, ConfigError, ConnectionEntry, ConnectionFile, ConnectionTypesFile, Engine, Resolver,
-    Source, SystemBackend, TrustStore, TunnelFile, TypesLayer, UserFile, WritePolicy,
+    Config, ConfigError, ConnectionEntry, ConnectionFile, ConnectionId, ConnectionKey,
+    ConnectionTypesFile, Engine, Resolver, Source, SystemBackend, TrustStore, TunnelFile,
+    TypesLayer, UserFile, WritePolicy,
 };
 use spelaion_core::{
     AgentAccess, AgentFailure, AgentView, Engines, Liveness, OpenConnection, OpenError,
@@ -674,6 +675,21 @@ impl SpelaionMcp {
         }
     }
 
+    /// The folder an audit entry about `connection` records (ADR-075): the canonical root of
+    /// the folder this server serves, for a repository connection; none for a personal one, or
+    /// when the folder could not be read for this call.
+    fn audit_folder(&self, connection: &str) -> Option<String> {
+        let current = self
+            .state
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let snapshot = current.ok()?;
+        let key = ConnectionKey::of(&snapshot.config, &ConnectionId::parse(connection));
+        key.folder().map(|folder| folder.display().to_string())
+    }
+
     fn audit(
         &self,
         call: &Call,
@@ -685,6 +701,7 @@ impl SpelaionMcp {
         let mut entry = AuditEntry::now(&call.client, connection, statement, decision);
         entry.session = Some(self.state.audit_session.clone());
         entry.tool = Some(call.tool.to_string());
+        entry.folder = self.audit_folder(connection);
         fill(&mut entry);
         if let Some(store) = self
             .state
