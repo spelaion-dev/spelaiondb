@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import { ExportDialog } from "./components/ExportDialog";
@@ -29,7 +29,8 @@ import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
 import { ErDiagramView } from "./components/ErDiagram";
-import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest } from "./connect";
+import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest, tabLabel } from "./connect";
+import { DEFAULT_SHARE, MAX_SHARE, MIN_SHARE, paneOf, resized, type Pane, type SplitLayout } from "./splitView";
 import { commandSpec, globalCommandFor, type CommandId } from "./commandRegistry";
 import { commandShortcut, commandTitle } from "./shortcuts";
 import { activeContext, isCommandId, runCommand } from "./commands";
@@ -54,6 +55,8 @@ export default function App() {
   // panel, never the whole window (SDB-110).
   const tabIds = useApp(useShallow((s) => s.tabs.map((tab) => tab.id)));
   const activeTab = useApp((s) => s.activeTab);
+  const layout = useApp((s) => s.layout);
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const historyOpen = useApp((s) => s.historyOpen);
   const snippetsOpen = useApp((s) => s.snippetsOpen);
   const settingsOpen = useApp((s) => s.settingsOpen);
@@ -269,7 +272,13 @@ export default function App() {
         <ReleaseNotesDialog />
         <TabBar hidden={sidebarSection === "processes" || sidebarSection === "mcp"} />
         <div className="workspace-content">
-          <div className="editor-workspace" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
+          <div
+            ref={workspaceRef}
+            className={`editor-workspace${layout.kind === "split" ? ` split-${layout.direction}` : ""}`}
+            style={splitTemplate(layout)}
+            hidden={sidebarSection === "processes" || sidebarSection === "mcp"}
+          >
+            {layout.kind === "split" && <SplitResizer layout={layout} workspace={workspaceRef} />}
             {tabIds.length === 0 ? (
               <div className="welcome">
                 <p className="welcome-eyebrow">{t("welcomeEyebrow")}</p>
@@ -284,8 +293,9 @@ export default function App() {
                 <p className="welcome-shortcut">{t("commands.paletteHint", { shortcut: commandShortcut("palette.show") })}</p>
               </div>
             ) : (
-              // All mounted (the editor keeps its state); only the active one is visible.
-              tabIds.map((id) => <TabPanel key={id} id={id} active={id === activeTab} />)
+              // All mounted (the editor keeps its state); only the active one is visible, or the
+              // two panes of a split (SDB-30).
+              tabIds.map((id) => <TabPanel key={id} id={id} active={id === activeTab} pane={paneOf(layout, id)} />)
             )}
           </div>
           {sidebarSection === "processes" && (selectedProcessConnection
@@ -318,13 +328,98 @@ export default function App() {
   );
 }
 
-/** One tab's panel. It reads its own tab, and is memoized on its id and visibility, so a change
- *  to one tab (a run's progress, its connection) re-renders only that tab (SDB-110). */
-const TabPanel = memo(function TabPanel({ id, active }: { id: string; active: boolean }) {
+/** The grid tracks of a split: the first pane's share, the separator, the rest. */
+function splitTemplate(layout: SplitLayout): CSSProperties | undefined {
+  switch (layout.kind) {
+    case "single":
+      return undefined;
+    case "split": {
+      const tracks = `minmax(0, ${layout.share}fr) auto minmax(0, ${1 - layout.share}fr)`;
+      return layout.direction === "right" ? { gridTemplateColumns: tracks } : { gridTemplateRows: tracks };
+    }
+    default:
+      return unknownSplit(layout);
+  }
+}
+
+function unknownSplit(layout: never): never {
+  throw new Error(`unknown split layout: ${JSON.stringify(layout)}`);
+}
+
+/** Between the two panes of a split: dragged, or moved with the arrows (Shift: bigger steps),
+ *  Home / End to its limits; a double click makes the panes equal. */
+function SplitResizer({ layout, workspace }: { layout: Extract<SplitLayout, { kind: "split" }>; workspace: RefObject<HTMLDivElement | null> }) {
+  const { t } = useTranslation("app");
+  const across = layout.direction === "right";
+  const setShare = (share: number) => {
+    const app = useApp.getState();
+    app.setLayout(resized(app.layout, share));
+  };
+  const shareAt = (e: { clientX: number; clientY: number }) => {
+    const rect = workspace.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return across ? (e.clientX - rect.left) / rect.width : (e.clientY - rect.top) / rect.height;
+  };
+  return (
+    <div
+      className="split-resizer"
+      role="separator"
+      tabIndex={0}
+      aria-orientation={across ? "vertical" : "horizontal"}
+      aria-label={t("split.resize")}
+      title={t("split.resizeHint")}
+      aria-valuemin={Math.round(MIN_SHARE * 100)}
+      aria-valuemax={Math.round(MAX_SHARE * 100)}
+      aria-valuenow={Math.round(layout.share * 100)}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+        const share = shareAt(e);
+        if (share !== null) setShare(share);
+      }}
+      onPointerUp={(e) => {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+      }}
+      onDoubleClick={() => setShare(DEFAULT_SHARE)}
+      onKeyDown={(e) => {
+        const step = e.shiftKey ? 0.1 : 0.02;
+        const back = across ? "ArrowLeft" : "ArrowUp";
+        const forward = across ? "ArrowRight" : "ArrowDown";
+        if (e.key === back) setShare(layout.share - step);
+        else if (e.key === forward) setShare(layout.share + step);
+        else if (e.key === "Home") setShare(MIN_SHARE);
+        else if (e.key === "End") setShare(MAX_SHARE);
+        else return;
+        e.preventDefault();
+      }}
+    />
+  );
+}
+
+/** One tab's panel. It reads its own tab, and is memoized on its id, visibility and pane, so a
+ *  change to one tab (a run's progress, its connection) re-renders only that tab (SDB-110). In a
+ *  split, a click or the focus inside the other pane makes its tab the active one. */
+const TabPanel = memo(function TabPanel({ id, active, pane }: { id: string; active: boolean; pane: Pane | null }) {
+  const { t: translate } = useTranslation("app");
   const t = useApp((s) => s.tabs.find((tab) => tab.id === id));
   if (!t) return null;
+  const takeFocus = pane !== null && !active ? () => useApp.getState().setActiveTab(id) : undefined;
   return (
-    <div className="tab-panel" hidden={!active}>
+    <div
+      id={`pane-${id}`}
+      className={`tab-panel${pane !== null && active ? " focused-pane" : ""}`}
+      data-pane={pane ?? undefined}
+      role={pane !== null ? "region" : undefined}
+      aria-label={pane !== null ? translate("split.pane", { name: tabLabel(t) }) : undefined}
+      tabIndex={pane !== null ? -1 : undefined}
+      hidden={!active && pane === null}
+      onPointerDownCapture={takeFocus}
+      onFocusCapture={takeFocus}
+    >
       <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
         {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
       </ScreenBoundary>

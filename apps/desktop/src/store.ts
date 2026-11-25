@@ -7,6 +7,7 @@ import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFormatItem, OnErrorItem, RestoreNoteItem, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
 import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
 import { DISCONNECTED, withReadOnly, withTransaction, type TabConnection } from "./tabState";
+import { SINGLE, show, survivingPane, withoutTabs, type SplitLayout } from "./splitView";
 
 export interface ResultMeta {
   id: number;
@@ -333,6 +334,9 @@ interface AppStore {
   connections: ConnectionItem[];
   tabs: Tab[];
   activeTab: string | null;
+  /** One tab, or two side by side or one above the other (SDB-30); the focused pane is
+   *  `activeTab`. Changed only with `splitView.ts`'s transitions. */
+  layout: SplitLayout;
   historyOpen: boolean;
   snippetsOpen: boolean;
   snippetsRevision: number;
@@ -408,6 +412,8 @@ interface AppStore {
   /** Moves a tab to `index`, kept inside its group (pinned or not). */
   moveTab(id: string, index: number): void;
   setActiveTab(id: string): void;
+  /** Replaces the layout (built with `splitView.ts`'s transitions), focusing `focus` if given. */
+  setLayout(layout: SplitLayout, focus?: string): void;
   /** Replaces every tab with the ones the core restored for the open folder (ADR-036): all
    *  disconnected, with their text and nothing to run. Closed tabs are forgotten. */
   restoreTabs(restored: RestoredTabItem[], active: number | null): void;
@@ -460,6 +466,7 @@ export const useApp = create<AppStore>((set) => ({
   connections: [],
   tabs: [],
   activeTab: null,
+  layout: SINGLE,
   historyOpen: false,
   snippetsOpen: false,
   snippetsRevision: 0,
@@ -499,7 +506,8 @@ export const useApp = create<AppStore>((set) => ({
       run: null,
       ...(fromTemplate ? { fromTemplate: true } : {}),
     };
-    set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, recentTabs: [id, ...s.recentTabs] }));
+    // A new tab opens in the focused pane.
+    set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, layout: show(s.layout, s.activeTab, id), recentTabs: [id, ...s.recentTabs] }));
     return id;
   },
   addTableTab: (connectionId, schema, name, filter = ""): string => {
@@ -538,12 +546,16 @@ export const useApp = create<AppStore>((set) => ({
       });
       const tabs = s.tabs.filter((t) => !closing.has(t.id));
       const recentTabs = s.recentTabs.filter((id) => !closing.has(id));
+      // A pane whose tab closes ends the split; the other pane's tab keeps (or takes) the focus.
+      const surviving = survivingPane(s.layout, closing);
+      const current = s.activeTab && closing.has(s.activeTab) ? surviving : s.activeTab;
       return {
         tabs,
         recentTabs,
+        layout: withoutTabs(s.layout, closing),
         // The leftmost of a batch comes back first, so each one lands at its old index.
         closedTabs: [...s.closedTabs, ...closed.reverse()].slice(-MAX_CLOSED_TABS),
-        activeTab: nextActive(tabs, recentTabs, s.activeTab && closing.has(s.activeTab) ? null : s.activeTab),
+        activeTab: nextActive(tabs, recentTabs, current),
         renamingTab: s.renamingTab && closing.has(s.renamingTab) ? null : s.renamingTab,
       };
     }),
@@ -605,7 +617,14 @@ export const useApp = create<AppStore>((set) => ({
       others.splice(target, 0, tab);
       return { tabs: others };
     }),
-  setActiveTab: (activeTab) => set((s) => ({ activeTab, recentTabs: [activeTab, ...s.recentTabs.filter((id) => id !== activeTab)] })),
+  setActiveTab: (activeTab) => set((s) => ({
+    activeTab,
+    layout: show(s.layout, s.activeTab, activeTab),
+    recentTabs: [activeTab, ...s.recentTabs.filter((id) => id !== activeTab)],
+  })),
+  setLayout: (layout, focus) => set((s) => (focus === undefined
+    ? { layout }
+    : { layout, activeTab: focus, recentTabs: [focus, ...s.recentTabs.filter((id) => id !== focus)] })),
   restoreTabs: (restored, active) => {
     const tabs: Tab[] = restored.map(({ tab: kept, notes }) => {
       tabCounter += 1;
@@ -635,7 +654,7 @@ export const useApp = create<AppStore>((set) => ({
     });
     const ordered = pinnedFirst(tabs);
     const activeTab = (active !== null ? tabs[active]?.id : undefined) ?? ordered[ordered.length - 1]?.id ?? null;
-    set({ tabs: ordered, activeTab, recentTabs: activeTab ? [activeTab] : [], closedTabs: [], renamingTab: null });
+    set({ tabs: ordered, activeTab, layout: SINGLE, recentTabs: activeTab ? [activeTab] : [], closedTabs: [], renamingTab: null });
   },
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   setConnection: (id, next) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, connectionState: next } : t)) })),

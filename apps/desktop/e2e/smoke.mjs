@@ -3787,6 +3787,87 @@ try {
     await page.locator(".tabbar .tab.active:not([data-pinned])").waitFor();
   }
 
+  step("split view: two tabs side by side and one above the other, each with its own connection row, resized and focused (SDB-30)");
+  {
+    const tabs = page.locator(".tabbar .tab");
+    const activeTab = page.locator(".tabbar .tab.active");
+    const workspace = page.locator(".editor-workspace");
+    const panes = page.locator(".tab-panel:not([hidden])");
+    const tabMenu = page.getByRole("menu", { name: /^Actions for / });
+    const before = await tabs.count();
+    const first = await activeTab.locator(".tab-label").innerText();
+    // Split right on the active tab: the tab used before it opens beside it, and takes the focus.
+    await activeTab.click({ button: "right" });
+    await tabMenu.getByRole("menuitem", { name: "Split right" }).click();
+    await page.locator(".editor-workspace.split-right").waitFor();
+    assert.equal(await panes.count(), 2);
+    assert.equal(await tabs.count(), before, "no tab is opened when another one can go beside");
+    assert.equal(await page.locator('.tab-panel[data-pane="second"]').evaluate((el) => el.classList.contains("focused-pane")), true);
+    const second = await activeTab.locator(".tab-label").innerText();
+    assert.notEqual(second, first);
+    assert.equal(await page.locator(".tabbar .tab.beside .tab-label").innerText(), first);
+    // Each pane is its own tab: its own toolbar, with its own connection.
+    for (const pane of ["first", "second"]) {
+      assert.ok(await page.locator(`.tab-panel[data-pane="${pane}"] .toolbar`).first().isVisible(), `${pane} pane's toolbar`);
+    }
+    // Side by side: the panes share the width, the separator between them.
+    const [left, right] = await Promise.all(["first", "second"].map((pane) => page.locator(`.tab-panel[data-pane="${pane}"]`).boundingBox()));
+    assert.ok(left.x + left.width <= right.x && Math.abs(left.y - right.y) < 2, JSON.stringify({ left, right }));
+    // The separator: arrows (Shift: bigger steps), Home to its limit, a double click back to equal.
+    const separator = page.getByRole("separator", { name: "Resize the split panes" });
+    assert.equal(await separator.getAttribute("aria-valuenow"), "50");
+    await separator.focus();
+    await page.keyboard.press("Shift+ArrowRight");
+    assert.equal(await separator.getAttribute("aria-valuenow"), "60");
+    await page.keyboard.press("Home");
+    assert.equal(await separator.getAttribute("aria-valuenow"), "20");
+    await separator.dblclick();
+    assert.equal(await separator.getAttribute("aria-valuenow"), "50");
+    // A click inside the other pane makes its tab the active one; the strip follows.
+    // (A pointer down on the pane itself: a click at some point could land on its pickers.)
+    await page.locator('.tab-panel[data-pane="first"]').dispatchEvent("pointerdown", { button: 0, bubbles: true });
+    await page.locator('.tab-panel[data-pane="first"].focused-pane').waitFor();
+    assert.equal(await activeTab.locator(".tab-label").innerText(), first);
+    assert.equal(await page.locator(".tabbar .tab.beside .tab-label").innerText(), second);
+    await shot("sdb-30-split-right-light");
+    await setTheme("dark", "dark");
+    await shot("sdb-30-split-right-dark");
+    await setTheme("light", "light");
+    // The palette moves the focus to the other pane.
+    await page.keyboard.press("Control+Shift+P");
+    const commandPalette = page.getByRole("dialog", { name: "Command palette" });
+    await commandPalette.getByRole("combobox").fill("focus the other split pane");
+    await page.keyboard.press("Enter");
+    await commandPalette.waitFor({ state: "detached" });
+    await page.locator('.tab-panel[data-pane="second"].focused-pane').waitFor();
+    // Split down: the same two tabs, one above the other.
+    await activeTab.click({ button: "right" });
+    await tabMenu.getByRole("menuitem", { name: "Split down" }).click();
+    await page.locator(".editor-workspace.split-down").waitFor();
+    const [top, bottom] = await Promise.all(["first", "second"].map((pane) => page.locator(`.tab-panel[data-pane="${pane}"]`).boundingBox()));
+    assert.ok(top.y + top.height <= bottom.y && Math.abs(top.x - bottom.x) < 2, JSON.stringify({ top, bottom }));
+    await shot("sdb-30-split-down-light");
+    // Another tab chosen in the strip takes the focused pane's place; the other pane stays.
+    const third = tabs.filter({ hasNotText: first }).filter({ hasNotText: second }).first();
+    if (await third.count()) {
+      const thirdName = await third.locator(".tab-label").innerText();
+      await third.click();
+      assert.equal(await page.locator(".tabbar .tab.beside .tab-label").innerText(), first);
+      assert.equal(await activeTab.locator(".tab-label").innerText(), thirdName);
+      await page.locator(".tabbar .tab", { hasText: second }).first().click();
+    }
+    // Close split: one pane again, the focused tab kept, no tab closed.
+    await activeTab.click({ button: "right" });
+    await tabMenu.getByRole("menuitem", { name: "Close split" }).click();
+    await workspace.and(page.locator(":not(.split-down)")).waitFor();
+    assert.equal(await panes.count(), 1);
+    assert.equal(await tabs.count(), before);
+    assert.equal(await page.locator(".tabbar .tab.beside").count(), 0);
+    // Back to the tab the step started on, for the steps below.
+    await page.locator(".tabbar .tab", { hasText: first }).first().click();
+    assert.equal(await activeTab.locator(".tab-label").innerText(), first);
+  }
+
   step("explorer: view rows and generate SQL written by the core");
   await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
   const mainSchemaNode = page.getByRole("button", { name: "Expand or collapse schema main" });

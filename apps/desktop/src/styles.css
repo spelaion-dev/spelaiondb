@@ -1173,6 +1173,16 @@ select {
   height: 2px;
   background: var(--accent);
 }
+/* The tab shown in the other pane of a split (SDB-30): on screen too, with a neutral edge. */
+.tab.beside::after {
+  content: "";
+  position: absolute;
+  left: var(--space-sm);
+  right: var(--space-sm);
+  bottom: 0;
+  height: 2px;
+  background: var(--line-strong);
+}
 .tab.active .tab-label { font-weight: 600; }
 .tab:focus-visible, .tab .close:focus-visible, .new-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tab-icon { width: 16px; height: 16px; flex: none; color: var(--muted); }
@@ -1359,6 +1369,38 @@ select {
   display: flex;
   overflow: hidden;
 }
+/* Split view (SDB-30): two tabs at once, each pane a tab of its own. */
+.editor-workspace.split-right,
+.editor-workspace.split-down {
+  display: grid;
+}
+.editor-workspace.split-right { grid-template-areas: "first sep second"; }
+.editor-workspace.split-down { grid-template-areas: "first" "sep" "second"; }
+.tab-panel[data-pane] { position: relative; outline: none; }
+.tab-panel[data-pane="first"] { grid-area: first; }
+.tab-panel[data-pane="second"] { grid-area: second; }
+/* The focused pane: a 2px accent edge along its top, as the active tab has one. */
+.tab-panel.focused-pane::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  content: "";
+  background: var(--accent);
+  z-index: var(--z-sticky);
+  pointer-events: none;
+}
+.split-resizer {
+  grid-area: sep;
+  background: var(--line);
+  touch-action: none;
+}
+.split-right > .split-resizer { width: 5px; cursor: col-resize; }
+.split-down > .split-resizer { height: 5px; cursor: row-resize; }
+.split-resizer:hover,
+.split-resizer:focus-visible {
+  background: var(--accent);
+}
+.split-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .welcome {
   margin: auto;
   width: min(520px, 100%);

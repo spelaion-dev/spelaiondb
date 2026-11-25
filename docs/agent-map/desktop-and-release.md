@@ -177,6 +177,17 @@
   before the ticket arrives; `useJobPhase` and `searchRun.ts` keep the `Job`) and stops any job
   with `cancelJob(id, kind)`. A new job is one `jobs::start` call, held until it ends; no map
   to add or remove from.
+- Split view (SDB-30): the editor area's layout is `useApp`'s `layout`, a `SplitLayout` union
+  (`src/splitView.ts`: one tab, or two in panes `first` / `second`, side by side or one above the
+  other, with the first pane's share), changed only through its transitions (`split`, `show`,
+  `withoutTabs`, `resized`; tested by `scripts/split-view.test.mjs`). The focused pane is
+  `activeTab`, nothing else: `setActiveTab` and `addTab` show the tab in the focused pane,
+  `closeTabs` ends the split when a pane's tab closes. Each pane is an ordinary `TabPanel` (all
+  stay mounted, as before), placed by `data-pane` in the workspace's grid, so a pane has its own
+  session, results and connection row and nothing is shared between panes. The commands are
+  `view.splitRight`, `view.splitDown`, `view.closeSplit` and `view.focusOtherPane`
+  (`splitTab` and friends in `tabActions.ts`); none has default keys. The layout is not kept
+  across restarts or a folder switch.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.
