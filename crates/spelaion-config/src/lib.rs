@@ -23,6 +23,7 @@ mod edit;
 mod engine_change;
 pub mod engine_options;
 mod error;
+mod folders;
 mod heidisql;
 mod identity;
 mod import;

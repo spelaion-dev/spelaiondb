@@ -285,76 +285,31 @@ impl<'a> Resolver<'a> {
         self
     }
 
-    /// The folders a connection from `source` reads beyond its own file, each once: its own
-    /// folder for a folder's connection, every open one for a personal connection.
+    /// The folders a connection from `source` reads beyond its own file (`folders.rs`).
     fn folders_for(&self, source: Source) -> Vec<&'a Config> {
-        let all = match source {
-            Source::Workspace => vec![self.config],
-            Source::User if self.open.is_empty() => vec![self.config],
-            Source::User => self.open.clone(),
-        };
-        let mut folders: Vec<&'a Config> = Vec::new();
-        for config in all {
-            if !folders
-                .iter()
-                .any(|other| other.workspace_root == config.workspace_root)
-            {
-                folders.push(config);
-            }
-        }
-        folders
+        crate::folders::folders_for(self.config, &self.open, source)
     }
 
     /// The network profile `name` that `entry` uses, and the folder's configuration it comes
-    /// from (whose root its paths, its trust and its keychain names belong to). A folder's
-    /// connection: its own folder's, then a personal one (`Config::tunnel_for`). A personal
-    /// connection: a personal one, else the one open folder's that has it; two folders that
-    /// have it refuse it, naming them, rather than pick one (ADR-075).
+    /// from (whose root its paths, its trust and its keychain names belong to), as
+    /// `folders::profile` finds it; two folders that have a personal connection's profile
+    /// refuse it, naming them, rather than pick one (ADR-075).
     fn network_profile(
         &self,
         entry: &ConnectionEntry,
         name: &str,
     ) -> Result<(&'a Config, &'a TunnelEntry), ResolveError> {
-        let missing = || -> ResolveError {
-            ConfigError::new(
+        match crate::folders::profile(self.config, &self.open, entry.id.source, name) {
+            crate::folders::Profile::Found(config, tunnel) => Ok((config, tunnel)),
+            crate::folders::Profile::Missing => Err(ConfigError::new(
                 &entry.file_path,
                 format!("tunnel {name:?} does not exist in .spelaion/tunnels/"),
             )
-            .into()
-        };
-        if entry.id.source == Source::Workspace {
-            let tunnel = self
-                .config
-                .tunnel_for(Source::Workspace, name)
-                .ok_or_else(missing)?;
-            return Ok((self.config, tunnel));
-        }
-        if let Some(tunnel) = self
-            .config
-            .tunnels
-            .iter()
-            .find(|t| t.source == Source::User && t.name == name)
-        {
-            return Ok((self.config, tunnel));
-        }
-        let found: Vec<(&'a Config, &'a TunnelEntry)> = self
-            .folders_for(Source::User)
-            .into_iter()
-            .filter_map(|config| {
-                config
-                    .tunnels
-                    .iter()
-                    .find(|t| t.source == Source::Workspace && t.name == name)
-                    .map(|tunnel| (config, tunnel))
-            })
-            .collect();
-        match found.as_slice() {
-            [] => Err(missing()),
-            [one] => Ok(*one),
-            several => {
+            .into()),
+            crate::folders::Profile::Several(several) => {
                 let folders = several
                     .iter()
-                    .filter_map(|(config, _)| config.workspace_root.as_deref())
+                    .filter_map(|config| config.workspace_root.as_deref())
                     .map(|root| root.display().to_string())
                     .collect::<Vec<_>>()
                     .join(", ");

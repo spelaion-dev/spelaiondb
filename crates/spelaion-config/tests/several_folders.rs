@@ -410,3 +410,85 @@ fn several_folders_the_same_folder_twice_is_one_folder() {
     assert_eq!(tunnel.hops[0].host, "jump.a.internal");
     assert_eq!(tunnel.known_hosts, [a_hosts]);
 }
+
+/// SDB-526: a session is made from an open one only while its definition stays the same
+/// (SDB-426). With several folders open, a personal connection's covers what it reads of each
+/// folder, so a change in folder B stops it being reused; a folder's connection's never
+/// depends on another folder, and with one folder open nothing changed.
+#[test]
+fn several_folders_a_personal_connections_definition_covers_every_open_folder() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let fx = Folders::new("definitions");
+    fx.write(
+        "b/.spelaion/connection-types.toml",
+        "schema_version = 1\n\n[types.prod]\nconfirm_execution = true\n",
+    );
+    fx.write("b/.spelaion/known_hosts", &hosts(KEY));
+    fx.write(
+        "b/.spelaion/tunnels/only-b.toml",
+        &bastion("jump.b.internal"),
+    );
+    fx.write(
+        "a/.spelaion/tunnels/only-a.toml",
+        &bastion("jump.a.internal"),
+    );
+    // Typed `prod`, through B's profile: it reads B's types, known_hosts and profile.
+    fx.write(
+        "user/connections/mine.toml",
+        &format!("{}env = \"prod\"\n", through("only-b")),
+    );
+    fx.write("a/.spelaion/connections/orders.toml", &through("only-a"));
+    let mine = personal("mine");
+    let orders = ws("orders");
+    let definition = |id: &ConnectionId, trusted_b: bool| {
+        let (a, b) = (fx.load("a"), fx.load("b"));
+        a.connection_definition_open(id, true, &[(&a, true), (&b, trusted_b)])
+            .unwrap()
+    };
+    let opened = definition(&mine, true);
+    let opened_orders = definition(&orders, true);
+    // Nothing changed: the same definition.
+    assert_eq!(definition(&mine, true), opened);
+
+    // One folder open is today's definition, for both kinds of connection.
+    let a = fx.load("a");
+    for id in [&mine, &orders] {
+        let today = a.connection_definition(id, true);
+        assert_eq!(a.connection_definition_open(id, true, &[]), today);
+        assert_eq!(a.connection_definition_open(id, true, &[(&a, true)]), today);
+    }
+    // Opening B changes the personal connection's (it now reads B), never A's own.
+    assert_ne!(Some(opened.clone()), a.connection_definition(&mine, true));
+    assert_eq!(
+        Some(opened_orders.clone()),
+        a.connection_definition(&orders, true)
+    );
+
+    // B's types tightened: the personal connection's changes, A's connection's does not.
+    fx.write(
+        "b/.spelaion/connection-types.toml",
+        "schema_version = 1\n\n[types.prod]\nconfirm_execution = true\nmanual_commit = true\n",
+    );
+    let after_types = definition(&mine, true);
+    assert_ne!(after_types, opened);
+    assert_eq!(definition(&orders, true), opened_orders);
+
+    // B's known_hosts changed.
+    fx.write("b/.spelaion/known_hosts", &hosts(OTHER_KEY));
+    let after_hosts = definition(&mine, true);
+    assert_ne!(after_hosts, after_types);
+    assert_eq!(definition(&orders, true), opened_orders);
+
+    // B's profile, which the personal connection uses, was edited.
+    fx.write(
+        "b/.spelaion/tunnels/only-b.toml",
+        &bastion("jump2.b.internal"),
+    );
+    let after_profile = definition(&mine, true);
+    assert_ne!(after_profile, after_hosts);
+    assert_eq!(definition(&orders, true), opened_orders);
+
+    // B is no longer trusted.
+    assert_ne!(definition(&mine, false), after_profile);
+    assert_eq!(definition(&orders, false), opened_orders);
+}
