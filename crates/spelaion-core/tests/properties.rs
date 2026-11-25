@@ -990,61 +990,10 @@ const RISKY: &[(&str, &str)] = &[
 /// step 1): `(labels, card, shape)`. Only a statement of the known shape is let through.
 type GuardKnown = (&'static [&'static str], &'static str, fn(&str) -> bool);
 
-const GUARD_KNOWN: &[GuardKnown] = &[
-    // `# c\ndrop table t`: the guard's first word skips comments the engine does not have:
-    // `#` on every engine (PostgreSQL's `#` is an operator), and MySQL's `--` with no white
-    // space after it. It asks about a DROP the splitter does not read first: more, never less.
-    (
-        &[
-            "postgres",
-            "sqlite",
-            "duckdb",
-            "trino",
-            "databend",
-            "flightsql",
-            "mysql",
-            "mysql[NO_BACKSLASH_ESCAPES]",
-            "mysql[ANSI_QUOTES]",
-        ],
-        "SDB-517",
-        |statement| {
-            let before = before_risky(statement);
-            before.contains('#')
-                || before
-                    .match_indices("--")
-                    .any(|(at, _)| !before[at + 2..].starts_with(char::is_whitespace))
-        },
-    ),
-    // `/* a /* b */ c */truncate table t ((`: the guard's first word ends a block comment at
-    // its first `*/`, and the SQL parser reads block comments nested on every engine. Where the
-    // dialect nests them and the parser cannot read the statement (PostgreSQL, DuckDB,
-    // ClickHouse; DuckDB even for a DROP), the destructive statement the splitter reads first
-    // is not asked about; where the dialect does not nest them (Trino, Databend, Flight SQL),
-    // the guard asks about a DROP that is not the first word.
-    (
-        &[
-            "postgres",
-            "duckdb",
-            "clickhouse",
-            "trino",
-            "databend",
-            "flightsql",
-        ],
-        "SDB-518",
-        |statement| before_risky(statement).matches("/*").count() >= 2,
-    ),
-];
-
-/// The text of a generated statement before its risky word.
-fn before_risky(statement: &str) -> &str {
-    let lower = statement.to_ascii_lowercase();
-    let at = RISKY
-        .iter()
-        .filter_map(|(word, _)| lower.rfind(word))
-        .max()
-        .unwrap_or(statement.len());
-    &statement[..at]
-}
+/// Found here and fixed: the guard's own comment reading (SDB-517: `#` taken for a comment on
+/// every engine; SDB-518: block comments ended at their first `*/`, and the parser nesting them
+/// where the dialect does not). The guard now reads comments through the dialect.
+const GUARD_KNOWN: &[GuardKnown] = &[];
 
 fn guard_known(label: &str, statement: &str) -> bool {
     GUARD_KNOWN.iter().any(|(labels, card, shape)| {

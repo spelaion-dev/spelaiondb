@@ -79,7 +79,11 @@
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
   connection's type asks for: data changes on Production, every run where it confirms
   execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
-  decides it. A read-only connection runs only reads, session settings and transaction control
+  decides it. Its comments are the dialect's (`Lexical`, SDB-517/518): the first word is read
+  after the comments the dialect's `code_ranges` leaves out, and the SQL parser reads the
+  statement with them blanked, so neither a `#` the engine does not have nor a block comment
+  nested on one side only hides a statement or invents one; never a comment list of its own. A
+  read-only connection runs only reads, session settings and transaction control
   (ADR-053, `classify_read_only_connection`): `check_run` refuses anything else before the guard
   asks and whatever was confirmed, the session refuses it again (`Session::with_read_only`, set
   by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's

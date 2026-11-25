@@ -10,7 +10,8 @@
 //! anything runs and whatever was confirmed, a script with a statement that is not a read, a
 //! session setting or transaction control. The session refuses it again when it runs.
 
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, Range};
+use std::sync::Arc;
 
 use spelaion_config::Safeguards;
 use spelaion_driver_api::{Dialect, RequestClass, StatementSpan};
@@ -359,7 +360,13 @@ fn start_of(statement: &str) -> String {
 }
 
 pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
-    let first = first_word(sql);
+    // Comments are the dialect's (ADR-065, SDB-518): its first word is read after them, and the
+    // parser reads the statement without them, so a block comment the dialect nests and the
+    // parser does not (or the other way round) hides no statement and invents none.
+    let lexical = Lexical::of(engine, sql);
+    let first = lexical.first_word();
+    let uncommented = lexical.without_comments();
+    let sql_for_parser = uncommented.as_ref();
     // Every kind of DROP (table, schema, database, function…), parsed or not.
     if first == "drop" {
         return Some(Risk::Drop);
@@ -376,7 +383,7 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
         return Some(risk);
     }
     let parser = sql_dialect(engine);
-    let Ok(statements) = Parser::parse_sql(parser.as_ref(), sql) else {
+    let Ok(statements) = Parser::parse_sql(parser.as_ref(), sql_for_parser) else {
         let by_first_word = match first.as_str() {
             "truncate" => Some(Risk::Truncate),
             "delete" | "update" => Some(Risk::UncheckedWrite),
@@ -441,7 +448,7 @@ fn oracle_unparsed_risk(sql: &str) -> Option<Risk> {
     if !spelaion_dialect::oracle::is_plsql(sql, 0) {
         return None;
     }
-    let first = first_word(sql);
+    let first = Lexical::of("oracle", sql).first_word();
     if !matches!(first.as_str(), "declare" | "begin") {
         // A unit's definition, or a query with `WITH FUNCTION`: nothing runs as it is made.
         return None;
@@ -760,26 +767,141 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
     }
 }
 
-/// The first word of the statement in lower case, after comments and spaces.
-fn first_word(sql: &str) -> String {
-    let mut rest = sql;
-    loop {
-        rest = rest.trim_start();
-        if let Some(after) = rest.strip_prefix("--") {
-            rest = after.split_once('\n').map_or("", |(_, next)| next);
-        } else if let Some(after) = rest.strip_prefix("/*") {
-            rest = after.split_once("*/").map_or("", |(_, next)| next);
-        } else if let Some(after) = rest.strip_prefix('#') {
-            // MySQL comment.
-            rest = after.split_once('\n').map_or("", |(_, next)| next);
-        } else {
-            break;
+/// A statement as its engine's dialect reads it (ADR-065, SDB-518): which bytes are code and
+/// which are comments, from the dialect's own `code_ranges`, the reading its splitter shares.
+/// The guard never decides on its own what a comment is: a `#` is one only where the dialect
+/// says so, and a block comment nests only where the dialect nests it.
+struct Lexical<'a> {
+    sql: &'a str,
+    /// Whether each byte is code.
+    code: Vec<bool>,
+    /// The comments, in order.
+    comments: Vec<Range<usize>>,
+}
+
+impl<'a> Lexical<'a> {
+    /// `sql` read by the dialect named `engine` (`Dialect::name`); standard SQL for a name the
+    /// core has no dialect for.
+    fn of(engine: &str, sql: &'a str) -> Self {
+        let dialect = spelaion_dialect::for_engine(engine)
+            .unwrap_or_else(|| Arc::new(spelaion_dialect::StandardDialect::named("standard")));
+        let mut code = vec![false; sql.len()];
+        for range in dialect.code_ranges(sql) {
+            code[range].fill(true);
+        }
+        let nested = nests_comments(dialect.as_ref());
+        // What is not code is a comment, a string or a quoted name. A comment is told by how it
+        // opens and ends where it ends; from the first region that opens otherwise (a string)
+        // on, nothing more of that stretch is taken for a comment.
+        let mut comments = Vec::new();
+        let mut i = 0;
+        while i < sql.len() {
+            if code[i] {
+                i += 1;
+                continue;
+            }
+            let gap_end = (i..sql.len()).find(|&j| code[j]).unwrap_or(sql.len());
+            let mut at = i;
+            while at < gap_end {
+                let rest = &sql[at..gap_end];
+                let end =
+                    if rest.starts_with("--") || rest.starts_with('#') || rest.starts_with("//") {
+                        at + rest.find('\n').map_or(rest.len(), |n| n + 1)
+                    } else if rest.starts_with("/*") {
+                        at + block_comment_len(rest, nested)
+                    } else {
+                        break;
+                    };
+                comments.push(at..end);
+                at = end;
+            }
+            i = gap_end;
+        }
+        Self {
+            sql,
+            code,
+            comments,
         }
     }
-    rest.chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_lowercase()
+
+    /// The first word of the statement in lower case, after white space and comments; empty
+    /// when something else comes first (a string, a quoted name, a sign).
+    fn first_word(&self) -> String {
+        let mut i = 0;
+        let mut comments = self.comments.iter().peekable();
+        while i < self.sql.len() {
+            if let Some(comment) = comments.next_if(|c| c.start <= i) {
+                i = i.max(comment.end);
+                continue;
+            }
+            let Some(c) = self.sql[i..].chars().next() else {
+                break;
+            };
+            if !c.is_whitespace() {
+                break;
+            }
+            i += c.len_utf8();
+        }
+        if i >= self.sql.len() || !self.code[i] {
+            return String::new();
+        }
+        self.sql[i..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    }
+
+    /// The statement with each comment blanked (its newlines kept), for the SQL parser: the
+    /// parser never reads a comment its own way.
+    fn without_comments(&self) -> std::borrow::Cow<'a, str> {
+        if self.comments.is_empty() {
+            return std::borrow::Cow::Borrowed(self.sql);
+        }
+        let mut out = String::with_capacity(self.sql.len());
+        let mut at = 0;
+        for comment in &self.comments {
+            out.push_str(&self.sql[at..comment.start]);
+            out.extend(
+                self.sql[comment.clone()]
+                    .chars()
+                    .map(|c| if c == '\n' { '\n' } else { ' ' }),
+            );
+            at = comment.end;
+        }
+        out.push_str(&self.sql[at..]);
+        std::borrow::Cow::Owned(out)
+    }
+}
+
+/// Whether the dialect nests block comments, as its own `code_ranges` reads them.
+fn nests_comments(dialect: &dyn Dialect) -> bool {
+    let probe = "/* /* */ x */";
+    let x = probe.find('x').unwrap_or(0);
+    !dialect.code_ranges(probe).iter().any(|r| r.contains(&x))
+}
+
+/// The length of the block comment `text` starts with, nested or not; all of `text` when it
+/// does not close.
+fn block_comment_len(text: &str, nested: bool) -> usize {
+    let b = text.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i..].starts_with(b"/*") && (nested || depth == 0) {
+            depth += 1;
+            i += 2;
+        } else if b[i..].starts_with(b"*/") {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    b.len()
 }
 
 #[cfg(test)]
@@ -869,6 +991,83 @@ mod tests {
             destructive("mysql", "update `t` set a = 1 where b = 2"),
             None
         );
+    }
+
+    /// SDB-518: a destructive statement after a nested block comment, on each dialect that
+    /// nests them. The guard ended the comment at its first `*/` and read `c` as the first
+    /// word; the parser read nested comments only for some of these engines. Found by
+    /// `the_guard_reads_the_splitters_first_word`.
+    #[test]
+    fn destructive_statements_after_a_nested_comment_ask_where_comments_nest() {
+        let nested = "/* a /* b */ c */";
+        for engine in ["postgres", "duckdb", "clickhouse", "sqlserver"] {
+            for (statement, risk) in [
+                ("drop table t", Risk::Drop),
+                ("truncate table t ((", Risk::Truncate),
+                ("delete from t ((", Risk::UncheckedWrite),
+                ("update t set ((", Risk::UncheckedWrite),
+                ("delete from t", Risk::DeleteAll),
+                ("update t set a = 1", Risk::UpdateAll),
+            ] {
+                assert_eq!(
+                    destructive(engine, &format!("{nested}{statement}")),
+                    Some(risk),
+                    "{engine}: {statement}"
+                );
+                // Also after a line comment, and with the comment on a line of its own.
+                assert_eq!(
+                    destructive(engine, &format!("-- x\n{nested}\n{statement}")),
+                    Some(risk),
+                    "{engine}: {statement}"
+                );
+            }
+        }
+    }
+
+    /// SDB-518, the other way: where block comments do not nest, the comment ends at its first
+    /// `*/`, and what follows (`c */drop table t`) is not a DROP, though the parser alone would
+    /// have read one. A DROP that really comes first still asks.
+    #[test]
+    fn a_drop_inside_what_only_nests_elsewhere_is_not_first() {
+        for engine in ["trino", "databend", "flightsql", "sqlite", "mysql"] {
+            assert_eq!(
+                destructive(engine, "/* a /* b */ c */drop table t"),
+                None,
+                "{engine}"
+            );
+            assert_eq!(
+                destructive(engine, "/* a /* b */drop table t"),
+                Some(Risk::Drop),
+                "{engine}"
+            );
+        }
+    }
+
+    /// SDB-517: `#` is a comment only where the dialect says so (MySQL, ClickHouse's `# `);
+    /// elsewhere it is code, and no DROP after it comes first.
+    #[test]
+    fn a_hash_is_a_comment_only_where_the_dialect_reads_one() {
+        assert_eq!(
+            destructive("mysql", "# note\nDROP DATABASE shop"),
+            Some(Risk::Drop)
+        );
+        assert_eq!(
+            destructive("clickhouse", "# note\ndrop table t"),
+            Some(Risk::Drop)
+        );
+        for engine in ["postgres", "sqlite", "duckdb", "trino", "databend"] {
+            assert_eq!(
+                destructive(engine, "# note\ndrop table t"),
+                None,
+                "{engine}"
+            );
+        }
+        // MySQL's `--` is a comment only before white space.
+        assert_eq!(
+            destructive("mysql", "-- note\ndrop table t"),
+            Some(Risk::Drop)
+        );
+        assert_eq!(destructive("mysql", "--note\ndrop table t"), None);
     }
 
     #[test]
