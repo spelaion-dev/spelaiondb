@@ -100,8 +100,8 @@ pub use name_pattern::{
 pub use pgadmin::{PgadminError, pgadmin_dir, read_pgadmin};
 pub use relocate::{Moved, connection_move_target, move_connection};
 pub use resolve::{
-    LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
-    ResolvedSession, ResolvedSsm, ResolvedTunnel, Resolver, TunnelSettings,
+    LocalPort, OtherDatabases, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes,
+    ResolvedProxy, ResolvedSession, ResolvedSsm, ResolvedTunnel, Resolver, TunnelSettings,
 };
 pub use secrets::{
     KEYCHAIN_NOT_KEPT, KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef,

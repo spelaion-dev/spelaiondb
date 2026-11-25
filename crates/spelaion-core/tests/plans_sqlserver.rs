@@ -43,6 +43,7 @@ async fn open(read_only: bool) -> Option<OpenConnection> {
         sqlite3: None,
         file_folder: None,
         databases: None,
+        other_databases: spelaion_config::OtherDatabases::None,
         local_port: LocalPort::Any,
         keepalive: None,
         statement_timeout: Some(Duration::from_secs(10)),

@@ -2015,8 +2015,13 @@ export type ConnectionDraftItem_Deserialize = {
 	 *  connection only over a checked certificate or an SSH tunnel.
 	 */
 	cleartextPassword: boolean,
-	/**  The databases the connection shows (SDB-396); empty for all of them. */
+	/**
+	 *  MySQL, MariaDB and SQL Server: the databases the connection shows (SDB-396); empty for
+	 *  all of them. PostgreSQL: the other databases it opens (ADR-074); empty for only its own.
+	 */
 	databases: string[],
+	/**  PostgreSQL: it opens every database the server lists (ADR-074). */
+	allDatabases: boolean,
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -2085,8 +2090,13 @@ export type ConnectionDraftItem_Serialize = {
 	 *  connection only over a checked certificate or an SSH tunnel.
 	 */
 	cleartextPassword: boolean,
-	/**  The databases the connection shows (SDB-396); empty for all of them. */
+	/**
+	 *  MySQL, MariaDB and SQL Server: the databases the connection shows (SDB-396); empty for
+	 *  all of them. PostgreSQL: the other databases it opens (ADR-074); empty for only its own.
+	 */
 	databases: string[],
+	/**  PostgreSQL: it opens every database the server lists (ADR-074). */
+	allDatabases: boolean,
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,

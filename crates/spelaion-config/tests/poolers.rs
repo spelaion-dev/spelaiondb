@@ -161,7 +161,11 @@ fn the_databases_shown_are_bounded_and_only_where_an_engine_chooses_them() {
     );
 
     for (name, text) in [
-        ("pg", format!("{PG}databases = [\"app\"]\n")),
+        // A pooler routes by its own list of names: no other database behind it (ADR-074).
+        (
+            "pg",
+            format!("{PG}pooler = \"session\"\ndatabases = [\"app\"]\n"),
+        ),
         ("empty", format!("{MYSQL}databases = []\n")),
         ("blank", format!("{MYSQL}databases = [\"  \"]\n")),
         ("control", format!("{MYSQL}databases = [\"a\\u0007b\"]\n")),
@@ -231,7 +235,6 @@ fn the_form_writes_each_setting_alone_and_takes_it_out_again() {
     let draft = ConnectionDraft::from_entry(config.connection(&id).unwrap());
     let pooled = ConnectionDraft {
         pooler: Some(PoolerMode::Transaction),
-        databases: vec!["other".into()],
         ..draft.clone()
     };
     update_connection(&config, &id, &pooled, None, &backend).unwrap();

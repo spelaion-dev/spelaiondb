@@ -482,6 +482,7 @@ pub fn import_plan(
             pooler: None,
             cleartext_password: false,
             databases: Vec::new(),
+            all_databases: false,
             user: if file {
                 String::new()
             } else {

@@ -176,7 +176,7 @@
       "type": "boolean"
     },
     "databases": {
-      "description": "The databases the explorer and the database picker show (SDB-396), by name; all when\nabsent. MySQL, MariaDB, SQL Server and the engines whose tabs choose a database. At\nmost 500 names, of up to 128 characters each.",
+      "description": "MySQL, MariaDB and SQL Server: the databases the explorer and the database picker show\n(SDB-396), by name; all when absent. PostgreSQL: the other databases of its server the\nconnection opens (ADR-074), its own `database` always included; only its own when\nabsent. At most 500 names, of up to 128 characters each.",
       "type": [
         "array",
         "null"
@@ -184,6 +184,10 @@
       "items": {
         "type": "string"
       }
+    },
+    "all_databases": {
+      "description": "PostgreSQL only: the connection opens every database its server lists (ADR-074),\ninstead of naming them in `databases`; never both, and never behind a `pooler`.",
+      "type": "boolean"
     },
     "session": {
       "description": "How every new session starts (ADR-037): setup statements, the default schema and the\nisolation level, applied each time a session opens (reconnecting included).",

@@ -30,6 +30,17 @@
   transaction mode refuses `[session]` and `read_only`, which would hold for one transaction.
   The first two reach the driver only as `ConnectParams::options` (`engine_options.rs`), so an
   older plugin that speaks protocol 1.0 refuses the connection instead of ignoring them.
+  On PostgreSQL `databases` means something else (ADR-074, SDB-491): the other databases of
+  its server the connection opens, its own `database` always included; `all_databases = true`
+  (PostgreSQL only) opens every database the server lists. Without either it is its own
+  database alone, as before, and neither key is written. `load.rs` refuses both together,
+  `all_databases` on another engine, and either behind a `pooler`. The resolved connection
+  carries the choice as `OtherDatabases` (`None`, `Named`, `All`; always `None` off
+  PostgreSQL), which is what the core reads; `databases` keeps feeding `shown.rs`. On
+  PostgreSQL the form's names are case-sensitive, changing the engine keeps `databases` only
+  between engines where it means the same, a paste or a copy leaves both keys out (they widen
+  what opens), and an import never turns `all_databases` on (DBeaver's "Show all databases"
+  is listed as not imported). Trust pins both like every field (`tests/postgres_databases.rs`).
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server).
   Every file the configuration writes goes through `atomic_file` (temporary file + rename, the

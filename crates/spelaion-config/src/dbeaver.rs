@@ -408,10 +408,17 @@ fn unmapped_of(json: &Json, config: &Json) -> Vec<String> {
     }
     for key in ["provider-properties", "properties"] {
         if let Some(properties) = config.get(key).and_then(Json::as_object) {
-            for name in properties.keys() {
+            for (name, value) in properties {
                 let lower = name.to_lowercase();
                 if !lower.starts_with("@dbeaver") {
                     out.push(format!("Driver property: {name}"));
+                } else if lower == "@dbeaver-show-non-default-db@"
+                    && (value.as_bool() == Some(true) || text(Some(value)) == "true")
+                {
+                    // ADR-074, point 12: never turned into `all_databases` by an import.
+                    out.push(
+                        "Show all databases (turn on all databases in the connection form)".into(),
+                    );
                 }
             }
         }
@@ -977,5 +984,21 @@ mod tests {
         let plain = bootstrapped("postgresql", "postgres-jdbc", Json::Null);
         assert_eq!(plain.session, SessionDraft::default());
         assert!(plain.unmapped.is_empty(), "{:?}", plain.unmapped);
+    }
+
+    /// DBeaver's "Show all databases" is listed as not imported, never turned into
+    /// `all_databases` (ADR-074, point 12): the user turns that on in the form.
+    #[test]
+    fn show_all_databases_is_listed_and_never_turned_on() {
+        let none = serde_json::json!({});
+        let on = serde_json::json!({"provider-properties": {
+            "@dbeaver-show-non-default-db@": "true", "@dbeaver-default-dbname": "x"}});
+        assert_eq!(
+            unmapped_of(&none, &on),
+            ["Show all databases (turn on all databases in the connection form)"]
+        );
+        let off =
+            serde_json::json!({"provider-properties": {"@dbeaver-show-non-default-db@": "false"}});
+        assert!(unmapped_of(&none, &off).is_empty());
     }
 }

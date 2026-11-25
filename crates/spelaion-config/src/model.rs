@@ -105,11 +105,16 @@ pub struct ConnectionFile {
     /// connection goes through an SSH tunnel.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cleartext_password: bool,
-    /// The databases the explorer and the database picker show (SDB-396), by name; all when
-    /// absent. MySQL, MariaDB, SQL Server and the engines whose tabs choose a database. At
-    /// most 500 names, of up to 128 characters each.
+    /// MySQL, MariaDB and SQL Server: the databases the explorer and the database picker show
+    /// (SDB-396), by name; all when absent. PostgreSQL: the other databases of its server the
+    /// connection opens (ADR-074), its own `database` always included; only its own when
+    /// absent. At most 500 names, of up to 128 characters each.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub databases: Option<Vec<String>>,
+    /// PostgreSQL only: the connection opens every database its server lists (ADR-074),
+    /// instead of naming them in `databases`; never both, and never behind a `pooler`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all_databases: bool,
     /// How every new session starts (ADR-037): setup statements, the default schema and the
     /// isolation level, applied each time a session opens (reconnecting included).
     #[serde(default, skip_serializing_if = "SessionConfig::is_default")]
@@ -459,6 +464,13 @@ impl Engine {
             | Engine::Solr
             | Engine::Meilisearch => false,
         }
+    }
+
+    /// Whether a connection of the engine may open other databases of its server, each in a
+    /// session of its own (PostgreSQL, ADR-074): what its `databases` and `all_databases`
+    /// name. A session of it never changes database.
+    pub fn opens_other_databases(self) -> bool {
+        self == Engine::Postgres
     }
 
     /// Whether a tab of the engine chooses its database from the server's list (MySQL,

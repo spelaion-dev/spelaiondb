@@ -364,6 +364,19 @@ const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
 const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
 type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "session" | "options";
 
+/** Which other databases of its server a PostgreSQL connection opens (ADR-074). */
+type OtherDatabasesChoice = "own" | "named" | "all";
+const OTHER_DATABASES: OtherDatabasesChoice[] = ["own", "named", "all"];
+
+function otherDatabasesLabel(choice: OtherDatabasesChoice, database: string, t: (key: string, options?: Record<string, string>) => string): string {
+  switch (choice) {
+    case "own": return database.trim() ? t("fields.otherDatabasesOwn", { database: database.trim() }) : t("fields.otherDatabasesOwnUnnamed");
+    case "named": return t("fields.otherDatabasesNamed");
+    case "all": return t("fields.otherDatabasesAll");
+    default: { const never: never = choice; return never; }
+  }
+}
+
 /** How a SQL Server LocalDB instance is named in place of a host (ADR-068). */
 const LOCALDB_PREFIX = "(localdb)\\";
 /** The instance every LocalDB installation has. */
@@ -535,6 +548,7 @@ function ConnectionForm(props: {
     pooler: null,
     cleartextPassword: false,
     databases: [],
+    allDatabases: false,
     user: prefill?.user ?? "",
     passwordEnv: "",
     passwordOther: "",
@@ -624,6 +638,12 @@ function ConnectionForm(props: {
   const transactionPooled = pooler && draft.pooler === "transaction";
   const cleartext = engine.id === "mysql" || engine.id === "mariadb";
   const choosesDatabases = cleartext || engine.id === "sqlserver";
+  // ADR-074: a PostgreSQL connection opens only its own database, the ones it names, or all
+  // of its server's; never behind a pooler (the core refuses it). Picked here, the choice wins
+  // over what the draft implies, so "these databases" holds while its list is still empty.
+  const opensDatabases = engine.id === "postgres";
+  const [databaseChoice, setDatabaseChoice] = useState<OtherDatabasesChoice | null>(null);
+  const otherDatabases: OtherDatabasesChoice = databaseChoice ?? (draft.allDatabases ? "all" : draft.databases.some((name) => name.trim()) ? "named" : "own");
   // A hint only: the core checks when it opens (a certificate checked, or a profile with SSH
   // hops; a profile with only a proxy or SSM is refused there).
   const cleartextSafeRoute = draft.tlsMode === "verify-ca" || draft.tlsMode === "verify-full" || (useTunnel && !useKubernetes);
@@ -668,7 +688,8 @@ function ConnectionForm(props: {
     // SDB-396: each only on the engine that has it, as the core checks.
     pooler: pooler ? draft.pooler : null,
     cleartextPassword: cleartext && draft.cleartextPassword,
-    databases: choosesDatabases ? draft.databases : [],
+    databases: choosesDatabases || (opensDatabases && otherDatabases === "named") ? draft.databases : [],
+    allDatabases: opensDatabases && otherDatabases === "all",
     // A pooler in transaction mode keeps nothing set for the session (the core refuses it).
     ...(transactionPooled
       ? { readOnly: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }
@@ -1073,6 +1094,43 @@ function ConnectionForm(props: {
                   </>
                 )}
               </fieldset>
+              {opensDatabases && (
+                <fieldset>
+                  <legend>{t("sections.otherDatabases")}</legend>
+                  <div className="form-row" role="radiogroup" aria-label={t("sections.otherDatabases")}>
+                    {OTHER_DATABASES.map((choice) => (
+                      <label key={choice} className="check">
+                        <input
+                          type="radio"
+                          name="other-databases"
+                          value={choice}
+                          checked={otherDatabases === choice}
+                          disabled={draft.pooler !== null}
+                          onChange={() => {
+                            setDatabaseChoice(choice);
+                            update({ allDatabases: choice === "all" });
+                          }}
+                        />
+                        {otherDatabasesLabel(choice, draft.database, t)}
+                      </label>
+                    ))}
+                  </div>
+                  {otherDatabases === "named" && draft.pooler === null && (
+                    <Field label={t("fields.otherDatabases")}>
+                      <textarea
+                        className="masking-patterns"
+                        name="databases"
+                        rows={3}
+                        spellCheck={false}
+                        value={draft.databases.join("\n")}
+                        placeholder={t("fields.otherDatabasesPlaceholder")}
+                        onChange={(e) => update({ databases: e.target.value.split("\n") })}
+                      />
+                    </Field>
+                  )}
+                  <p className="muted small">{t(draft.pooler !== null ? "fields.otherDatabasesPooler" : "fields.otherDatabasesHint")}</p>
+                </fieldset>
+              )}
               {choosesDatabases && (
                 <fieldset>
                   <legend>{t("sections.databases")}</legend>

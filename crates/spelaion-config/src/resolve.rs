@@ -12,8 +12,8 @@ use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, ConnectionEntry, ConnectionId, Source, TunnelEntry};
 use crate::masking::MaskingRules;
 use crate::model::{
-    Engine, IsolationLevel, KubernetesConfig, KubernetesProfileConfig, McpConfig, ProxyType,
-    SecretSpec, SshAuth, TlsModeConfig, TunnelFile,
+    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, KubernetesProfileConfig, McpConfig,
+    ProxyType, SecretSpec, SshAuth, TlsModeConfig, TunnelFile,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::trust::TrustStore;
@@ -31,6 +31,33 @@ pub enum Password {
     Prompt {
         save_to: Option<String>,
     },
+}
+
+/// Which other databases of its server a connection opens, each in a session of its own
+/// (ADR-074): only a PostgreSQL connection opens any, and only what its file names. The
+/// connection's own `database` always opens, whatever this says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OtherDatabases {
+    /// Only its own database: every connection whose file names no others, and every engine
+    /// but PostgreSQL.
+    None,
+    /// These, as the file's `databases` names them.
+    Named(Vec<String>),
+    /// Every database the server lists (`all_databases`).
+    All,
+}
+
+impl OtherDatabases {
+    fn of(file: &ConnectionFile) -> Self {
+        if !file.engine.opens_other_databases() {
+            return Self::None;
+        }
+        match (&file.databases, file.all_databases) {
+            (_, true) => Self::All,
+            (Some(names), false) => Self::Named(names.clone()),
+            (None, false) => Self::None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +83,8 @@ pub struct ResolvedConnection {
     pub file_folder: Option<PathBuf>,
     /// The databases the explorer and the database picker show (SDB-396); all when `None`.
     pub databases: Option<Vec<String>>,
+    /// The other databases of its server it opens (ADR-074): PostgreSQL only.
+    pub other_databases: OtherDatabases,
     /// Where the SSH tunnel's local end listens for this connection.
     pub local_port: LocalPort,
     /// Keep the session alive after this long idle (ADR-028); `None`: off.
@@ -564,6 +593,7 @@ impl<'a> Resolver<'a> {
             },
             file_folder,
             databases: file.databases.clone(),
+            other_databases: OtherDatabases::of(file),
             local_port: match (file.local_port, self.config.user.tunnels.range()) {
                 (Some(port), _) => LocalPort::Fixed(port),
                 (None, Ok(Some((min, max)))) => LocalPort::Range { min, max },
