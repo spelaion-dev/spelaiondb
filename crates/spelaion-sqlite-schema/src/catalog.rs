@@ -364,6 +364,94 @@ pub fn primary_key_sql(schema: &str, table: &str) -> String {
     )
 }
 
+/// The tables of `m` (the schema's `sqlite_schema`) that [`tables_sql`] describes: those of
+/// [`objects_sql`] that are tables.
+const USER_TABLES: &str = r"m.type = 'table' and m.name not like 'sqlite\_%' escape '\'";
+
+/// The five catalog queries that describe every table of `schema` at once (SDB-220): its
+/// tables and their stored SQL, then the rows of [`columns_sql`], [`indexes_sql`],
+/// [`unique_columns_sql`] and [`foreign_keys_sql`] for all of them, each with the table's name
+/// first. Five round trips for the whole schema where describing each table takes five or more:
+/// what matters through a server's `sqlite3` and on a libSQL server. [`tables`] reads them.
+pub fn tables_sql(schema: &str) -> [String; 5] {
+    let st = schema_table(schema);
+    let s = literal(schema);
+    [
+        format!(r"select m.name, m.type, m.sql from {st} m where {USER_TABLES} order by m.name"),
+        format!(
+            r#"select m.name, c.name, c.type, c."notnull", c.dflt_value, c.pk from {st} m join pragma_table_xinfo(m.name, {s}) c where {USER_TABLES} and c.hidden <> 1 order by m.name, c.cid"#
+        ),
+        format!(
+            r#"select m.name, il.name, il."unique", il.origin, x.sql from {st} m join pragma_index_list(m.name, {s}) il left join {st} x on x.type = 'index' and x.name = il.name where {USER_TABLES} order by m.name, il.name"#
+        ),
+        format!(
+            r"select m.name, il.name, ii.name from {st} m join pragma_index_list(m.name, {s}) il join pragma_index_info(il.name, {s}) ii where {USER_TABLES} and il.origin = 'u' order by m.name, il.name, ii.seqno"
+        ),
+        format!(
+            r#"select m.name, f.id, f."table", f."from", f."to" from {st} m join pragma_foreign_key_list(m.name, {s}) f where {USER_TABLES} order by m.name, f.id, f.seq"#
+        ),
+    ]
+}
+
+/// Every table of `schema` from the rows of [`tables_sql`]'s five queries, each exactly as
+/// [`table`] and the describe of one table make it (the CHECK constraints from its stored SQL,
+/// a key written without its referenced columns pointing to the referenced table's primary key,
+/// found ignoring case as SQLite resolves names), ordered by name.
+pub fn tables(schema: &str, rows: &[Vec<Row>; 5]) -> Result<Vec<TableInfo>> {
+    // Each table's rows of one query, its name taken off the front.
+    let by_table = |rows: &[Row]| {
+        let mut grouped: std::collections::HashMap<String, Vec<Row>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            grouped
+                .entry(text(row, 0))
+                .or_default()
+                .push(row.get(1..).map_or_else(Vec::new, <[SqlValue]>::to_vec));
+        }
+        grouped
+    };
+    let [objects, columns, indexes, uniques, foreign_keys] = rows;
+    let (columns, indexes, uniques, foreign_keys) = (
+        by_table(columns),
+        by_table(indexes),
+        by_table(uniques),
+        by_table(foreign_keys),
+    );
+    let none: Vec<Row> = Vec::new();
+    let rows_of = |grouped: &std::collections::HashMap<String, Vec<Row>>, name: &str| {
+        grouped.get(name).unwrap_or(&none).clone()
+    };
+    let mut described = Vec::with_capacity(objects.len());
+    for row in objects {
+        let name = text(row, 0);
+        let (object, checks) = described_object(schema, &name, std::slice::from_ref(row))?;
+        let (mut table, to_primary_keys) = table(
+            object,
+            &rows_of(&columns, &name),
+            &rows_of(&indexes, &name),
+            &rows_of(&foreign_keys, &name),
+            &rows_of(&uniques, &name),
+        );
+        table.constraints.extend(checks);
+        described.push((table, to_primary_keys));
+    }
+    let primary_keys: std::collections::HashMap<String, Vec<String>> = described
+        .iter()
+        .map(|(t, _)| (t.object.name.to_ascii_lowercase(), t.primary_key.clone()))
+        .collect();
+    Ok(described
+        .into_iter()
+        .map(|(mut table, to_primary_keys)| {
+            for i in to_primary_keys {
+                let referenced = table.foreign_keys[i].referenced_table.to_ascii_lowercase();
+                table.foreign_keys[i].referenced_columns =
+                    primary_keys.get(&referenced).cloned().unwrap_or_default();
+            }
+            table
+        })
+        .collect())
+}
+
 /// The first column of every row.
 pub fn names(rows: &[Row]) -> Vec<String> {
     rows.iter().map(|row| text(row, 0)).collect()

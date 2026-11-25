@@ -244,10 +244,37 @@ pub async fn read_model(
         described.push(main);
         on_progress(ReadProgress { read: 1, total });
     }
+    // A schema's tables in one catalog call where the engine has one (SDB-220). Without it, or
+    // if it fails, each table is described on its own as before; so is a listed table the
+    // batch did not bring (dropped meanwhile), which then counts as unreadable.
+    let mut batch: HashMap<TableName, TableInfo> = match scope {
+        DiagramScope::Schema { schema, .. } if !names.is_empty() => {
+            match conn.describe_tables(schema).await {
+                Ok(Some(tables)) => tables
+                    .into_iter()
+                    .map(|t| {
+                        let key = TableName {
+                            schema: t.object.schema.clone(),
+                            name: t.object.name.clone(),
+                        };
+                        (key, t)
+                    })
+                    .collect(),
+                Ok(None) | Err(_) => HashMap::new(),
+            }
+        }
+        DiagramScope::Schema { .. } | DiagramScope::Tables { .. } | DiagramScope::Focus { .. } => {
+            HashMap::new()
+        }
+    };
     let mut unreadable = 0;
     let mut first_error = None;
     for name in names {
-        match conn.describe_table(&name.schema, &name.name).await {
+        let table = match batch.remove(&name) {
+            Some(table) => Ok(table),
+            None => conn.describe_table(&name.schema, &name.name).await,
+        };
+        match table {
             Ok(table) => described.push(table),
             Err(e) => {
                 unreadable += 1;

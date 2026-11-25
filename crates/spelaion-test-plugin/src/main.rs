@@ -774,6 +774,14 @@ impl Connection for MadeConnection {
         })
     }
 
+    // 1.4 (SDB-220): `main`'s one table, as `describe_table` describes it; `sys` cannot be read.
+    async fn describe_tables(&self, schema: &str) -> Result<Option<Vec<TableInfo>>> {
+        match schema {
+            "main" => Ok(Some(vec![self.describe_table(schema, "people").await?])),
+            _ => Err(other(&format!("cannot read the tables of {schema}"))),
+        }
+    }
+
     // 1.3's kinds (ADR-082): a sink in `main`, a cluster with a replica.
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
         Ok(match schema {

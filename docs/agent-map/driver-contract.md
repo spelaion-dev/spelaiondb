@@ -32,6 +32,17 @@
   A new kind is a new minor version this way: the kind, the SDK's filter, the host's guard, the
   spec's table and `spelaion-test-plugin`'s cases (`tests/protocol.rs`), then a `plugin-sdk-v*`
   tag the plugins move to.
+  `describe_tables` (SDB-220, protocol 1.4) is every table of a schema, each exactly as
+  `describe_table` describes it, in a few catalog queries: the ER diagram reads a schema with it
+  (`spelaion-core`'s `er::read_model`, each table on its own when it answers `None` or fails,
+  and for a listed table it did not bring). Its default is `None`; the host answers `None` for
+  a plugin below 1.4, and `health.rs`'s wrapper passes it on. SQLite's is
+  `spelaion-sqlite-schema`'s `tables_sql` and `tables` (five queries over `pragma_*`, which
+  libSQL's plugin can use too); SQLite over SSH (`remote.rs`) keeps the default. A driver
+  that adds one checks it against `describe_table` table by table in its own tests
+  (SQLite's in `tests/sqlite.rs`; every engine's in the core's `tests/er_diagram.rs`), and
+  `spelaion-plugin-host`'s `conformance.rs` compares it with `describe_table` (up to 100 tables
+  of the first schema that is not a system one) in every plugin's own CI.
   `list_columns` is every
   column of a schema in one catalog query (metadata search, ADR-043), and `execute_bound` runs
   one read with text values bound to `bound_placeholder`'s placeholders (MySQL binds them to

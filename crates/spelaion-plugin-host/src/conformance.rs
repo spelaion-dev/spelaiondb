@@ -195,7 +195,11 @@ async fn check_with(target: Checked<'_>) -> Vec<String> {
         None => failures.push("`server_version` was never answered".into()),
     }
     match within(connection.list_schemas()).await {
-        Some(Ok(_)) => {}
+        Some(Ok(schemas)) => {
+            if let Some(schema) = schemas.iter().find(|s| !s.system) {
+                batched_tables(connection, &schema.name, &mut failures).await;
+            }
+        }
         Some(Err(error)) => failures.push(format!("`list_schemas` failed: {error}")),
         None => failures.push("`list_schemas` was never answered".into()),
     }
@@ -247,6 +251,53 @@ async fn run(connection: &dyn Connection, probe: &Probe) -> Vec<Result<ExecEvent
     match probe.start(connection).await {
         Ok(events) => events.collect().await,
         Err(error) => vec![Err(error)],
+    }
+}
+
+/// Most tables [`batched_tables`] compares one by one: enough to catch a batched read that
+/// differs, without describing a whole large schema twice in a plugin's CI.
+const MAX_COMPARED_TABLES: usize = 100;
+
+/// `describe_tables` (1.4, SDB-220), where the plugin answers it, says of each table exactly
+/// what `describe_table` says, and only of tables `list_objects` lists.
+async fn batched_tables(connection: &dyn Connection, schema: &str, failures: &mut Vec<String>) {
+    let tables = match within(connection.describe_tables(schema)).await {
+        Some(Ok(Some(tables))) => tables,
+        // No batched read: each table is described on its own, which the core does then.
+        Some(Ok(None)) => return,
+        Some(Err(error)) => {
+            failures.push(format!("`describe_tables` of {schema:?} failed: {error}"));
+            return;
+        }
+        None => {
+            failures.push(format!(
+                "`describe_tables` of {schema:?} was never answered"
+            ));
+            return;
+        }
+    };
+    let listed = match within(connection.list_objects(schema)).await {
+        Some(Ok(objects)) => objects,
+        _ => return,
+    };
+    for table in tables.iter().take(MAX_COMPARED_TABLES) {
+        let name = &table.object.name;
+        if !listed.iter().any(|o| &o.name == name) {
+            failures.push(format!(
+                "`describe_tables` of {schema:?} has {name:?}, which `list_objects` does not list"
+            ));
+            continue;
+        }
+        match within(connection.describe_table(schema, name)).await {
+            Some(Ok(one)) if one == *table => {}
+            Some(Ok(_)) => failures.push(format!(
+                "`describe_tables` of {schema:?} describes {name:?} unlike `describe_table`"
+            )),
+            Some(Err(error)) => failures.push(format!(
+                "`describe_table` of {name:?}, which `describe_tables` has, failed: {error}"
+            )),
+            None => failures.push(format!("`describe_table` of {name:?} was never answered")),
+        }
     }
 }
 
