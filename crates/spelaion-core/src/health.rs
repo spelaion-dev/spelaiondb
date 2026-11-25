@@ -679,6 +679,7 @@ mod tests {
                 schemas: false,
                 insert_rows: false,
                 bound_params: false,
+                insert_bytes: false,
             },
             release: tokio::sync::Notify::new(),
             in_transaction: Default::default(),

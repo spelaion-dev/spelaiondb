@@ -266,6 +266,25 @@ fn int_kind(engine: &str, base: &str) -> Portable {
 }
 
 /// `Nullable(T)` and `LowCardinality(T)` are `T`.
+/// Whether a column of `native` type on `engine` (a dialect's name) stores bytes as they are: where
+/// a copy sends a binary column's bytes (SDB-464). Into any other column they go as their text.
+/// ClickHouse's `String` holds any bytes; SQLite's column with no declared type keeps a blob.
+pub fn takes_bytes(engine: &str, native: &str) -> bool {
+    let (base, _) = parts(unwrap_clickhouse(native));
+    match engine {
+        "postgres" => base == "bytea",
+        "mysql" => matches!(
+            base.as_str(),
+            "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob"
+        ),
+        "sqlserver" => matches!(base.as_str(), "binary" | "varbinary" | "image"),
+        "sqlite" => base.is_empty() || base.contains("blob"),
+        "duckdb" => matches!(base.as_str(), "blob" | "bytea" | "binary" | "varbinary"),
+        "clickhouse" => base == "string" || base == "fixedstring",
+        _ => false,
+    }
+}
+
 fn unwrap_clickhouse(native: &str) -> &str {
     let mut native = native.trim();
     for wrapper in ["Nullable(", "LowCardinality("] {

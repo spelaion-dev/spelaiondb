@@ -377,7 +377,9 @@
   `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
   the DDL, checks read-only and the guard, and loads the rows in transactions through
   `Connection::insert_rows`, which takes them as columns of text (`TextRows`: Arrow, read as
-  `&str`, never one `String` per cell, so they reach a plugin as they are) and binds every value (`COPY` on PostgreSQL, prepared inserts on
+  `&str`, never one `String` per cell, so they reach a plugin as they are; a copy's binary
+  column into a connection with `insert_bytes` is a column of bytes, sent as hex by
+  `table_copy` and decoded by the load, SDB-464) and binds every value (`COPY` on PostgreSQL, prepared inserts on
   MySQL, a TDS bulk load on SQL Server, the appender on DuckDB, TabSeparated data in the
   request's body on ClickHouse): never SQL text. ClickHouse has no transactions: `staged.rs`
   (ADR-066) loads into a table of our own (`__spelaion_import_` + a random UUID, created

@@ -348,9 +348,10 @@ fn each_target_gets_its_own_types_and_says_what_is_lost() {
     );
 }
 
-/// Binary columns go only where the target reads hex text as bytes (ADR-069's point 8).
+/// Without bytes in `insert_rows`, binary columns go only where the target reads hex text as
+/// bytes (ADR-069's point 8); with them (SDB-464), to every target, as bytes, losing nothing.
 #[test]
-fn binary_is_blocked_where_it_would_be_stored_as_text() {
+fn binary_is_blocked_only_where_it_would_be_stored_as_text() {
     for target in TARGETS {
         let column = SourceColumn {
             name: "payload".into(),
@@ -358,12 +359,54 @@ fn binary_is_blocked_where_it_would_be_stored_as_text() {
             logical: L::Bytes,
             nullable: true,
         };
-        let plan = plan_column("postgres", &column, target);
+        let plan = plan_column("postgres", &column, target, false);
         assert_eq!(
             plan.blocked(),
             !matches!(target, "postgres" | "duckdb"),
             "{target}"
         );
+        let plan = plan_column("postgres", &column, target, true);
+        assert!(!plan.blocked(), "{target}");
+        assert!(plan.target.losses.is_empty(), "{target}: {plan:?}");
+        // The type a new table gets for it stores the bytes as they are.
+        assert!(
+            takes_bytes(target, &plan.target.sql_type),
+            "{target}: {}",
+            plan.target.sql_type
+        );
+    }
+}
+
+/// Which target columns a binary column's bytes go into as they are (SDB-464).
+#[test]
+fn bytes_go_as_they_are_only_into_binary_columns() {
+    for (engine, native) in [
+        ("postgres", "bytea"),
+        ("mysql", "varbinary(16)"),
+        ("mysql", "LONGBLOB"),
+        ("mysql", "binary(4)"),
+        ("sqlserver", "varbinary(max)"),
+        ("sqlserver", "image"),
+        ("sqlite", "BLOB"),
+        ("sqlite", ""),
+        ("duckdb", "BLOB"),
+        ("clickhouse", "String"),
+        ("clickhouse", "Nullable(String)"),
+        ("clickhouse", "FixedString(16)"),
+    ] {
+        assert!(takes_bytes(engine, native), "{engine} {native}");
+    }
+    for (engine, native) in [
+        ("postgres", "text"),
+        ("mysql", "varchar(10)"),
+        ("mysql", "text"),
+        ("sqlserver", "nvarchar(max)"),
+        ("sqlite", "TEXT"),
+        ("duckdb", "VARCHAR"),
+        ("clickhouse", "UUID"),
+        ("oracle", "BLOB"),
+    ] {
+        assert!(!takes_bytes(engine, native), "{engine} {native}");
     }
 }
 

@@ -423,6 +423,46 @@ async fn rows_are_loaded_as_they_were_given() {
     assert!(wrong.is_err());
 }
 
+/// A column of bytes reaches a plugin of 1.3 that takes them as the same bytes, every one of
+/// them (SDB-464).
+#[tokio::test]
+async fn bytes_are_loaded_as_they_were_given() {
+    use spelaion_driver_api::{Cell, ColumnKind};
+    let plugin = Plugin::new(PROGRAM);
+    let connection = connect(&plugin).await;
+    assert!(connection.capabilities().insert_bytes);
+    let target = InsertTarget {
+        schema: "public".into(),
+        table: format!("b{}", std::process::id()),
+        columns: vec!["id".into(), "data".into()],
+    };
+    let every: Vec<u8> = (0..=255).collect();
+    let mut rows = TextRows::builder_with(&[ColumnKind::Text, ColumnKind::Bytes]);
+    rows.push_cells([Some(Cell::Text("1")), Some(Cell::Bytes(&every))])
+        .unwrap();
+    rows.push_cells([Some(Cell::Text("2")), Some(Cell::Bytes(&[]))])
+        .unwrap();
+    rows.push_cells([Some(Cell::Text("3")), None]).unwrap();
+    let loaded = within(connection.insert_rows(&target, rows.finish()))
+        .await
+        .unwrap();
+    assert_eq!(loaded, 3);
+    let name = format!("public.{}(id,data)", target.table);
+    let inserted: Vec<String> = texts(&run(connection.as_ref(), "inserted").await)
+        .into_iter()
+        .filter(|row| row.starts_with(&name))
+        .collect();
+    let hex: String = every.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        inserted,
+        [
+            format!("{name} [Some(\"1\"), Some(\"0x{hex}\")]"),
+            format!("{name} [Some(\"2\"), Some(\"0x\")]"),
+            format!("{name} [Some(\"3\"), None]"),
+        ]
+    );
+}
+
 // ------------------------------------------------------------------------ the catalog
 
 #[tokio::test]
@@ -675,6 +715,26 @@ async fn a_plugin_of_version_1_0_is_never_sent_a_request_or_settings() {
         .await
         .unwrap_err();
     assert!(refused.to_string().contains("no definitions"), "{refused}");
+    // It says it takes bytes, which 1.0 had not: the core does not believe it, and rows with
+    // bytes are refused before they are sent (SDB-464).
+    assert!(!connection.capabilities().insert_bytes);
+    let mut rows = TextRows::builder_with(&[spelaion_driver_api::ColumnKind::Bytes]);
+    rows.push_cells([Some(spelaion_driver_api::Cell::Bytes(b"\x00\xff"))])
+        .unwrap();
+    let target = InsertTarget {
+        schema: "main".into(),
+        table: "people".into(),
+        columns: vec!["photo".into()],
+    };
+    let Err(error) = within(connection.insert_rows(&target, rows.finish())).await else {
+        panic!("bytes were sent to a plugin of 1.0");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("cannot load columns of bytes"),
+        "{message}"
+    );
+    assert!(message.contains("1.3"), "{message}");
     // It was refused in the core: the plugin is still there, and never saw any of it.
     assert!(within(plugin.is_running()).await);
     drop(connection);
