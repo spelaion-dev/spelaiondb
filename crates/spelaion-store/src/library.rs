@@ -108,8 +108,26 @@ pub struct SnippetFolder {
     pub name: String,
 }
 
+/// `in (?, …, '')`: every folder of `workspaces` and the personal entries (ADR-075: history
+/// and saved queries list every open folder's), with the values it binds.
+fn workspaces_in(workspaces: &[String]) -> (String, Vec<Value>) {
+    let marks = vec!["?"; workspaces.len()].join(",");
+    let list = if marks.is_empty() {
+        "in ('')".to_string()
+    } else {
+        format!("in ({marks}, '')")
+    };
+    (
+        list,
+        workspaces
+            .iter()
+            .map(|workspace| Value::Text(workspace.clone()))
+            .collect(),
+    )
+}
+
 fn history_sql(
-    workspace: &str,
+    workspaces: &[String],
     filter: &HistoryFilter,
     limit: usize,
     offset: usize,
@@ -128,10 +146,10 @@ fn history_sql(
         (true, false, true) => "history_pinned_database_at",
         (true, true, true) => "history_pinned_status_database_at",
     };
+    let (within, mut values) = workspaces_in(workspaces);
     let mut sql = format!(
-        "select h.id,h.at_ms,h.workspace,h.connection,h.statement,h.duration_ms,h.rows,h.error,h.cancelled,h.database,h.pinned from history h indexed by {index} where h.workspace in (?, '')"
+        "select h.id,h.at_ms,h.workspace,h.connection,h.statement,h.duration_ms,h.rows,h.error,h.cancelled,h.database,h.pinned from history h indexed by {index} where h.workspace {within}"
     );
-    let mut values = vec![Value::Text(workspace.into())];
     if filter.pinned {
         sql.push_str(" and h.pinned=1");
     }
@@ -194,6 +212,18 @@ impl Store {
         limit: usize,
         offset: usize,
     ) -> Result<HistoryPage, StoreError> {
+        self.history_page_in(&[workspace.to_string()], filter, limit, offset)
+    }
+
+    /// A page of the history of every folder in `workspaces` and the personal entries
+    /// (ADR-075), newest first; each entry says its folder (`HistoryEntry::workspace`).
+    pub fn history_page_in(
+        &self,
+        workspaces: &[String],
+        filter: &HistoryFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<HistoryPage, StoreError> {
         if filter
             .from_ms
             .zip(filter.until_ms)
@@ -216,7 +246,7 @@ impl Store {
             ..filter.clone()
         };
         let limit = limit.clamp(1, 500);
-        let (sql, values) = history_sql(workspace, &filter, limit + 1, offset);
+        let (sql, values) = history_sql(workspaces, &filter, limit + 1, offset);
         let mut stmt = self.conn.prepare(&sql)?;
         let mut entries = stmt
             .query_map(params_from_iter(values), read_history)?
@@ -235,12 +265,22 @@ impl Store {
         &self,
         workspace: &str,
         filter: &HistoryFilter,
+        visit: impl FnMut(&[HistoryEntry]) -> Result<(), StoreError>,
+    ) -> Result<usize, StoreError> {
+        self.visit_history_in(&[workspace.to_string()], filter, visit)
+    }
+
+    /// The same over every folder in `workspaces` and the personal entries.
+    pub fn visit_history_in(
+        &self,
+        workspaces: &[String],
+        filter: &HistoryFilter,
         mut visit: impl FnMut(&[HistoryEntry]) -> Result<(), StoreError>,
     ) -> Result<usize, StoreError> {
         let snapshot = self.conn.unchecked_transaction()?;
         let mut offset = 0;
         loop {
-            let page = self.history_page(workspace, filter, 500, offset)?;
+            let page = self.history_page_in(workspaces, filter, 500, offset)?;
             visit(&page.entries)?;
             offset += page.entries.len();
             if !page.has_more {
@@ -252,16 +292,35 @@ impl Store {
     }
 
     pub fn pin_history(&self, workspace: &str, id: i64, pinned: bool) -> Result<bool, StoreError> {
+        self.pin_history_in(&[workspace.to_string()], id, pinned)
+    }
+
+    /// Pins an entry of one of `workspaces`' folders, or a personal one.
+    pub fn pin_history_in(
+        &self,
+        workspaces: &[String],
+        id: i64,
+        pinned: bool,
+    ) -> Result<bool, StoreError> {
+        let (within, scopes) = workspaces_in(workspaces);
+        let mut values = vec![Value::from(pinned), Value::Integer(id)];
+        values.extend(scopes);
         Ok(self.conn.execute(
-            "update history set pinned=? where id=? and workspace in (?, '')",
-            params![pinned, id, workspace],
+            &format!("update history set pinned=? where id=? and workspace {within}"),
+            params_from_iter(values),
         )? > 0)
     }
 
     pub fn history_databases(&self, workspace: &str) -> Result<Vec<String>, StoreError> {
-        let mut stmt=self.conn.prepare("select distinct coalesce(database,'') from history indexed by history_database_at where workspace in (?, '') order by 1")?;
+        self.history_databases_in(&[workspace.to_string()])
+    }
+
+    /// The databases the history of `workspaces`' folders and the personal entries names.
+    pub fn history_databases_in(&self, workspaces: &[String]) -> Result<Vec<String>, StoreError> {
+        let (within, values) = workspaces_in(workspaces);
+        let mut stmt = self.conn.prepare(&format!("select distinct coalesce(database,'') from history indexed by history_database_at where workspace {within} order by 1"))?;
         Ok(stmt
-            .query_map([workspace], |r| r.get(0))?
+            .query_map(params_from_iter(values), |r| r.get(0))?
             .collect::<Result<_, _>>()?)
     }
 
@@ -281,13 +340,25 @@ impl Store {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Snippet>, StoreError> {
+        self.snippet_page_in(&[workspace.to_string()], filter, limit, offset)
+    }
+
+    /// Saved queries of every folder in `workspaces` and the personal ones (ADR-075); each
+    /// says its folder (`Snippet::workspace`).
+    pub fn snippet_page_in(
+        &self,
+        workspaces: &[String],
+        filter: &SnippetFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Snippet>, StoreError> {
         if filter.folder.is_some() && filter.unfiled {
             return Err(StoreError::new("choose a folder or unfiled queries".into()));
         }
-        let mut sql = String::from(
-            "select id,workspace,name,statement,connection,updated_ms,folder_id from snippets where workspace in (?, '')",
+        let (within, mut values) = workspaces_in(workspaces);
+        let mut sql = format!(
+            "select id,workspace,name,statement,connection,updated_ms,folder_id from snippets where workspace {within}",
         );
-        let mut values = vec![Value::Text(workspace.into())];
         if let Some(folder) = filter.folder {
             sql.push_str(" and folder_id=?");
             values.push(Value::Integer(folder));
@@ -330,9 +401,18 @@ impl Store {
     }
 
     pub fn snippet_folders(&self, workspace: &str) -> Result<Vec<SnippetFolder>, StoreError> {
-        let mut stmt=self.conn.prepare("select id,workspace,name from snippet_folders where workspace in (?, '') order by name collate nocase,id")?;
+        self.snippet_folders_in(&[workspace.to_string()])
+    }
+
+    /// The saved queries' folders of every folder in `workspaces` and the personal ones.
+    pub fn snippet_folders_in(
+        &self,
+        workspaces: &[String],
+    ) -> Result<Vec<SnippetFolder>, StoreError> {
+        let (within, values) = workspaces_in(workspaces);
+        let mut stmt = self.conn.prepare(&format!("select id,workspace,name from snippet_folders where workspace {within} order by name collate nocase,id"))?;
         Ok(stmt
-            .query_map([workspace], |r| {
+            .query_map(params_from_iter(values), |r| {
                 Ok(SnippetFolder {
                     id: r.get(0)?,
                     workspace: r.get(1)?,
@@ -461,7 +541,8 @@ mod tests {
                                 search: search.into(),
                                 through_id: Some(10_000),
                             };
-                            let (sql, values) = history_sql("/repo", &filter, 51, 50);
+                            let (sql, values) =
+                                history_sql(&["/repo".to_string()], &filter, 51, 50);
                             let plan = store
                                 .conn
                                 .prepare(&format!("explain query plan {sql}"))
@@ -617,6 +698,53 @@ mod tests {
                 "select lower_bound"
             ]
         );
+    }
+
+    /// Several folders open (ADR-075, SDB-501): history and saved queries list every open
+    /// folder's and the personal ones, each entry with its folder, and never a folder that is
+    /// not open.
+    #[test]
+    fn history_and_saved_queries_list_every_open_folder_each_with_its_folder() {
+        let path = temp("library-open-folders");
+        let store = Store::open(&path).unwrap();
+        for (n, workspace) in ["/a", "/b", "/closed", ""].iter().enumerate() {
+            store
+                .record_history(&history_entry(workspace, "shop", "select 1", n as i64 + 1))
+                .unwrap();
+            store
+                .save_snippet(workspace, &format!("query {n}"), "select 1", "shop")
+                .unwrap();
+        }
+        let open = ["/a".to_string(), "/b".to_string()];
+        let page = store
+            .history_page_in(&open, &HistoryFilter::default(), 50, 0)
+            .unwrap();
+        let mut folders: Vec<&str> = page.entries.iter().map(|e| e.workspace.as_str()).collect();
+        folders.sort_unstable();
+        assert_eq!(folders, ["", "/a", "/b"]);
+        let mut saved: Vec<String> = store
+            .snippet_page_in(&open, &SnippetFilter::default(), 50, 0)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.workspace)
+            .collect();
+        saved.sort_unstable();
+        assert_eq!(saved, ["", "/a", "/b"]);
+        // An entry of a folder that is not open is neither listed nor pinned.
+        let closed = store
+            .history_page("/closed", &HistoryFilter::default(), 50, 0)
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|e| e.workspace == "/closed")
+            .unwrap();
+        assert!(!store.pin_history_in(&open, closed.id, true).unwrap());
+        // No folder open: the personal ones alone, as before.
+        let personal = store
+            .history_page_in(&[], &HistoryFilter::default(), 50, 0)
+            .unwrap();
+        assert!(personal.entries.iter().all(|e| e.workspace.is_empty()));
+        assert_eq!(store.history_databases_in(&open).unwrap(), [""]);
     }
 
     #[test]

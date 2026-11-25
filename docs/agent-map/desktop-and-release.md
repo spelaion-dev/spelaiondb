@@ -260,7 +260,13 @@
   nowhere. The open folders are remembered in `desktop-open-folders.json` and opened again at
   start (a launch that names a folder opens that one); `desktop-last-workspace.txt` is read
   once, to migrate. The unit tests of `open_folders.rs` pin the limit, the roots, the order,
-  what is remembered and what a reload may replace.
+  what is remembered and what a reload may replace. Tabs (SDB-501): the page sends the whole
+  window with `save_tabs`, each tab with its connection's folder (`OpenTabItem::folder`), and
+  the core keeps each under that folder or the window's key (`tab_scope`, `window_sets`);
+  `restore_tabs_for_workspace` restores every open folder's and the window's, in the window's
+  order. So a tab on a personal connection, or none, stays across a change of folder, and the
+  page never names a folder key itself. History and saved queries list every open folder's
+  (`library.rs`'s `open_scopes`).
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

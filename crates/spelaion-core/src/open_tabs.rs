@@ -5,10 +5,19 @@
 //! [`restore_tabs`] checks the kept tabs before the app shows them again: they come back
 //! disconnected, with their text and nothing else, and with a note when their connection or
 //! their file is gone. Nothing here runs anything.
+//!
+//! A tab belongs to the folder of its connection (ADR-075, amending ADR-036 point 3): a tab on
+//! a folder's connection is kept under that folder ([`tab_scope`]), and one on a personal
+//! connection, or with none, under the window's empty key, whatever folders open or close.
+//! [`window_sets`] splits a window's tabs that way, with their place in the window;
+//! [`restore_window_tabs`] puts the open folders' and the window's tabs back in that order,
+//! each connection looked up in its own folder only.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
+use spelaion_config::{ConnectionId, Source};
 use spelaion_store::{SavedTab, SavedTabs};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -20,10 +29,8 @@ use crate::{HistoryError, QueryHistory};
 pub const TAB_SAVE_DELAY: Duration = Duration::from_secs(1);
 
 enum KeeperRequest {
-    Update {
-        workspace: String,
-        tabs: SavedTabs,
-    },
+    /// Each workspace's tabs as they are now; workspaces not named keep what they have.
+    Update { sets: Vec<(String, SavedTabs)> },
     Flush {
         reply: oneshot::Sender<Result<(), HistoryError>>,
     },
@@ -57,9 +64,13 @@ impl TabKeeper {
     /// [`TAB_SAVE_DELAY`]. Tabs of another workspace still waiting are written first, so
     /// switching folders never drops the last state of the previous one.
     pub fn update(&self, workspace: String, tabs: SavedTabs) {
-        let _ = self
-            .requests
-            .send(KeeperRequest::Update { workspace, tabs });
+        self.update_window(vec![(workspace, tabs)]);
+    }
+
+    /// A window's tabs as they are now, each workspace's set ([`window_sets`]): written within
+    /// [`TAB_SAVE_DELAY`], together. Workspaces not named (closed folders) keep their tabs.
+    pub fn update_window(&self, sets: Vec<(String, SavedTabs)>) {
+        let _ = self.requests.send(KeeperRequest::Update { sets });
     }
 
     /// Writes what is waiting now (quitting, switching folders) and reports the last error.
@@ -83,7 +94,7 @@ async fn keep(
     delay: Duration,
     mut requests: mpsc::UnboundedReceiver<KeeperRequest>,
 ) {
-    let mut pending: Option<(String, SavedTabs)> = None;
+    let mut pending: BTreeMap<String, SavedTabs> = BTreeMap::new();
     let mut deadline: Option<Instant> = None;
     let mut last_error: Option<HistoryError> = None;
     loop {
@@ -104,11 +115,9 @@ async fn keep(
                 write(&history, &mut pending, &mut last_error).await;
                 return;
             }
-            Some(KeeperRequest::Update { workspace, tabs }) => {
-                if pending.as_ref().is_some_and(|(w, _)| *w != workspace) {
-                    write(&history, &mut pending, &mut last_error).await;
-                }
-                pending = Some((workspace, tabs));
+            Some(KeeperRequest::Update { sets }) => {
+                // The newest set of each workspace; others still waiting are written with them.
+                pending.extend(sets);
                 // A deadline, not a debounce: steady typing still saves every `delay`.
                 deadline.get_or_insert_with(|| Instant::now() + delay);
             }
@@ -121,26 +130,116 @@ async fn keep(
     }
 }
 
-/// Writes the waiting tabs. On failure they stay waiting for the next update or flush, and
-/// the error is kept for the next flush.
+/// Writes the waiting tabs, every workspace's in one transaction. On failure they stay waiting
+/// for the next update or flush (newer sets replace them), and the error is kept for the next
+/// flush.
 async fn write(
     history: &QueryHistory,
-    pending: &mut Option<(String, SavedTabs)>,
+    pending: &mut BTreeMap<String, SavedTabs>,
     last_error: &mut Option<HistoryError>,
 ) {
-    let Some((workspace, tabs)) = pending.take() else {
+    if pending.is_empty() {
         return;
-    };
-    match history
-        .save_open_tabs(workspace.clone(), tabs.clone())
-        .await
-    {
+    }
+    let sets: Vec<(String, SavedTabs)> = std::mem::take(pending).into_iter().collect();
+    match history.save_window_tabs(sets.clone()).await {
         Ok(()) => *last_error = None,
         Err(e) => {
             *last_error = Some(e);
-            *pending = Some((workspace, tabs));
+            for (workspace, tabs) in sets {
+                pending.entry(workspace).or_insert(tabs);
+            }
         }
     }
+}
+
+/// The workspace a tab is kept under (ADR-075): the folder of its connection (`folder`, its
+/// folder's text as the store keys it) for a folder's connection; the window's empty key for a
+/// personal connection or none.
+pub fn tab_scope(connection: Option<&str>, folder: Option<&str>) -> String {
+    match connection.map(ConnectionId::parse) {
+        Some(id) if id.source == Source::Workspace => folder.unwrap_or_default().to_string(),
+        Some(_) | None => String::new(),
+    }
+}
+
+/// A window's tabs (in the tab bar's order, each with the workspace [`tab_scope`] gives it)
+/// split into each workspace's set, every tab with its place in the window. `open` names the
+/// workspaces the window has open (the empty key and each open folder's): each gets a set, an
+/// empty one if none of the tabs is its, so a folder whose tabs were all closed keeps none.
+/// `active` is the index of the tab shown, which stays the active one of its set.
+pub fn window_sets(
+    open: &[String],
+    tabs: Vec<(String, SavedTab)>,
+    active: Option<usize>,
+) -> Vec<(String, SavedTabs)> {
+    let mut sets: BTreeMap<String, SavedTabs> = open
+        .iter()
+        .map(|scope| (scope.clone(), SavedTabs::default()))
+        .collect();
+    for (index, (scope, mut tab)) in tabs.into_iter().enumerate() {
+        tab.window_position = u32::try_from(index).ok();
+        let set = sets.entry(scope).or_default();
+        if active == Some(index) {
+            set.active = Some(set.tabs.len());
+        }
+        set.tabs.push(tab);
+    }
+    sets.into_iter().collect()
+}
+
+/// The tabs kept for each workspace the window opens (`sets`: the open folders', in the order
+/// they were opened, then the window's empty key), checked as [`restore_tabs`] does and put
+/// back in the window's order: by their place in the window, then the tabs kept before that
+/// existed, folder by folder in their own order. A connection is looked up in the workspace
+/// it was kept under (`connection_exists(workspace, id)`), so a folder's tab never comes back
+/// on another folder's connection of the same id; so is the other database it was on
+/// (`database_opened(workspace, id, database)`). Each tab comes with its workspace; the active
+/// one is the first of them that was shown.
+pub fn restore_window_tabs(
+    sets: Vec<(String, SavedTabs)>,
+    connection_exists: impl Fn(&str, &str) -> bool,
+    database_opened: impl Fn(&str, &str, &str) -> bool,
+) -> (Vec<(String, RestoredTab)>, Option<usize>) {
+    /// A kept tab with where it goes back.
+    struct Kept {
+        /// Placed tabs first, by their place in the window; then the ones kept before places
+        /// existed, workspace by workspace, in their own order.
+        order: (u8, usize, usize, usize),
+        scope: String,
+        tab: SavedTab,
+        shown: bool,
+    }
+    let mut kept: Vec<Kept> = Vec::new();
+    for (set_index, (scope, saved)) in sets.into_iter().enumerate() {
+        let active = saved.active.filter(|i| *i < saved.tabs.len());
+        for (position, tab) in saved.tabs.into_iter().enumerate() {
+            let order = match tab.window_position {
+                Some(place) => (0, place as usize, set_index, position),
+                None => (1, set_index, position, 0),
+            };
+            kept.push(Kept {
+                order,
+                scope: scope.clone(),
+                tab,
+                shown: active == Some(position),
+            });
+        }
+    }
+    kept.sort_by_key(|k| k.order);
+    let active = kept.iter().position(|k| k.shown);
+    let tabs = kept
+        .into_iter()
+        .map(|k| {
+            let restored = restore_tab(
+                k.tab,
+                |id| connection_exists(&k.scope, id),
+                |id, database| database_opened(&k.scope, id, database),
+            );
+            (k.scope, restored)
+        })
+        .collect();
+    (tabs, active)
 }
 
 /// Why a restored tab is not exactly as it was kept.
@@ -186,53 +285,60 @@ pub fn restore_tabs(
     let tabs = saved
         .tabs
         .into_iter()
-        .map(|mut tab| {
-            let mut notes = Vec::new();
-            if let Some(connection) = tab.connection.take() {
-                if connection_exists(&connection) {
-                    tab.connection = Some(connection);
-                } else {
-                    notes.push(RestoreNote::ConnectionMissing { connection });
-                }
-            }
-            // A database is only ever of a connection: without one it goes with it.
-            match (tab.connection.as_deref(), tab.database.take()) {
-                (Some(connection), Some(database)) if database_opened(connection, &database) => {
-                    tab.database = Some(database);
-                }
-                (Some(_), Some(database)) => notes.push(RestoreNote::DatabaseMissing { database }),
-                (None, _) | (_, None) => {}
-            }
-            if let Some(file) = tab.file.as_mut() {
-                let path = Path::new(&file.path);
-                if file.modified {
-                    match std::fs::read(path) {
-                        Ok(bytes) => {
-                            if file.hash.as_deref() != Some(content_hash(&bytes).as_str()) {
-                                notes.push(RestoreNote::FileChangedOnDisk);
-                            }
-                        }
-                        Err(e) => notes.push(file_note(e.into())),
-                    }
-                } else {
-                    match read_sql_file(path) {
-                        Ok(read) => {
-                            tab.text = read.text;
-                            file.hash = Some(read.hash);
-                            file.encoding = read.format.encoding;
-                            file.line_ending = read.format.line_ending;
-                        }
-                        Err(e) => {
-                            file.modified = true;
-                            notes.push(file_note(e));
-                        }
-                    }
-                }
-            }
-            RestoredTab { tab, notes }
-        })
+        .map(|tab| restore_tab(tab, &connection_exists, &database_opened))
         .collect();
     (tabs, active)
+}
+
+/// One kept tab, checked ([`restore_tabs`]).
+fn restore_tab(
+    mut tab: SavedTab,
+    connection_exists: impl Fn(&str) -> bool,
+    database_opened: impl Fn(&str, &str) -> bool,
+) -> RestoredTab {
+    let mut notes = Vec::new();
+    if let Some(connection) = tab.connection.take() {
+        if connection_exists(&connection) {
+            tab.connection = Some(connection);
+        } else {
+            notes.push(RestoreNote::ConnectionMissing { connection });
+        }
+    }
+    // A database is only ever of a connection: without one it goes with it.
+    match (tab.connection.as_deref(), tab.database.take()) {
+        (Some(connection), Some(database)) if database_opened(connection, &database) => {
+            tab.database = Some(database);
+        }
+        (Some(_), Some(database)) => notes.push(RestoreNote::DatabaseMissing { database }),
+        (None, _) | (_, None) => {}
+    }
+    if let Some(file) = tab.file.as_mut() {
+        let path = Path::new(&file.path);
+        if file.modified {
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    if file.hash.as_deref() != Some(content_hash(&bytes).as_str()) {
+                        notes.push(RestoreNote::FileChangedOnDisk);
+                    }
+                }
+                Err(e) => notes.push(file_note(e.into())),
+            }
+        } else {
+            match read_sql_file(path) {
+                Ok(read) => {
+                    tab.text = read.text;
+                    file.hash = Some(read.hash);
+                    file.encoding = read.format.encoding;
+                    file.line_ending = read.format.line_ending;
+                }
+                Err(e) => {
+                    file.modified = true;
+                    notes.push(file_note(e));
+                }
+            }
+        }
+    }
+    RestoredTab { tab, notes }
 }
 
 fn file_note(error: FileError) -> RestoreNote {
@@ -350,12 +456,13 @@ mod tests {
         let keeper = TabKeeper::spawn(QueryHistory::open(db.clone()).unwrap());
 
         keeper.update("/a".into(), tabs(&["in a"]));
-        // The next folder's tabs arrive before A's deadline: A is written first, not dropped.
+        // The next folder's tabs arrive before A's deadline: both wait, neither is dropped, and
+        // they are written together (ADR-075: a window's folders in one transaction).
         keeper.update("/b".into(), tabs(&["in b", "also b"]));
         settle().await;
-        assert_eq!(stored(&db, "/a"), ["in a"]);
-        assert!(stored(&db, "/b").is_empty());
+        assert!(stored(&db, "/a").is_empty());
         keeper.flush().await.unwrap();
+        assert_eq!(stored(&db, "/a"), ["in a"]);
         assert_eq!(stored(&db, "/b"), ["in b", "also b"]);
         // Nothing waiting: a flush is a no-op.
         keeper.flush().await.unwrap();
@@ -520,5 +627,228 @@ mod tests {
         assert!(tab.tab.file.as_ref().unwrap().modified);
         assert_eq!(tab.notes, [RestoreNote::FileMissing]);
         assert_eq!(tab.tab.connection.as_deref(), Some("shop"));
+    }
+
+    // ------------------------------------------------ tabs belong to their folder (ADR-075)
+
+    /// A console on `connection` (none: no connection).
+    fn on(text: &str, connection: Option<&str>) -> SavedTab {
+        SavedTab {
+            text: text.into(),
+            connection: connection.map(Into::into),
+            ..SavedTab::default()
+        }
+    }
+
+    /// A window's tabs, each with the folder its connection is from, as the page sends them.
+    fn window(tabs: &[(&str, Option<&str>, Option<&str>)]) -> Vec<(String, SavedTab)> {
+        tabs.iter()
+            .map(|(text, connection, folder)| {
+                (tab_scope(*connection, *folder), on(text, *connection))
+            })
+            .collect()
+    }
+
+    fn texts(restored: &[(String, RestoredTab)]) -> Vec<String> {
+        restored.iter().map(|(_, t)| t.tab.text.clone()).collect()
+    }
+
+    /// What the store keeps for each of `scopes`, as the next start reads it.
+    fn kept(store: &Store, scopes: &[&str]) -> Vec<(String, SavedTabs)> {
+        scopes
+            .iter()
+            .map(|scope| (scope.to_string(), store.open_tabs(scope).unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn a_tab_is_kept_under_its_connections_folder_and_a_personal_one_under_the_window() {
+        assert_eq!(tab_scope(Some("prod/orders"), Some("/work/a")), "/work/a");
+        assert_eq!(
+            tab_scope(Some("~/local"), Some("/work/a")),
+            "",
+            "a personal connection"
+        );
+        assert_eq!(tab_scope(None, Some("/work/a")), "", "no connection");
+        assert_eq!(tab_scope(None, None), "");
+    }
+
+    #[test]
+    fn two_folders_and_the_window_are_saved_each_under_its_key_and_come_back_in_order() {
+        let dir = temp("window-sets");
+        let mut store = Store::open(&dir.join("state.db")).unwrap();
+        let tabs = window(&[
+            ("a1", Some("prod/orders"), Some("/a")),
+            ("mine", Some("~/local"), None),
+            ("b1", Some("prod/orders"), Some("/b")),
+            ("scratch", None, None),
+            ("a2", Some("crm"), Some("/a")),
+        ]);
+        let open = ["/a".to_string(), "/b".to_string(), String::new()];
+        store
+            .save_window_tabs(&window_sets(&open, tabs, Some(2)))
+            .unwrap();
+
+        // Each under its key.
+        let only = |scope: &str| -> Vec<String> {
+            store
+                .open_tabs(scope)
+                .unwrap()
+                .tabs
+                .into_iter()
+                .map(|t| t.text)
+                .collect()
+        };
+        assert_eq!(only("/a"), ["a1", "a2"]);
+        assert_eq!(only("/b"), ["b1"]);
+        assert_eq!(only(""), ["mine", "scratch"]);
+
+        // The next start: the window's order across folders, and the tab that was shown.
+        let (restored, active) =
+            restore_window_tabs(kept(&store, &["/a", "/b", ""]), |_, _| true, |_, _, _| true);
+        assert_eq!(texts(&restored), ["a1", "mine", "b1", "scratch", "a2"]);
+        assert_eq!(active, Some(2));
+        let scopes: Vec<&str> = restored.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(scopes, ["/a", "", "/b", "", "/a"]);
+    }
+
+    #[test]
+    fn closing_a_folder_keeps_its_tabs_for_next_time_and_leaves_the_others_open() {
+        let dir = temp("close-folder");
+        let mut store = Store::open(&dir.join("state.db")).unwrap();
+        let both = ["/a".to_string(), "/b".to_string(), String::new()];
+        let tabs = window(&[
+            ("a1", Some("orders"), Some("/a")),
+            ("b1", Some("orders"), Some("/b")),
+            ("mine", Some("~/local"), None),
+        ]);
+        store
+            .save_window_tabs(&window_sets(&both, tabs, Some(0)))
+            .unwrap();
+
+        // A is closed: the window keeps B's tab and the personal one, and only those are
+        // written, so A's set stays as it was.
+        let without_a = ["/b".to_string(), String::new()];
+        let tabs = window(&[
+            ("b1", Some("orders"), Some("/b")),
+            ("mine", Some("~/local"), None),
+        ]);
+        store
+            .save_window_tabs(&window_sets(&without_a, tabs, Some(1)))
+            .unwrap();
+        let (restored, _) =
+            restore_window_tabs(kept(&store, &["/b", ""]), |_, _| true, |_, _, _| true);
+        assert_eq!(texts(&restored), ["b1", "mine"]);
+
+        // A opens again: its tab is back.
+        let (restored, _) =
+            restore_window_tabs(kept(&store, &["/a", "/b", ""]), |_, _| true, |_, _, _| true);
+        assert!(texts(&restored).contains(&"a1".to_string()));
+
+        // A folder whose tabs were all closed keeps none.
+        store
+            .save_window_tabs(&window_sets(&both, Vec::new(), None))
+            .unwrap();
+        assert!(store.open_tabs("/a").unwrap().tabs.is_empty());
+    }
+
+    #[test]
+    fn two_folders_with_a_connection_of_the_same_id_never_exchange_tabs() {
+        let sets = vec![
+            (
+                "/a".to_string(),
+                SavedTabs {
+                    tabs: vec![on("in a", Some("prod/orders"))],
+                    active: None,
+                },
+            ),
+            (
+                "/b".to_string(),
+                SavedTabs {
+                    tabs: vec![on("in b", Some("prod/orders"))],
+                    active: None,
+                },
+            ),
+        ];
+        // `prod/orders` was deleted from A only: A's tab loses its connection, B's keeps its own.
+        let exists = |scope: &str, id: &str| scope == "/b" && id == "prod/orders";
+        let (restored, _) = restore_window_tabs(sets, exists, |_, _, _| true);
+        let (scope_a, a) = &restored[0];
+        let (scope_b, b) = &restored[1];
+        assert_eq!(
+            (scope_a.as_str(), a.tab.connection.as_deref()),
+            ("/a", None)
+        );
+        assert_eq!(
+            a.notes,
+            [RestoreNote::ConnectionMissing {
+                connection: "prod/orders".into()
+            }]
+        );
+        assert_eq!(
+            (scope_b.as_str(), b.tab.connection.as_deref()),
+            ("/b", Some("prod/orders"))
+        );
+    }
+
+    #[test]
+    fn tabs_kept_before_come_back_as_they_were_and_are_saved_again_under_the_new_rule() {
+        let dir = temp("legacy-tabs");
+        let mut store = Store::open(&dir.join("state.db")).unwrap();
+        // As the previous version kept them: every tab under the folder that was open, a
+        // personal one included, without a place in the window.
+        store
+            .save_open_tabs(
+                "/a",
+                &SavedTabs {
+                    tabs: vec![
+                        on("mine", Some("~/local")),
+                        on("a1", Some("orders")),
+                        on("scratch", None),
+                    ],
+                    active: Some(1),
+                },
+            )
+            .unwrap();
+        let (restored, active) =
+            restore_window_tabs(kept(&store, &["/a", ""]), |_, _| true, |_, _, _| true);
+        assert_eq!(texts(&restored), ["mine", "a1", "scratch"]);
+        assert_eq!(active, Some(1));
+
+        // Saved again: A keeps only its own tab; the personal one and the one without a
+        // connection belong to the window, and the order is the same after the next start.
+        let tabs: Vec<(String, SavedTab)> = restored
+            .into_iter()
+            .map(|(scope, t)| {
+                let folder = (!scope.is_empty()).then_some(scope);
+                (
+                    tab_scope(t.tab.connection.as_deref(), folder.as_deref()),
+                    t.tab,
+                )
+            })
+            .collect();
+        let open = ["/a".to_string(), String::new()];
+        store
+            .save_window_tabs(&window_sets(&open, tabs, Some(1)))
+            .unwrap();
+        let only = |scope: &str| -> Vec<String> {
+            store
+                .open_tabs(scope)
+                .unwrap()
+                .tabs
+                .into_iter()
+                .map(|t| t.text)
+                .collect()
+        };
+        assert_eq!(only("/a"), ["a1"]);
+        assert_eq!(only(""), ["mine", "scratch"]);
+        let (restored, active) =
+            restore_window_tabs(kept(&store, &["/a", ""]), |_, _| true, |_, _, _| true);
+        assert_eq!(texts(&restored), ["mine", "a1", "scratch"]);
+        assert_eq!(active, Some(1));
+        // The personal tab now comes back with another folder open, or none.
+        let (restored, _) =
+            restore_window_tabs(kept(&store, &["/b", ""]), |_, _| true, |_, _, _| true);
+        assert_eq!(texts(&restored), ["mine", "scratch"]);
     }
 }

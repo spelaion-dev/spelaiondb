@@ -305,6 +305,10 @@ const MIGRATIONS: &[&str] = &["create table audit (
     alter table open_tabs add column database text check (length(database) > 0);",
     // The same for a table's filters (`table_filters.rs`).
     table_filters::BY_DATABASE,
+    // A tab's place among the window's tabs across folders (ADR-075, SDB-501): each folder's
+    // tabs are kept under it, and the window's order is put back from this. Rows written before
+    // have none and keep their order within their folder.
+    "alter table open_tabs add column window_position integer check (window_position >= 0);",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -3738,7 +3742,11 @@ mod tests {
     #[test]
     fn a_store_from_before_databases_keeps_its_rows_on_the_connections_own_database() {
         let path = temp("by-database-upgrade");
-        let before = MIGRATIONS.len() - 2;
+        // Every migration before the two that gave databases a level.
+        let before = MIGRATIONS
+            .iter()
+            .position(|migration| migration.contains("explorer_bookmarks_by_database"))
+            .unwrap();
         {
             let conn = Connection::open(&path).unwrap();
             for migration in &MIGRATIONS[..before] {

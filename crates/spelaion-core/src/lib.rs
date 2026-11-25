@@ -236,7 +236,10 @@ pub use open::{
     Engines, Liveness, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
     create_file_database, dialect_of, open_connection, open_route, test_tunnel,
 };
-pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
+pub use open_tabs::{
+    RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs, restore_window_tabs,
+    tab_scope, window_sets,
+};
 pub use other_database::{
     Configuration, ConnectionDatabases, OtherDatabaseError, change_session_database,
     connection_databases, database_owner, file_opens_database, open_other_database,

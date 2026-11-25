@@ -1,7 +1,9 @@
-// Open tabs that survive a restart (ADR-036). The core keeps them per folder and decides how
-// often they are written; this module sends what the tabs look like now (at most every
-// 250 ms while they change) and puts back what the core restores. Restored tabs are
-// disconnected: the optional "reconnect at startup" only connects them, it never runs anything.
+// Open tabs that survive a restart (ADR-036). The core keeps each tab under its connection's
+// folder, and one on a personal connection or none under the window's key (ADR-075), and
+// decides how often they are written; this module sends the window's tabs as they are now (at
+// most every 250 ms while they change), each with its connection's folder, and puts back what
+// the core restores. Restored tabs are disconnected: the optional "reconnect at startup" only
+// connects them, it never runs anything.
 
 import { call, commands, type OpenTabItem, type RestoredTabsItem } from "./api";
 import { connectionFailedRun, openTabSession } from "./connect";
@@ -13,9 +15,9 @@ import { CONNECTING, DISCONNECTED, connectFailed, connectedWith, hasSession } fr
 /** Longest wait before the tabs as they are now go to the core. */
 const SEND_DELAY_MS = 250;
 
-/** The folder the tabs on screen belong to; null until they were restored (nothing is sent
- *  before, so an empty start can never overwrite the kept tabs). */
-let scope: string | null = null;
+/** The tabs on screen were restored: nothing is sent before, so an empty start (or a folder
+ *  switch in progress) can never overwrite the kept tabs. */
+let restored = false;
 let lastSent = "";
 let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -34,6 +36,8 @@ function snapshot(tabs: Tab[], activeTab: string | null): { tabs: OpenTabItem[];
       text: tab.sql,
       connection: tab.connectionId,
       database: tab.connectionId ? (tab.database ?? null) : null,
+      // The core keeps the tab under this folder, or under the window's key (ADR-075).
+      folder: tab.connectionId ? connectionKey(tab.connectionId).folder : null,
       pinned: tab.pinned ?? false,
       onError: tab.runOptions?.onError ?? null,
       timeoutSeconds: tab.runOptions?.timeoutSeconds ?? null,
@@ -52,20 +56,20 @@ function sendNow() {
     clearTimeout(timer);
     timer = null;
   }
-  if (scope === null) return;
+  if (!restored) return;
   const { tabs, activeTab } = useApp.getState();
   const current = snapshot(tabs, activeTab);
   const text = JSON.stringify(current);
   if (text === lastSent) return;
   lastSent = text;
-  void call(commands.saveTabs(scope, current.tabs, current.active)).catch(() => {
+  void call(commands.saveTabs(current.tabs, current.active)).catch(() => {
     // Sent again with the next change.
     lastSent = "";
   });
 }
 
 function schedule() {
-  if (scope === null || timer) return;
+  if (!restored || timer) return;
   timer = setTimeout(sendNow, SEND_DELAY_MS);
 }
 
@@ -75,27 +79,29 @@ export async function flushTabs(): Promise<void> {
   await call(commands.flushTabs()).catch(() => undefined);
 }
 
-/** Stops sending: the tabs on screen are about to belong to another folder. */
+/** Stops sending: the folders are about to change, and the tabs on screen with them. */
 export function detachTabs() {
   if (timer) clearTimeout(timer);
   timer = null;
-  scope = null;
+  restored = false;
   lastSent = "";
 }
 
-/** Puts back the open folder's kept tabs, replacing the ones on screen, and starts keeping
- *  them. With "reconnect at startup", connects them one at a time afterwards (never runs). */
+/** Puts back the window's kept tabs and every open folder's, replacing the ones on screen, and
+ *  starts keeping them. A tab on a personal connection, or none, comes back whatever folder is
+ *  open (ADR-075). With "reconnect at startup", connects them one at a time afterwards (never
+ *  runs). */
 export async function restoreTabs(): Promise<void> {
-  let restored: RestoredTabsItem;
+  let kept: RestoredTabsItem;
   try {
-    restored = await call(commands.restoreTabsForWorkspace());
+    kept = await call(commands.restoreTabsForWorkspace());
   } catch {
     return;
   }
-  useApp.getState().restoreTabs(restored.tabs, restored.active);
-  scope = restored.scope;
+  useApp.getState().restoreTabs(kept.tabs, kept.active);
+  restored = true;
   lastSent = JSON.stringify(snapshot(useApp.getState().tabs, useApp.getState().activeTab));
-  if (restored.reconnect) void reconnectRestored();
+  if (kept.reconnect) void reconnectRestored();
 }
 
 /** Connects the restored tabs that have a connection, one at a time, as a click would: a
