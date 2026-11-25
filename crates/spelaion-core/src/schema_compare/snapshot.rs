@@ -66,7 +66,10 @@ pub async fn read_snapshot(
                 | SchemaObjectKind::Domain
                 | SchemaObjectKind::Type
                 | SchemaObjectKind::Event
-                | SchemaObjectKind::Synonym => return None,
+                | SchemaObjectKind::Synonym
+                | SchemaObjectKind::Sink
+                | SchemaObjectKind::Connection
+                | SchemaObjectKind::Secret => return None,
             };
             Some((kind, object))
         })

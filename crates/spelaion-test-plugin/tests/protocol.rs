@@ -13,8 +13,8 @@ use arrow::array::{Array, Int64Array, StringArray};
 use futures_util::StreamExt;
 use spelaion_driver_api::{
     ConnectParams, Connection, DependencyKind, Driver, DriverError, ExecEvent, ExecOptions,
-    InsertTarget, KeepAlive, LogicalType, NameFilter, ObjectKind, PlanMode, Result, Secret,
-    TextRows, TlsMode, TransactionState,
+    InsertTarget, KeepAlive, LogicalType, NameFilter, ObjectKind, PlanMode, Result,
+    SchemaObjectKind, Secret, ServerObjectKind, TextRows, TlsMode, TransactionState,
 };
 use spelaion_plugin_host::{Plugin, REDACTED, VERSION};
 
@@ -485,13 +485,34 @@ async fn the_catalog_and_the_session_calls_answer_as_the_driver_does() {
         .await
         .unwrap_err();
     assert_eq!(refused.to_string(), "this engine has no table definitions");
+    // 1.3's kinds and a server object's definition (ADR-082), as the driver gave them.
+    let schema_objects = within(c.list_schema_objects("main")).await.unwrap();
+    assert_eq!(schema_objects.len(), 1);
+    assert_eq!(schema_objects[0].kind, SchemaObjectKind::Sink);
     assert!(
-        within(c.list_schema_objects("main"))
+        within(c.list_schema_objects("sys"))
             .await
             .unwrap()
             .is_empty()
     );
-    assert!(within(c.list_server_objects()).await.unwrap().is_empty());
+    let server = within(c.list_server_objects()).await.unwrap();
+    assert_eq!(
+        server.iter().map(|o| o.kind).collect::<Vec<_>>(),
+        [ServerObjectKind::Cluster, ServerObjectKind::ClusterReplica]
+    );
+    assert_eq!(
+        within(c.server_object_definition(&server[0]))
+            .await
+            .unwrap(),
+        "CREATE CLUSTER quickstart (SIZE = '25cc');"
+    );
+    assert_eq!(
+        within(c.server_object_definition(&server[1]))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "no definition for r1"
+    );
 
     // A relation's properties, partitions and dependencies (1.2, SDB-393), as the driver gave
     // them, an engine's own property name and a kind not tracked included.
@@ -643,6 +664,17 @@ async fn a_plugin_of_version_1_0_is_never_sent_a_request_or_settings() {
             .unwrap(),
         None
     );
+    // Nor 1.3's definitions of server objects (ADR-082): its engine has none.
+    let cluster = spelaion_driver_api::ServerObject {
+        name: "quickstart".into(),
+        kind: ServerObjectKind::Cluster,
+        detail: None,
+        system: false,
+    };
+    let refused = within(connection.server_object_definition(&cluster))
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("no definitions"), "{refused}");
     // It was refused in the core: the plugin is still there, and never saw any of it.
     assert!(within(plugin.is_running()).await);
     drop(connection);
@@ -832,6 +864,68 @@ async fn a_plugin_of_another_version_is_refused_with_both_versions() {
         assert!(!within(plugin.is_running()).await);
         let _ = std::fs::remove_file(program);
     }
+}
+
+/// A core of protocol 1.2 cannot read 1.3's kinds (ADR-082): the plugin SDK leaves those
+/// objects out of its lists for it, so the rest of each list still arrives. Spoken frame by
+/// frame, as such a core would.
+#[test]
+fn a_core_of_version_1_2_is_never_sent_the_kinds_1_3_added() {
+    use spelaion_plugin_protocol::{Frame, Message, read_frame, write_frame};
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(PROGRAM)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("starting the test plugin");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut ask = |id: u64, method: &str, params: serde_json::Value| -> serde_json::Value {
+        let frame = Frame::Message(Message::request(id, method, params).to_bytes());
+        write_frame(&mut stdin, &frame).unwrap();
+        stdin.flush().unwrap();
+        loop {
+            let Some(Frame::Message(bytes)) = read_frame(&mut stdout).unwrap() else {
+                continue;
+            };
+            let message = Message::from_bytes(&bytes).unwrap();
+            if message.id == Some(id) {
+                let answer = serde_json::to_value(&message).unwrap();
+                assert!(answer.get("error").is_none(), "{method}: {answer}");
+                return answer["result"].clone();
+            }
+        }
+    };
+    let chosen = ask(
+        1,
+        "initialize",
+        serde_json::json!({"protocols": [{"major": 1, "minor": 2}],
+                           "host": {"name": "spelaiondb", "version": "0.15.0"}}),
+    );
+    assert_eq!(
+        chosen["protocol"],
+        serde_json::json!({"major": 1, "minor": 2})
+    );
+    ask(
+        2,
+        "connect",
+        serde_json::json!({"session": 1, "engine": "test", "host": "db.test", "port": 5555,
+                           "user": "app", "password": PASSWORD, "database": "made",
+                           "tls": serde_json::to_value(TlsMode::Disable).unwrap()}),
+    );
+    let schema_objects = ask(
+        3,
+        "list_schema_objects",
+        serde_json::json!({"session": 1, "schema": "main"}),
+    );
+    assert_eq!(schema_objects["objects"], serde_json::json!([]), "no sink");
+    let server = ask(4, "list_server_objects", serde_json::json!({"session": 1}));
+    assert_eq!(server["objects"], serde_json::json!([]), "no cluster");
+    drop(stdin);
+    let _ = child.wait();
 }
 
 #[tokio::test]

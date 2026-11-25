@@ -16,6 +16,7 @@ import {
   type ObjectItem,
   type ObjectTargetItem,
   type SchemaObjectItem,
+  type ServerObjectItem,
   type SqlTemplateItem,
 } from "./api";
 import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase, SET_ACTIVE_SCHEMA_EVENT } from "./connect";
@@ -188,6 +189,12 @@ export const canGenerateCall = (object: SchemaObjectItem, actions: ObjectActions
 /** The object's definition, written by the driver, in a new tab: nothing runs. */
 export async function openObjectDefinition(connectionId: string, session: string, object: SchemaObjectItem) {
   openSqlTab(connectionId, session, object.schema, await call(commands.objectDefinition(session, object)));
+}
+
+/** An object outside every schema (a Materialize cluster, ADR-082), its definition written by
+ *  the driver, in a new tab: nothing runs. */
+export async function openServerObjectDefinition(connectionId: string, session: string, object: ServerObjectItem) {
+  openSqlTab(connectionId, session, undefined, await call(commands.serverObjectDefinition(session, object)));
 }
 
 /** "Edit source": the core writes the routine as the statement that replaces it (ADR-047). */

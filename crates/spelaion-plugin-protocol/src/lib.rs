@@ -18,13 +18,17 @@ pub use message::{
 };
 
 /// The version this build of the protocol speaks.
-pub const VERSION: Version = Version { major: 1, minor: 2 };
+pub const VERSION: Version = Version { major: 1, minor: 3 };
 
 /// The version that added requests (`Run::Request`) and connection options (ADR-056).
 pub const REQUESTS: Version = Version { major: 1, minor: 1 };
 
 /// The version that added a relation's properties, partitions and dependencies (SDB-393).
 pub const DETAILS: Version = Version { major: 1, minor: 2 };
+
+/// The version that added the schema object kinds `sink`, `connection` and `secret`, the server
+/// object kinds `cluster` and `cluster_replica`, and `server_object_definition` (ADR-082).
+pub const CATALOG_KINDS: Version = Version { major: 1, minor: 3 };
 
 /// How many record batches a plugin may have sent on a stream without credit given back, when
 /// it has no reason to choose otherwise.

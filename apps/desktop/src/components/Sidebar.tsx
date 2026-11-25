@@ -100,6 +100,7 @@ import {
   loadObjectActions,
   openGeneratedSql,
   openObjectDefinition,
+  openServerObjectDefinition,
   openRelationDdl,
   openRelationDiagram,
   openRelationRows,
@@ -1096,6 +1097,9 @@ const SCHEMA_FOLDERS = [
   "types",
   "events",
   "synonyms",
+  "sinks",
+  "connections",
+  "secrets",
 ] as const;
 type SchemaFolder = (typeof SCHEMA_FOLDERS)[number];
 
@@ -1134,10 +1138,17 @@ function schemaObjectFolder(kind: SchemaObjectKindItem): SchemaFolder {
       return "events";
     case "synonym":
       return "synonyms";
+    // A streaming engine's (Materialize, ADR-082).
+    case "sink":
+      return "sinks";
+    case "connection":
+      return "connections";
+    case "secret":
+      return "secrets";
   }
 }
 
-const SERVER_FOLDERS = ["roles", "users", "logins", "tablespaces", "extensions"] as const;
+const SERVER_FOLDERS = ["roles", "users", "logins", "tablespaces", "extensions", "clusters", "clusterReplicas"] as const;
 
 type TreeIconKind = "folder" | "table" | "view" | "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers" | "column" | "properties" | "partitions" | "dependencies";
 
@@ -1174,6 +1185,10 @@ function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[numbe
       return "tablespaces";
     case "extension":
       return "extensions";
+    case "cluster":
+      return "clusters";
+    case "cluster_replica":
+      return "clusterReplicas";
   }
 }
 
@@ -1188,6 +1203,8 @@ function folderAccountKind(folder: (typeof SERVER_FOLDERS)[number]): PrincipalKi
       return "login";
     case "tablespaces":
     case "extensions":
+    case "clusters":
+    case "clusterReplicas":
       return null;
   }
 }
@@ -2189,6 +2206,8 @@ function ConnectionNode({
                   {items.map((o) =>
                     kind ? (
                       <AccountRow key={`${o.kind}:${o.name}`} object={o} kind={kind} actions={principalActions} onAct={setAccount} />
+                    ) : o.hasDefinition ? (
+                      <ServerObjectRow key={`${o.kind}:${o.name}`} connectionId={connection.id} session={session} object={o} />
                     ) : (
                       <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
                         <span className="label">{o.name}</span>
@@ -2232,6 +2251,57 @@ function ConnectionNode({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** An object outside every schema whose kind the core says may have a definition (a
+ *  Materialize cluster, ADR-082): double-click, Enter or its menu opens it in a new tab. */
+function ServerObjectRow({ connectionId, session, object }: {
+  connectionId: string;
+  session: string;
+  object: ServerObjectItem;
+}) {
+  const { t } = useTranslation("shell");
+  const [menu, setMenu] = useContextMenu();
+  const [error, setError] = useState<string | null>(null);
+  const openDefinition = () => {
+    setMenu(null);
+    setError(null);
+    void openServerObjectDefinition(connectionId, session, object).catch((e: unknown) => setError(errorText(e)));
+  };
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        onDoubleClick={openDefinition}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        title={object.detail ?? t("definitionHint")}
+        role="button"
+        tabIndex={0}
+        aria-label={t("openObject", { name: object.name })}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            openDefinition();
+          }
+        }}
+      >
+        <TreeIcon kind="folder" />
+        <span className="label">{object.name}</span>
+        {object.detail && <span className="muted small">{object.detail}</span>}
+      </div>
+      {menu && (
+        <ObjectMenu at={menu}>
+          <button role="menuitem" data-action="openDefinition" onClick={openDefinition}>
+            {t("openDefinition")}
+          </button>
+        </ObjectMenu>
+      )}
+      {error && <div className="row-note error small" role="alert">{error}</div>}
     </div>
   );
 }

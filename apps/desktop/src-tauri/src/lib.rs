@@ -5129,6 +5129,22 @@ async fn object_definition(
         .map_err(|e| e.to_string())
 }
 
+/// The DDL of an object outside every schema (a Materialize cluster, ADR-082), to open in a
+/// new tab (nothing runs). The explorer asks only for kinds the core says may have one.
+#[command]
+async fn server_object_definition(
+    session: String,
+    object: ServerObjectItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .server_object_definition(&object.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The table whose foreign keys a query's result follows like a table data tab (SDB-93), or
 /// none: the core matches the rows to one table, on a read-only connection too. The same
 /// answer says whether the session permits editing, so both actions share the catalog read.
@@ -6603,6 +6619,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             remove_bookmark,
             filter_explorer_name,
             object_definition,
+            server_object_definition,
             relation_definition,
             procedure_call,
             table_templates,

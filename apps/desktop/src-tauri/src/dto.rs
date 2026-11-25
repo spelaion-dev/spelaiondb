@@ -89,6 +89,9 @@ pub enum BookmarkKindItem {
     Type,
     Event,
     Synonym,
+    Sink,
+    Connection,
+    Secret,
 }
 
 impl From<spelaion_core::BookmarkKind> for BookmarkKindItem {
@@ -114,6 +117,9 @@ impl From<spelaion_core::BookmarkKind> for BookmarkKindItem {
             K::Type => Self::Type,
             K::Event => Self::Event,
             K::Synonym => Self::Synonym,
+            K::Sink => Self::Sink,
+            K::Connection => Self::Connection,
+            K::Secret => Self::Secret,
         }
     }
 }
@@ -141,6 +147,9 @@ impl From<BookmarkKindItem> for spelaion_core::BookmarkKind {
             K::Type => Self::Type,
             K::Event => Self::Event,
             K::Synonym => Self::Synonym,
+            K::Sink => Self::Sink,
+            K::Connection => Self::Connection,
+            K::Secret => Self::Secret,
         }
     }
 }
@@ -2686,6 +2695,9 @@ pub enum SchemaObjectKindItem {
     Type,
     Event,
     Synonym,
+    Sink,
+    Connection,
+    Secret,
 }
 
 impl From<SchemaObjectKind> for SchemaObjectKindItem {
@@ -2701,6 +2713,9 @@ impl From<SchemaObjectKind> for SchemaObjectKindItem {
             SchemaObjectKind::Type => Self::Type,
             SchemaObjectKind::Event => Self::Event,
             SchemaObjectKind::Synonym => Self::Synonym,
+            SchemaObjectKind::Sink => Self::Sink,
+            SchemaObjectKind::Connection => Self::Connection,
+            SchemaObjectKind::Secret => Self::Secret,
         }
     }
 }
@@ -2718,6 +2733,9 @@ impl From<SchemaObjectKindItem> for SchemaObjectKind {
             SchemaObjectKindItem::Type => Self::Type,
             SchemaObjectKindItem::Event => Self::Event,
             SchemaObjectKindItem::Synonym => Self::Synonym,
+            SchemaObjectKindItem::Sink => Self::Sink,
+            SchemaObjectKindItem::Connection => Self::Connection,
+            SchemaObjectKindItem::Secret => Self::Secret,
         }
     }
 }
@@ -2759,7 +2777,7 @@ impl From<SchemaObjectItem> for SchemaObject {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ServerObjectKindItem {
     Role,
@@ -2767,10 +2785,42 @@ pub enum ServerObjectKindItem {
     Login,
     Tablespace,
     Extension,
+    /// Materialize's clusters and their replicas (ADR-082).
+    Cluster,
+    ClusterReplica,
 }
 
-/// A role, login, tablespace or extension: outside every schema (ADR-024).
-#[derive(Debug, Clone, Serialize, Type)]
+impl From<ServerObjectKind> for ServerObjectKindItem {
+    fn from(kind: ServerObjectKind) -> Self {
+        match kind {
+            ServerObjectKind::Role => Self::Role,
+            ServerObjectKind::User => Self::User,
+            ServerObjectKind::Login => Self::Login,
+            ServerObjectKind::Tablespace => Self::Tablespace,
+            ServerObjectKind::Extension => Self::Extension,
+            ServerObjectKind::Cluster => Self::Cluster,
+            ServerObjectKind::ClusterReplica => Self::ClusterReplica,
+        }
+    }
+}
+
+impl From<ServerObjectKindItem> for ServerObjectKind {
+    fn from(kind: ServerObjectKindItem) -> Self {
+        match kind {
+            ServerObjectKindItem::Role => Self::Role,
+            ServerObjectKindItem::User => Self::User,
+            ServerObjectKindItem::Login => Self::Login,
+            ServerObjectKindItem::Tablespace => Self::Tablespace,
+            ServerObjectKindItem::Extension => Self::Extension,
+            ServerObjectKindItem::Cluster => Self::Cluster,
+            ServerObjectKindItem::ClusterReplica => Self::ClusterReplica,
+        }
+    }
+}
+
+/// A role, login, tablespace, extension or cluster: outside every schema (ADR-024). The UI
+/// sends it back unchanged to ask for its definition (ADR-082).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerObjectItem {
     pub name: String,
@@ -2778,19 +2828,27 @@ pub struct ServerObjectItem {
     pub detail: Option<String>,
     /// Built into the engine: shown only with "Show system objects".
     pub system: bool,
+    /// The core says this kind may have a definition: the explorer offers to open it.
+    pub has_definition: bool,
 }
 
 impl From<ServerObject> for ServerObjectItem {
     fn from(o: ServerObject) -> Self {
         Self {
             name: o.name,
-            kind: match o.kind {
-                ServerObjectKind::Role => ServerObjectKindItem::Role,
-                ServerObjectKind::User => ServerObjectKindItem::User,
-                ServerObjectKind::Login => ServerObjectKindItem::Login,
-                ServerObjectKind::Tablespace => ServerObjectKindItem::Tablespace,
-                ServerObjectKind::Extension => ServerObjectKindItem::Extension,
-            },
+            has_definition: o.kind.has_definition(),
+            kind: o.kind.into(),
+            detail: o.detail,
+            system: o.system,
+        }
+    }
+}
+
+impl From<ServerObjectItem> for ServerObject {
+    fn from(o: ServerObjectItem) -> Self {
+        Self {
+            name: o.name,
+            kind: o.kind.into(),
             detail: o.detail,
             system: o.system,
         }

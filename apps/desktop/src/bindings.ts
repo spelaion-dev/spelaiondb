@@ -1164,6 +1164,11 @@ export const commands = {
 	/**  The DDL of an object, to open in a new tab (nothing runs). */
 	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
 	/**
+	 *  The DDL of an object outside every schema (a Materialize cluster, ADR-082), to open in a
+	 *  new tab (nothing runs). The explorer asks only for kinds the core says may have one.
+	 */
+	serverObjectDefinition: (session: string, object: ServerObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("server_object_definition", { session, object })),
+	/**
 	 *  The DDL of a table or view (`CREATE TABLE` with its constraints, indexes and comments),
 	 *  to open in a new tab (nothing runs).
 	 */
@@ -1457,7 +1462,7 @@ export type BookmarkItem = {
  *  What a bookmark points at: `schema`, a relation's kind or another object's, as the drivers
  *  name them. Any other word is refused when the command is called (SDB-376).
  */
-export type BookmarkKindItem = "schema" | "table" | "partitioned_table" | "view" | "materialized_view" | "foreign_table" | "collection" | "node_label" | "relationship_type" | "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
+export type BookmarkKindItem = "schema" | "table" | "partitioned_table" | "view" | "materialized_view" | "foreign_table" | "collection" | "node_label" | "relationship_type" | "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym" | "sink" | "connection" | "secret";
 
 /**  A rectangle in the geometry's own units. */
 export type Bounds = {
@@ -6192,7 +6197,7 @@ export type SchemaObjectItem_Serialize = {
 };
 
 /**  The kinds of `list_schema_objects` (ADR-024): the explorer has a folder for each. */
-export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
+export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym" | "sink" | "connection" | "secret";
 
 /**  A screen that failed, as the page's error boundary saw it. */
 export type ScreenFailureItem = {
@@ -6417,28 +6422,43 @@ export type SelectionStatsItem_Serialize = {
 	modeCount: number | null,
 };
 
-/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+/**
+ *  A role, login, tablespace, extension or cluster: outside every schema (ADR-024). The UI
+ *  sends it back unchanged to ask for its definition (ADR-082).
+ */
 export type ServerObjectItem = ServerObjectItem_Serialize | ServerObjectItem_Deserialize;
 
-/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+/**
+ *  A role, login, tablespace, extension or cluster: outside every schema (ADR-024). The UI
+ *  sends it back unchanged to ask for its definition (ADR-082).
+ */
 export type ServerObjectItem_Deserialize = {
 	name: string,
 	kind: ServerObjectKindItem,
 	detail?: string | null,
 	/**  Built into the engine: shown only with "Show system objects". */
 	system: boolean,
+	/**  The core says this kind may have a definition: the explorer offers to open it. */
+	hasDefinition: boolean,
 };
 
-/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+/**
+ *  A role, login, tablespace, extension or cluster: outside every schema (ADR-024). The UI
+ *  sends it back unchanged to ask for its definition (ADR-082).
+ */
 export type ServerObjectItem_Serialize = {
 	name: string,
 	kind: ServerObjectKindItem,
 	detail: string | null,
 	/**  Built into the engine: shown only with "Show system objects". */
 	system: boolean,
+	/**  The core says this kind may have a definition: the explorer offers to open it. */
+	hasDefinition: boolean,
 };
 
-export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension";
+export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension" | 
+/**  Materialize's clusters and their replicas (ADR-082). */
+"cluster" | "cluster_replica";
 
 /**  One server setting, variable, status counter or property. */
 export type ServerSettingItem = ServerSettingItem_Serialize | ServerSettingItem_Deserialize;

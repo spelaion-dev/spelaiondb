@@ -10,15 +10,15 @@ use std::time::Duration;
 use futures_util::{FutureExt, StreamExt};
 use serde_json::{Value, json};
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, EventStream, ExecEvent, ExecOptions, Secret,
-    TextRows,
+    ConnectParams, Connection, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
+    SchemaObjectKind, Secret, ServerObjectKind, TextRows,
 };
 use spelaion_plugin_protocol::ipc::{BatchDecoder, BatchEncoder, Decoded};
 use spelaion_plugin_protocol::{
-    CatalogRequest, Connect, ConnectResult, CreateDatabase, ErrorData, Execute, Frame, FrameError,
-    Initialize, InitializeResult, InsertRows, InsertRowsResult, Message, Program, RpcError, Run,
-    SessionRequest, StreamCredit, StreamDone, StreamError, StreamId, StreamNotice, VERSION, code,
-    method, read_frame, write_frame,
+    CATALOG_KINDS, CatalogRequest, Connect, ConnectResult, CreateDatabase, ErrorData, Execute,
+    Frame, FrameError, Initialize, InitializeResult, InsertRows, InsertRowsResult, Message,
+    Program, RpcError, Run, SessionRequest, StreamCredit, StreamDone, StreamError, StreamId,
+    StreamNotice, VERSION, Version, code, method, read_frame, write_frame,
 };
 use tokio::sync::{Notify, Semaphore, mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -74,6 +74,7 @@ where
         incoming: Mutex::new(HashMap::new()),
         tasks: Mutex::new(JoinSet::new()),
         turns: Mutex::new(HashMap::new()),
+        protocol: std::sync::OnceLock::new(),
     });
     let watcher = tokio::spawn(watch_closed(shared.clone()));
 
@@ -227,6 +228,8 @@ struct Shared {
     tasks: Mutex<JoinSet<()>>,
     /// Each session's last `execute` or `cancel` read: the next one waits for its turn.
     turns: Mutex<HashMap<u64, oneshot::Receiver<()>>>,
+    /// The version `initialize` chose: what was added after it is never sent (ADR-082).
+    protocol: std::sync::OnceLock<Version>,
 }
 
 /// A session's `execute` and `cancel` reach its driver in the order they were read (SDB-428).
@@ -329,8 +332,10 @@ impl Shared {
                 data: Some(json!({ "protocols": [VERSION] })),
             });
         };
+        let chosen = (*theirs).min(VERSION);
+        let _ = self.protocol.set(chosen);
         Ok(InitializeResult {
-            protocol: (*theirs).min(VERSION),
+            protocol: chosen,
             plugin: Program {
                 name: self.plugin.name.clone(),
                 version: self.plugin.version.clone(),
@@ -448,6 +453,11 @@ impl Shared {
         })
     }
 
+    /// The core chose `version` or a later one in `initialize`.
+    fn speaks(&self, version: Version) -> bool {
+        self.protocol.get().is_some_and(|chosen| *chosen >= version)
+    }
+
     fn session(&self, id: u64) -> Result<Arc<Session>, RpcError> {
         match self.sessions.lock().expect("lock poisoned").get(&id) {
             Some(Slot::Open(session)) => Ok(session.clone()),
@@ -556,6 +566,36 @@ async fn handle(
         Err(error) => Message::error(id, error),
     };
     shared.send(answer).await;
+}
+
+/// A schema object kind a core of protocol 1.2 or older can read: it would fail to read the
+/// whole list for one kind it does not know (ADR-082).
+fn schema_kind_before_1_3(kind: SchemaObjectKind) -> bool {
+    match kind {
+        SchemaObjectKind::Function
+        | SchemaObjectKind::Procedure
+        | SchemaObjectKind::Aggregate
+        | SchemaObjectKind::Sequence
+        | SchemaObjectKind::Trigger
+        | SchemaObjectKind::Enum
+        | SchemaObjectKind::Domain
+        | SchemaObjectKind::Type
+        | SchemaObjectKind::Event
+        | SchemaObjectKind::Synonym => true,
+        SchemaObjectKind::Sink | SchemaObjectKind::Connection | SchemaObjectKind::Secret => false,
+    }
+}
+
+/// The same for a server object kind.
+fn server_kind_before_1_3(kind: ServerObjectKind) -> bool {
+    match kind {
+        ServerObjectKind::Role
+        | ServerObjectKind::User
+        | ServerObjectKind::Login
+        | ServerObjectKind::Tablespace
+        | ServerObjectKind::Extension => true,
+        ServerObjectKind::Cluster | ServerObjectKind::ClusterReplica => false,
+    }
 }
 
 fn driver_error(error: DriverError) -> RpcError {
@@ -781,10 +821,30 @@ async fn on_session(
                 }
                 None => connection.list_schema_objects(schema).await,
             };
-            json!({ "objects": objects.map_err(driver_error)? })
+            let mut objects = objects.map_err(driver_error)?;
+            if !shared.speaks(CATALOG_KINDS) {
+                objects.retain(|o| schema_kind_before_1_3(o.kind));
+            }
+            json!({ "objects": objects })
         }
         method::LIST_SERVER_OBJECTS => {
-            json!({ "objects": connection.list_server_objects().await.map_err(driver_error)? })
+            let mut objects = connection
+                .list_server_objects()
+                .await
+                .map_err(driver_error)?;
+            if !shared.speaks(CATALOG_KINDS) {
+                objects.retain(|o| server_kind_before_1_3(o.kind));
+            }
+            json!({ "objects": objects })
+        }
+        method::SERVER_OBJECT_DEFINITION => {
+            let object = request.server_object.as_ref().ok_or_else(|| RpcError {
+                code: code::INVALID_PARAMS,
+                message: "`server_object` is missing".into(),
+                data: None,
+            })?;
+            let sql = connection.server_object_definition(object).await;
+            json!({ "sql": sql.map_err(driver_error)? })
         }
         method::OBJECT_DEFINITION | method::PROCEDURE_CALL => {
             let object = request.object.as_ref().ok_or_else(|| RpcError {
