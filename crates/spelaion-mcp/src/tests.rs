@@ -2163,3 +2163,39 @@ async fn catalog_answers_on_thousands_of_tables_stay_within_the_limit() {
     assert!(column.chars().count() < 260, "{}", column.len());
     assert!(!text.contains("fake_column"), "{text}");
 }
+
+/// ADR-074 point 8: a connection that opens every database of its server is still, to agents,
+/// its own database alone. Its sessions open the file's `database`, and it is listed once.
+#[tokio::test]
+async fn an_agent_on_a_connection_with_all_databases_reaches_only_its_own_database() {
+    let Ok(address) = std::env::var("SPELAION_TEST_PG") else {
+        eprintln!("SPELAION_TEST_PG not set: agents and all_databases not tested");
+        return;
+    };
+    let (host, port) = address.rsplit_once(':').unwrap();
+    let user_dir = temp("all-databases");
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    std::fs::write(
+        user_dir.join("connections/wide.toml"),
+        postgres_connection(
+            host,
+            Some(port),
+            "spelaion-mcp-all-databases",
+            "all_databases = true",
+            true,
+        ),
+    )
+    .unwrap();
+    let server = server(None, &user_dir, false);
+    let answer = query(&server, "~/wide", "select current_database() as here").await;
+    let text = body(&answer);
+    assert!(text.contains("\"spelaion\""), "{text}");
+    assert!(!text.contains("postgres\""), "{text}");
+    let listed = listed(&server).await;
+    assert_eq!(
+        listed.lines().filter(|l| l.contains("~/wide")).count(),
+        1,
+        "{listed}"
+    );
+    assert!(!listed.contains("spelaion_gis"), "{listed}");
+}
