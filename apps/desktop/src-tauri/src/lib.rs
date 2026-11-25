@@ -3634,17 +3634,26 @@ async fn open_read_session(
     app: &AppHandle,
     source: &str,
 ) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>)> {
-    let (source_open, password) = {
+    let (source_open, password, window) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
             .get(source)
             .ok_or("the connection of this export is closed")?;
-        (source.open.clone(), source.password.clone())
+        (
+            source.open.clone(),
+            source.password.clone(),
+            source.window.clone(),
+        )
     };
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        // Its SSH questions go to the source session's window (SDB-522, ADR-083).
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            &window,
+        )),
         password,
         // Only reads are ever run there (ADR-034).
         read_only_session: true,

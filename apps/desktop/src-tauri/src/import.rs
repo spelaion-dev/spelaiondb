@@ -489,19 +489,28 @@ async fn open_import_session(
     Arc<JobCancel>,
     jobs::Job,
 )> {
-    let (source_open, password) = {
+    let (source_open, password, window) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
             .get(source)
             .ok_or("the connection of this import is closed")?;
-        (source.open.clone(), source.password.clone())
+        (
+            source.open.clone(),
+            source.password.clone(),
+            source.window.clone(),
+        )
     };
     let running = jobs::start(state, JobKind::Import, job);
     let cancel = running.cancel().clone();
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        // Its SSH questions go to the source session's window (SDB-522, ADR-083).
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            &window,
+        )),
         password,
         read_only_session: false,
     };

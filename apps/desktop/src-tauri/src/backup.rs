@@ -393,27 +393,38 @@ pub struct BackupDoneItem {
 /// How a backup ended (a partial backup is removed).
 pub type BackupOutcome = JobOutcome<BackupDoneItem, ()>;
 
-fn route_options(state: &AppState, app: &AppHandle) -> RouteOptions {
+/// The route of a job started from a session of the window `window`: its SSH questions go to that
+/// window only (SDB-522, ADR-083).
+fn route_options(state: &AppState, app: &AppHandle, window: &str) -> RouteOptions {
     RouteOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            window,
+        )),
     }
 }
 
-/// The source session's connection and its in-memory password.
+/// The source session's connection, its in-memory password and the window that opened it.
 async fn source(
     state: &AppState,
     session: &str,
 ) -> CmdResult<(
     Arc<spelaion_core::OpenConnection>,
     Option<spelaion_driver_api::Secret>,
+    String,
 )> {
     let sessions = state.sessions.lock().await;
     let source = sessions
         .get(session)
         .ok_or("the connection of this backup is closed")?;
-    Ok((source.open.clone(), source.password.clone()))
+    Ok((
+        source.open.clone(),
+        source.password.clone(),
+        source.window.clone(),
+    ))
 }
 
 /// Backs up the connection's database with its vendor's tool, through its tunnel; the tool's
@@ -427,7 +438,7 @@ pub async fn run_backup(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<BackupOutcome> {
-    let (open, password) = source(&state, &session).await?;
+    let (open, password, window) = source(&state, &session).await?;
     let request: DumpRequest = request.into();
     let running = jobs::start(&state, JobKind::Backup, &job);
     let cancel = running.cancel().clone();
@@ -437,7 +448,7 @@ pub async fn run_backup(
     let outcome = backup::run_dump(
         &open.resolved,
         password,
-        route_options(&state, &app),
+        route_options(&state, &app, &window),
         &request,
         Some(&open.session),
         &cancel,
@@ -603,7 +614,7 @@ pub async fn run_restore(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<RestoreOutcome> {
-    let (open, password) = source(&state, &session).await?;
+    let (open, password, window) = source(&state, &session).await?;
     let request: RestoreRequest = request.into();
     let running = jobs::start(&state, JobKind::Restore, &job);
     let cancel = running.cancel().clone();
@@ -613,7 +624,7 @@ pub async fn run_restore(
     let outcome = backup::run_restore(
         &open.resolved,
         password,
-        route_options(&state, &app),
+        route_options(&state, &app, &window),
         &request,
         confirmed,
         &cancel,
@@ -641,14 +652,18 @@ async fn open_run_session(
     source: &str,
     reads_only: bool,
 ) -> CmdResult<spelaion_core::OpenConnection> {
-    let (open, password) = self::source(state, source).await?;
+    let (open, password, window) = self::source(state, source).await?;
     spelaion_core::open_connection(
         open.resolved.clone(),
         &state.engines(),
         spelaion_core::OpenOptions {
             tunnels: state.tunnels.clone(),
             known_hosts: KnownHosts::for_user(&state.user_dir),
-            interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+            interaction: Arc::new(AppInteraction::for_window(
+                app.clone(),
+                state.pending.clone(),
+                &window,
+            )),
             password,
             read_only_session: reads_only,
         },

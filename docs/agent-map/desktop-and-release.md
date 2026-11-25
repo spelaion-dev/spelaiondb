@@ -198,7 +198,8 @@
   calling window in `connect` / `connect_from_session`; `close_window_sessions` closes one
   window's sessions. An event meant for one window is sent with `emit_to` and heard with
   `events.x(getCurrentWebviewWindow()).listen` (a plain `listen` hears every target): SSH
-  questions of `connect` and the tests (`AppInteraction::for_window`), `QuitRequested` and
+  questions (`AppInteraction::for_window`, the only constructor: `connect` and the tests take
+  the calling window, a job the window of its source session's `DesktopSession::window`, SDB-522), `QuitRequested` and
   `LaunchRequested` (main only), `WindowCloseRequested`, `ResultsWindowClosed`. A tab and its
   results window talk through `resultsWindow.ts` (`sendMirror` / `serveRequests` on the tab's
   side, `ownerClient` on the other); a new callback of `Results` is a new `ResultsRequest`
