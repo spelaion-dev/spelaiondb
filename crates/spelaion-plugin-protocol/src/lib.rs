@@ -18,7 +18,7 @@ pub use message::{
 };
 
 /// The version this build of the protocol speaks.
-pub const VERSION: Version = Version { major: 1, minor: 3 };
+pub const VERSION: Version = Version { major: 1, minor: 4 };
 
 /// The version that added requests (`Run::Request`) and connection options (ADR-056).
 pub const REQUESTS: Version = Version { major: 1, minor: 1 };
@@ -34,6 +34,12 @@ pub const CATALOG_KINDS: Version = Version { major: 1, minor: 3 };
 /// plugin built on 1.3's first SDK (`plugin-sdk-v0.4.0`) does not say `insert_bytes`, which
 /// reads as false: it is never sent bytes.
 pub const BYTES: Version = Version { major: 1, minor: 3 };
+
+/// The version that added `describe_tables`: every table of a schema described in one request
+/// (SDB-220). A plugin of an older version is not asked, and the core describes each table.
+/// 1.4 is SpelaionDB 0.17's version: whatever else 0.17 adds to the protocol joins it, with a
+/// constant of its own, rather than another version.
+pub const BATCHED_TABLES: Version = Version { major: 1, minor: 4 };
 
 /// How many record batches a plugin may have sent on a stream without credit given back, when
 /// it has no reason to choose otherwise.

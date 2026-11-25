@@ -619,6 +619,11 @@ impl Connection for Tracked {
         self.observe(self.inner.list_columns(schema).await)
     }
 
+    async fn describe_tables(&self, schema: &str) -> Result<Option<Vec<TableInfo>>> {
+        let _busy = self.activity.begin().await;
+        self.observe(self.inner.describe_tables(schema).await)
+    }
+
     async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.insert_rows(target, rows).await)

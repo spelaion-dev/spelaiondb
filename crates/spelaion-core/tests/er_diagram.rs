@@ -298,6 +298,42 @@ async fn schemas_tables_and_focus_on_every_engine() {
             fixture("shop.dbml", &dbml(&model));
         }
 
+        // The schema's tables in one catalog call, where the engine (or its plugin's protocol)
+        // has one (SDB-220): each is exactly what describe_table says, and the diagram is the one
+        // the same tables make when each is described on its own.
+        match conn.describe_tables(schema).await {
+            Ok(Some(batched)) => {
+                for table in &batched {
+                    let one = conn
+                        .describe_table(schema, &table.object.name)
+                        .await
+                        .unwrap_or_else(|e| panic!("{label}: {e}"));
+                    assert_eq!(*table, one, "{label}: {}", table.object.name);
+                }
+                eprintln!("{label}: {} tables read in one catalog call", batched.len());
+            }
+            Ok(None) => eprintln!("{label}: no batched read, each table described on its own"),
+            Err(e) => panic!("{label}: {e}"),
+        }
+        let one_by_one = read_er_model(
+            conn.as_ref(),
+            &DiagramScope::Tables {
+                tables: model
+                    .tables
+                    .iter()
+                    .map(|t| TableName {
+                        schema: t.schema.clone(),
+                        name: t.name.clone(),
+                    })
+                    .collect(),
+            },
+            |_| {},
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(one_by_one.tables, model.tables, "{label}");
+        assert_eq!(one_by_one.relations, model.relations, "{label}");
+
         // Chosen tables: the key to a table left out is counted, not drawn.
         let chosen = |name: &str| TableName {
             schema: customer.schema.clone(),
@@ -430,6 +466,30 @@ async fn a_200_table_schema_is_laid_out_once() {
     let read = started.elapsed();
     assert_eq!(model.tables.len(), 200);
     assert!(model.relations.len() > 200, "{}", model.relations.len());
+    // The same 200 tables described one by one, as before the batched read (SDB-220).
+    let started = Instant::now();
+    let one_by_one = read_er_model(
+        conn.as_ref(),
+        &DiagramScope::Tables {
+            tables: model
+                .tables
+                .iter()
+                .map(|t| TableName {
+                    schema: t.schema.clone(),
+                    name: t.name.clone(),
+                })
+                .collect(),
+        },
+        |_| {},
+    )
+    .await
+    .expect("reading the catalog");
+    let read_one_by_one = started.elapsed();
+    assert_eq!(one_by_one.tables, model.tables);
+    eprintln!(
+        "200 tables: read in {read:?} as a schema (one catalog call), \
+         {read_one_by_one:?} one table at a time"
+    );
 
     let started = Instant::now();
     let layout = er_layout(&model, &all_options(), &METRICS);

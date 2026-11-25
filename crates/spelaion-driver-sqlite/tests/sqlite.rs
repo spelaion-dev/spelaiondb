@@ -663,6 +663,60 @@ async fn describes_named_and_unnamed_checks_in_sqlite_tables() {
     assert!(view.constraints.is_empty());
 }
 
+/// Every table of a schema in five catalog queries (SDB-220) is each table exactly as
+/// `describe_table` describes it: composite and implicit keys (a key to a table written in
+/// another case), unique constraints, indexes, CHECK constraints, generated and quoted
+/// columns, a table without rowid, in an attached schema whose name needs quoting; views and
+/// SQLite's own tables are not tables.
+#[tokio::test]
+async fn describe_tables_is_describe_table_for_every_table() {
+    let db = TempDb::new("batched");
+    let conn = open(&db).await;
+    exec_all(
+        &*conn,
+        r#"attach ':memory:' as "it's here";
+           create table "it's here".customer (
+               id integer primary key, email text unique, "first ""name""" text default 'x',
+               age integer check (age >= 0)
+           );
+           create table "it's here"."Order" (
+               id integer, n integer, customer_id integer references CUSTOMER,
+               total numeric not null, double_total numeric generated always as (total * 2),
+               primary key (id, n), unique (customer_id, n), constraint big check (total < 1e9)
+           ) without rowid;
+           create index "it's here".order_total on "Order" (total desc);
+           create table "it's here".line (
+               order_id integer, order_n integer, sku text,
+               foreign key (order_id, order_n) references "order" (id, n)
+           );
+           create table "it's here".lonely (x);
+           create view "it's here".summary as select * from line;
+           create table "it's here".gone_ref (y integer references missing);
+           analyze "it's here";"#,
+    )
+    .await;
+
+    let batched = conn
+        .describe_tables("it's here")
+        .await
+        .unwrap()
+        .expect("SQLite reads every table at once");
+    let names: Vec<_> = batched.iter().map(|t| t.object.name.as_str()).collect();
+    assert_eq!(names, ["Order", "customer", "gone_ref", "line", "lonely"]);
+    for table in &batched {
+        let one = conn
+            .describe_table("it's here", &table.object.name)
+            .await
+            .unwrap();
+        assert_eq!(*table, one, "{}", table.object.name);
+    }
+    // Order's implicit key to CUSTOMER found customer's primary key, ignoring case.
+    let order = &batched[0];
+    assert_eq!(order.foreign_keys[0].referenced_columns, ["id"]);
+    // An empty schema has no tables, which is not "no batched read".
+    assert_eq!(conn.describe_tables("temp").await.unwrap(), Some(vec![]));
+}
+
 /// A relation's properties and dependencies (SDB-393): what SQLite records, and what it does
 /// not said so rather than shown as nothing.
 #[tokio::test]

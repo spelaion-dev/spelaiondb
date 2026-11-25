@@ -17,8 +17,8 @@ use spelaion_driver_api::{
 };
 use spelaion_plugin_protocol::ipc::BatchEncoder;
 use spelaion_plugin_protocol::{
-    BYTES, CATALOG_KINDS, CatalogRequest, Connect, ConnectResult, DETAILS, Execute, InsertRows,
-    REQUESTS, Run, SessionRequest, StreamId, method,
+    BATCHED_TABLES, BYTES, CATALOG_KINDS, CatalogRequest, Connect, ConnectResult, DETAILS, Execute,
+    InsertRows, REQUESTS, Run, SessionRequest, StreamId, method,
 };
 use tokio::sync::mpsc;
 
@@ -433,6 +433,19 @@ impl Connection for PluginConnection {
             ..self.catalog()
         };
         self.ask(method::LIST_COLUMNS, request, "columns").await
+    }
+
+    // A plugin older than 1.4 is not asked: the core describes each table, as with a
+    // compiled-in driver that has no batched read (SDB-220).
+    async fn describe_tables(&self, schema: &str) -> Result<Option<Vec<TableInfo>>> {
+        if self.process.info().protocol < BATCHED_TABLES {
+            return Ok(None);
+        }
+        let request = CatalogRequest {
+            schema: Some(schema.to_string()),
+            ..self.catalog()
+        };
+        self.ask(method::DESCRIBE_TABLES, request, "tables").await
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
