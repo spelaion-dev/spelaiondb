@@ -148,6 +148,9 @@ async fn write(
 pub enum RestoreNote {
     /// Its connection was deleted or renamed: the tab has no connection now.
     ConnectionMissing { connection: String },
+    /// Its connection no longer opens the other database it was on (ADR-074, SDB-505): the tab
+    /// is on its connection's own database now.
+    DatabaseMissing { database: String },
     /// Its file is gone: the kept text came back as unsaved.
     FileMissing,
     /// Its file could not be read: the kept text came back as unsaved.
@@ -166,6 +169,8 @@ pub struct RestoredTab {
 /// Checks the kept tabs before they are shown again (blocking: it reads their files).
 ///
 /// - A connection for which `connection_exists` says no is taken off the tab, with a note.
+/// - The other database it was on, if `database_opened` says its connection no longer opens
+///   it, is taken off the tab, with a note: it comes back on its connection's own database.
 /// - A file tab without unsaved changes is read again from disk, so it shows the file as it is
 ///   now; if that fails, its kept text comes back as unsaved, with a note.
 /// - A file tab with unsaved changes keeps its text; a note says if the file changed since.
@@ -175,6 +180,7 @@ pub struct RestoredTab {
 pub fn restore_tabs(
     saved: SavedTabs,
     connection_exists: impl Fn(&str) -> bool,
+    database_opened: impl Fn(&str, &str) -> bool,
 ) -> (Vec<RestoredTab>, Option<usize>) {
     let active = saved.active.filter(|i| *i < saved.tabs.len());
     let tabs = saved
@@ -188,6 +194,14 @@ pub fn restore_tabs(
                 } else {
                     notes.push(RestoreNote::ConnectionMissing { connection });
                 }
+            }
+            // A database is only ever of a connection: without one it goes with it.
+            match (tab.connection.as_deref(), tab.database.take()) {
+                (Some(connection), Some(database)) if database_opened(connection, &database) => {
+                    tab.database = Some(database);
+                }
+                (Some(_), Some(database)) => notes.push(RestoreNote::DatabaseMissing { database }),
+                (None, _) | (_, None) => {}
             }
             if let Some(file) = tab.file.as_mut() {
                 let path = Path::new(&file.path);
@@ -368,6 +382,49 @@ mod tests {
         }
     }
 
+    /// ADR-074, SDB-505: a tab keeps the other database it was on while its connection still
+    /// opens it; otherwise it comes back on the connection's own database, with a note.
+    #[test]
+    fn restore_keeps_a_tabs_database_or_says_it_is_gone() {
+        let on = |database: &str| SavedTab {
+            connection: Some("tenants".into()),
+            database: Some(database.into()),
+            ..console("select 1;")
+        };
+        let saved = SavedTabs {
+            tabs: vec![
+                on("billing"),
+                on("closed"),
+                SavedTab {
+                    connection: Some("~/deleted".into()),
+                    ..on("billing")
+                },
+            ],
+            active: Some(0),
+        };
+        let (restored, _) = restore_tabs(
+            saved,
+            |id| id == "tenants",
+            |id, database| id == "tenants" && database == "billing",
+        );
+        assert_eq!(restored[0].tab.database.as_deref(), Some("billing"));
+        assert!(restored[0].notes.is_empty());
+        assert_eq!(restored[1].tab.connection.as_deref(), Some("tenants"));
+        assert_eq!(restored[1].tab.database, None);
+        assert_eq!(
+            restored[1].notes,
+            [RestoreNote::DatabaseMissing {
+                database: "closed".into()
+            }]
+        );
+        // Without its connection, its database goes too, under the connection's note.
+        assert_eq!(restored[2].tab.database, None);
+        assert!(matches!(
+            restored[2].notes[..],
+            [RestoreNote::ConnectionMissing { .. }]
+        ));
+    }
+
     #[test]
     fn restore_keeps_the_text_of_a_tab_whose_connection_is_gone() {
         let saved = SavedTabs {
@@ -386,7 +443,7 @@ mod tests {
             ],
             active: Some(2),
         };
-        let (restored, active) = restore_tabs(saved, |id| id == "shop");
+        let (restored, active) = restore_tabs(saved, |id| id == "shop", |_, _| true);
         assert_eq!(active, Some(2));
         assert_eq!(restored.len(), 3);
         assert_eq!(restored[0].tab.text, "select * from orders;");
@@ -409,6 +466,7 @@ mod tests {
                 active: Some(5),
             },
             |_| true,
+            |_, _| true,
         );
         assert_eq!(active, None);
     }
@@ -439,7 +497,7 @@ mod tests {
             ],
             active: Some(1),
         };
-        let (restored, _) = restore_tabs(saved, |_| true);
+        let (restored, _) = restore_tabs(saved, |_| true, |_, _| true);
 
         // Clean: the file as it is now, in its new format, still clean.
         let tab = &restored[0];

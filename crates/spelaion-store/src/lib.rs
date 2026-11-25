@@ -280,6 +280,31 @@ const MIGRATIONS: &[&str] = &["create table audit (
     "alter table audit add column folder text;",
     // Saved ER diagrams (ADR-084).
     er_diagrams::MIGRATION,
+    // A PostgreSQL connection's other databases (ADR-074, SDB-505): bookmarks are kept per
+    // database, empty for the connection's own, and a kept tab says which database it was
+    // connected to (none: its connection's own). SQLite cannot change a primary key: the
+    // bookmarks' table is made again with the database in it and every row copied as it was,
+    // its database empty, so what a row meant it still means.
+    "create table explorer_bookmarks_by_database (
+        workspace   text not null,
+        connection  text not null,
+        database    text not null default '',
+        schema      text not null,
+        name        text not null,
+        kind        text not null,
+        detail      text not null,
+        created_ms  integer not null,
+        primary key (workspace, connection, database, schema, name, kind, detail)
+    );
+    insert into explorer_bookmarks_by_database
+        (workspace, connection, database, schema, name, kind, detail, created_ms)
+        select workspace, connection, '', schema, name, kind, detail, created_ms
+        from explorer_bookmarks;
+    drop table explorer_bookmarks;
+    alter table explorer_bookmarks_by_database rename to explorer_bookmarks;
+    alter table open_tabs add column database text check (length(database) > 0);",
+    // The same for a table's filters (`table_filters.rs`).
+    table_filters::BY_DATABASE,
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -763,6 +788,9 @@ fn patterns_of(lines: &str) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bookmark {
     pub connection: String,
+    /// The other database of the connection it is in (ADR-074, SDB-505); `None` for the
+    /// connection's own, as every bookmark made before databases had a level.
+    pub database: Option<String>,
     /// The schema the object is in, or the schema itself (with an empty `name`).
     pub schema: String,
     pub name: String,
@@ -1642,9 +1670,9 @@ impl Store {
     /// Bookmarks an object; bookmarking it again changes nothing.
     pub fn add_bookmark(&self, workspace: &str, bookmark: &Bookmark) -> Result<(), StoreError> {
         self.conn.execute(
-            "insert into explorer_bookmarks (workspace, connection, schema, name, kind, detail,
-                                             created_ms)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "insert into explorer_bookmarks (workspace, connection, database, schema, name, kind,
+                                             detail, created_ms)
+             values (?1, ?2, ?8, ?3, ?4, ?5, ?6, ?7)
              on conflict do nothing",
             params![
                 workspace,
@@ -1653,7 +1681,8 @@ impl Store {
                 bookmark.name,
                 bookmark.kind.as_str(),
                 bookmark.detail,
-                now_ms()
+                now_ms(),
+                bookmark.database.as_deref().unwrap_or("")
             ],
         )?;
         Ok(())
@@ -1667,15 +1696,16 @@ impl Store {
     ) -> Result<bool, StoreError> {
         Ok(self.conn.execute(
             "delete from explorer_bookmarks
-             where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4
-               and kind = ?5 and detail = ?6",
+             where workspace = ?1 and connection = ?2 and database = ?7 and schema = ?3
+               and name = ?4 and kind = ?5 and detail = ?6",
             params![
                 workspace,
                 bookmark.connection,
                 bookmark.schema,
                 bookmark.name,
                 bookmark.kind.as_str(),
-                bookmark.detail
+                bookmark.detail,
+                bookmark.database.as_deref().unwrap_or("")
             ],
         )? > 0)
     }
@@ -1683,8 +1713,8 @@ impl Store {
     /// A workspace's bookmarks, by connection, schema and name.
     pub fn bookmarks(&self, workspace: &str) -> Result<Vec<Bookmark>, StoreError> {
         let mut statement = self.conn.prepare(
-            "select connection, schema, name, kind, detail from explorer_bookmarks
-             where workspace = ?1 order by connection, schema, name, kind, detail",
+            "select connection, schema, name, kind, detail, database from explorer_bookmarks
+             where workspace = ?1 order by connection, database, schema, name, kind, detail",
         )?;
         let rows = statement.query_map([workspace], |r| {
             let kind: String = r.get(3)?;
@@ -1693,6 +1723,7 @@ impl Store {
             };
             Ok(Some(Bookmark {
                 connection: r.get(0)?,
+                database: Some(r.get::<_, String>(5)?).filter(|d| !d.is_empty()),
                 schema: r.get(1)?,
                 name: r.get(2)?,
                 kind,
@@ -3542,6 +3573,7 @@ mod tests {
         };
         let bookmark = |connection: &str| Bookmark {
             connection: connection.into(),
+            database: None,
             schema: "public".into(),
             name: "orders".into(),
             kind: BookmarkKind::Table,
@@ -3640,6 +3672,7 @@ mod tests {
         let store = Store::open(&path).unwrap();
         let orders = Bookmark {
             connection: "shop".into(),
+            database: None,
             schema: "public".into(),
             name: "orders".into(),
             kind: BookmarkKind::Table,
@@ -3671,6 +3704,91 @@ mod tests {
         drop(store);
         let reopened = Store::open(&path).unwrap();
         assert_eq!(reopened.bookmarks("/repo").unwrap(), [orders]);
+    }
+
+    /// ADR-074, SDB-505: a same-named table of two databases of one connection is two
+    /// bookmarks, and the connection's own database is the one bookmarks always had.
+    #[test]
+    fn bookmarks_of_two_databases_of_a_connection_are_kept_apart() {
+        let store = Store::open(&temp("bookmarks-by-database")).unwrap();
+        let own = Bookmark {
+            connection: "tenants".into(),
+            database: None,
+            schema: "public".into(),
+            name: "orders".into(),
+            kind: BookmarkKind::Table,
+            detail: String::new(),
+        };
+        let billing = Bookmark {
+            database: Some("billing".into()),
+            ..own.clone()
+        };
+        store.add_bookmark("/repo", &own).unwrap();
+        store.add_bookmark("/repo", &billing).unwrap();
+        assert_eq!(
+            store.bookmarks("/repo").unwrap(),
+            [own.clone(), billing.clone()]
+        );
+        assert!(store.remove_bookmark("/repo", &billing).unwrap());
+        assert_eq!(store.bookmarks("/repo").unwrap(), [own]);
+    }
+
+    /// ADR-074, SDB-505: a store written before databases had a level keeps every bookmark,
+    /// table filter and kept tab, each on its connection's own database.
+    #[test]
+    fn a_store_from_before_databases_keeps_its_rows_on_the_connections_own_database() {
+        let path = temp("by-database-upgrade");
+        let before = MIGRATIONS.len() - 2;
+        {
+            let conn = Connection::open(&path).unwrap();
+            for migration in &MIGRATIONS[..before] {
+                conn.execute_batch(migration).unwrap();
+            }
+            conn.pragma_update(None, "user_version", before as i64)
+                .unwrap();
+            conn.execute_batch(
+                "insert into explorer_bookmarks values ('/repo', 'shop', 'public', 'orders', 'table', '', 1);
+                 insert into table_filter_history values ('/repo', 'shop', 'public', 'orders', 'id > 1', 2);
+                 insert into table_filter_defaults values ('/repo', 'shop', 'public', 'orders', 'id > 1');
+                 insert into open_tabs (workspace, position, active, text, connection, pinned)
+                     values ('/repo', 0, 1, 'select 1', 'shop', 0);",
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.bookmarks("/repo").unwrap(),
+            [Bookmark {
+                connection: "shop".into(),
+                database: None,
+                schema: "public".into(),
+                name: "orders".into(),
+                kind: BookmarkKind::Table,
+                detail: String::new(),
+            }]
+        );
+        let table = FilteredTable {
+            workspace: "/repo".into(),
+            connection: "shop".into(),
+            database: None,
+            schema: "public".into(),
+            name: "orders".into(),
+        };
+        assert_eq!(store.table_filter_history(&table).unwrap(), ["id > 1"]);
+        assert_eq!(
+            store.table_default_filter(&table).unwrap().as_deref(),
+            Some("id > 1")
+        );
+        let tabs = store.open_tabs("/repo").unwrap();
+        assert_eq!(tabs.tabs[0].connection.as_deref(), Some("shop"));
+        assert_eq!(tabs.tabs[0].database, None);
+        // Another database of the same connection has nothing of the own one's.
+        let billing = FilteredTable {
+            database: Some("billing".into()),
+            ..table
+        };
+        assert!(store.table_filter_history(&billing).unwrap().is_empty());
+        assert_eq!(store.table_default_filter(&billing).unwrap(), None);
     }
 
     #[test]

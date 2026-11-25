@@ -135,8 +135,8 @@ pub(crate) async fn restore_tabs_for_workspace(
             config
                 .connections
                 .iter()
-                .map(|c| c.id.to_string())
-                .collect::<std::collections::HashSet<_>>(),
+                .map(|c| (c.id.to_string(), c.file.clone()))
+                .collect::<std::collections::HashMap<_, _>>(),
         )
     };
     let saved = state
@@ -149,10 +149,20 @@ pub(crate) async fn restore_tabs_for_workspace(
         .reconnect_on_start()
         .await
         .map_err(|e| e.to_string())?;
-    let (tabs, active) =
-        tokio::task::spawn_blocking(move || restore_tabs(saved, |id| connections.contains(id)))
-            .await
-            .map_err(|e| e.to_string())?;
+    let (tabs, active) = tokio::task::spawn_blocking(move || {
+        restore_tabs(
+            saved,
+            |id| connections.contains_key(id),
+            // Which database a connection still opens is the core's rule (ADR-074).
+            |id, database| {
+                connections
+                    .get(id)
+                    .is_some_and(|file| spelaion_core::file_opens_database(file, database))
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(RestoredTabsItem {
         scope,
         tabs: tabs
