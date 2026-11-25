@@ -588,7 +588,8 @@ pub fn copy_stdio(sql: &str) -> Option<CopyStdio> {
             RegionKind::String | RegionKind::QuotedName | RegionKind::QuotedBody => {
                 words.push(String::new());
             }
-            RegionKind::Comment => {}
+            // PostgreSQL's scanner gives no executable comments: MySQL's.
+            RegionKind::Comment | RegionKind::ExecutableComment => {}
             // A meta-command line only comes before any word: psql's, not a COPY.
             RegionKind::MetaLine { .. } => return None,
             RegionKind::StatementEnd { .. } | RegionKind::CopyData | RegionKind::CopyEnd => break,
