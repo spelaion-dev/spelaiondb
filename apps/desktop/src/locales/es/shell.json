@@ -441,6 +441,7 @@
     "failed": "No se ha podido cambiar la cuenta: {{detail}}"
   },
   "privileges": {
+    "database": "Permisos en la base de datos",
     "menu": "Privilegios…",
     "title": "Privilegios de {{name}}",
     "has": "Lo que tiene",

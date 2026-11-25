@@ -473,10 +473,13 @@ function useObjectActions(session: string, enabled = true): ObjectActionsItem | 
 }
 
 /** Opens the backup or restore dialog of a connection the explorer has open (ADR-049). */
-function openBackup(connection: ConnectionItem, session: string, mode: "backup" | "restore") {
+/** Backup or restore of the connection's database, or of `database`, another one it opens
+ *  (ADR-074, SDB-506): `session` is that database's, and the dialog names it. */
+function openBackup(connection: ConnectionItem, session: string, mode: "backup" | "restore", database: string | null = null) {
   const family = backupFamily(connection.engine);
   if (!family) return;
-  useBackup.getState().open({ session, connection: keyOf(connection), connectionName: connection.name, family, mode });
+  const connectionName = database === null ? connection.name : `${connection.name} · ${database}`;
+  useBackup.getState().open({ session, connection: keyOf(connection), connectionName, family, mode });
 }
 
 /** "New table", "New view"…: the core's statement, to finish in a new tab (ADR-026). */
@@ -2072,6 +2075,7 @@ function ConnectionNode({
   const databaseNodes = databases !== null && databases.kind !== "own" && databases.databases.map((database) => (
     <DatabaseNode
       key={database.name}
+      connection={connection}
       identity={key}
       ownSession={session}
       database={database}
@@ -2273,7 +2277,7 @@ function ConnectionNode({
         </div>
       )}
       {account?.action === "privileges" && (
-        <PrivilegesDialog session={session} identity={key} target={account.target} onClose={() => setAccount(null)} />
+        <PrivilegesDialog session={session} identity={key} target={account.target} databases={databases !== null && databases.kind !== "own" ? databases.databases : null} onClose={() => setAccount(null)} />
       )}
       {account && account.action !== "privileges" && (
         <AccountDialog
@@ -2318,6 +2322,7 @@ function ConnectionNode({
  * entries are that database's, and a tab opened from them connects to that database.
  */
 function DatabaseNode({
+  connection,
   identity,
   ownSession,
   database,
@@ -2330,6 +2335,7 @@ function DatabaseNode({
   onConfigureFilter,
   onFilterName,
 }: {
+  connection: ConnectionItem;
   /** The connection's own identity. */
   identity: ConnectionKey;
   /** The connection's explorer session, on its own database. */
@@ -2508,6 +2514,16 @@ function DatabaseNode({
       {menu && (
         <ObjectMenu at={menu} label={t("databases.menu", { name: database.name })}>
           <button type="button" role="menuitem" autoFocus onClick={() => { setMenu(null); void newQuery(); }}>{t("newQuery")}</button>
+          {/* Backup and restore of this database, through the connection's route (SDB-506). */}
+          {backupFamily(connection.engine) && (
+            <button type="button" role="menuitem" onClick={() => { setMenu(null); void (async () => { if (await expand()) openBackup(connection, session, "backup", own ? null : database.name); })(); }}>{t("editor:backup.menu")}</button>
+          )}
+          {(() => {
+            const family = backupFamily(connection.engine);
+            return family && familyRestores(family) ? (
+              <button type="button" role="menuitem" onClick={() => { setMenu(null); void (async () => { if (await expand()) openBackup(connection, session, "restore", own ? null : database.name); })(); }}>{t("editor:restoreDb.menu")}</button>
+            ) : null;
+          })()}
           {!own && schemas && (
             <button type="button" role="menuitem" onClick={() => { setMenu(null); disconnect(); }}>{t("databases.disconnect")}</button>
           )}

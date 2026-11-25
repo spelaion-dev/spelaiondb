@@ -7369,6 +7369,21 @@ try {
     await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
     await page.locator(".tabbar .tab.active .close").click();
 
+    // SDB-506: backup and restore from a database's row act on that database, and say so.
+    await gis.click({ button: "right" });
+    await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "Back up…", exact: true }).click();
+    const gisBackup = page.getByRole("dialog", { name: "Back up PG all databases · spelaion_gis" });
+    await gisBackup.waitFor();
+    await shot("sdb-506-backup-database");
+    await gisBackup.getByRole("button", { name: "Close", exact: true }).click();
+    await gisBackup.waitFor({ state: "detached" });
+    await gis.click({ button: "right" });
+    await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "Restore…", exact: true }).click();
+    const gisRestore = page.getByRole("dialog", { name: "Restore into PG all databases · spelaion_gis" });
+    await gisRestore.waitFor();
+    await gisRestore.getByRole("button", { name: "Close", exact: true }).click();
+    await gisRestore.waitFor({ state: "detached" });
+
     // Disconnecting from its row closes its session; deleting the connection closes the rest.
     await gis.click({ button: "right" });
     await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "Disconnect", exact: true }).click();

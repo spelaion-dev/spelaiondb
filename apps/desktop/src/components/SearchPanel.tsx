@@ -25,7 +25,7 @@ import { startJob, type Job } from "../jobs";
 import { ended, failed, markCancelling, searching, startedRun, withEvent, type SearchedTable, type SearchRun } from "../searchRun";
 import { useApp } from "../store";
 import { explorerSessionOpen } from "../tabState";
-import { connectionKey, connectionOfTag, connectionTag, keyOf, sameConnection, tabKey, type ConnectionKey } from "../connectionKey";
+import { connectionKey, connectionOfTag, connectionTag, databaseOf, keyOf, listedConnection, sameConnection, tabKey, type ConnectionKey } from "../connectionKey";
 import { openFound } from "./OpenObjectDialog";
 import { HideSidePanelButton } from "./SidePanelButtons";
 
@@ -245,16 +245,24 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   }, []);
 
   const list = useMemo(() => searchCatalog(Object.values(schemas)), [schemas]);
-  const choices = useMemo(
-    // The data search writes a SELECT per table: only engines queried with SQL (ADR-056).
-    () => connections.filter((c) => c.sql && explorerSessionOpen(connected, keyOf(c)) && list.some((s) => s.connection === connectionTag(keyOf(c)))),
-    [connections, connected, list],
-  );
+  // Each connection, and each other database of one that opens several (ADR-074, SDB-506), whose
+  // tables the explorer has read: the search runs in that database's session, and says which.
+  const choices = useMemo(() => {
+    const tags = [...new Set(list.map((s) => s.connection))];
+    return tags.flatMap((tag) => {
+      const key = connectionOfTag(tag);
+      const listed = key === null ? undefined : listedConnection(connections, key);
+      // The data search writes a SELECT per table: only engines queried with SQL (ADR-056).
+      if (key === null || !listed?.sql || !explorerSessionOpen(connected, key)) return [];
+      const database = databaseOf(key);
+      return [{ tag, key, name: database === null ? listed.name : `${listed.name} · ${database}` }];
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }, [connections, connected, list]);
   // The active tab's connection first, then the first one with tables loaded.
   useEffect(() => {
-    if (choices.some((c) => connectionTag(keyOf(c)) === connectionTagValue)) return;
-    const next = choices.find((c) => activeConnection !== null && sameConnection(keyOf(c), connectionKey(activeConnection))) ?? choices[0];
-    setConnectionTagValue(next ? connectionTag(keyOf(next)) : "");
+    if (choices.some((c) => c.tag === connectionTagValue)) return;
+    const next = choices.find((c) => activeConnection !== null && databaseOf(c.key) === null && sameConnection(c.key, connectionKey(activeConnection))) ?? choices[0];
+    setConnectionTagValue(next ? next.tag : "");
     setChosen(new Set());
   }, [choices, connectionTagValue, activeConnection]);
 
@@ -371,7 +379,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
           <label className="modal-field search-field">
             <span>{t("search.connection")}</span>
             <select value={connectionTagValue} disabled={running} onChange={(e) => { setConnectionTagValue(e.target.value); setChosen(new Set()); }}>
-              {choices.map((c) => <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))}>{c.name}</option>)}
+              {choices.map((c) => <option key={c.tag} value={c.tag}>{c.name}</option>)}
             </select>
           </label>
           <fieldset className="search-tables" disabled={running}>

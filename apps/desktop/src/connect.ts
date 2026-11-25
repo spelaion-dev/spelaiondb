@@ -297,7 +297,7 @@ export async function openTabSession(tabId: string, connection: ConnectionKey): 
 
 /** The database a tab connected from `source` is on: the explorer session's database, or the
  *  database of the tab `source` is (ADR-074, SDB-505); null for the connection's own. */
-function sourceDatabase(source: string): string | null {
+export function sourceDatabase(source: string): string | null {
   const explorer = explorerConnectionOf(source);
   if (explorer !== null) return databaseOf(explorer);
   return useApp.getState().tabs.find((tab) => tab.id === source)?.database ?? null;

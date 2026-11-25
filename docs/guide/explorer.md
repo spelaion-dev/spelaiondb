@@ -14,8 +14,12 @@ A PostgreSQL connection that opens other databases of its server (its file names
 under it, its databases, its own first, each with its schemas and its **Extensions**.
 **Roles** and **Tablespaces** belong to the server and stay under the connection. Another
 database connects only when its row is first expanded, in a session of its own with the
-connection's settings, and its row's menu has **New query** (a tab on that database) and
-**Disconnect**. A database that another connection with the same login has as its own shows
+connection's settings, and its row's menu has **New query** (a tab on that database),
+**Back up…** and **Restore…** (of that database, through the connection's route, and refused
+on a read-only connection as for its own) and **Disconnect**. A diagram or table details
+opened under it read that database, the data search lists it as "connection · database", and
+a role's **Privileges** dialog has **Grants in database** to read and change the grants of
+another database it has open; each dialog names the database it acts on. A database that another connection with the same login has as its own shows
 **Open in** that connection instead: it opens there, with that connection's settings. A
 connection that names no other database looks as it always did. If the server's databases
 cannot be listed (an older PostgreSQL plugin), its own database is shown and the reason

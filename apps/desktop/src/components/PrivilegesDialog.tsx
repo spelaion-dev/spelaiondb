@@ -4,12 +4,14 @@
 // The core writes the GRANT or REVOKE, the dialog shows it, and it runs as shown.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { listedConnection, type ConnectionKey } from "../connectionKey";
+import { listedConnection, onDatabase, type ConnectionKey } from "../connectionKey";
+import { explorerSession } from "../windowContext";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands } from "../api";
 import type {
   AlterationPreviewItem,
+  ExplorerDatabaseItem_Serialize as ExplorerDatabaseItem,
   GrantedPrivilegeItem,
   PrincipalTargetItem,
   PrivilegeChangeItem,
@@ -44,15 +46,43 @@ function placeOf(target: PrivilegeTargetItem, t: TFunction<"shell">): string {
   return target.columns.length > 0 ? `${place} (${target.columns.join(", ")})` : place;
 }
 
-export function PrivilegesDialog({ session, identity, target, onClose }: {
+export function PrivilegesDialog({ session, identity, target, databases = null, onClose }: {
+  /** The connection's explorer session, on its own database. */
   session: string;
   identity: ConnectionKey;
   target: PrincipalTargetItem;
+  /** A PostgreSQL connection that opens several databases (ADR-074, SDB-506): the databases
+   *  whose grants can be read and changed here. Roles are the server's; grants are of one
+   *  database, read and written in that database's session. Null for one database. */
+  databases?: ExplorerDatabaseItem[] | null;
   onClose(): void;
 }) {
   const { t } = useTranslation("shell");
   const connection = useApp((s) => listedConnection(s.connections, identity));
   const ids = useId();
+  /** The database whose grants are shown (null: the connection's own), and its session. */
+  const [grantsDatabase, setGrantsDatabase] = useState<string | null>(null);
+  const [grantsSession, setGrantsSession] = useState(session);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const choosable = (databases ?? []).filter((d) => !d.ownedBy);
+  /** Another database: its explorer session, opened through the core if it is not yet. */
+  async function chooseDatabase(name: string) {
+    const own = choosable.find((d) => d.own)?.name ?? null;
+    setDatabaseError(null);
+    if (name === own) {
+      setGrantsDatabase(null);
+      setGrantsSession(session);
+      return;
+    }
+    const other = explorerSession(onDatabase(identity, name));
+    try {
+      await call(commands.connectDatabase(session, other, name));
+      setGrantsDatabase(name);
+      setGrantsSession(other);
+    } catch (e) {
+      setDatabaseError(message(e));
+    }
+  }
   const [scopes, setScopes] = useState<PrivilegeScopeInfoItem[] | null>(null);
   const [granted, setGranted] = useState<GrantedPrivilegeItem[] | null>(null);
   const [grantedError, setGrantedError] = useState<string | null>(null);
@@ -69,7 +99,7 @@ export function PrivilegesDialog({ session, identity, target, onClose }: {
 
   useEffect(() => {
     let current = true;
-    call(commands.privilegeScopes(session, target.kind))
+    call(commands.privilegeScopes(grantsSession, target.kind))
       .then((answer) => {
         if (!current) return;
         setScopes(answer);
@@ -77,14 +107,14 @@ export function PrivilegesDialog({ session, identity, target, onClose }: {
       })
       .catch((e: unknown) => { if (current) setGrantedError(message(e)); });
     return () => { current = false; };
-  }, [session, target.kind]);
+  }, [grantsSession, target.kind]);
 
   const readGranted = useCallback(() => {
     setGrantedError(null);
-    call(commands.principalPrivileges(session, target))
+    call(commands.principalPrivileges(grantsSession, target))
       .then(setGranted)
       .catch((e: unknown) => { setGranted([]); setGrantedError(message(e)); });
-  }, [session, target]);
+  }, [grantsSession, target]);
   useEffect(readGranted, [readGranted]);
 
   const info = scopes?.find((s) => s.scope === scope) ?? null;
@@ -105,8 +135,8 @@ export function PrivilegesDialog({ session, identity, target, onClose }: {
   }), [target, scope, info, database, schema, name, columns, chosen, revoke, grantOption, isRole]);
   const key = change === null ? null : JSON.stringify(change);
 
-  const flow = usePreviewThenApply<AlterationPreviewItem>(session, key, 150, (asked) =>
-    call(commands.previewPrivilegeChange(session, JSON.parse(asked) as PrivilegeChangeItem)));
+  const flow = usePreviewThenApply<AlterationPreviewItem>(grantsSession, key, 150, (asked) =>
+    call(commands.previewPrivilegeChange(grantsSession, JSON.parse(asked) as PrivilegeChangeItem)));
   const { preview, busy } = flow;
   const ready = preview.kind === "ready";
   const error = flow.apply.kind === "failed" ? flow.apply.message : null;
@@ -139,7 +169,7 @@ export function PrivilegesDialog({ session, identity, target, onClose }: {
     const confirmed = await confirmShown(connection?.name ?? "", shown);
     if (confirmed === null) return;
     await flow.run(async () => {
-      await call(commands.applyPrivilegeChange(session, change, shown.sql, confirmed));
+      await call(commands.applyPrivilegeChange(grantsSession, change, shown.sql, confirmed));
       setChosen([]);
       readGranted();
       return revoke ? t("privileges.revoked") : t("privileges.granted");
@@ -153,6 +183,15 @@ export function PrivilegesDialog({ session, identity, target, onClose }: {
         onSubmit={(e) => { e.preventDefault(); if (ready && !readOnly && !busy) void apply(); }}
         onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); if (!busy) onClose(); } }}>
         <h2>{title}</h2>
+        {choosable.length > 1 && (
+          <label className="privileges-database">
+            {t("privileges.database")}
+            <select value={grantsDatabase ?? choosable.find((d) => d.own)?.name ?? ""} disabled={busy} onChange={(e) => void chooseDatabase(e.target.value)}>
+              {choosable.map((d) => <option key={d.name} value={d.name}>{d.own ? t("databases.own", { name: d.name }) : d.name}</option>)}
+            </select>
+          </label>
+        )}
+        {databaseError && <p className="error small" role="alert">{databaseError}</p>}
         <section className="privileges-granted" aria-labelledby={`${ids}-has`}>
           <h3 id={`${ids}-has`}>{t("privileges.has")}</h3>
           {granted === null ? (

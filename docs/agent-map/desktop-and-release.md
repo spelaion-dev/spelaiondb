@@ -211,7 +211,12 @@
   it to its database with `change_tab_database` (the core's `change_session_database`: refused
   mid-run, then `open_other_database`), or leaves it disconnected, never on another database.
   Bookmarks and table filters carry the database (`BookmarkItem.database`, the filters'
-  commands' `database`), empty in the store for the connection's own. `DesktopSession::window` is set from the
+  commands' `database`), empty in the store for the connection's own. What is opened from
+  another database acts on it (SDB-506): `openBackup`'s `database` (the row's session, the
+  dialog's name), `addDiagramTab`'s `database` (from `sourceDatabase`), the ER diagram and table
+  details connect through `openTabSession`, the data search's choices are catalog tags, and
+  `PrivilegesDialog` takes the connection's `databases` and reads and writes grants in the
+  chosen database's explorer session (`connect_database` is a no-op when it is already open). `DesktopSession::window` is set from the
   calling window in `connect` / `connect_from_session`; `close_window_sessions` closes one
   window's sessions. An event meant for one window is sent with `emit_to` and heard with
   `events.x(getCurrentWebviewWindow()).listen` (a plain `listen` hears every target): SSH
