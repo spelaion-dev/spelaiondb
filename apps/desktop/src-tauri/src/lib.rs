@@ -153,6 +153,41 @@ fn config_refs(configs: &[Arc<Config>]) -> Vec<&Config> {
     configs.iter().map(|config| &**config).collect()
 }
 
+/// The open folder (of `open`) whose repository is `root`, as a connection's identity names it.
+fn open_folder_config(open: &[Arc<Config>], root: &str) -> CmdResult<Arc<Config>> {
+    open.iter()
+        .find(|config| spelaion_config::repository_scope(config) == root)
+        .cloned()
+        .ok_or_else(|| format!("the folder {root} is not open"))
+}
+
+/// The connections the explorer lists (ADR-075): every open folder's own, each with its
+/// folder's configuration, then the personal ones once, from `shown` (every folder loads the
+/// same personal layer).
+fn listed_connections(
+    open: &[Arc<Config>],
+    shown: &Arc<Config>,
+) -> Vec<(Arc<Config>, spelaion_config::ConnectionEntry)> {
+    let mut connections = Vec::new();
+    for config in open {
+        for entry in config
+            .connections
+            .iter()
+            .filter(|c| c.id.source == Source::Workspace)
+        {
+            connections.push((config.clone(), entry.clone()));
+        }
+    }
+    for entry in shown
+        .connections
+        .iter()
+        .filter(|c| c.id.source == Source::User)
+    {
+        connections.push((shown.clone(), entry.clone()));
+    }
+    connections
+}
+
 /// A compatible kind recognized by the core when opening the session.
 fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
     open.session.server_family().and_then(|family| {
@@ -257,6 +292,29 @@ impl AppState {
     /// connection reads (ADR-075, `Resolver::with_open_folders`).
     async fn open_configs(&self) -> Vec<Arc<Config>> {
         self.folders.read().await.configs()
+    }
+
+    /// The connection the page named by its identity (ADR-075), in the configuration of the
+    /// open folder it names: a folder's connection in that folder's, a personal one in the
+    /// shown one (every folder loads the same personal layer). Refused when its folder is not
+    /// open, or when that folder has no such connection (`connection_in`).
+    async fn connection_config(
+        &self,
+        key: &ConnectionKeyItem,
+    ) -> CmdResult<(Arc<Config>, ConnectionId)> {
+        let config = self.folder_config(key.folder.as_deref()).await?;
+        let id = connection_in(&config, key)?;
+        Ok((config, id))
+    }
+
+    /// The configuration of the open folder whose repository is `root` (as a connection's
+    /// identity and `OpenFolderItem::root` name it), where a new or imported repository
+    /// connection goes (ADR-075); `None`: the shown folder's. Refused when it is not open.
+    async fn folder_config(&self, root: Option<&str>) -> CmdResult<Arc<Config>> {
+        match root {
+            None => Ok(self.config().await),
+            Some(root) => open_folder_config(&self.open_configs().await, root),
+        }
     }
 
     /// Closes the sessions of the folder of `root` (canonical). Personal connections' sessions
@@ -990,25 +1048,29 @@ async fn accept_change(
 async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<ConnectionItem>> {
     state.reload().await;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let config = state.config().await;
+    let shown = state.config().await;
     let open = state.open_configs().await;
-    let connections = config.connections.clone();
+    let connections = listed_connections(&open, &shown);
     let marks: Vec<_> = {
         let sessions = state.sessions.lock().await;
         connections
             .iter()
-            .map(|entry| {
+            .map(|(config, entry)| {
                 let saved = entry.file.engine_mark();
                 if saved != entry.file.engine.as_str() {
                     return saved.to_owned();
                 }
+                let key = spelaion_config::ConnectionKey::of(config, &entry.id);
                 sessions
                     .values()
-                    .filter(|session| session.open.resolved.id == entry.id)
+                    .filter(|session| {
+                        session.open.resolved.id == entry.id
+                            && session.folder.as_deref() == key.folder()
+                    })
                     .find_map(|session| {
                         let mark = detected_engine_mark(&session.open)?;
                         let opened = session.definition.as_ref()?;
-                        (definition_now(&config, &open, &trust, &entry.id).as_ref() == Some(opened))
+                        (definition_now(config, &open, &trust, &entry.id).as_ref() == Some(opened))
                             .then_some(mark)
                     })
                     .unwrap_or_else(|| saved.to_owned())
@@ -1017,13 +1079,25 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
     };
     let tls_warnings: Vec<Option<TlsWarningItem>> = connections
         .iter()
-        .map(|c| spelaion_core::file_tls_warning(&config, c).map(TlsWarningItem::from))
+        .map(|(config, c)| spelaion_core::file_tls_warning(config, c).map(TlsWarningItem::from))
         .collect();
-    let types = spelaion_config::ConnectionTypes::load(&config, &trust);
-    let workspace = spelaion_config::repository_scope(&config);
-    drop(config);
+    // A folder's connection takes its folder's types; a personal one every open folder's.
+    let personal_types =
+        spelaion_config::ConnectionTypes::load_open(&config_refs(&open), &shown, &trust);
+    drop(shown);
     let mut items = Vec::with_capacity(connections.len());
-    for ((c, tls_warning), engine_mark) in connections.into_iter().zip(tls_warnings).zip(marks) {
+    for (((config, c), tls_warning), engine_mark) in
+        connections.into_iter().zip(tls_warnings).zip(marks)
+    {
+        let workspace = spelaion_config::repository_scope(&config);
+        let folder_types;
+        let types = match c.id.source {
+            Source::User => &personal_types,
+            Source::Workspace => {
+                folder_types = spelaion_config::ConnectionTypes::load(&config, &trust);
+                &folder_types
+            }
+        };
         let scope = match c.id.source {
             Source::User => String::new(),
             Source::Workspace => workspace.clone(),
@@ -1135,8 +1209,7 @@ async fn set_history_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let id = connection_in(&*state.config().await, &connection)?;
-    let config = state.config().await;
+    let (config, id) = state.connection_config(&connection).await?;
     if config.connection(&id).is_none() {
         return Err(format!("unknown connection: {}", connection.id));
     }
@@ -1282,8 +1355,7 @@ async fn connection_scope(
     state: &AppState,
     connection: &ConnectionKeyItem,
 ) -> CmdResult<(String, String)> {
-    let config = state.config().await;
-    let id = connection_in(&config, connection)?;
+    let (config, id) = state.connection_config(connection).await?;
     Ok((
         spelaion_config::ConnectionKey::of(&config, &id).store_scope(),
         id.to_string(),
@@ -1351,15 +1423,25 @@ async fn test_connection(
     let name = draft.name.clone();
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let resolved = {
-        let config = state.config().await;
+        // An edited connection in its own folder's configuration (ADR-075); a new one in the
+        // shown folder's.
+        let (config, edited) = match &editing {
+            Some(key) => {
+                let (config, id) = state.connection_config(key).await?;
+                (config, Some(id))
+            }
+            None => (state.config().await, None),
+        };
         let resolver = Resolver::new(&config, &trust, &SystemBackend);
-        let resolved = match &editing {
-            Some(key) => resolver.resolve_edit(&connection_in(&config, key)?, &draft),
+        let resolved = match &edited {
+            Some(id) => resolver.resolve_edit(id, &draft),
             None => resolver.resolve_draft(&draft),
         };
         match resolved {
-            Err(spelaion_config::ResolveError::Untrusted { .. }) => {
-                return Ok(ConnectionTestOutcome::Untrusted);
+            Err(spelaion_config::ResolveError::Untrusted { root }) => {
+                return Ok(ConnectionTestOutcome::Untrusted {
+                    root: root.display().to_string(),
+                });
             }
             Err(spelaion_config::ResolveError::Changed { root, change }) => {
                 return Ok(ConnectionTestOutcome::changed(root, change));
@@ -1421,17 +1503,19 @@ async fn draft_tls_warning(
 }
 
 /// Saves a new connection file (and, for `keychain`, its password) and reloads the
-/// configuration. Returns the new connection's identifier.
+/// configuration. Returns the new connection's identifier. A repository connection goes into
+/// the open folder `repository` (its root, ADR-075), or the shown one.
 #[command]
 async fn add_connection(
     draft: ConnectionDraftItem,
     password: Option<String>,
+    repository: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let draft = ConnectionDraft::try_from(draft)?;
     let password = password.map(Secret::new);
     let id = {
-        let config = state.config().await;
+        let config = state.folder_config(repository.as_deref()).await?;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
         check_setup_before_saving(&state, &config, &file)?;
         let id =
@@ -1469,12 +1553,15 @@ async fn connection_editor_access(
     connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<EditorAccessOutcome> {
-    let id = connection_in(&*state.config().await, &connection)?;
+    let (config, id) = state.connection_config(&connection).await?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let config = state.config().await;
     match Resolver::new(&config, &trust, &SystemBackend).check_editor_access(id.source, Some(&id)) {
         Ok(()) => Ok(EditorAccessOutcome::Ready),
-        Err(spelaion_config::ResolveError::Untrusted { .. }) => Ok(EditorAccessOutcome::Untrusted),
+        Err(spelaion_config::ResolveError::Untrusted { root }) => {
+            Ok(EditorAccessOutcome::Untrusted {
+                root: root.display().to_string(),
+            })
+        }
         Err(spelaion_config::ResolveError::Changed { root, change }) => {
             Ok(EditorAccessOutcome::Changed {
                 root: root.to_string_lossy().into_owned(),
@@ -1501,8 +1588,7 @@ async fn connection_draft(
     connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<EditedConnectionItem> {
-    let config = state.config().await;
-    let id = connection_in(&config, &connection)?;
+    let (config, id) = state.connection_config(&connection).await?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     Resolver::new(&config, &trust, &SystemBackend)
         .check_editor_access(id.source, Some(&id))
@@ -1535,8 +1621,7 @@ async fn update_connection(
     let draft = ConnectionDraft::try_from(draft)?;
     let password = password.map(Secret::new);
     {
-        let config = state.config().await;
-        let id = connection_in(&config, &connection)?;
+        let (config, id) = state.connection_config(&connection).await?;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
         check_setup_before_saving(&state, &config, &file)?;
         let written = spelaion_config::update_connection_at_revision(
@@ -1579,8 +1664,7 @@ async fn duplicate_connection(
     state: State<'_, AppState>,
 ) -> CmdResult<DuplicatedItem> {
     let duplicated = {
-        let config = state.config().await;
-        let id = connection_in(&config, &connection)?;
+        let (config, id) = state.connection_config(&connection).await?;
         state.change_trust(|trust| {
             spelaion_config::duplicate_connection(&config, trust, &id, &SystemBackend)
         })?
@@ -1603,7 +1687,7 @@ async fn move_connection(
     folder: String,
     state: State<'_, AppState>,
 ) -> CmdResult<MovedItem> {
-    let id = connection_in(&*state.config().await, &connection)?;
+    let (config, id) = state.connection_config(&connection).await?;
     let in_use = state
         .sessions
         .lock()
@@ -1617,8 +1701,7 @@ async fn move_connection(
     state.tabs.flush().await.map_err(|e| e.to_string())?;
     let (moved, workspace) = {
         // Serialize the restriction switch with staging and moving the connection.
-        let folders = state.folders.write().await;
-        let config = folders.shown();
+        let _serialized = state.folders.write().await;
         let destination = spelaion_config::connection_move_target(&config, &id, &folder)
             .map_err(|e| e.to_string())?;
         if destination != id {
@@ -1666,8 +1749,7 @@ async fn copy_connection(
     connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<ClipboardConnectionItem> {
-    let config = state.config().await;
-    let id = connection_in(&config, &connection)?;
+    let (config, id) = state.connection_config(&connection).await?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let copied = spelaion_config::connection_clipboard_text(&config, &trust, &id, &SystemBackend)
         .map_err(|e| e.to_string())?;
@@ -1803,8 +1885,7 @@ async fn delete_connection(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     {
-        let config = state.config().await;
-        let id = connection_in(&config, &connection)?;
+        let (config, id) = state.connection_config(&connection).await?;
         spelaion_config::delete_connection(&config, &id, &SystemBackend)
             .map_err(|e| e.to_string())?;
     }
@@ -1940,10 +2021,14 @@ async fn check_kube_editor(
             editing,
             profile: Some(profile),
         } => {
-            let id = editing
-                .as_ref()
-                .map(|key| connection_in(&config, key))
-                .transpose()?;
+            // An edited connection in its own folder (ADR-075); a new one in the shown folder.
+            let (config, id) = match &editing {
+                Some(key) => {
+                    let (config, id) = state.connection_config(key).await?;
+                    (config, Some(id))
+                }
+                None => (config.clone(), None),
+            };
             let resolver = spelaion_config::Resolver::new(&config, &trust, &SystemBackend);
             resolver
                 .check_editor_access(source_of(personal), id.as_ref())
@@ -1970,10 +2055,14 @@ async fn check_kube_editor(
             editing,
             profile: None,
         } => {
-            let id = editing
-                .as_ref()
-                .map(|key| connection_in(&config, key))
-                .transpose()?;
+            // An edited connection in its own folder (ADR-075); a new one in the shown folder.
+            let (config, id) = match &editing {
+                Some(key) => {
+                    let (config, id) = state.connection_config(key).await?;
+                    (config, Some(id))
+                }
+                None => (config.clone(), None),
+            };
             spelaion_core::kube::editor_spec(
                 &config,
                 &trust,
@@ -2142,10 +2231,9 @@ async fn connect(
     let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
     };
-    let id = connection_in(&*state.config().await, &connection)?;
+    let (config, id) = state.connection_config(&connection).await?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let (resolved, history_workspace, connection_folder, definition) = {
-        let config = state.config().await;
         // A personal connection takes from every open folder only what tightens (ADR-075).
         let open = state.open_configs().await;
         let resolved = match Resolver::new(&config, &trust, &SystemBackend)
@@ -2153,8 +2241,10 @@ async fn connect(
             .resolve(&id)
         {
             Ok(resolved) => resolved,
-            Err(spelaion_config::ResolveError::Untrusted { .. }) => {
-                return Ok(ConnectOutcome::Untrusted);
+            Err(spelaion_config::ResolveError::Untrusted { root }) => {
+                return Ok(ConnectOutcome::Untrusted {
+                    root: root.display().to_string(),
+                });
             }
             Err(spelaion_config::ResolveError::Changed { root, change }) => {
                 return Ok(ConnectOutcome::changed(root, change));
@@ -4725,8 +4815,7 @@ async fn filtered_table(
     schema: String,
     name: String,
 ) -> CmdResult<(spelaion_core::FilteredTable, Arc<dyn Dialect>)> {
-    let id = connection_in(&*state.config().await, &connection)?;
-    let config = state.config().await;
+    let (config, id) = state.connection_config(&connection).await?;
     let entry = config
         .connection(&id)
         .ok_or_else(|| format!("unknown connection: {}", connection.id))?;
@@ -7245,12 +7334,13 @@ pub fn run() {
         .plan
         .as_ref()
         .map(|plan| plan.display().to_string());
-    // Initial folders: the command line's (the page shows one at a time), or the ones open
-    // when the app last ran (ADR-075), each trusted or not as it was.
-    let initial = match &launch_request.folder {
-        Some(folder) => vec![folder.clone()],
-        None => open_folders::remembered(&user_dir),
-    };
+    // Initial folders: the ones open when the app last ran (ADR-075), each trusted or not as it
+    // was, and the command line's added to them (it closes nothing, so nothing is asked); it is
+    // the one shown.
+    let mut initial = open_folders::remembered(&user_dir);
+    if let Some(folder) = &launch_request.folder {
+        initial.push(folder.clone());
+    }
     let folders = open_folders::OpenFolders::open(&user_dir, &initial);
     let workspace = folders.folders().last().map(|folder| folder.path.clone());
     // The folder is open already and the plan has its own way: the rest goes to the page.
@@ -7378,6 +7468,74 @@ pub fn run() {
 #[cfg(test)]
 mod connection_identity_tests {
     use super::*;
+
+    /// Two repositories that both have a connection `orders`, and the personal layer.
+    fn two_folders(name: &str) -> (Arc<Config>, Arc<Config>, PathBuf) {
+        let base = std::env::temp_dir().join(format!("spelaion-two-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let user = base.join("user");
+        for (dir, file, database) in [
+            (base.join("a/.spelaion/connections"), "orders.toml", "a.db"),
+            (base.join("b/.spelaion/connections"), "orders.toml", "b.db"),
+            (user.join("connections"), "local.toml", "local.db"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(file),
+                format!("schema_version = 1\nengine = \"sqlite\"\ndatabase = '{database}'\n"),
+            )
+            .unwrap();
+        }
+        let a = Arc::new(load(Some(&base.join("a")), &user));
+        let b = Arc::new(load(Some(&base.join("b")), &user));
+        (a, b, base)
+    }
+
+    /// ADR-075 (SDB-502): with two folders open that both have `orders`, each identity reaches
+    /// its own folder's connection, a folder that is not open is refused, and the explorer lists
+    /// both `orders` (each with its folder) and the personal connection once.
+    #[test]
+    fn two_folders_with_the_same_id_each_reach_their_own_connection() {
+        let (a, b, base) = two_folders("same-id");
+        let open = vec![a.clone(), b.clone()];
+        let root = |config: &Config| spelaion_config::repository_scope(config);
+        for config in [&a, &b] {
+            let found = open_folder_config(&open, &root(config)).unwrap();
+            assert!(Arc::ptr_eq(&found, config));
+            let id = connection_in(&found, &key(Some(&root(config)), "orders")).unwrap();
+            // Its own file: its own database.
+            let file = &found.connection(&id).unwrap().file_path;
+            assert!(
+                file.starts_with(config.workspace_root.as_ref().unwrap()),
+                "{}",
+                file.display()
+            );
+        }
+        let refused = open_folder_config(&open[..1], &root(&b)).unwrap_err();
+        assert!(refused.contains("is not open"), "{refused}");
+
+        let listed = listed_connections(&open, &a);
+        let ids: Vec<(String, String)> = listed
+            .iter()
+            .map(|(config, entry)| (root(config), entry.id.to_string()))
+            .filter(|(_, id)| id == "orders")
+            .collect();
+        assert_eq!(
+            ids,
+            [(root(&a), "orders".into()), (root(&b), "orders".into())]
+        );
+        let personal = listed
+            .iter()
+            .filter(|(_, e)| e.id.source == Source::User)
+            .count();
+        assert_eq!(personal, 1, "the personal connection once");
+        // One folder open: what it lists is today's list.
+        assert_eq!(
+            listed_connections(&open[..1], &a).len(),
+            a.connections.len()
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
 
     /// A repository with a connection `orders`, and a personal `local` beside it.
     fn folders(name: &str) -> (PathBuf, PathBuf) {

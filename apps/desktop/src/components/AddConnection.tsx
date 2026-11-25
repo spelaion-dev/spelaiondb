@@ -801,11 +801,11 @@ function ConnectionForm(props: {
         test.run((job, onStep) => call(commands.testConnection(request, typedPassword || null, editing ? connectionKey(editing) : null, networkOnly, job, onStep)));
       let outcome = await attempt();
       if (outcome.kind === "untrusted") {
-        if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
+        if (!(await useDialogs.getState().askTrust(outcome.root))) {
           test.clear();
           return;
         }
-        useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
+        useApp.getState().setWorkspace(await call(commands.trustWorkspace(outcome.root)));
         outcome = await attempt();
       }
       // The tunnel this connection uses may have changed in the repository.
@@ -838,7 +838,8 @@ function ConnectionForm(props: {
         if (historyEnabled !== savedHistory) await saveHistoryPreference(editing, historyEnabled);
         await call(commands.updateConnection(connectionKey(editing), request, stored, props.revision ?? ""));
       } else {
-        const id = await call(commands.addConnection(request, stored));
+        // The shown folder until the page offers a choice of folder (SDB-502).
+        const id = await call(commands.addConnection(request, stored, null));
         await refreshConnections();
         // The store remembers it per connection identifier (enabled unless set otherwise).
         const added = useApp.getState().connections.find((c) => c.id === id);

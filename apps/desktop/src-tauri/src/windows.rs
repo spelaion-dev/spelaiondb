@@ -290,7 +290,7 @@ pub async fn open_connection_window(
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     // Only a connection of the folder open gets a window (ADR-075).
-    crate::connection_in(&*state.config().await, &connection)?;
+    state.connection_config(&connection).await?;
     let label = state.windows.add(WindowKind::Connection { connection });
     let size = interface_size(&state).await;
     if let Err(e) = crate::open_window(&app, &label, &title, size) {

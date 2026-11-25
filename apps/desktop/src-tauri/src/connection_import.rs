@@ -243,6 +243,7 @@ pub async fn scan_connections(
     client: String,
     path: Option<String>,
     file_password: Option<String>,
+    repository: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<ImportScan> {
     let client = client_named(&client)?;
@@ -269,7 +270,8 @@ pub async fn scan_connections(
             return Err(e.to_string());
         }
     };
-    let config = state.config().await;
+    // Duplicates are looked for in the folder they would go into (ADR-075, ADR-039).
+    let config = state.folder_config(repository.as_deref()).await?;
     vet_setups(&state, &config, &mut found)?;
     Ok(ImportScan {
         dir: place,
@@ -318,6 +320,10 @@ impl From<ImportAction> for DuplicateAction {
 #[serde(rename_all = "camelCase")]
 pub struct ImportTarget {
     pub personal: bool,
+    /// The open folder repository connections go into (its root, ADR-075); none: the shown
+    /// one. Duplicates are looked for there.
+    #[serde(default)]
+    pub repository: Option<String>,
     pub save_passwords: bool,
     /// A folder to put them in; empty for the top level.
     pub folder: String,
@@ -382,7 +388,12 @@ pub async fn import_connections(
         .into_iter()
         .filter(|c| action_of(&c.id).is_some_and(|a| a != DuplicateAction::Skip))
         .collect();
-    vet_setups(&state, &*state.config().await, &mut chosen)?;
+    let repository = target.repository.clone();
+    vet_setups(
+        &state,
+        &*state.folder_config(repository.as_deref()).await?,
+        &mut chosen,
+    )?;
     let mut report = ImportReport {
         imported: Vec::new(),
         replaced: Vec::new(),
@@ -431,10 +442,13 @@ pub async fn import_connections(
         let brings_setup = !plan.connection.session.setup.is_empty();
         let outcome = import_one(
             &state,
+            Destination {
+                source,
+                repository: repository.as_deref(),
+            },
             client,
             connection,
             plan,
-            source,
             action,
             &tunnel_name,
         )
@@ -475,25 +489,34 @@ struct Done {
 /// Creates the tunnel (unless one with its name exists), then the connection: a new one,
 /// trying `name (Client)`, `name (Client 2)`… when the name is taken, or the existing one it
 /// duplicates, edited in place, for `replace`.
+/// Where an imported connection goes: personal or a repository's, and which open folder's
+/// (ADR-075; `None`: the shown one).
+#[derive(Clone, Copy)]
+struct Destination<'a> {
+    source: Source,
+    repository: Option<&'a str>,
+}
+
 async fn import_one(
     state: &AppState,
+    destination: Destination<'_>,
     client: ImportClient,
     connection: &ImportedConnection,
     plan: spelaion_config::ImportPlan,
-    source: Source,
     action: DuplicateAction,
     tunnel_name: &str,
 ) -> Result<Done, String> {
+    let Destination { source, repository } = destination;
     let mut created_tunnel = false;
     if let Some((tunnel, passwords)) = &plan.tunnel {
         let exists = state
-            .config()
-            .await
+            .folder_config(repository)
+            .await?
             .tunnels
             .iter()
             .any(|t| t.source == source && t.name == tunnel_name);
         if !exists {
-            let config = state.config().await;
+            let config = state.folder_config(repository).await?;
             let file = tunnel.to_file(&config).map_err(|e| e.to_string())?;
             let name = spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
                 .map_err(|e| e.to_string())?;
@@ -506,7 +529,7 @@ async fn import_one(
     }
     if action == DuplicateAction::Replace {
         let replaced = {
-            let config = state.config().await;
+            let config = state.folder_config(repository).await?;
             match spelaion_config::find_duplicate(&config, connection, source) {
                 Some(existing) => {
                     let id = existing.id.clone();
@@ -552,7 +575,7 @@ async fn import_one(
     for name in spelaion_config::import_names(&base, client) {
         draft.name = name;
         let added = {
-            let config = state.config().await;
+            let config = state.folder_config(repository).await?;
             let file = draft.to_file(&config).map_err(|e| e.to_string())?;
             check_setup_before_saving(state, &config, &file)?;
             let result = spelaion_config::add_connection(

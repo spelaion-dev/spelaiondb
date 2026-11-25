@@ -94,7 +94,7 @@ export function ConnectionImport(props: {
     let active = true;
     setScan({ kind: "reading" });
     setImporting({ kind: "idle" });
-    call(commands.scanConnections(props.client, dir, filePassword || null))
+    call(commands.scanConnections(props.client, dir, filePassword || null, null))
       .then((answer) => {
         if (!active) return;
         setDefaultSource(answer.defaultSource);

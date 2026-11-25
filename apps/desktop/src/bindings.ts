@@ -411,9 +411,10 @@ export const commands = {
 	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: ConnectionKeyItem_Deserialize | null, networkOnly: boolean, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, job, onStep })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
-	 *  configuration. Returns the new connection's identifier.
+	 *  configuration. Returns the new connection's identifier. A repository connection goes into
+	 *  the open folder `repository` (its root, ADR-075), or the shown one.
 	 */
-	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<string, string>(__TAURI_INVOKE("add_connection", { draft, password })),
+	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, repository: string | null) => typedError<string, string>(__TAURI_INVOKE("add_connection", { draft, password, repository })),
 	/**  Checks whether an existing connection can be opened in the editor. */
 	connectionEditorAccess: (connection: ConnectionKeyItem_Deserialize) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
 	/**  The form of an existing connection, to edit it. */
@@ -1003,7 +1004,7 @@ export const commands = {
 	 *  (TablePlus's) is opened with `file_password`; without it, or with a wrong one, the scan
 	 *  says so instead of failing.
 	 */
-	scanConnections: (client: string, path: string | null, filePassword: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword })),
+	scanConnections: (client: string, path: string | null, filePassword: string | null, repository: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword, repository })),
 	/**
 	 *  What a client has on this computer, for the import's list (SDB-446): counted by the core
 	 *  without reading any saved password, keychain or encrypted export, off the UI thread. The page
@@ -1024,7 +1025,7 @@ export const commands = {
 	 *  the client saved go to the keychain (those it keeps in the system keychain are only read
 	 *  now), otherwise they are asked when connecting.
 	 */
-	importConnections: (client: string, path: string | null, filePassword: string | null, choices: ImportChoice[], target: ImportTarget) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, filePassword, choices, target })),
+	importConnections: (client: string, path: string | null, filePassword: string | null, choices: ImportChoice[], target: ImportTarget_Deserialize) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, filePassword, choices, target })),
 	/**
 	 *  The page chose a folder (it shows one at a time, ADR-075): every other open folder closes,
 	 *  with its sessions, and `path` opens. Personal connections' sessions stay; the page asked
@@ -2097,8 +2098,11 @@ setupSkipped: SkippedSetupItem[] } |
 { kind: "authFailed"; message: string; canRemember: boolean } | 
 /**  The user declined an SSH question or cancelled an authentication prompt. */
 { kind: "cancelled" } | 
-/**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" } | 
+/**
+ *  The repository `root` is not trusted: ask before resolving anything. With several
+ *  folders open (ADR-075) it is the folder the connection reads, not always the one shown.
+ */
+{ kind: "untrusted"; root: string } | 
 /**
  *  A repository connection or tunnel is new or changed since the repository was trusted
  *  (ADR-022): show the change and ask before resolving anything.
@@ -2124,8 +2128,11 @@ setupSkipped: SkippedSetupItem[] } |
 { kind: "authFailed"; message: string; canRemember: boolean } | 
 /**  The user declined an SSH question or cancelled an authentication prompt. */
 { kind: "cancelled" } | 
-/**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" } | 
+/**
+ *  The repository `root` is not trusted: ask before resolving anything. With several
+ *  folders open (ADR-075) it is the folder the connection reads, not always the one shown.
+ */
+{ kind: "untrusted"; root: string } | 
 /**
  *  A repository connection or tunnel is new or changed since the repository was trusted
  *  (ADR-022): show the change and ask before resolving anything.
@@ -2446,8 +2453,8 @@ export type ConnectionTestOutcome = ConnectionTestOutcome_Serialize | Connection
 export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize; 
 /**  The connection's TLS does not check its server (SDB-395), from its resolved form. */
 tlsWarning?: TlsWarningItem | null } | 
-/**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" } | 
+/**  The repository `root` is not trusted: ask before resolving anything. */
+{ kind: "untrusted"; root: string } | 
 /**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
 { kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string } | 
 /**  Personal `${user.…}` variables to ask for first (ADR-022). */
@@ -2460,8 +2467,8 @@ tlsWarning?: TlsWarningItem | null } |
 export type ConnectionTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize; 
 /**  The connection's TLS does not check its server (SDB-395), from its resolved form. */
 tlsWarning: TlsWarningItem | null } | 
-/**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" } | 
+/**  The repository `root` is not trusted: ask before resolving anything. */
+{ kind: "untrusted"; root: string } | 
 /**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
 { kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string } | 
 /**  Personal `${user.…}` variables to ask for first (ADR-022). */
@@ -3250,12 +3257,16 @@ export type EditedTunnelItem_Serialize = {
 export type EditorAccessOutcome = EditorAccessOutcome_Serialize | EditorAccessOutcome_Deserialize;
 
 /**  Trust status of an existing connection before opening its editor. */
-export type EditorAccessOutcome_Deserialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
+export type EditorAccessOutcome_Deserialize = { kind: "ready" } | 
+/**  The connection's repository `root` is not trusted. */
+{ kind: "untrusted"; root: string } | { kind: "changed"; 
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string };
 
 /**  Trust status of an existing connection before opening its editor. */
-export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
+export type EditorAccessOutcome_Serialize = { kind: "ready" } | 
+/**  The connection's repository `root` is not trusted. */
+{ kind: "untrusted"; root: string } | { kind: "changed"; 
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string };
 
@@ -4268,8 +4279,18 @@ export type ImportSourceItem = { kind: "file"; path: string } |
 { kind: "text"; text: string };
 
 /**  Where the connections go. */
-export type ImportTarget = {
+export type ImportTarget = ImportTarget_Serialize | ImportTarget_Deserialize;
+
+export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
+
+/**  Where the connections go. */
+export type ImportTarget_Deserialize = {
 	personal: boolean,
+	/**
+	 *  The open folder repository connections go into (its root, ADR-075); none: the shown
+	 *  one. Duplicates are looked for there.
+	 */
+	repository?: string | null,
 	savePasswords: boolean,
 	/**  A folder to put them in; empty for the top level. */
 	folder: string,
@@ -4277,7 +4298,20 @@ export type ImportTarget = {
 	keepClientFolders: boolean,
 };
 
-export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
+/**  Where the connections go. */
+export type ImportTarget_Serialize = {
+	personal: boolean,
+	/**
+	 *  The open folder repository connections go into (its root, ADR-075); none: the shown
+	 *  one. Duplicates are looked for there.
+	 */
+	repository: string | null,
+	savePasswords: boolean,
+	/**  A folder to put them in; empty for the top level. */
+	folder: string,
+	/**  Keep the client's folders under it. */
+	keepClientFolders: boolean,
+};
 
 export type IndexCleanupItem = "auto" | "on" | "off";
 

@@ -18,9 +18,9 @@ import { useApp, useDialogs } from "./store";
 export async function ensureEditorAccess(connectionId: string): Promise<boolean> {
   let access = await call(commands.connectionEditorAccess(connectionKey(connectionId)));
   if (access.kind === "untrusted") {
-    const shown = useApp.getState().workspace?.workspace ?? null;
-    if (!(await useDialogs.getState().askTrust(shown))) return false;
-    useApp.getState().setWorkspace(await call(commands.trustWorkspace(shown ?? "")));
+    // The connection's own folder (ADR-075).
+    if (!(await useDialogs.getState().askTrust(access.root))) return false;
+    useApp.getState().setWorkspace(await call(commands.trustWorkspace(access.root)));
     access = await call(commands.connectionEditorAccess(connectionKey(connectionId)));
   }
   if (access.kind === "changed") {
