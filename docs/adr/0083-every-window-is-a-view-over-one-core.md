@@ -42,7 +42,9 @@ windows, and each session records which window opened it.**
    The core keeps keys opaque, as before. Each session records the label of the window whose
    page opened it (`connect` and `connect_from_session` read it from Tauri, not from the page).
 3. **What is meant for one window goes to that window only.** SSH questions go to the window
-   that asked to connect or test; the quit request and a launch's files go to the main window;
+   that asked to connect or test, and a job's (a backup, a restore, an import, an export, a
+   copy, a comparison) to the window of the session it was started from (SDB-522); no question
+   is sent to every window. The quit request and a launch's files go to the main window;
    a connection window's close request goes to it; "your results window closed" goes to the
    tab's window. Each page listens to those on its own window. Events about one session stay
    broadcast: keys never repeat, so a page ignores another window's sessions as it ignores a
@@ -77,9 +79,6 @@ windows, and each session records which window opened it.**
   Linux's clipboard access, the smoke test's place and the interface size.
 - `capabilities/default.json` names the windows by pattern (`connection-*`, `results-*`): they
   get the same permissions as the main one, no more.
-- A job that is not started by a window's page yet (backups, imports, a table copy's reading
-  session) still broadcasts its SSH questions; with more than one window open, each would show
-  it. Sending those to the window that started them too is SDB-522.
 - "Disconnect all" on a connection acts on the window it is chosen in: its tabs and its
   explorer. Another window's sessions on that connection stay, as closing one window leaves
   another's.

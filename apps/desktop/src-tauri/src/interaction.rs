@@ -70,34 +70,24 @@ impl Drop for Asking<'_> {
 pub struct AppInteraction {
     app: AppHandle,
     pending: Pending,
-    /// The window whose page asked for what needs the answer (SDB-30): only it shows the
-    /// question. None: every window hears it (a job a window does not own yet).
-    window: Option<String>,
+    /// The window whose page asked for what needs the answer (SDB-30, SDB-522): a connect or a
+    /// test that page started, or a job started from one of its sessions. Only it shows the
+    /// question; no question is ever sent to every window.
+    window: String,
 }
 
 impl AppInteraction {
-    pub fn new(app: AppHandle, pending: Pending) -> Self {
-        Self {
-            app,
-            pending,
-            window: None,
-        }
-    }
-
     /// Questions shown only in the window `label` (ADR-083).
     pub fn for_window(app: AppHandle, pending: Pending, label: &str) -> Self {
         Self {
             app,
             pending,
-            window: Some(label.to_owned()),
+            window: label.to_owned(),
         }
     }
 
     fn send<E: Event + serde::Serialize + Clone>(&self, event: &E) -> tauri::Result<()> {
-        match &self.window {
-            Some(label) => event.emit_to(&self.app, label.as_str()),
-            None => event.emit(&self.app),
-        }
+        event.emit_to(&self.app, self.window.as_str())
     }
 
     async fn ask(&self, request: InteractionKind) -> Answer {

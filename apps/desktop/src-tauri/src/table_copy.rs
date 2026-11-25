@@ -189,17 +189,26 @@ async fn open_from(
     session: &str,
     read_only: bool,
 ) -> CmdResult<(Arc<OpenConnection>, OpenConnection)> {
-    let (existing, password) = {
+    let (existing, password, window) = {
         let sessions = state.sessions.lock().await;
         let open = sessions
             .get(session)
             .ok_or("a connection of this copy is closed")?;
-        (open.open.clone(), open.password.clone())
+        (
+            open.open.clone(),
+            open.password.clone(),
+            open.window.clone(),
+        )
     };
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        // Its SSH questions go to the source session's window (SDB-522, ADR-083).
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            &window,
+        )),
         password,
         read_only_session: read_only,
     };
