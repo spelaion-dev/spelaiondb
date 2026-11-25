@@ -5812,6 +5812,7 @@ dependencies = [
  "spelaion-driver-api",
  "spelaion-https",
  "spelaion-ssh",
+ "spelaion-tile-http",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -6005,6 +6006,17 @@ dependencies = [
  "spelaion-plugin-protocol",
  "spelaion-plugin-sdk",
  "tar",
+ "tokio",
+]
+
+[[package]]
+name = "spelaion-tile-http"
+version = "0.16.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "rustls",
+ "spelaion-core",
  "tokio",
 ]
 

@@ -123,7 +123,7 @@ const DEFAULT_EDITOR: EditorPreferencesItem = { font: "system", fontSize: 13, li
 // Only until the core's lists arrive: the same values, and nothing is offered meanwhile
 // that the core would refuse (the size and zoom are sent as one of these).
 const DEFAULT_STEPS: SizeStepsItem = { interfaceSizes: [90, 100, 110, 125, 150], defaultInterfaceSize: 100, editorZooms: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200], defaultEditorZoom: 100 };
-const DEFAULT_MAP: MapPreferencesItem = { tiles: false, tileName: "", tileUrl: "", tileAttribution: "" };
+const DEFAULT_MAP: MapPreferencesItem = { tiles: false, tileName: "", tileUrl: "", tileAttribution: "", tileAttributionUrl: "" };
 // Only until the core's answer arrives: its defaults and limits.
 const DEFAULT_SIDE_PANEL: SidePanelItem = { hidden: false, width: 290, minWidth: 210, maxWidth: 700, defaultWidth: 290 };
 

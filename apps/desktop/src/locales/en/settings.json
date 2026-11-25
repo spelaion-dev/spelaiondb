@@ -370,7 +370,12 @@
     "url": "Tile address",
     "urlHint": "An https:// address with {z}, {x} and {y} where the server puts the zoom and the tile, as its documentation gives it (http:// only for a server on this computer). Check that its terms allow use from an app.",
     "attribution": "Attribution",
-    "attributionHint": "The credit the server asks maps to show. It is shown on the map.",
+    "attributionHint": "The credit the server asks maps to show. It is shown on the map whenever its tiles are.",
+    "attributionUrl": "Attribution link",
+    "attributionUrlHint": "The https:// page the attribution links to, such as the server's copyright page. Optional.",
+    "whatIsSent": "SpelaionDB fetches each tile itself and keeps it on this computer as long as the server allows. A tile request tells the server the address it comes from, which square of the map you are looking at and when, and that it comes from SpelaionDB and which version. Nothing else is sent: no cookies, no account, nothing of your data.",
+    "useOpenStreetMap": "Use OpenStreetMap",
+    "openStreetMapHint": "Fills the server with OpenStreetMap's standard tiles and turns tiles on. They are served by volunteers under OpenStreetMap's tile policy, which SpelaionDB follows: few requests, tiles kept as long as the server says, and its attribution on the map.",
     "remove": "Remove tile server"
   },
   "shortcuts": {

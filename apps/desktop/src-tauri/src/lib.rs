@@ -23,6 +23,7 @@ mod plugins;
 mod schema_compare;
 mod startup;
 mod table_copy;
+mod tiles;
 mod update;
 mod update_state;
 mod webview_args;
@@ -92,6 +93,8 @@ struct AppState {
     jobs: jobs::Jobs,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
+    /// Map tiles, fetched and cached by the core under the tile servers' policy (ADR-085).
+    tiles: Arc<spelaion_core::tiles::TileCache>,
     /// Schema comparisons, by their job's id, until the page forgets them (ADR-070).
     comparisons: std::sync::Mutex<HashMap<u32, schema_compare::StoredComparison>>,
     /// The process monitor's live dashboards, by monitor session (SDB-192).
@@ -6485,6 +6488,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             time_zones,
             get_map_preferences,
             set_map_preferences,
+            tiles::map_tile,
+            tiles::openstreetmap_tiles,
+            tiles::open_tile_attribution,
             get_side_panel,
             set_side_panel,
             column_map,
@@ -7039,6 +7045,7 @@ pub fn run() {
     // normal size.
     let interface_size = tauri::async_runtime::block_on(history.interface_size())
         .unwrap_or(spelaion_core::DEFAULT_INTERFACE_SIZE);
+    let tile_cache = Arc::new(tiles::cache(&user_dir));
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
@@ -7060,6 +7067,7 @@ pub fn run() {
         quit: app_lifecycle::Quit::default(),
         jobs: jobs::Jobs::new(),
         diagrams: std::sync::Mutex::new(HashMap::new()),
+        tiles: tile_cache,
         comparisons: std::sync::Mutex::new(HashMap::new()),
         dashboards: dashboard::Dashboards::default(),
         windows: windows::Windows::new(),

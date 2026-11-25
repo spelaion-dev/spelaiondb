@@ -3635,6 +3635,8 @@ select {
   white-space: nowrap;
 }
 .map-attribution { right: 0; border-top-left-radius: var(--radius-sm); }
+/* The attribution's link (ADR-085): text-sized, in the attribution's own line. */
+.map-attribution-link { font-size: inherit; line-height: inherit; padding: 0; vertical-align: baseline; }
 .map-hover { left: 0; color: var(--fg); border-top-right-radius: var(--radius-sm); font-variant-numeric: tabular-nums; }
 .map-caption { font-variant-numeric: tabular-nums; min-height: var(--leading-sm); }
 .cell-viewer-notice {

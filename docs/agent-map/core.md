@@ -255,7 +255,15 @@
   nothing after it).
   `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
   PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
-  (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
+  (`spelaion-store`'s `map.rs`), off by default and checked before it is saved, its
+  attribution's link too (`check_attribution_link`). `tiles.rs` fetches every tile (ADR-085):
+  the page asks by view and `z/x/y`, the core builds the address from the stored server and
+  refuses with tiles off; a disk cache next to `state.db` honours `Cache-Control`, `Expires` and
+  `ETag` (7 days when unreadable) with conditional requests; two requests at a time, 300 per map
+  view; only PNG, JPEG or WebP; `OPENSTREETMAP` is the one preset, chosen only by the user. The
+  transport is `crates/spelaion-tile-http` (its User-Agent `TILE_USER_AGENT`, no referrer or
+  cookies, `https://` or `http://` to this computer, redirects only to `https://`), tested
+  against a local server in `tests/local_server.rs`: **no test ever asks an outside host**.
   `display.rs` (SDB-385) is how the grid shows values: `strftime` patterns for dates, times
   and timestamps, a number's marks, a display time zone (jiff; values without a zone are never
   converted) and how binary reads. Display only: `window_ipc` serves each cell as the database

@@ -313,26 +313,33 @@ function ScriptSettings() {
   );
 }
 
-/** The map's background (ADR-045): tiles from a server the user names, off by default. The
- *  server's fields are saved when they lose focus and the core accepts them (all three empty
- *  removes the server); tiles can be turned on only once a server is saved. */
+/** The map's background (ADR-045, ADR-085): tiles from a server the user names or OpenStreetMap,
+ *  off by default. The server's fields are saved when they lose focus and the core accepts them
+ *  (all of them empty removes the server); tiles can be turned on only once a server is saved.
+ *  "Use OpenStreetMap" fills the server from the core's preset and turns tiles on: that click is
+ *  the user's opt-in. */
 function MapSettings() {
   const { t } = useTranslation("settings");
   const map = usePreferences((s) => s.map);
   const busy = usePreferences((s) => s.loading);
   const setMap = usePreferences((s) => s.setMap);
-  const [draft, setDraft] = useState({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution });
-  useEffect(() => setDraft({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution }), [map.tileName, map.tileUrl, map.tileAttribution]);
+  const fromMap = () => ({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution, tileAttributionUrl: map.tileAttributionUrl });
+  const [draft, setDraft] = useState(fromMap);
+  useEffect(() => setDraft(fromMap()), [map.tileName, map.tileUrl, map.tileAttribution, map.tileAttributionUrl]);
   const saved = map.tileUrl !== "";
-  const changed = draft.tileName !== map.tileName || draft.tileUrl !== map.tileUrl || draft.tileAttribution !== map.tileAttribution;
+  const changed = draft.tileName !== map.tileName || draft.tileUrl !== map.tileUrl || draft.tileAttribution !== map.tileAttribution || draft.tileAttributionUrl !== map.tileAttributionUrl;
   const saveServer = () => {
     if (!changed) return;
-    const empty = draft.tileName.trim() === "" && draft.tileUrl === "" && draft.tileAttribution === "";
+    const empty = draft.tileName.trim() === "" && draft.tileUrl === "" && draft.tileAttribution === "" && draft.tileAttributionUrl === "";
     // A half-typed server waits for its other fields; the core checks it once name and address are there.
     if (!empty && (draft.tileName.trim() === "" || draft.tileUrl === "")) return;
     void setMap({ ...draft, tiles: empty ? false : map.tiles });
   };
-  const field = (key: "tileName" | "tileUrl" | "tileAttribution", label: string, hint?: string, placeholder?: string) => (
+  const useOpenStreetMap = async () => {
+    const preset = await commands.openstreetmapTiles();
+    await setMap(preset, true);
+  };
+  const field = (key: "tileName" | "tileUrl" | "tileAttribution" | "tileAttributionUrl", label: string, hint?: string, placeholder?: string) => (
     <label className="field">
       <span>{label}</span>
       <input
@@ -357,15 +364,21 @@ function MapSettings() {
         </label>
       </fieldset>
       <p className="muted small">{t("map.tilesHint")}</p>
+      <p className="muted small">{t("map.whatIsSent")}</p>
       {!saved && <p className="muted small">{t("map.tilesNeedServer")}</p>}
+      <div>
+        <button className="small" name="useOpenStreetMap" disabled={busy} onClick={() => void useOpenStreetMap()}>{t("map.useOpenStreetMap")}</button>
+        <p className="muted small">{t("map.openStreetMapHint")}</p>
+      </div>
       <fieldset className="settings-choice">
         <legend>{t("map.server")}</legend>
         {field("tileName", t("map.name"))}
         {field("tileUrl", t("map.url"), t("map.urlHint"), "https://tiles.example.com/{z}/{x}/{y}.png")}
         {field("tileAttribution", t("map.attribution"), t("map.attributionHint"))}
+        {field("tileAttributionUrl", t("map.attributionUrl"), t("map.attributionUrlHint"), "https://tiles.example.com/copyright")}
         {saved && (
           <div>
-            <button className="small" disabled={busy} onClick={() => void setMap({ tiles: false, tileName: "", tileUrl: "", tileAttribution: "" })}>{t("map.remove")}</button>
+            <button className="small" disabled={busy} onClick={() => void setMap({ tiles: false, tileName: "", tileUrl: "", tileAttribution: "", tileAttributionUrl: "" })}>{t("map.remove")}</button>
           </div>
         )}
       </fieldset>

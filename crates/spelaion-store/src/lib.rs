@@ -32,7 +32,7 @@ pub use library::{
 };
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,
-    check_tile_server,
+    check_attribution_link, check_tile_server,
 };
 pub use shortcuts::{SHORTCUT_COMMAND_MAX, ShortcutOverride, is_command_id};
 pub use side_panel::{

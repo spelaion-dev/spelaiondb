@@ -48,6 +48,7 @@ spelaion-core = { workspace = true, features = ["bindings"] }
 # `#[command]`: a Tauri command that answers even when it panics (SDB-163).
 spelaion-desktop-macros = { path = "../../../crates/spelaion-desktop-macros" }
 spelaion-https.workspace = true
+spelaion-tile-http.workspace = true
 spelaion-driver-api.workspace = true
 spelaion-ssh.workspace = true
 arrow.workspace = true

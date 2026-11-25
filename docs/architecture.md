@@ -102,12 +102,9 @@ relaxed, each for one thing:
   (`style-mod`), and components set `style` attributes. CSS cannot run script; it is the one
   inline relaxation.
 - `img-src data:`: the cell viewer shows images as `data:` URLs of the types the core recognised
-  by their bytes (never SVG), and the chart and ER diagram exports draw their SVG through an
-  `Image` with a `data:image/svg+xml` URL.
-- `img-src https: http://localhost:* http://127.0.0.1:*`: the map's tiles (ADR-045) come from
-  the server the user chose in Settings, whose address the core only accepts over HTTPS, or
-  HTTP to `localhost` or `127.0.0.1` (`spelaion-store`'s `check_tile_server`; not `[::1]`, which
-  a policy cannot name). Off by default.
+  by their bytes (never SVG), the chart and ER diagram exports draw their SVG through an
+  `Image` with a `data:image/svg+xml` URL, and the map's tiles arrive as `data:` images from
+  the core, which fetches them (ADR-085). No image comes from the network to the page.
 - `connect-src ipc: http://ipc.localhost`: Tauri's commands, `fetch_window`'s binary windows
   included (the custom `ipc:` scheme, or `http://ipc.localhost` on Windows). The app reaches no
   other address from the page: updates, plugins and every database go through the Rust side.
