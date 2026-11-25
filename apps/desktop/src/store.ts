@@ -9,7 +9,7 @@ import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, RestoredT
 import { DISCONNECTED, withReadOnly, withTransaction, type TabConnection } from "./tabState";
 import { SINGLE, show, survivingPane, withoutTabs, type SplitLayout } from "./splitView";
 import { sessionPrefix } from "./windowContext";
-import { withConnection, type ConnectionKey } from "./connectionIdentity.ts";
+import { listedConnection, tabConnection, tabOnConnection, withConnection, type ConnectionKey } from "./connectionIdentity.ts";
 
 export interface ResultMeta {
   id: number;
@@ -127,6 +127,9 @@ export interface Tab {
    *  that opens several. Absent or null for the connection's own. Kept with the tab, so a
    *  restored tab connects to it when run. Changed only once the core opened it. */
   database?: string | null;
+  /** The folder of its connection (ADR-075): null for a personal connection, or none. A tab's
+   *  connection is the pair (`tabConnection`), never its id alone. */
+  connectionFolder: string | null;
   /** Its connection, one state (SDB-371): disconnected (and why it failed), connecting,
    *  connected (version, transaction, read-only for this session), lost, idle-closed. Read only
    *  through the selectors of `tabState.ts`; changed with `setConnection` and its transitions. */
@@ -223,6 +226,7 @@ export const DEFAULT_PAGE_SIZE = 500;
  */
 export interface TabSnapshot {
   connectionId: string | null;
+  connectionFolder: string | null;
   sql: string;
   title?: string;
   pinned?: boolean;
@@ -244,6 +248,7 @@ export function snapshotOf(tab: Tab): TabSnapshot | null {
   if (tab.table || tab.tableDetails || tab.plan || tab.diagram) return null;
   return {
     connectionId: tab.connectionId,
+    connectionFolder: tab.connectionFolder,
     sql: tab.sql,
     ...(tab.title ? { title: tab.title } : {}),
     ...(tab.pinned ? { pinned: true } : {}),
@@ -287,7 +292,7 @@ export type ConnectionDialog =
   /** `imports`: open on the list of clients to import connections from (SDB-446). */
   | { kind: "add"; imports?: boolean }
   /** `notice`: shown above the form, such as "this is the copy just made". */
-  | { kind: "edit"; id: string; notice?: string };
+  | { kind: "edit"; connection: ConnectionKey; notice?: string };
 
 /** An object to show in the explorer: its connection expands (if it is connected there), then
  *  its schema and the folder holding the object, which is scrolled into view. */
@@ -363,6 +368,7 @@ interface AppStore {
   /** The connection whose "Move to folder…" dialog is open. */
   movingConnection: ConnectionItem | null;
   historyRevision: number;
+  /** Connections whose history setting is being saved, by `connectionTag`. */
   historySaving: string[];
   workspaceChanging: boolean;
   /** Why the last change of folder failed, shown above the explorer (SDB-397: wherever it
@@ -398,17 +404,17 @@ interface AppStore {
   /** Opens an editor tab. Without `sql` it is a new script: it starts with the user's
    *  template, if there is one. A tab opened for some text (a file, a history entry, generated
    *  SQL) or for a table passes that text, or an empty one, and never gets the template. */
-  addTab(connectionId: string | null, sql?: string): string;
+  addTab(connection: ConnectionKey | null, sql?: string): string;
   /** Opens a table data tab on a table (its first page loads when it appears), filtered by
    *  `filter` when given (a followed foreign key's, written by the core). */
-  addTableTab(connectionId: string, schema: string, name: string, filter?: string): string;
-  addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
+  addTableTab(connection: ConnectionKey, schema: string, name: string, filter?: string): string;
+  addTableDetailsTab(connection: ConnectionKey, schema: string, name: string, kind: TableDetailKind): string;
   /** Opens an ER diagram tab, or shows the one already open on the same scope and database (or
    *  on the same saved diagram, ADR-084). An unsaved diagram is read from `database` of a
    *  PostgreSQL connection that opens several (ADR-074, SDB-506; null: its own); a saved one
    *  from the connection's own. The second value says whether the tab is new (and needs
    *  connecting). */
-  addDiagramTab(connectionId: string, scope: DiagramScopeItem_Deserialize, saved?: { id: number; name: string }, database?: string | null): [string, boolean];
+  addDiagramTab(connection: ConnectionKey, scope: DiagramScopeItem_Deserialize, saved?: { id: number; name: string }, database?: string | null): [string, boolean];
   /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
   closeTabs(ids: string[]): void;
   /** Opens again the last closed query tab (its connection, SQL and name, not its results). */
@@ -509,14 +515,15 @@ export const useApp = create<AppStore>((set) => ({
   bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
-  addTab: (connectionId, sql) => {
+  addTab: (connection, sql) => {
     tabCounter += 1;
     const id = `${sessionPrefix()}tab-${tabCounter}`;
     const fromTemplate = sql === undefined && newScriptTemplate !== "";
     const tab: Tab = {
       id,
       number: tabCounter,
-      connectionId,
+      connectionId: connection?.id ?? null,
+      connectionFolder: connection?.folder ?? null,
       connectionState: DISCONNECTED,
       sql: sql ?? newScriptTemplate,
       run: null,
@@ -526,31 +533,31 @@ export const useApp = create<AppStore>((set) => ({
     set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, layout: show(s.layout, s.activeTab, id), recentTabs: [id, ...s.recentTabs] }));
     return id;
   },
-  addTableTab: (connectionId, schema, name, filter = ""): string => {
+  addTableTab: (connection, schema, name, filter = ""): string => {
     const app: AppStore = useApp.getState();
-    const id: string = app.addTab(connectionId, "");
+    const id: string = app.addTab(connection, "");
     app.updateTab(id, { table: { schema, name, filter, orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
     return id;
   },
-  addTableDetailsTab: (connectionId, schema, name, kind): string => {
+  addTableDetailsTab: (connection, schema, name, kind): string => {
     const app = useApp.getState();
-    const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === schema && tab.tableDetails.name === name && tab.tableDetails.kind === kind);
+    const existing = app.tabs.find((tab) => tabOnConnection(tab, connection) && tab.tableDetails?.schema === schema && tab.tableDetails.name === name && tab.tableDetails.kind === kind);
     if (existing) { app.setActiveTab(existing.id); return existing.id; }
-    const id = app.addTab(connectionId, "");
+    const id = app.addTab(connection, "");
     app.updateTab(id, { tableDetails: { schema, name, kind } });
     return id;
   },
-  addDiagramTab: (connectionId, scope, saved, database = null): [string, boolean] => {
+  addDiagramTab: (connection, scope, saved, database = null): [string, boolean] => {
     const app = useApp.getState();
     const key = JSON.stringify(scope);
     // A saved diagram has a tab of its own; an unsaved one is found by its scope and database.
     const existing = app.tabs.find((tab) =>
-      tab.connectionId === connectionId && tab.diagram &&
+      tabOnConnection(tab, connection) && tab.diagram &&
       (saved
         ? tab.savedDiagram?.id === saved.id
         : !tab.savedDiagram && (tab.database ?? null) === database && JSON.stringify(tab.diagram) === key));
     if (existing) { app.setActiveTab(existing.id); return [existing.id, false]; }
-    const id = app.addTab(connectionId, "");
+    const id = app.addTab(connection, "");
     app.updateTab(id, saved ? { diagram: scope, savedDiagram: saved } : { diagram: scope, database });
     return [id, true];
   },
@@ -586,9 +593,9 @@ export const useApp = create<AppStore>((set) => ({
     if (!last) return;
     set({ closedTabs: s.closedTabs.slice(0, -1) });
     const { snapshot } = last;
-    // The connection may have been deleted since.
-    const connectionId = snapshot.connectionId && s.connections.some((c) => c.id === snapshot.connectionId) ? snapshot.connectionId : null;
-    const id: string = s.addTab(connectionId, snapshot.sql);
+    // The connection may have been deleted since, or its folder closed.
+    const kept = tabConnection(snapshot);
+    const id: string = s.addTab(kept && listedConnection(s.connections, kept) ? kept : null, snapshot.sql);
     set((now) => {
       const tab = now.tabs.find((t) => t.id === id);
       if (!tab) return now;
@@ -608,7 +615,7 @@ export const useApp = create<AppStore>((set) => ({
     const source = s.tabs.find((t) => t.id === id);
     // A metadata tab is opened once per object (addTableDetailsTab finds the open one).
     if (!source || source.tableDetails || source.diagram) return null;
-    const copy: string = s.addTab(source.connectionId, source.sql);
+    const copy: string = s.addTab(tabConnection(source), source.sql);
     set((now) => {
       const tab = now.tabs.find((t) => t.id === copy);
       if (!tab) return now;
@@ -657,6 +664,7 @@ export const useApp = create<AppStore>((set) => ({
         pinned: kept.pinned || undefined,
         connectionId: kept.connection ?? null,
         database: kept.connection ? (kept.database ?? null) : null,
+        connectionFolder: kept.connection ? kept.folder ?? null : null,
         connectionState: DISCONNECTED,
         sql: kept.text,
         run: null,
@@ -732,7 +740,7 @@ export const useApp = create<AppStore>((set) => ({
   setConnectionOpen: (connection, open) => set((s) => ({
     openConnections: withConnection(s.openConnections, connection, open),
   })),
-  clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, connectionState: DISCONNECTED, run: null })) })),
+  clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, connectionFolder: null, connectionState: DISCONNECTED, run: null })) })),
   setResultsMaximized: (id, resultsMaximized) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, resultsMaximized: resultsMaximized || undefined } : t)) })),
 }));

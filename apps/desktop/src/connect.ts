@@ -4,7 +4,7 @@
 
 import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
 import { explorerConnectionOf, explorerSession } from "./windowContext";
-import { connectionKey, databaseOf, listedConnection, tabKey, type ConnectionKey } from "./connectionKey";
+import { databaseOf, listedConnection, tabConnection, tabOnConnection, type ConnectionKey } from "./connectionKey";
 import { runningOutsideTransactions } from "./closeQuestion";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
@@ -305,8 +305,8 @@ export function sourceDatabase(source: string): string | null {
 
 export function connectTabFromExplorer(tabId: string, source: string, database?: string) {
   const initial = useApp.getState().tabs.find((tab) => tab.id === tabId);
-  if (!initial?.connectionId) return;
-  const connectionId = initial.connectionId;
+  const connection = initial ? tabConnection(initial) : null;
+  if (!connection) return;
   // A tab connected from another database's session is on that database (SDB-505).
   useApp.getState().updateTab(tabId, { database: sourceDatabase(source) });
   useApp.getState().setConnection(tabId, CONNECTING);
@@ -317,9 +317,9 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
       // tab connects as a new one does, from the saved file, then to the database it wanted.
       const session = outcome.kind === "connected"
         ? await opened(tabId, outcome.serverVersion)
-        : await openTabSession(tabId, connectionKey(connectionId));
+        : await openTabSession(tabId, connection);
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
-      if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) {
+      if (!tab || !tabOnConnection(tab, connection) || !isConnecting(tab)) {
         if (session !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
         return;
       }
@@ -332,7 +332,7 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
       }
       useApp.getState().setConnection(tabId, connectedWith(session));
     } catch (e) {
-      failConnecting(tabId, connectionId, e);
+      failConnecting(tabId, connection, e);
     }
   })();
 }
@@ -340,8 +340,7 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
 /** Open a query on a connection, independently of the explorer's expanded state. */
 export function newQueryOnConnection(connection: ConnectionKey): string {
   const app = useApp.getState();
-  const connectionId = tabKey(connection);
-  const tabId = app.addTab(connectionId);
+  const tabId = app.addTab(connection);
   if (explorerSessionOpen(app.explorerConnected, connection)) {
     connectTabFromExplorer(tabId, explorerSession(connection));
     return tabId;
@@ -351,13 +350,13 @@ export function newQueryOnConnection(connection: ConnectionKey): string {
     try {
       const session = await openSession(tabId, connection);
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
-      if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) {
+      if (!tab || !tabOnConnection(tab, connection) || !isConnecting(tab)) {
         if (session !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
         return;
       }
       useApp.getState().setConnection(tabId, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
-      failConnecting(tabId, connectionId, e);
+      failConnecting(tabId, connection, e);
     }
   })();
   return tabId;
@@ -365,18 +364,18 @@ export function newQueryOnConnection(connection: ConnectionKey): string {
 
 /** The session a tab was opening on `connectionId` failed with `error`: the tab says why, if
  *  it is still waiting for that session. */
-function failConnecting(tabId: string, connectionId: string, error: unknown) {
+function failConnecting(tabId: string, connection: ConnectionKey, error: unknown) {
   const tab = useApp.getState().tabs.find((item) => item.id === tabId);
-  if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) return;
+  if (!tab || !tabOnConnection(tab, connection) || !isConnecting(tab)) return;
   const detail = error instanceof Error ? error.message : String(error);
   useApp.getState().updateTab(tabId, { connectionState: connectFailed(detail), run: connectionFailedRun(detail, tab.run?.results ?? []) });
 }
 
 /** Opens a table data tab on `schema.table` filtered by `filter` (a followed foreign key's,
  *  written by the core), on a session of its own opened like `source`'s. */
-export function openTableData(connectionId: string, source: string, schema: string, table: string, filter = ""): string {
-  const id = useApp.getState().addTableTab(connectionId, schema, table, filter);
-  connectTabFromExplorer(id, source, explorerDatabase(connectionKey(connectionId), schema));
+export function openTableData(connection: ConnectionKey, source: string, schema: string, table: string, filter = ""): string {
+  const id = useApp.getState().addTableTab(connection, schema, table, filter);
+  connectTabFromExplorer(id, source, explorerDatabase(connection, schema));
   return id;
 }
 

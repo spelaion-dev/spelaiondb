@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { explorerSession, windowConnection } from "../windowContext";
-import { connectionKey, connectionTag, databaseOf, holdsConnection, keyOf, listedConnection, onDatabase, sameConnection, tabKey, tabOnConnection, type ConnectionKey } from "../connectionKey";
+import { connectionTag, databaseOf, holdsConnection, keyOf, listedConnection, onDatabase, sameConnection, tabConnectionOf, tabOnConnection, type ConnectionKey } from "../connectionKey";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { chooseFolder, workspaceParent } from "../dialogs";
@@ -1471,7 +1471,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   // explorer (SDB-110).
   const tabConnections = useApp(useShallow((s) => connectedConnections(s.tabs)));
   /** Opened in the explorer or used by a connected tab. */
-  const connected = (c: ConnectionItem) => explorerSessionOpen(explorerConnected, keyOf(c)) || tabConnections.some((id) => tabOnConnection(id, keyOf(c)));
+  const connected = (c: ConnectionItem) => explorerSessionOpen(explorerConnected, keyOf(c)) || tabConnections.includes(connectionTag(keyOf(c)));
   // "Link with editor": the active tab's connection, schema and table, shown in the tree.
   const linked = useApp((s) => {
     const activeTab = s.tabs.find((tab) => tab.id === s.activeTab);
@@ -1482,7 +1482,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => {
     const tab = useApp.getState().tabs.find((t) => t.id === useApp.getState().activeTab);
     if (!explorer.linkWithEditor || !tab?.connectionId) return;
-    const connection = connectionKey(tab.connectionId);
+    const connection = tabConnectionOf(tab.connectionId, tab.connectionFolder);
     const reveal = useApp.getState().revealInExplorer;
     if (tab.table) return reveal({ connection, schema: tab.table.schema, name: tab.table.name });
     // A query tab: the schema its session is on, asked only while it is idle.
@@ -2410,7 +2410,7 @@ function DatabaseNode({
       return;
     }
     if (!(await expand())) return;
-    const tab = useApp.getState().addTab(tabKey(identity));
+    const tab = useApp.getState().addTab(identity);
     connectTabFromExplorer(tab, session);
   }
 
@@ -2780,7 +2780,7 @@ function SchemaNode({
         onDoubleClick={() => {
           const database = explorerDatabase(identity, schema);
           if (!database) return;
-          const tab = useApp.getState().addTab(tabKey(identity));
+          const tab = useApp.getState().addTab(identity);
           connectTabFromExplorer(tab, session, database);
         }}
         role="button"
@@ -3019,8 +3019,8 @@ function ObjectNode({
   const drop = () => dropRelation(identity, session, object, onSchemaChanged);
   const openDetails = (kind: TableDetailKind) => {
     const app = useApp.getState();
-    const existing = app.tabs.some((tab) => tabOnConnection(tab.connectionId, identity) && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
-    const tab = app.addTableDetailsTab(tabKey(identity), object.schema, object.name, kind);
+    const existing = app.tabs.some((tab) => tabOnConnection(tab, identity) && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
+    const tab = app.addTableDetailsTab(identity, object.schema, object.name, kind);
     if (!existing) {
       connectTabFromExplorer(tab, session, explorerDatabase(identity, object.schema));
     }
@@ -3646,7 +3646,7 @@ function IndexNode({
   const openDefinition = () => {
     setMenu(null);
     const sql = index.definition.startsWith("--") ? index.definition : `${index.definition.trimEnd().replace(/;$/, "")};`;
-    const tab = addTab(tabKey(identity), sql);
+    const tab = addTab(identity, sql);
     connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
   };
   return (

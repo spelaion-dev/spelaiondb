@@ -3,7 +3,7 @@
 // script (or it opens in the editor).
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listedConnection, type ConnectionKey, tabKey } from "../connectionKey";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { AlterationPreviewItem, NewTableItem } from "../bindings";
@@ -94,7 +94,7 @@ export function CreateTableDialog({ session, identity, schema, onClose, onDone }
 
   function openInEditor() {
     if (preview.kind !== "ready") return;
-    const tab = useApp.getState().addTab(tabKey(identity), preview.value.sql);
+    const tab = useApp.getState().addTab(identity, preview.value.sql);
     connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
     onClose();
   }

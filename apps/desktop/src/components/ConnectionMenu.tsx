@@ -128,7 +128,7 @@ export function ConnectionMenu({
       {connected && item(t("refreshAllSchemas"), actions.refresh, { shortcut: "refresh" })}
       <hr />
       {/* The connection's own settings and what the explorer shows of it. */}
-      {item(t("connections:edit"), () => app().setConnectionDialog({ kind: "edit", id: connection.id }))}
+      {item(t("connections:edit"), () => app().setConnectionDialog({ kind: "edit", connection: keyOf(connection) }))}
       {item(t("connections:configureFilters"), actions.configureFilters)}
       {connected && actions.createSchema && item(t("create.schema"), actions.createSchema)}
       {connected && actions.backup && (

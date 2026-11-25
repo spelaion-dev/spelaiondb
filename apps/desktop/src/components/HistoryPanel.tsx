@@ -4,6 +4,7 @@ import { call, commands, type HistoryItem } from "../api";
 import type { HistoryFilterItem } from "../bindings";
 import { chooseSavePath, sqlFileFilters } from "../dialogs";
 import { startJob, type Job } from "../jobs";
+import { keyOf, listedConnection } from "../connectionKey";
 import { useApp } from "../store";
 import { Icon } from "./Icons";
 
@@ -73,7 +74,9 @@ export function HistoryPanel() {
   }, [filter, offset, revision, workspace, refresh, invalidRange]);
 
   function open(entry: HistoryItem) {
-    useApp.getState().addTab(connections.find((connection) => connection.id === entry.connection)?.id ?? null, entry.statement);
+    // Its own folder's connection (ADR-075): one of the same id in another folder is not it.
+    const listed = entry.identity ? listedConnection(connections, entry.identity) : undefined;
+    useApp.getState().addTab(listed ? keyOf(listed) : null, entry.statement);
     close();
   }
   async function pin(entry: HistoryItem) {
@@ -109,7 +112,7 @@ export function HistoryPanel() {
         {!busy && !error && !invalidRange && entries.length === 0 && <div className="empty">{t(query || status || database !== "all" || from || until || pinned ? "history.noMatches" : "history.empty")}</div>}
         {entries.map((entry, index) => <Fragment key={entry.id}>
           {(index === 0 || dayKey(entries[index - 1]!) !== dayKey(entry)) && <h3 className="library-date">{days.format(entry.atMs)}</h3>}
-          <article className="history-entry"><div className="history-entry-heading"><span className="history-connection" title={entry.connection}>{connections.find((connection) => connection.id === entry.connection)?.name ?? entry.connection}</span><span className={`library-status ${entry.outcome.kind}`}>{t(OUTCOME_LABEL[entry.outcome.kind])}</span></div>
+          <article className="history-entry"><div className="history-entry-heading"><span className="history-connection" title={entry.connection}>{(entry.identity ? listedConnection(connections, entry.identity)?.name : undefined) ?? entry.connection}</span><span className={`library-status ${entry.outcome.kind}`}>{t(OUTCOME_LABEL[entry.outcome.kind])}</span></div>
             <div className="history-meta muted small"><span title={entry.database ?? undefined}>{entry.database ?? t("history.unknownDatabase")}</span><time dateTime={new Date(entry.atMs).toISOString()}>{times.format(entry.atMs)}</time><span>{t("history.duration", { duration: numbers.format(entry.durationMs) })}</span><span>{t("history.rowsReturned", { count: entry.rows, formattedCount: numbers.format(entry.rows) })}</span></div>
             <pre className="history-sql">{entry.statement}</pre>{entry.outcome.kind !== "succeeded" && <details className="library-details"><summary>{t("history.details")}</summary><pre className="history-error">{entry.outcome.kind === "failed" ? entry.outcome.error : t("messages.cancelled")}</pre></details>}
             {!connections.some((connection) => connection.id === entry.connection) && <p className="muted small">{t("history.connectionUnavailable")}</p>}

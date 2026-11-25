@@ -78,7 +78,7 @@ export function ResultsWindow({ context }: { context: ResultsContext }) {
             cancelRequested={mirror.cancelRequested}
             onCancelRun={() => void owner.ask({ kind: "cancelRun" })}
             session={context.tab}
-            connectionId={mirror.connectionId}
+            connection={mirror.connection}
             table={null}
             // Row edits stay in the tab, whose pending edits the core keeps with its session.
             editingState="readOnly"

@@ -62,6 +62,27 @@ pub struct ConnectionKeyItem {
     pub id: String,
 }
 
+impl ConnectionKeyItem {
+    /// The identity of the connection the local store keeps something under: its `scope` (the
+    /// folder's text, empty for none) and its id (empty for none). A personal connection has
+    /// no folder; a repository one kept outside any folder has no identity it can be found by.
+    pub fn stored(scope: &str, connection: &str) -> Option<Self> {
+        if connection.is_empty() {
+            return None;
+        }
+        match spelaion_config::ConnectionId::parse(connection).source {
+            spelaion_config::Source::User => Some(Self {
+                folder: None,
+                id: connection.to_owned(),
+            }),
+            spelaion_config::Source::Workspace => (!scope.is_empty()).then(|| Self {
+                folder: Some(scope.to_owned()),
+                id: connection.to_owned(),
+            }),
+        }
+    }
+}
+
 impl From<&spelaion_config::ConnectionKey> for ConnectionKeyItem {
     fn from(key: &spelaion_config::ConnectionKey) -> Self {
         Self {
@@ -1793,6 +1814,8 @@ pub struct HistoryItem {
     #[specta(type = specta_typescript::Number)]
     pub at_ms: i64,
     pub connection: String,
+    /// The identity of `connection` (ADR-075): reopening the statement uses that folder's.
+    pub identity: Option<ConnectionKeyItem>,
     pub statement: String,
     #[specta(type = specta_typescript::Number)]
     pub duration_ms: i64,
@@ -1907,6 +1930,8 @@ pub struct SnippetItem {
     pub name: String,
     pub statement: String,
     pub connection: String,
+    /// The identity of `connection` (ADR-075): opening the query uses that folder's.
+    pub identity: Option<ConnectionKeyItem>,
     #[specta(type = specta_typescript::Number)]
     pub updated_ms: i64,
     /// Saved outside any repository: visible from every workspace.
@@ -1920,6 +1945,7 @@ impl From<spelaion_core::Snippet> for SnippetItem {
         Self {
             id: s.id,
             personal: s.workspace.is_empty(),
+            identity: ConnectionKeyItem::stored(&s.workspace, &s.connection),
             name: s.name,
             statement: s.statement,
             connection: s.connection,
@@ -1935,6 +1961,7 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
             outcome: entry.outcome().into(),
             id: entry.id,
             at_ms: entry.at_ms,
+            identity: ConnectionKeyItem::stored(&entry.workspace, &entry.connection),
             connection: entry.connection,
             statement: entry.statement,
             duration_ms: entry.duration_ms,
@@ -4650,6 +4677,22 @@ mod tests {
             assert_eq!(engine_named(engine.as_str()), Ok(engine));
         }
         assert!(engine_named("snowflake").is_err());
+    }
+
+    /// What the store keeps under a folder names that folder's connection; a personal one has
+    /// no folder wherever it was kept; nothing names no connection (ADR-075, SDB-502).
+    #[test]
+    fn a_stored_connection_names_its_own_folder() {
+        use super::ConnectionKeyItem;
+        let shop = ConnectionKeyItem::stored("/work/shop", "prod/orders").expect("named");
+        assert_eq!(shop.folder.as_deref(), Some("/work/shop"));
+        assert_eq!(shop.id, "prod/orders");
+        let personal = ConnectionKeyItem::stored("/work/shop", "~/local").expect("named");
+        assert_eq!(personal.folder, None);
+        assert_eq!(ConnectionKeyItem::stored("", "~/local").expect("named").folder, None);
+        assert!(ConnectionKeyItem::stored("/work/shop", "").is_none());
+        // A repository connection kept outside any folder cannot be told apart from another's.
+        assert!(ConnectionKeyItem::stored("", "prod/orders").is_none());
     }
 
     /// Every kind of object the UI names comes back as itself: `browse_statement` reads it.

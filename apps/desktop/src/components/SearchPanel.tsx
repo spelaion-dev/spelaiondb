@@ -25,7 +25,7 @@ import { startJob, type Job } from "../jobs";
 import { ended, failed, markCancelling, searching, startedRun, withEvent, type SearchedTable, type SearchRun } from "../searchRun";
 import { useApp } from "../store";
 import { explorerSessionOpen } from "../tabState";
-import { connectionKey, connectionOfTag, connectionTag, databaseOf, keyOf, listedConnection, sameConnection, tabKey, type ConnectionKey } from "../connectionKey";
+import { connectionOfTag, connectionTag, databaseOf, keyOf, listedConnection, tabConnection, type ConnectionKey } from "../connectionKey";
 import { openFound } from "./OpenObjectDialog";
 import { HideSidePanelButton } from "./SidePanelButtons";
 
@@ -224,7 +224,12 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   const schemas = useCatalog((s) => s.schemas);
   const connections = useApp((s) => s.connections);
   const connected = useApp((s) => s.explorerConnected);
-  const activeConnection = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab)?.connectionId ?? null);
+  // The active tab's connection, as its tag (text, so the effect below runs only when it changes).
+  const activeConnection = useApp((s) => {
+    const tab = s.tabs.find((item) => item.id === s.activeTab);
+    const connection = tab ? tabConnection(tab) : null;
+    return connection ? connectionTag(connection) : null;
+  });
   const [limits, setLimits] = useState<DataSearchLimitsItem>(FALLBACK_LIMITS);
   /** The chosen connection, as its tag (the picker's value); empty: none. */
   const [connectionTagValue, setConnectionTagValue] = useState("");
@@ -261,7 +266,8 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   // The active tab's connection first, then the first one with tables loaded.
   useEffect(() => {
     if (choices.some((c) => c.tag === connectionTagValue)) return;
-    const next = choices.find((c) => activeConnection !== null && databaseOf(c.key) === null && sameConnection(c.key, connectionKey(activeConnection))) ?? choices[0];
+    // A connection's own database keeps the pair's tag, so the active tab's connection is it.
+    const next = choices.find((c) => c.tag === activeConnection) ?? choices[0];
     setConnectionTagValue(next ? next.tag : "");
     setChosen(new Set());
   }, [choices, connectionTagValue, activeConnection]);
@@ -449,7 +455,7 @@ function TableHits({ connection, outcome }: { connection: ConnectionKey; outcome
   const { status } = outcome;
   if (status.kind === "failed") return <div className="row-note" role="alert">{t("search.tableFailed", { table: name, detail: status.message })}</div>;
   if (status.kind !== "searched" || status.hits.length === 0) return null;
-  const open = (hit: SearchHitItem) => openTableData(tabKey(connection), explorerSession(connection), outcome.schema, outcome.table, hit.filter ?? "");
+  const open = (hit: SearchHitItem) => openTableData(connection, explorerSession(connection), outcome.schema, outcome.table, hit.filter ?? "");
   return (
     <section aria-label={name}>
       <div className="group-title search-table-title">{name} · {status.hits.length}{status.more ? ` · ${t("search.more")}` : ""}</div>

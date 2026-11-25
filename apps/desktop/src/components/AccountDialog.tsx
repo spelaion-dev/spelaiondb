@@ -3,7 +3,7 @@
 // and Apply runs exactly that script. The password is sent once, on Apply, and never shown.
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { listedConnection, type ConnectionKey, tabKey } from "../connectionKey";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type {
@@ -147,7 +147,7 @@ export function AccountDialog({ session, identity, request, logins, onClose, onD
 
   function openInEditor() {
     if (!ready || preview.kind !== "ready" || withPassword) return;
-    const tab = useApp.getState().addTab(tabKey(identity), preview.value.sql);
+    const tab = useApp.getState().addTab(identity, preview.value.sql);
     connectTabFromExplorer(tab, session);
     onClose();
   }

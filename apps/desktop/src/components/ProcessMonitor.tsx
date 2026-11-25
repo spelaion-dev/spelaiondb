@@ -117,7 +117,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
       try {
         // Reuse credentials from an open explorer or query without returning them to the UI.
         const key = keyOf(connection);
-        const sources = [explorerSession(key), ...useApp.getState().tabs.filter((tab) => tabOnConnection(tab.connectionId, key) && isConnected(tab)).map((tab) => tab.id)];
+        const sources = [explorerSession(key), ...useApp.getState().tabs.filter((tab) => tabOnConnection(tab, key) && isConnected(tab)).map((tab) => tab.id)];
         let version: string | null = null;
         for (const source of sources) {
           try {
@@ -216,7 +216,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
   async function openSql(row: ProcessItem) {
     if (!row.sql) return;
     const id = session.current;
-    const tab = useApp.getState().addTab(connection.id, row.sql);
+    const tab = useApp.getState().addTab(keyOf(connection), row.sql);
     if (id) {
       useApp.getState().setConnection(tab, CONNECTING);
       try {
@@ -227,13 +227,13 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         // Edited since the monitor's session opened (SDB-426): connect as a new tab does.
         const session = outcome.kind === "connected" ? { version: outcome.serverVersion } : await openSession(tab, keyOf(connection));
         const current = useApp.getState().tabs.find((item) => item.id === tab);
-        if (!current || current.connectionId !== connection.id || !isConnecting(current)) { if (session !== null) await call(commands.disconnect(tab)); return; }
+        if (!current || !tabOnConnection(current, keyOf(connection)) || !isConnecting(current)) { if (session !== null) await call(commands.disconnect(tab)); return; }
         if (session === null) { useApp.getState().setConnection(tab, DISCONNECTED); return; }
         if (outcome.kind === "connectAgain" && database) await call(commands.selectDatabase(tab, database)).catch(() => undefined);
         useApp.getState().setConnection(tab, connectedWith(session));
       } catch {
         const current = useApp.getState().tabs.find((item) => item.id === tab);
-        if (current?.connectionId === connection.id && isConnecting(current)) useApp.getState().setConnection(tab, DISCONNECTED);
+        if (current && tabOnConnection(current, keyOf(connection)) && isConnecting(current)) useApp.getState().setConnection(tab, DISCONNECTED);
       }
     }
     if (session.current === id) onOpenEditor();

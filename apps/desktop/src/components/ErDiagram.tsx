@@ -33,7 +33,7 @@ import { chooseSavePath } from "../dialogs";
 import { SAVE_DIAGRAM_EVENT, openDiagram } from "../diagramTabs";
 import { NOTE_WIDTH, placeNewNote } from "../erNotes";
 import { useApp, useDialogs, type Tab } from "../store";
-import { connectionKey } from "../connectionKey";
+import { tabConnection, tabConnectionOf, tabOnConnection } from "../connectionKey";
 import { CONNECTING, DISCONNECTED, connectedWith, lostSession, statusName } from "../tabState";
 import { ConfirmDelete } from "./ConfirmDelete";
 import { Icon } from "./Icons";
@@ -756,7 +756,7 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
     useApp.getState().setConnection(tab.id, CONNECTING);
     try {
       // On the database it was opened on (ADR-074, SDB-506), never quietly another.
-      const session = await openTabSession(tab.id, connectionKey(tab.connectionId));
+      const session = await openTabSession(tab.id, tabConnectionOf(tab.connectionId, tab.connectionFolder));
       useApp.getState().setConnection(tab.id, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
       useApp.getState().setConnection(tab.id, DISCONNECTED);
@@ -817,7 +817,7 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
     const kept = { ...arrangement, positions };
     try {
       const saved = await call(commands.saveDiagram(
-        connectionKey(tab.connectionId),
+        tabConnectionOf(tab.connectionId, tab.connectionFolder),
         asNew || !savedDiagram ? null : savedDiagram.id,
         name,
         scope,
@@ -974,21 +974,24 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
   }
 
   function openFocus(node: DiagramNode) {
-    if (!tab.connectionId) return;
-    openDiagram(tab.connectionId, { kind: "focus", schema: node.schema, table: node.name }, tab.id);
+    const connection = tabConnection(tab);
+    if (!connection) return;
+    openDiagram(connection, { kind: "focus", schema: node.schema, table: node.name }, tab.id);
   }
 
   function openData(node: DiagramNode) {
-    if (!tab.connectionId) return;
-    openTableData(tab.connectionId, tab.id, node.schema, node.name);
+    const connection = tabConnection(tab);
+    if (!connection) return;
+    openTableData(connection, tab.id, node.schema, node.name);
   }
 
   function openStructure(node: DiagramNode) {
-    if (!tab.connectionId) return;
+    const connection = tabConnection(tab);
+    if (!connection) return;
     const app = useApp.getState();
-    const existing = app.tabs.some((other) => other.connectionId === tab.connectionId && other.tableDetails?.schema === node.schema && other.tableDetails.name === node.name && other.tableDetails.kind === "columns");
-    const id = app.addTableDetailsTab(tab.connectionId, node.schema, node.name, "columns");
-    if (!existing) connectTabFromExplorer(id, tab.id, explorerDatabase(connectionKey(tab.connectionId), node.schema));
+    const existing = app.tabs.some((other) => tabOnConnection(other, connection) && other.tableDetails?.schema === node.schema && other.tableDetails.name === node.name && other.tableDetails.kind === "columns");
+    const id = app.addTableDetailsTab(connection, node.schema, node.name, "columns");
+    if (!existing) connectTabFromExplorer(id, tab.id, explorerDatabase(connection, node.schema));
   }
 
   const number = (n: number) => n.toLocaleString(i18n.language);

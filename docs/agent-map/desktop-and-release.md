@@ -240,9 +240,15 @@
   `<select>`'s values, session keys) with `connectionTag`, read back only with
   `connectionOfTag`. An effect depends on the tag, not on the object. The explorer's window
   events carry the pair: send them with `schemasRefreshed`, `refreshExplorer` and
-  `explorerSessionClosed` (`connect.ts`), never by hand. Tabs still name their connection by
-  its id (`tabKey`, `tabOnConnection`) until the card that makes them belong to a folder
-  (ADR-075 point 7); the metadata search (`dbSearch.ts`) gets each connection as its tag.
+  `explorerSessionClosed` (`connect.ts`), never by hand. A tab holds both halves
+  (`connectionId` and `connectionFolder`, ADR-075 point 7, SDB-502): read its identity with
+  `tabConnection`, compare with `tabOnConnection`, and after an await check it with
+  `stillOnConnection`; whatever changes a tab's connection sets both. The tab's connection
+  picker's values are tags. The history and saved queries carry the stored `identity`
+  (`ConnectionKeyItem::stored`: the store's scope and id) and reopen on that folder's
+  connection; `add_connection` returns the new identity. Only a launch and the MCP page still
+  look a bare id up with `connectionKey(id)`. The metadata search (`dbSearch.ts`) gets each
+  connection as its tag.
 - Open folders (ADR-075, SDB-500): `AppState::folders` (`src-tauri/src/open_folders.rs`) is
   the ordered list of open folders, at most `MAX_FOLDERS` (ten), each with its own `Config`
   (that folder alone with the personal layer) and its canonical root; the same root is never

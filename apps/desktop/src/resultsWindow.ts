@@ -11,6 +11,7 @@
 // Both directions are events sent to one window (`emitTo` its label) and heard on that window
 // only (`getCurrentWebviewWindow().listen`).
 
+import type { ConnectionKey } from "./connectionIdentity.ts";
 import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { call, commands, type ColumnFilterItem, type ConnectionItem } from "./api";
@@ -30,7 +31,8 @@ export interface ResultsMirror {
   tab: string;
   /** The tab's name, as its tab shows it. */
   name: string;
-  connectionId: string | null;
+  /** The tab's connection (its folder and id), if it has one. */
+  connection: ConnectionKey | null;
   run: RunState | null;
   running: boolean;
   connectFailed: boolean;

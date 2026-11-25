@@ -411,10 +411,10 @@ export const commands = {
 	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: ConnectionKeyItem_Deserialize | null, networkOnly: boolean, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, job, onStep })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
-	 *  configuration. Returns the new connection's identifier. A repository connection goes into
-	 *  the open folder `repository` (its root, ADR-075), or the shown one.
+	 *  configuration. Returns the new connection's identity (its folder and id). A repository
+	 *  connection goes into the open folder `repository` (its root, ADR-075), or the shown one.
 	 */
-	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, repository: string | null) => typedError<string, string>(__TAURI_INVOKE("add_connection", { draft, password, repository })),
+	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, repository: string | null) => typedError<ConnectionKeyItem_Serialize, string>(__TAURI_INVOKE("add_connection", { draft, password, repository })),
 	/**  Checks whether an existing connection can be opened in the editor. */
 	connectionEditorAccess: (connection: ConnectionKeyItem_Deserialize) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
 	/**  The form of an existing connection, to edit it. */
@@ -3908,6 +3908,8 @@ export type HistoryItem_Deserialize = {
 	id: number,
 	atMs: number,
 	connection: string,
+	/**  The identity of `connection` (ADR-075): reopening the statement uses that folder's. */
+	identity?: ConnectionKeyItem_Deserialize | null,
 	statement: string,
 	durationMs: number,
 	rows: number,
@@ -3920,6 +3922,8 @@ export type HistoryItem_Serialize = {
 	id: number,
 	atMs: number,
 	connection: string,
+	/**  The identity of `connection` (ADR-075): reopening the statement uses that folder's. */
+	identity: ConnectionKeyItem_Serialize | null,
 	statement: string,
 	durationMs: number,
 	rows: number,
@@ -7237,6 +7241,8 @@ export type SnippetItem_Deserialize = {
 	name: string,
 	statement: string,
 	connection: string,
+	/**  The identity of `connection` (ADR-075): opening the query uses that folder's. */
+	identity?: ConnectionKeyItem_Deserialize | null,
 	updatedMs: number,
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
@@ -7249,6 +7255,8 @@ export type SnippetItem_Serialize = {
 	name: string,
 	statement: string,
 	connection: string,
+	/**  The identity of `connection` (ADR-075): opening the query uses that folder's. */
+	identity: ConnectionKeyItem_Serialize | null,
 	updatedMs: number,
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,

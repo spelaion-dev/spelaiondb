@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { explorerSession } from "../windowContext";
-import { connectionKey, connectionOfTag, connectionTag, holdsConnection, keyOf, listedConnection, tabKey, type ConnectionKey } from "../connectionKey";
+import { type ConnectionKey, connectionOfTag, connectionTag, holdsConnection, keyOf, listedConnection, tabConnection } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands, type FoundObjectItem } from "../api";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
@@ -23,7 +23,7 @@ export async function openFound(connection: ConnectionKey, found: FoundObjectIte
   const { schema, name } = found.object;
   const database = explorerDatabase(connection, schema);
   const sql = listedConnection(app.connections, connection)?.sql ?? true;
-  const connectionId = tabKey(connection);
+  const connectionId = connection;
   if (found.kind === "relation" && (found.object.kind === "collection" || !sql)) {
     // An engine whose language is not SQL (ADR-056): the core's statement for it, run in a tab.
     // Its tables too (CQL's): the table data tab writes SQL.
@@ -46,10 +46,10 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
   const { t } = useTranslation("shell");
   const connections = useApp((s) => s.connections);
   const connected = useApp((s) => s.explorerConnected);
-  const activeConnection = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab)?.connectionId ?? null);
+  const activeTab = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab));
   const choices = connections.filter((c) => holdsConnection(connected, keyOf(c)));
   const [connection, setConnection] = useState<ConnectionKey | null>(() => {
-    const active = activeConnection === null ? null : connectionKey(activeConnection);
+    const active = activeTab ? tabConnection(activeTab) : null;
     for (const key of [initialConnection, active]) if (key && holdsConnection(connected, key)) return key;
     return choices[0] ? keyOf(choices[0]) : null;
   });

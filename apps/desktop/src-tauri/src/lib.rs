@@ -1503,18 +1503,18 @@ async fn draft_tls_warning(
 }
 
 /// Saves a new connection file (and, for `keychain`, its password) and reloads the
-/// configuration. Returns the new connection's identifier. A repository connection goes into
-/// the open folder `repository` (its root, ADR-075), or the shown one.
+/// configuration. Returns the new connection's identity (its folder and id). A repository
+/// connection goes into the open folder `repository` (its root, ADR-075), or the shown one.
 #[command]
 async fn add_connection(
     draft: ConnectionDraftItem,
     password: Option<String>,
     repository: Option<String>,
     state: State<'_, AppState>,
-) -> CmdResult<String> {
+) -> CmdResult<ConnectionKeyItem> {
     let draft = ConnectionDraft::try_from(draft)?;
     let password = password.map(Secret::new);
-    let id = {
+    let key = {
         let config = state.folder_config(repository.as_deref()).await?;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
         check_setup_before_saving(&state, &config, &file)?;
@@ -1524,10 +1524,10 @@ async fn add_connection(
         if id.source == Source::Workspace {
             state.change_trust(|trust| trust.accept_connection_write(&config, &id, &file))?;
         }
-        id
+        spelaion_config::ConnectionKey::of(&config, &id)
     };
     state.reload().await;
-    Ok(id.to_string())
+    Ok(ConnectionKeyItem::from(&key))
 }
 
 /// A session setup the connection's sessions would refuse (ADR-037: a write on a read-only or

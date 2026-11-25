@@ -157,14 +157,14 @@ try {
       await page.keyboard.press("Escape");
     }
   }
-  const connectionId = await panel.getByLabel("Connection", { exact: true }).inputValue();
+  // The tab's picker holds its connection's folder and id as one value (`connectionTag`).
+  const [folder, id] = JSON.parse(await panel.getByLabel("Connection", { exact: true }).inputValue());
   faultMetadata = true;
   ({ breakpointId } = await observe());
   // The event names the connection by its folder and its id (ADR-075), as `schemasRefreshed` does.
-  await page.evaluate(async (id) => {
-    const connection = (await window.__TAURI_INTERNALS__.invoke("list_connections")).find((item) => item.id === id);
-    window.dispatchEvent(new CustomEvent("spelaion-schemas-refreshed", { detail: { folder: connection?.folder ?? null, id } }));
-  }, connectionId);
+  await page.evaluate((detail) => {
+    window.dispatchEvent(new CustomEvent("spelaion-schemas-refreshed", { detail }));
+  }, { folder, id });
   await panel.getByText(/Could not load completion metadata:/).waitFor();
   await page.screenshot({ path: join(shots, "metadata-error-dark-900.png") });
   faultMetadata = false;

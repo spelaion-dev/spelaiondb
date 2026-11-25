@@ -5,7 +5,7 @@
 // in the local store. Nothing here is sent anywhere.
 
 import { useEffect, useState } from "react";
-import { connectionKey } from "../connectionKey";
+import { type ConnectionKey, connectionTag } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import { useApp } from "../store";
@@ -17,9 +17,9 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-export function VariablesDialog({ tabId, connectionId, connectionName, onClose }: {
+export function VariablesDialog({ tabId, connection, connectionName, onClose }: {
   tabId: string;
-  connectionId: string | null;
+  connection: ConnectionKey | null;
   connectionName: string | null;
   onClose(): void;
 }) {
@@ -27,7 +27,8 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
   const tabVariables = useApp((s) => s.tabs.find((tab) => tab.id === tabId)?.variables) ?? {};
   const params = useApp((s) => s.tabs.find((tab) => tab.id === tabId)?.params) ?? {};
   const updateTab = useApp((s) => s.updateTab);
-  const [saved, setSaved] = useState<{ name: string; value: string }[] | null>(connectionId ? null : []);
+  const [saved, setSaved] = useState<{ name: string; value: string }[] | null>(connection ? null : []);
+  const connectionText = connection ? connectionTag(connection) : null;
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
@@ -35,13 +36,13 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!connectionId) return;
+    if (!connection) return;
     let live = true;
-    call(commands.connectionVariables(connectionKey(connectionId)))
+    call(commands.connectionVariables(connection))
       .then((list) => { if (live) setSaved(list); })
       .catch((e: unknown) => { if (live) { setSaved([]); setError(t("variables.loadFailed", { detail: message(e) })); } });
     return () => { live = false; };
-  }, [connectionId, t]);
+  }, [connectionText, t]);
 
   const setTab = (next: Record<string, string>) => updateTab(tabId, { variables: next });
 
@@ -56,9 +57,9 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
       }
       if (where === "tab") {
         setTab({ ...tabVariables, [variable]: text });
-      } else if (connectionId) {
-        await call(commands.setConnectionVariable(connectionKey(connectionId), variable, text));
-        setSaved(await call(commands.connectionVariables(connectionKey(connectionId))));
+      } else if (connection) {
+        await call(commands.setConnectionVariable(connection, variable, text));
+        setSaved(await call(commands.connectionVariables(connection)));
       }
       return true;
     } catch (e) {
@@ -77,11 +78,11 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
       setTab(next);
       return;
     }
-    if (!connectionId) return;
+    if (!connection) return;
     setBusy(true);
     try {
-      await call(commands.setConnectionVariable(connectionKey(connectionId), variable, null));
-      setSaved(await call(commands.connectionVariables(connectionKey(connectionId))));
+      await call(commands.setConnectionVariable(connection, variable, null));
+      setSaved(await call(commands.connectionVariables(connection)));
     } catch (e) {
       setError(t("variables.saveFailed", { detail: message(e) }));
     } finally {
@@ -141,7 +142,7 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
         <h3 className="variables-heading">{connectionName ? t("variables.connection", { name: connectionName }) : t("variables.connectionNone")}</h3>
         {saved === null
           ? <p className="muted small">{t("variables.loading")}</p>
-          : saved.length > 0 ? rows("connection", saved) : <p className="muted small">{connectionId ? t("variables.noneConnection") : t("variables.pickConnection")}</p>}
+          : saved.length > 0 ? rows("connection", saved) : <p className="muted small">{connection ? t("variables.noneConnection") : t("variables.pickConnection")}</p>}
 
         <fieldset className="variables-add">
           <legend>{t("variables.add")}</legend>
@@ -157,7 +158,7 @@ export function VariablesDialog({ tabId, connectionId, connectionName, onClose }
             <span>{t("variables.keptIn")}</span>
             <select name="variableScope" value={scope} onChange={(e) => setScope(e.target.value as Scope)}>
               <option value="tab">{t("variables.scopeTab")}</option>
-              <option value="connection" disabled={!connectionId}>{t("variables.scopeConnection")}</option>
+              <option value="connection" disabled={!connection}>{t("variables.scopeConnection")}</option>
             </select>
           </label>
           <button type="submit" disabled={busy || !name.trim()}>{t("variables.addButton")}</button>

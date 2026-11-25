@@ -5,7 +5,7 @@
 // outside any transaction (a new tab has none open).
 
 import { useEffect, useState } from "react";
-import { type ConnectionKey, tabKey } from "../connectionKey";
+import { type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { MaintenanceKindItem, MaintenanceOptionsItem_Deserialize as MaintenanceOptionsItem, MaintenancePlanItem, ObjectTargetItem_Deserialize as ObjectTargetItem } from "../bindings";
@@ -120,7 +120,7 @@ export function MaintenanceDialog({
   function openTab(run: boolean) {
     if (!plan) return;
     const app = useApp.getState();
-    const tab = app.addTab(tabKey(identity), plan.sql);
+    const tab = app.addTab(identity, plan.sql);
     if (run) app.updateTab(tab, { runOnOpen: true });
     connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
     onClose();
