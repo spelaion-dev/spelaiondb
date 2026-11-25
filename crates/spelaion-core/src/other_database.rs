@@ -23,8 +23,8 @@
 use std::sync::Arc;
 
 use spelaion_config::{
-    Config, ConnectionId, Engine, OtherDatabases, ResolvedConnection, Resolver, SecretBackend,
-    TrustStore, engine_options,
+    Config, ConnectionFile, ConnectionId, Engine, OtherDatabases, ResolvedConnection, Resolver,
+    SecretBackend, TrustStore, engine_options,
 };
 
 use crate::open::{Engines, OpenConnection, OpenError, OpenOptions, open_connection};
@@ -96,6 +96,21 @@ pub enum OtherDatabaseError {
     Open(#[from] OpenError),
 }
 
+/// Whether a connection's file still opens `database` (ADR-074): its own, one its `databases`
+/// names (exactly), or any under `all_databases`. A restored tab that was on a database its file
+/// no longer opens comes back on its connection's own, with a note (SDB-505). Under
+/// `all_databases` the server's list decides when the tab connects.
+pub fn file_opens_database(file: &ConnectionFile, database: &str) -> bool {
+    file.database.as_deref() == Some(database)
+        || (file.engine.opens_other_databases()
+            && file.pooler.is_none()
+            && (file.all_databases
+                || file
+                    .databases
+                    .as_ref()
+                    .is_some_and(|names| names.iter().any(|n| n == database))))
+}
+
 /// The databases `own` opens: its own, and the others its file names or the server lists.
 pub async fn connection_databases(own: &OpenConnection) -> ConnectionDatabases {
     let database = own.resolved.params.database.clone();
@@ -150,6 +165,18 @@ pub async fn open_other_database(
 ) -> Result<OpenConnection, OtherDatabaseError> {
     if database == own.resolved.params.database {
         return Ok(open_connection(own.resolved.clone(), engines, options, results).await?);
+    }
+    // The connection's own database, asked from a session on another one (a tab's picker,
+    // SDB-505): as its saved file opens it, its default schema included.
+    if let Ok(saved) = Resolver::new(
+        configuration.config,
+        configuration.trust,
+        configuration.backend,
+    )
+    .resolve(&own.resolved.id)
+        && saved.params.database == database
+    {
+        return Ok(open_connection(saved, engines, options, results).await?);
     }
     server_refusal(own)?;
     match &own.resolved.other_databases {

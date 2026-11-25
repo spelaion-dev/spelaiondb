@@ -4721,6 +4721,7 @@ async fn column_top_values(
 async fn filtered_table(
     state: &AppState,
     connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
 ) -> CmdResult<(spelaion_core::FilteredTable, Arc<dyn Dialect>)> {
@@ -4736,6 +4737,8 @@ async fn filtered_table(
         spelaion_core::FilteredTable {
             workspace,
             connection: id.to_string(),
+            // The other database of the connection the table is in (ADR-074, SDB-505).
+            database: database.filter(|d| !d.is_empty()),
             schema,
             name,
         },
@@ -4750,11 +4753,12 @@ async fn filtered_table(
 #[command]
 async fn table_filters(
     connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
     state: State<'_, AppState>,
 ) -> CmdResult<TableFiltersItem> {
-    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    let (table, dialect) = filtered_table(&state, connection, database, schema, name).await?;
     state
         .history
         .table_filters(dialect.as_ref(), table)
@@ -4767,12 +4771,13 @@ async fn table_filters(
 #[command]
 async fn record_table_filter(
     connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
     filter: String,
     state: State<'_, AppState>,
 ) -> CmdResult<TableFiltersItem> {
-    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    let (table, dialect) = filtered_table(&state, connection, database, schema, name).await?;
     state
         .history
         .record_table_filter(dialect.as_ref(), table, &filter)
@@ -4785,12 +4790,13 @@ async fn record_table_filter(
 #[command]
 async fn forget_table_filter(
     connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
     filter: String,
     state: State<'_, AppState>,
 ) -> CmdResult<TableFiltersItem> {
-    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    let (table, dialect) = filtered_table(&state, connection, database, schema, name).await?;
     state
         .history
         .forget_table_filter(dialect.as_ref(), table, &filter)
@@ -4803,12 +4809,13 @@ async fn forget_table_filter(
 #[command]
 async fn set_table_default_filter(
     connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
     filter: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<TableFiltersItem> {
-    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    let (table, dialect) = filtered_table(&state, connection, database, schema, name).await?;
     state
         .history
         .set_table_default_filter(dialect.as_ref(), table, filter.as_deref())

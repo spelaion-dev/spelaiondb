@@ -77,6 +77,8 @@ impl From<&spelaion_config::ConnectionKey> for ConnectionKeyItem {
 pub struct BookmarkItem {
     /// The connection's identity (ADR-075).
     pub connection: ConnectionKeyItem,
+    /// The other database of the connection it is in (ADR-074, SDB-505); `None` for its own.
+    pub database: Option<String>,
     /// The schema the object is in, or the schema itself (with an empty `name`).
     pub schema: String,
     pub name: String,
@@ -179,6 +181,7 @@ impl BookmarkItem {
     pub fn stored(b: spelaion_core::Bookmark, connection: ConnectionKeyItem) -> Self {
         let spelaion_core::Bookmark {
             connection: _,
+            database,
             schema,
             name,
             kind,
@@ -186,6 +189,7 @@ impl BookmarkItem {
         } = b;
         Self {
             connection,
+            database,
             schema,
             name,
             kind: kind.into(),
@@ -199,6 +203,7 @@ impl From<BookmarkItem> for spelaion_core::Bookmark {
     fn from(b: BookmarkItem) -> Self {
         let BookmarkItem {
             connection,
+            database,
             schema,
             name,
             kind,
@@ -206,6 +211,7 @@ impl From<BookmarkItem> for spelaion_core::Bookmark {
         } = b;
         Self {
             connection: connection.id,
+            database: database.filter(|d| !d.is_empty()),
             schema,
             name,
             kind: kind.into(),
@@ -7095,6 +7101,8 @@ pub struct OpenTabItem {
     pub title: Option<String>,
     pub text: String,
     pub connection: Option<String>,
+    /// The other database of its connection it was on (ADR-074, SDB-505); `None` for its own.
+    pub database: Option<String>,
     pub pinned: bool,
     pub on_error: Option<OnErrorItem>,
     pub timeout_seconds: Option<u32>,
@@ -7108,6 +7116,7 @@ impl From<OpenTabItem> for spelaion_core::SavedTab {
             title: t.title,
             text: t.text,
             connection: t.connection,
+            database: t.database.filter(|d| !d.is_empty()),
             pinned: t.pinned,
             on_error: t.on_error.map(Into::into),
             timeout_seconds: t.timeout_seconds,
@@ -7129,6 +7138,7 @@ impl From<spelaion_core::SavedTab> for OpenTabItem {
             title: t.title,
             text: t.text,
             connection: t.connection,
+            database: t.database,
             pinned: t.pinned,
             on_error: t.on_error.map(Into::into),
             timeout_seconds: t.timeout_seconds,
@@ -7150,9 +7160,17 @@ impl From<spelaion_core::SavedTab> for OpenTabItem {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RestoreNoteItem {
-    ConnectionMissing { connection: String },
+    ConnectionMissing {
+        connection: String,
+    },
+    /// Its connection no longer opens the database it was on (ADR-074): it is on its own now.
+    DatabaseMissing {
+        database: String,
+    },
     FileMissing,
-    FileUnreadable { message: String },
+    FileUnreadable {
+        message: String,
+    },
     FileChangedOnDisk,
 }
 
@@ -7161,6 +7179,9 @@ impl From<spelaion_core::RestoreNote> for RestoreNoteItem {
         match n {
             spelaion_core::RestoreNote::ConnectionMissing { connection } => {
                 Self::ConnectionMissing { connection }
+            }
+            spelaion_core::RestoreNote::DatabaseMissing { database } => {
+                Self::DatabaseMissing { database }
             }
             spelaion_core::RestoreNote::FileMissing => Self::FileMissing,
             spelaion_core::RestoreNote::FileUnreadable { message } => {
