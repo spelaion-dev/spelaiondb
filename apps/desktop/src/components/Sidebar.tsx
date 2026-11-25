@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { explorerSession, windowConnection } from "../windowContext";
-import { connectionKey, connectionTag, holdsConnection, keyOf, listedConnection, sameConnection, tabKey, tabOnConnection, type ConnectionKey } from "../connectionKey";
+import { connectionKey, connectionTag, databaseOf, holdsConnection, keyOf, listedConnection, onDatabase, sameConnection, tabKey, tabOnConnection, type ConnectionKey } from "../connectionKey";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { chooseFolder, workspaceParent } from "../dialogs";
@@ -68,7 +68,7 @@ import { StructureDialog } from "./StructureDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AccountDialog, usePrincipalActions, type AccountAction } from "./AccountDialog";
 import { PrivilegesDialog } from "./PrivilegesDialog";
-import type { MaintenanceKindItem, PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } from "../bindings";
+import type { ConnectionDatabasesItem_Serialize as ConnectionDatabasesItem, ExplorerDatabaseItem_Serialize as ExplorerDatabaseItem, MaintenanceKindItem, PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } from "../bindings";
 import { MaintenanceDialog } from "./MaintenanceDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
@@ -1889,6 +1889,9 @@ function ConnectionNode({
   const [open, setOpen] = useState(false);
   const [schemas, setSchemas] = useState<SchemaItem[] | null>(null);
   const [serverObjects, setServerObjects] = useState<ServerObjectItem[]>([]);
+  /** The databases it shows (ADR-074, SDB-504), as the core answers once it is connected: a
+   *  connection that opens only its own keeps today's tree, with no database level. */
+  const [databases, setDatabases] = useState<ConnectionDatabasesItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** Bumped by "Refresh all schemas": every schema and table node reads its data again. */
@@ -1931,9 +1934,11 @@ function ConnectionNode({
   useEffect(() => {
     const closed = (event: Event) => {
       const detail = (event as CustomEvent<ExplorerSessionClosed>).detail;
-      if (!sameConnection(detail.connection, key)) return;
+      // Another database's session is that database's row's (SDB-504).
+      if (!sameConnection(detail.connection, key) || databaseOf(detail.connection) !== null) return;
       setSchemas(null);
       setServerObjects([]);
+      setDatabases(null);
       setOpen(false);
       useApp.getState().setExplorerConnected(key, false);
       setError(detail.idleSeconds != null ? t("idleClosed", { minutes: Math.max(1, Math.round(detail.idleSeconds / 60)) }) : null);
@@ -2007,8 +2012,12 @@ function ConnectionNode({
         return [];
       }),
     ]);
+    // Which databases it shows is the core's answer (ADR-074): its own only, several, or its
+    // own because the others could not be listed, and why.
+    const listed = await call(commands.connectionDatabases(session)).catch((): ConnectionDatabasesItem => ({ kind: "own" }));
     setSchemas(all);
     setServerObjects(server);
+    setDatabases(listed);
     useApp.getState().setExplorerConnected(key, true);
     void templatesOf(session).catch(() => undefined);
   }
@@ -2050,6 +2059,26 @@ function ConnectionNode({
       filter={inner}
       objectFilter={filters?.objects ?? null}
       columnFilter={filters?.columns ?? null}
+      onConfigureFilter={configureFilter}
+      onFilterName={filterName}
+    />
+  ));
+  // A connection that opens several databases (ADR-074, SDB-504): under it, its databases,
+  // each with its schemas and its extensions; roles and tablespaces, which are the server's,
+  // stay under the connection, read from its own database's session.
+  const byDatabase = databases !== null && databases.kind !== "own";
+  const databaseNodes = databases !== null && databases.kind !== "own" && databases.databases.map((database) => (
+    <DatabaseNode
+      key={database.name}
+      identity={key}
+      ownSession={session}
+      database={database}
+      ownSchemaNodes={database.own ? schemaNodes : null}
+      ownExtensions={database.own ? shownServerObjects.filter((o) => o.kind === "extension") : []}
+      generation={generation}
+      onRefreshAll={() => void refreshAll()}
+      filter={inner}
+      filters={filters}
       onConfigureFilter={configureFilter}
       onFilterName={filterName}
     />
@@ -2203,8 +2232,10 @@ function ConnectionNode({
           {busy && <div className="muted small">{t(schemas ? "refreshing" : "connecting")}</div>}
           {error && <div className="error small">{error}</div>}
           {error && schemas === null && <MissingPlugin engine={connection.engine} />}
-          {!foldersFirst && schemaNodes}
-          {schemas && SERVER_FOLDERS.map((folder) => {
+          {databases?.kind === "ownOnly" && <div className="muted small row-note">{t("databases.ownOnly", { reason: databases.reason })}</div>}
+          {byDatabase && !foldersFirst && databaseNodes}
+          {!byDatabase && !foldersFirst && schemaNodes}
+          {schemas && SERVER_FOLDERS.filter((folder) => !byDatabase || folder !== "extensions").map((folder) => {
             const items = shownServerObjects.filter((o) => serverFolder(o.kind) === folder);
             const kind = folderAccountKind(folder);
             // A folder of accounts the engine can create shows even empty (the session may
@@ -2235,7 +2266,8 @@ function ConnectionNode({
               )
             );
           })}
-          {foldersFirst && schemaNodes}
+          {byDatabase && foldersFirst && databaseNodes}
+          {!byDatabase && foldersFirst && schemaNodes}
         </div>
       )}
       {account?.action === "privileges" && (
@@ -2267,6 +2299,228 @@ function ConnectionNode({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * One database of a PostgreSQL connection that opens several (ADR-074, SDB-504): its schemas,
+ * with their folders (ADR-024), and its extensions, which belong to a database.
+ * - Its own database shows what the connection's session read.
+ * - Another opens a session of its own when its row is first expanded, never before, through
+ *   the core's `open_other_database` (`connectDatabase`), which refuses what ADR-074 refuses. It
+ *   closes from its row ("Disconnect") or with the connection's explorer session (the desktop
+ *   closes it with that one).
+ * - One that has a connection of its own leads to that connection instead of opening.
+ * Its nodes take `onDatabase(identity, name)` as their identity: their session and catalog
+ * entries are that database's, and a tab opened from them connects to that database.
+ */
+function DatabaseNode({
+  identity,
+  ownSession,
+  database,
+  ownSchemaNodes,
+  ownExtensions,
+  generation,
+  onRefreshAll,
+  filter,
+  filters,
+  onConfigureFilter,
+  onFilterName,
+}: {
+  /** The connection's own identity. */
+  identity: ConnectionKey;
+  /** The connection's explorer session, on its own database. */
+  ownSession: string;
+  database: ExplorerDatabaseItem;
+  /** Its own database's schemas, as the connection's node read them; null for another. */
+  ownSchemaNodes: ReactNode;
+  ownExtensions: ServerObjectItem[];
+  generation: number;
+  onRefreshAll(): void;
+  /** The quick filter's text ("" when nothing is filtered here). */
+  filter: string;
+  /** The connection's patterns (ADR-025): they apply to every database the same. */
+  filters: ExplorerFilter | null;
+  onConfigureFilter(kind: FilterKind): void;
+  onFilterName: FilterName;
+}) {
+  const { t } = useTranslation("shell");
+  const own = database.own;
+  const key = useMemo(() => onDatabase(identity, own ? null : database.name), [connectionTag(identity), own, database.name]);
+  const session = own ? ownSession : explorerSession(key);
+  // Its own database opens with the connection, as its schemas always did.
+  const [open, setOpen] = useState(own);
+  const [schemas, setSchemas] = useState<SchemaItem[] | null>(null);
+  const [extensions, setExtensions] = useState<ServerObjectItem[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useContextMenu();
+  const showSystem = usePreferences((s) => s.explorer.showSystem);
+  const sort = useSortByName();
+
+  async function load() {
+    const [all, server] = await Promise.all([
+      call(commands.listSchemas(session, filters?.schemas ?? null, usePreferences.getState().explorer.serverSideFilters)),
+      call(commands.listServerObjects(session)).catch((): ServerObjectItem[] => []),
+    ]);
+    setSchemas(all);
+    setExtensions(server.filter((o) => o.kind === "extension"));
+  }
+
+  /** Expands the row, opening the database's session the first time. */
+  async function expand(): Promise<boolean> {
+    setOpen(true);
+    if (own) return true;
+    if (database.ownedBy || busy) return false;
+    if (schemas) return true;
+    setBusy(true);
+    setError(null);
+    try {
+      await call(commands.connectDatabase(ownSession, session, database.name));
+      await load();
+      return true;
+    } catch (e) {
+      setError(errorText(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function disconnect() {
+    void call(commands.disconnect(session)).catch(() => undefined);
+    setSchemas(null);
+    setExtensions([]);
+    setOpen(false);
+  }
+
+  /** A new query connected to this database. */
+  async function newQuery() {
+    if (own) {
+      newQueryOnConnection(identity);
+      return;
+    }
+    if (!(await expand())) return;
+    const tab = useApp.getState().addTab(tabKey(identity));
+    connectTabFromExplorer(tab, session);
+  }
+
+  // "Refresh all schemas" on the connection reads an opened database again too.
+  useOnChange(generation, () => {
+    if (!own && schemas) void load().catch((e: unknown) => setError(errorText(e)));
+  });
+  // Its session was lost or closed for being idle (ADR-029): the row collapses and says why;
+  // expanding it again opens a new one, nothing else does.
+  useEffect(() => {
+    if (own) return;
+    const closed = (event: Event) => {
+      const detail = (event as CustomEvent<ExplorerSessionClosed>).detail;
+      if (!sameConnection(detail.connection, identity) || databaseOf(detail.connection) !== database.name) return;
+      setSchemas(null);
+      setExtensions([]);
+      setOpen(false);
+      setError(detail.idleSeconds != null ? t("idleClosed", { minutes: Math.max(1, Math.round(detail.idleSeconds / 60)) }) : null);
+    };
+    window.addEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
+    return () => window.removeEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
+  }, [own, connectionTag(identity), database.name, t]);
+
+  const owner = database.ownedBy;
+  const shownExtensions = sort((own ? ownExtensions : extensions).filter((o) => (showSystem || !o.system) && matchesFilter(o.name, filter)), (o) => o.name);
+  const schemaNodes = own
+    ? ownSchemaNodes
+    : schemas && sort(schemas.filter((s) => showSystem || !s.system), (s) => s.name).map((s) => (
+      <SchemaNode
+        key={s.name}
+        session={session}
+        identity={key}
+        schema={s.name}
+        generation={generation}
+        onRefreshAll={onRefreshAll}
+        filter={filter}
+        objectFilter={filters?.objects ?? null}
+        columnFilter={filters?.columns ?? null}
+        onConfigureFilter={onConfigureFilter}
+        onFilterName={onFilterName}
+      />
+    ));
+  const label = own ? t("databases.own", { name: database.name }) : database.name;
+  return (
+    <div className="node database-node">
+      <div
+        // A database with a connection of its own has no children here: it lines up as a leaf.
+        className={`row database-row${owner ? " leaf-row" : ""}`}
+        tabIndex={-1}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          if (!owner) setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        onDoubleClick={(e) => {
+          if (!owner && !(e.target as Element).closest("button")) void newQuery();
+        }}
+        onKeyDown={(e) => {
+          if (owner) return;
+          if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey)) {
+            e.preventDefault();
+            const rect = e.currentTarget.getBoundingClientRect();
+            setMenu({ x: rect.left + 24, y: rect.bottom });
+          }
+        }}
+      >
+        {!owner && (
+          <button
+            className="twisty"
+            onClick={() => void (open ? setOpen(false) : expand())}
+            aria-expanded={open}
+            aria-label={t("databases.toggle", { name: database.name })}
+            title={t("databases.toggle", { name: database.name })}
+          >
+            <Icon name={open ? "chevronDown" : "chevronRight"} />
+          </button>
+        )}
+        <Icon name="database" />
+        <span className="label" title={owner ? t("databases.ownedHint", { name: database.name, connection: owner.name }) : label}>{label}</span>
+        {owner && (
+          <button
+            type="button"
+            className="link small"
+            title={t("databases.ownedHint", { name: database.name, connection: owner.name })}
+            onClick={() => {
+              useApp.getState().setSidebarSection("connections");
+              useApp.getState().revealInExplorer({ connection: owner.connection });
+            }}
+          >
+            {t("databases.openOwner", { connection: owner.name })}
+          </button>
+        )}
+      </div>
+      {menu && (
+        <ObjectMenu at={menu} label={t("databases.menu", { name: database.name })}>
+          <button type="button" role="menuitem" autoFocus onClick={() => { setMenu(null); void newQuery(); }}>{t("newQuery")}</button>
+          {!own && schemas && (
+            <button type="button" role="menuitem" onClick={() => { setMenu(null); disconnect(); }}>{t("databases.disconnect")}</button>
+          )}
+        </ObjectMenu>
+      )}
+      {open && !owner && (
+        <div className="children">
+          {busy && <div className="muted small">{t("connecting")}</div>}
+          {error && <div className="error small" role="alert">{error}</div>}
+          {shownExtensions.length > 0 && (
+            <Folder label={t("folders.extensions")} count={shownExtensions.length} forceOpen={filter !== ""}>
+              {shownExtensions.map((o) => (
+                <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
+                  <span className="label">{o.name}</span>
+                  {o.detail && <span className="muted small">{o.detail}</span>}
+                </div>
+              ))}
+            </Folder>
+          )}
+          {schemaNodes}
+        </div>
+      )}
+      {!open && error && <div className="error small row-note" role="alert">{error}</div>}
     </div>
   );
 }

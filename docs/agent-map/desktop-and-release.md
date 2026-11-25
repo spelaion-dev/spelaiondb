@@ -194,7 +194,17 @@
   stands; its unit tests pin the transitions). The page reads its kind once in `main.tsx`
   (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Session
   keys come from `store.ts` (tabs) and `explorerSession` (explorer), both with `sessionPrefix()`:
-  never write `meta:…` or `tab-${n}` by hand. `DesktopSession::window` is set from the
+  never write `meta:…` or `tab-${n}` by hand. A PostgreSQL connection that opens several
+  databases (ADR-074, SDB-504) has a database level in the explorer (`DatabaseNode` in
+  `Sidebar.tsx`), from `connection_databases` (`explorer_databases.rs`: the core's list and
+  each database's owner connection). Another database's nodes take `onDatabase(key, name)`
+  (`connectionIdentity.ts`) as their identity, so `explorerSession` and `catalogKey` give that
+  database its own session and catalog entries through `connectionTag`, while everything keyed
+  by the connection (`sameConnection`, filters, commands) ignores it; a tab opened from them
+  connects from that session. `connect_database` opens it through the core's
+  `open_other_database`; its `DesktopSession` is marked `other_database` (a session made from
+  it, after an edit, is refused rather than opened on the own database) and records its
+  `explorer_parent`, so `disconnect` of the connection's explorer session closes it too. `DesktopSession::window` is set from the
   calling window in `connect` / `connect_from_session`; `close_window_sessions` closes one
   window's sessions. An event meant for one window is sent with `emit_to` and heard with
   `events.x(getCurrentWebviewWindow()).listen` (a plain `listen` hears every target): SSH

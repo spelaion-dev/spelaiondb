@@ -1081,6 +1081,14 @@ export const commands = {
 	 *  one does. Passwords never cross back into the UI.
 	 */
 	connectFromSession: (source: string, session: string, database: string | null, editor: boolean) => typedError<FromSessionOutcome, string>(__TAURI_INVOKE("connect_from_session", { source, session, database, editor })),
+	/**  The databases the explorer shows under the connection whose explorer session is `session`. */
+	connectionDatabases: (session: string) => typedError<ConnectionDatabasesItem_Serialize, string>(__TAURI_INVOKE("connection_databases", { session })),
+	/**
+	 *  Opens `database` of the connection whose explorer session is `source` as the session
+	 *  `session` (ADR-074 point 4): a new session, never a switch, with the connection's settings and
+	 *  the password typed for `source`. What the core refuses comes back as its reason.
+	 */
+	connectDatabase: (source: string, session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("connect_database", { source, session, database })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
@@ -2066,6 +2074,33 @@ item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string } 
  */
 { kind: "missingVariables"; names: string[] };
 
+/**  The databases a connection's explorer shows (`spelaion_core::ConnectionDatabases`). */
+export type ConnectionDatabasesItem = ConnectionDatabasesItem_Serialize | ConnectionDatabasesItem_Deserialize;
+
+/**  The databases a connection's explorer shows (`spelaion_core::ConnectionDatabases`). */
+export type ConnectionDatabasesItem_Deserialize = 
+/**  Only its own: the tree has no database level. */
+{ kind: "own" } | 
+/**  Several: a database level, its own first. */
+{ kind: "several"; databases: ExplorerDatabaseItem_Deserialize[] } | 
+/**
+ *  Its own only, because the others could not be listed: a database level with its own,
+ *  and why.
+ */
+{ kind: "ownOnly"; databases: ExplorerDatabaseItem_Deserialize[]; reason: string };
+
+/**  The databases a connection's explorer shows (`spelaion_core::ConnectionDatabases`). */
+export type ConnectionDatabasesItem_Serialize = 
+/**  Only its own: the tree has no database level. */
+{ kind: "own" } | 
+/**  Several: a database level, its own first. */
+{ kind: "several"; databases: ExplorerDatabaseItem_Serialize[] } | 
+/**
+ *  Its own only, because the others could not be listed: a database level with its own,
+ *  and why.
+ */
+{ kind: "ownOnly"; databases: ExplorerDatabaseItem_Serialize[]; reason: string };
+
 /**
  *  What the "add connection" form sends. The password travels apart and is never stored in
  *  the connection file.
@@ -2680,6 +2715,21 @@ export type DataSearchSummaryItem = {
 	hits: number,
 };
 
+/**  A connection that a database opens only as (ADR-074 point 3). */
+export type DatabaseOwnerItem = DatabaseOwnerItem_Serialize | DatabaseOwnerItem_Deserialize;
+
+/**  A connection that a database opens only as (ADR-074 point 3). */
+export type DatabaseOwnerItem_Deserialize = {
+	connection: ConnectionKeyItem_Deserialize,
+	name: string,
+};
+
+/**  A connection that a database opens only as (ADR-074 point 3). */
+export type DatabaseOwnerItem_Serialize = {
+	connection: ConnectionKeyItem_Serialize,
+	name: string,
+};
+
 /**
  *  What a relation uses and what uses it; `untracked` are the kinds the engine does not record
  *  (SDB-393).
@@ -3253,6 +3303,27 @@ export type ExplainOptions_Serialize = {
 	confirmed: boolean,
 	/**  This tab's override, as for ordinary scripts: None uses the connection, zero disables. */
 	timeoutSeconds: number | null,
+};
+
+/**  One database of the connection, its own first. */
+export type ExplorerDatabaseItem = ExplorerDatabaseItem_Serialize | ExplorerDatabaseItem_Deserialize;
+
+/**  One database of the connection, its own first. */
+export type ExplorerDatabaseItem_Deserialize = {
+	name: string,
+	/**  The connection's own database (`database` in its file). */
+	own: boolean,
+	/**  Another connection has it as its own: its row leads there instead of opening. */
+	ownedBy?: DatabaseOwnerItem_Deserialize | null,
+};
+
+/**  One database of the connection, its own first. */
+export type ExplorerDatabaseItem_Serialize = {
+	name: string,
+	/**  The connection's own database (`database` in its file). */
+	own: boolean,
+	/**  Another connection has it as its own: its row leads there instead of opening. */
+	ownedBy: DatabaseOwnerItem_Serialize | null,
 };
 
 /**  A connection's explorer filter: personal, per workspace and connection (ADR-025). */

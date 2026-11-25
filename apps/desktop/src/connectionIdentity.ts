@@ -15,6 +15,26 @@ import type { ConnectionKeyItem_Serialize } from "./bindings";
 
 export type ConnectionKey = ConnectionKeyItem_Serialize;
 
+/**
+ * An explorer key on one of the other databases of a PostgreSQL connection that opens several
+ * (ADR-074, SDB-504): the connection's pair and, beside it, never inside its id, the database.
+ * Its nodes take it as their identity, so their session (`explorerSession`) and their entries
+ * of the catalog (`catalogKey`) are that database's, through `connectionTag`. Everything keyed
+ * by the connection alone (`sameConnection`, its filters, the commands' connection) ignores it.
+ */
+type DatabaseKey = ConnectionKey & { database?: string };
+
+/** `key` on `database`, one of its connection's other databases; `null` is its own. */
+export function onDatabase(key: ConnectionKey, database: string | null): ConnectionKey {
+  const scoped: DatabaseKey = database === null ? { folder: key.folder, id: key.id } : { folder: key.folder, id: key.id, database };
+  return scoped;
+}
+
+/** The other database an explorer key is on (`onDatabase`), or null for the connection's own. */
+export function databaseOf(key: ConnectionKey): string | null {
+  return (key as DatabaseKey).database ?? null;
+}
+
 /** The identity of a listed connection. */
 export function keyOf(connection: Pick<ConnectionItem, "folder" | "id">): ConnectionKey {
   return { folder: connection.folder, id: connection.id };
@@ -35,7 +55,9 @@ export function listedConnection(connections: ConnectionItem[], key: ConnectionK
  *  apart (JSON), so no folder and id can ever give the text of another; read back only by
  *  `connectionOfTag`, never taken apart by hand. */
 export function connectionTag(key: ConnectionKey): string {
-  return JSON.stringify([key.folder ?? null, key.id]);
+  const database = databaseOf(key);
+  // The connection's own database keeps the pair's text, as before databases had a level.
+  return JSON.stringify(database === null ? [key.folder ?? null, key.id] : [key.folder ?? null, key.id, database]);
 }
 
 /** The pair `connectionTag` wrote, or null for any other text. */
@@ -44,6 +66,9 @@ export function connectionOfTag(tag: string): ConnectionKey | null {
     const value: unknown = JSON.parse(tag);
     if (Array.isArray(value) && value.length === 2 && (value[0] === null || typeof value[0] === "string") && typeof value[1] === "string") {
       return { folder: value[0], id: value[1] };
+    }
+    if (Array.isArray(value) && value.length === 3 && (value[0] === null || typeof value[0] === "string") && typeof value[1] === "string" && typeof value[2] === "string") {
+      return onDatabase({ folder: value[0], id: value[1] }, value[2]);
     }
   } catch {
     // Not a tag.

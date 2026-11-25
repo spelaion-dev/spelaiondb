@@ -9,6 +9,7 @@ mod dashboard;
 mod diagnostics;
 mod diagram;
 mod dto;
+mod explorer_databases;
 mod file_dialog;
 mod files;
 mod import;
@@ -121,6 +122,12 @@ struct DesktopSession {
     /// What the session was opened from (SDB-426), without secrets: a session made from this
     /// one reuses its connection only while the configuration still says the same.
     definition: Option<ConnectionDefinition>,
+    /// Opened on another database of its connection (ADR-074), or made from such a session: the
+    /// saved file alone would open the connection's own database instead.
+    other_database: bool,
+    /// The connection's explorer session it was opened from as one of its other databases
+    /// (ADR-074, SDB-504): it closes with that session.
+    explorer_parent: Option<String>,
 }
 
 /// The definition `id` has in `config` now (SDB-426), as a session records it: with every
@@ -2254,6 +2261,8 @@ async fn connect(
             history_workspace,
             folder: connection_folder,
             definition,
+            other_database: false,
+            explorer_parent: None,
         },
     );
     drop(sessions);
@@ -2288,7 +2297,7 @@ async fn connect_from_session(
     let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
     };
-    let (source_open, typed, history_workspace, connection_folder, opened) = {
+    let (source_open, typed, history_workspace, connection_folder, opened, other_database) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
             .get(&source)
@@ -2299,6 +2308,7 @@ async fn connect_from_session(
             source.history_workspace.clone(),
             source.folder.clone(),
             source.definition.clone(),
+            source.other_database,
         )
     };
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
@@ -2324,6 +2334,11 @@ async fn connect_from_session(
                 else {
                     return Ok(FromSessionOutcome::ConnectAgain);
                 };
+                // A session on another database of the connection (ADR-074): the saved file
+                // would open its own database instead, so nothing is opened in its place.
+                if other_database {
+                    return Err("the connection was edited since this database was opened: collapse its row in the explorer and expand it again".into());
+                }
                 let carried = spelaion_core::session_source::carried_password(
                     &source_open.resolved,
                     &fresh,
@@ -2392,6 +2407,8 @@ async fn connect_from_session(
             history_workspace,
             folder: connection_folder,
             definition,
+            other_database,
+            explorer_parent: None,
         },
     );
     Ok(FromSessionOutcome::Connected { server_version })
@@ -2768,14 +2785,28 @@ async fn close_window_sessions(state: &AppState, label: &str) {
 async fn disconnect(session: String, state: State<'_, AppState>) -> CmdResult<()> {
     // Its dashboard stops with it (SDB-192).
     state.dashboards.stop(&session);
-    let removed = state.sessions.lock().await.remove(&session);
-    // A run waiting for an answer after an error stops: its tab is gone (ADR-035). A run
-    // that is executing goes on to its end, as before.
-    if let Some(open) = &removed {
+    let (removed, children) = {
+        let mut sessions = state.sessions.lock().await;
+        let removed = sessions.remove(&session);
+        // The other databases its explorer opened close with it (ADR-074, SDB-504).
+        let children: Vec<String> = sessions
+            .iter()
+            .filter(|(_, s)| s.explorer_parent.as_deref() == Some(session.as_str()))
+            .map(|(key, _)| key.clone())
+            .collect();
+        let children: Vec<DesktopSession> = children
+            .iter()
+            .filter_map(|key| sessions.remove(key))
+            .collect();
+        (removed, children)
+    };
+    for open in removed.into_iter().chain(children) {
+        // A run waiting for an answer after an error stops: its tab is gone (ADR-035). A run
+        // that is executing goes on to its end, as before.
         open.open.session.stop_paused_run();
-    }
-    if let Some(open) = removed.and_then(|o| Arc::try_unwrap(o.open).ok()) {
-        open.close().await;
+        if let Ok(open) = Arc::try_unwrap(open.open) {
+            open.close().await;
+        }
     }
     Ok(())
 }
@@ -6888,6 +6919,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_history_enabled,
             connect,
             connect_from_session,
+            explorer_databases::connection_databases,
+            explorer_databases::connect_database,
             disconnect,
             list_processes,
             control_process,
