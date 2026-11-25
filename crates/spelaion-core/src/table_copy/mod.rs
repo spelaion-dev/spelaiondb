@@ -13,7 +13,7 @@ pub use run::{
     Blocked, COPY_BATCH_ROWS, CopyError, CopyHow, CopyPlan, CopyRequest, CopySummary, NotCopied,
     plan_copy, run_copy,
 };
-pub use types::{Loss, Portable, TargetType, portable, target_type};
+pub use types::{Loss, Portable, TargetType, portable, takes_bytes, target_type};
 pub use values::text_for;
 
 /// A source column as the copy sees it: its name, its type as its engine writes it, and the
@@ -42,14 +42,21 @@ impl ColumnPlan {
     }
 }
 
-/// What `column`, on `source` (a dialect's name), becomes on `target`.
-pub fn plan_column(source: &str, column: &SourceColumn, target: &str) -> ColumnPlan {
+/// What `column`, on `source` (a dialect's name), becomes on `target`. `bytes`: the target's
+/// connection loads columns of bytes (`Capabilities::insert_bytes`, SDB-464), so a binary column
+/// goes as its bytes and loses nothing; without it, binary is refused where the target would
+/// store its hex text (ADR-069's point 8).
+pub fn plan_column(source: &str, column: &SourceColumn, target: &str, bytes: bool) -> ColumnPlan {
     let kind = portable(source, &column.native_type, column.logical);
+    let mut target = target_type(target, kind, column.nullable);
+    if bytes {
+        target.losses.retain(|loss| *loss != Loss::BinaryNotYet);
+    }
     ColumnPlan {
         name: column.name.clone(),
         source_type: column.native_type.clone(),
         kind,
-        target: target_type(target, kind, column.nullable),
+        target,
     }
 }
 

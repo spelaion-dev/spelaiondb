@@ -653,6 +653,7 @@ pub async fn connect(remote: &Remote, path: &str, read_only: bool) -> Result<Box
             // Values cannot be bound through the server's sqlite3 shell (ADR-038).
             insert_rows: false,
             bound_params: false,
+            insert_bytes: false,
         },
     }))
 }

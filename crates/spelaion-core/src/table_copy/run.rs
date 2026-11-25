@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use spelaion_config::Safeguards;
 use spelaion_driver_api::{DriverError, ExecEvent, ExecOptions, LogicalType, TableInfo, Value};
 
-use super::{ColumnPlan, SourceColumn, plan_column, text_for};
+use super::{ColumnPlan, Portable, SourceColumn, plan_column, takes_bytes, text_for};
 use crate::Session;
 use crate::export_stream::{ExportError, read_only_transaction};
 use crate::import::{
@@ -50,7 +50,8 @@ pub struct CopyRequest {
 /// Why a column cannot be copied as it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Blocked {
-    /// Binary into a target that would store its hex text (ADR-069's point 8).
+    /// Binary into a target that would store its hex text: one whose connection does not load
+    /// bytes (ADR-069's point 8, SDB-464).
     Binary,
     /// Masked on the source connection (ADR-051): its values never leave it.
     Masked,
@@ -180,6 +181,8 @@ struct Prepared {
     select: String,
     /// Which source columns (by position in the `SELECT`) are loaded, in the target's order.
     loaded: Vec<usize>,
+    /// For each loaded column, whether it goes as bytes (SDB-464).
+    bytes: Vec<bool>,
     logicals: Vec<LogicalType>,
 }
 
@@ -201,6 +204,8 @@ async fn prepare(
         source_table(source, &request.source_schema, &request.source_table).await?;
     let target_engine = target.dialect().name();
     let source_engine = source.dialect().name();
+    // A connection that loads bytes takes binary columns as they are (SDB-464).
+    let insert_bytes = target.connection().capabilities().insert_bytes;
     let new_table = matches!(request.how, CopyHow::NewTable { .. });
     let mut plans = Vec::new();
     let mut skipped = Vec::new();
@@ -208,7 +213,7 @@ async fn prepare(
     let mut mappings = Vec::new();
     let mut loaded = Vec::new();
     for (index, column) in columns.iter().enumerate() {
-        let mut plan = plan_column(source_engine, column, target_engine);
+        let mut plan = plan_column(source_engine, column, target_engine, insert_bytes);
         if let Some((_, chosen)) = request.types.iter().find(|(name, _)| name == &column.name) {
             plan.target.sql_type = chosen.trim().to_string();
         }
@@ -278,7 +283,7 @@ async fn prepare(
         },
     };
     let names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
-    let resolved = resolve_columns(
+    let mut resolved = resolve_columns(
         target,
         &import_target,
         &mappings,
@@ -288,6 +293,18 @@ async fn prepare(
         target_read_only,
     )
     .await?;
+    // A binary column goes as its bytes into a column that stores them as they are; into any
+    // other (a text column of a table that is there) as its text, as before (SDB-464).
+    let bytes: Vec<bool> = loaded
+        .iter()
+        .zip(resolved.column_types())
+        .map(|(&source, native)| {
+            insert_bytes
+                && matches!(plans[source].kind, Portable::Binary { .. })
+                && takes_bytes(target_engine, native)
+        })
+        .collect();
+    resolved.load_as_bytes(bytes.clone());
     let logicals = columns.iter().map(|c| c.logical).collect();
     Ok(Prepared {
         plan: CopyPlan {
@@ -301,6 +318,7 @@ async fn prepare(
         resolved,
         select,
         loaded,
+        bytes,
         logicals,
     })
 }
@@ -353,6 +371,7 @@ pub async fn run_copy(
         resolved,
         select,
         loaded,
+        bytes,
         logicals,
         ..
     } = prepared;
@@ -370,7 +389,15 @@ pub async fn run_copy(
                 None => false,
                 Some(_attached) => read_only_transaction(
                     source,
-                    send_rows(source, &select, &loaded, &logicals, target_engine, &sender),
+                    send_rows(
+                        source,
+                        &select,
+                        &loaded,
+                        &bytes,
+                        &logicals,
+                        target_engine,
+                        &sender,
+                    ),
                     |result| matches!(result, Ok(false)),
                 )
                 .await
@@ -413,12 +440,15 @@ pub async fn run_copy(
 }
 
 /// Reads `select` on `source` and sends its rows, the `loaded` columns only, as the text the
-/// target reads. `Ok(true)` once every row was sent, `Ok(false)` when the load stopped taking
-/// them (it failed, or was cancelled).
+/// target reads; a column that goes as `bytes` as the hex of its bytes, which the load turns back
+/// into them (SDB-464). `Ok(true)` once every row was sent, `Ok(false)` when the load stopped
+/// taking them (it failed, or was cancelled).
+#[allow(clippy::too_many_arguments)]
 async fn send_rows(
     source: &Session,
     select: &str,
     loaded: &[usize],
+    bytes: &[bool],
     logicals: &[LogicalType],
     target_engine: &str,
     sender: &tokio::sync::mpsc::Sender<Batch>,
@@ -452,7 +482,7 @@ async fn send_rows(
         let mut rows = Vec::with_capacity(batch.num_rows());
         for row in 0..batch.num_rows() {
             let mut values = Vec::with_capacity(loaded.len());
-            for &column in loaded {
+            for (&column, &as_bytes) in loaded.iter().zip(bytes) {
                 // A value the core cannot read is never sent as NULL: the copy stops there.
                 let value = Value::from_array(batch.column(column).as_ref(), row, logicals[column])
                     .ok_or_else(|| {
@@ -462,7 +492,11 @@ async fn send_rows(
                             logicals[column].as_str()
                         ))
                     })?;
-                values.push(text_for(target_engine, &value));
+                values.push(if as_bytes {
+                    hex_of(&value)
+                } else {
+                    text_for(target_engine, &value)
+                });
             }
             rows.push(values);
         }
@@ -471,4 +505,37 @@ async fn send_rows(
         }
     }
     Ok(true)
+}
+
+/// A value of a column that goes as bytes, as the hex the load reads: its bytes, or, for a value
+/// an engine typed otherwise (SQLite types by value), the bytes of its text. `None` for NULL.
+fn hex_of(value: &Value) -> Option<String> {
+    use std::fmt::Write as _;
+    let text;
+    let bytes: &[u8] = match value {
+        Value::Null => return None,
+        Value::Bytes(bytes) => bytes,
+        Value::Text(s) => s.as_bytes(),
+        Value::Bool(_)
+        | Value::Int(_)
+        | Value::Float(_)
+        | Value::Decimal(_)
+        | Value::Date(_)
+        | Value::Time(_)
+        | Value::Timestamp(_)
+        | Value::TimestampTz(_)
+        | Value::Uuid(_)
+        | Value::Json(_)
+        | Value::Interval(_)
+        | Value::Array(_)
+        | Value::Native(_) => {
+            text = value.to_string();
+            text.as_bytes()
+        }
+    };
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(hex)
 }

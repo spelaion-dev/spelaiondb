@@ -167,7 +167,8 @@ Stage 0 is in the repository; the protocol's specification is `docs/plugin-proto
 - **Each pipe has a thread of its own, with blocking reads and writes,** on both sides: a
   plugin's process belongs to no caller's runtime, and a frame is one read of the pipe.
 - **The rows of an import travel as columns of text** (`TextRows`, Arrow): the contract's
-  `insert_rows` takes them, and a driver reads them in place.
+  `insert_rows` takes them, and a driver reads them in place. From protocol 1.3 a column may
+  carry bytes instead, for a copy's binary column (SDB-464).
 - **The gate, measured** (Windows, optimised builds, the same build both ways, median of five,
   `scripts/measure-plugins.sh`): a million-row result takes 5.7 % longer through DuckDB's
   plugin; importing a million rows takes at most 13.9 % longer (DuckDB, into a new table;

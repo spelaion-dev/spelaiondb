@@ -4,8 +4,10 @@
 //! (`SPELAION_TEST_CLICKHOUSE`), and SQLite and DuckDB (always). The same table, with every
 //! common type, is created on each one in its own DDL and copied to each one; what is read back
 //! is compared with what was written, value by value, each type compared as itself (a boolean's
-//! `1` is `true`, a timestamp with zone is compared at its UTC time, JSON as parsed). An engine
-//! whose variable is not set is left out of the pairs, which does not count as tested.
+//! `1` is `true`, a timestamp with zone is compared at its UTC time, JSON as parsed). A binary
+//! column holding every byte goes too, compared as its hex (SDB-464); ClickHouse has no binary
+//! type (its `String` is read as text), so its table has none, though it takes one as a target.
+//! An engine whose variable is not set is left out of the pairs, which does not count as tested.
 
 use crate::engines;
 
@@ -14,7 +16,9 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
-use spelaion_core::table_copy::{CopyError, CopyHow, CopyRequest, Loss, plan_copy, run_copy};
+use spelaion_core::table_copy::{
+    Blocked, CopyError, CopyHow, CopyRequest, Loss, plan_copy, run_copy,
+};
 use spelaion_core::{CoreEvent, IfExists, JobCancel, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
 
@@ -26,10 +30,32 @@ const NONE: Safeguards = Safeguards {
     smart_commit: false,
 };
 
-/// The copied table's columns, in order.
+/// The copied table's columns, in order, but its binary one.
 const COLUMNS: [&str; 13] = [
     "id", "b", "i2", "i8", "d", "f", "t", "tx", "dt", "ts", "tz", "u", "j",
 ];
+
+/// The binary column, last, on every engine but ClickHouse (SDB-464).
+const BYTES: &str = "bn";
+
+/// Every byte, in order, as hex: the binary column's first value.
+fn every_byte() -> String {
+    (0..=255u8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// The columns of a table, with the binary one or without.
+fn columns(with_bytes: bool) -> Vec<&'static str> {
+    let mut columns = COLUMNS.to_vec();
+    if with_bytes {
+        columns.push(BYTES);
+    }
+    columns
+}
+
+/// Whether `side`'s table has the binary column: every engine's but ClickHouse's.
+fn has_bytes(side: &Side) -> bool {
+    side.session.dialect().name() != "clickhouse"
+}
 
 struct Side {
     label: &'static str,
@@ -45,8 +71,8 @@ async fn run(session: &Session, script: &str) {
     }
 }
 
-/// Every row of `sql`, each value as text (NULL as `NULL`).
-async fn rows(session: &Session, sql: &str) -> Vec<Vec<String>> {
+/// Every row of `sql`, the first `width` values of each as text (NULL as `NULL`).
+async fn rows(session: &Session, sql: &str, width: usize) -> Vec<Vec<String>> {
     let mut out = Vec::new();
     for event in session.run_script(sql).collect::<Vec<_>>().await {
         match event {
@@ -56,7 +82,7 @@ async fn rows(session: &Session, sql: &str) -> Vec<Vec<String>> {
                 let stored = stored.read().unwrap();
                 for row in 0..stored.rows() {
                     out.push(
-                        (0..COLUMNS.len())
+                        (0..width)
                             .map(|c| stored.value_at(row, c).unwrap().to_string())
                             .collect(),
                     );
@@ -221,17 +247,18 @@ fn source_script(side: &Side, table: &str) -> Vec<String> {
         ("postgres", _) => format!(
             "create table {table} (id integer primary key, b boolean, i2 smallint, i8 bigint, \
              d numeric(18,4), f double precision, t varchar(40), tx text, dt date, ts timestamp, \
-             tz timestamptz, u uuid, j json)"
+             tz timestamptz, u uuid, j json, bn bytea)"
         ),
         ("mysql", _) => format!(
             "create table {table} (id int primary key, b tinyint(1), i2 smallint, i8 bigint, \
              d decimal(18,4), f double, t varchar(40), tx longtext, dt date, ts datetime(6), \
-             tz datetime(6), u char(36), j json)"
+             tz datetime(6), u char(36), j json, bn longblob)"
         ),
         ("sqlserver", _) => format!(
             "create table {table} (id int primary key, b bit, i2 smallint, i8 bigint, \
              d decimal(18,4), f float, t nvarchar(40), tx nvarchar(max), dt date, \
-             ts datetime2(6), tz datetimeoffset(6), u uniqueidentifier, j nvarchar(max))"
+             ts datetime2(6), tz datetimeoffset(6), u uniqueidentifier, j nvarchar(max), \
+             bn varbinary(max))"
         ),
         ("clickhouse", _) => format!(
             "create table {table} (id Int32, b Nullable(Bool), i2 Nullable(Int16), \
@@ -243,12 +270,12 @@ fn source_script(side: &Side, table: &str) -> Vec<String> {
         ("sqlite", _) => format!(
             "create table {table} (id INTEGER PRIMARY KEY, b BOOLEAN, i2 SMALLINT, i8 BIGINT, \
              d DECIMAL(18,4), f REAL, t VARCHAR(40), tx TEXT, dt DATE, ts TIMESTAMP, \
-             tz TIMESTAMPTZ, u TEXT, j TEXT)"
+             tz TIMESTAMPTZ, u TEXT, j TEXT, bn BLOB)"
         ),
         _ => format!(
             "create table {table} (id INTEGER PRIMARY KEY, b BOOLEAN, i2 SMALLINT, i8 BIGINT, \
              d DECIMAL(18,4), f DOUBLE, t VARCHAR(40), tx VARCHAR, dt DATE, ts TIMESTAMP, \
-             tz TIMESTAMPTZ, u UUID, j JSON)"
+             tz TIMESTAMPTZ, u UUID, j JSON, bn BLOB)"
         ),
     };
     let (yes, no) = match engine {
@@ -263,19 +290,33 @@ fn source_script(side: &Side, table: &str) -> Vec<String> {
         // A zone they cannot keep: the UTC time.
         _ => format!("'{stamp}'"),
     };
+    // The binary column's value in each engine's SQL, from hex (SDB-464).
+    let bytes = |hex: &str| match engine {
+        "postgres" => format!(", decode('{hex}', 'hex')"),
+        "mysql" | "sqlite" => format!(", X'{hex}'"),
+        "sqlserver" => format!(", 0x{hex}"),
+        "duckdb" => format!(", from_hex('{hex}')"),
+        _ => String::new(),
+    };
+    let null_bytes = if has_bytes(side) { ", null" } else { "" };
     let rows = [
         format!(
             "(1, {yes}, -32768, 9223372036854775807, -12345678901234.5678, 0.1, \
              {unicode}'ñandú ''q'' \"x\"', {unicode}'line1\nline2\ttab', '2024-02-29', \
              '2024-02-29 13:45:30.123456', {}, '550e8400-e29b-41d4-a716-446655440000', \
-             '{{\"a\": [1, 2], \"b\": \"x\"}}')",
-            zone("2024-02-29 13:45:30.123456")
+             '{{\"a\": [1, 2], \"b\": \"x\"}}'{})",
+            zone("2024-02-29 13:45:30.123456"),
+            bytes(&every_byte())
         ),
-        "(2, null, null, null, null, null, null, null, null, null, null, null, null)".into(),
+        format!(
+            "(2, null, null, null, null, null, null, null, null, null, null, null, null\
+             {null_bytes})"
+        ),
         format!(
             "(3, {no}, 0, -1, 0, -2.5e-10, '', 'x', '1970-01-01', '1970-01-01 00:00:00', {}, \
-             '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '[]')",
-            zone("1999-12-31 23:59:59.5")
+             '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '[]'{})",
+            zone("1999-12-31 23:59:59.5"),
+            bytes("")
         ),
     ];
     let mut script = vec![create];
@@ -314,7 +355,7 @@ fn normalized(column: &str, value: &str) -> String {
         }
         "dt" => value.get(..10).unwrap_or(value).into(),
         "ts" | "tz" => utc(value),
-        "u" => value.to_ascii_lowercase(),
+        "u" | "bn" => value.to_ascii_lowercase(),
         "j" => serde_json::from_str::<serde_json::Value>(value)
             .map(|v| v.to_string())
             .unwrap_or_else(|_| format!("json? {value}")),
@@ -360,8 +401,9 @@ fn normalized_row(row: &[String], approximate: bool) -> Vec<String> {
     row.iter()
         .enumerate()
         .map(|(c, v)| {
-            let value = normalized(COLUMNS[c], v);
-            if approximate && COLUMNS[c] == "d" && value != "NULL" {
+            let column = COLUMNS.get(c).copied().unwrap_or(BYTES);
+            let value = normalized(column, v);
+            if approximate && column == "d" && value != "NULL" {
                 format!("{:.14e}", value.parse::<f64>().unwrap_or(f64::NAN))
             } else {
                 value
@@ -370,8 +412,9 @@ fn normalized_row(row: &[String], approximate: bool) -> Vec<String> {
         .collect()
 }
 
-/// What every engine's table holds, as [`normalized_row`] writes it.
-fn expected(approximate: bool) -> Vec<Vec<String>> {
+/// What every engine's table holds, as [`normalized_row`] writes it, with the binary column or
+/// without.
+fn expected(approximate: bool, with_bytes: bool) -> Vec<Vec<String>> {
     let raw = [
         [
             "1",
@@ -408,16 +451,34 @@ fn expected(approximate: bool) -> Vec<Vec<String>> {
             "[]",
         ],
     ];
+    let bytes = [every_byte(), "NULL".to_string(), String::new()];
     raw.iter()
-        .map(|row| {
-            let row: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+        .zip(bytes)
+        .map(|(row, bytes)| {
+            let mut row: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+            if with_bytes {
+                row.push(bytes);
+            }
             normalized_row(&row, approximate)
         })
         .collect()
 }
 
-fn select(table: &str) -> String {
-    format!("select {} from {table} order by id", COLUMNS.join(", "))
+/// The table's rows on `side`, the binary column as its hex in that engine's SQL.
+fn select(side: &Side, table: &str, with_bytes: bool) -> String {
+    let mut list = COLUMNS.join(", ");
+    if with_bytes {
+        let hex = match side.session.dialect().name() {
+            "postgres" => "encode(bn, 'hex')",
+            "sqlserver" => "lower(convert(varchar(max), bn, 2))",
+            _ => "lower(hex(bn))",
+        };
+        // SQLite's `hex(NULL)` is the empty text.
+        list.push_str(&format!(
+            ", case when bn is null then null else {hex} end as bn"
+        ));
+    }
+    format!("select {list} from {table} order by id")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -441,12 +502,22 @@ async fn a_table_of_every_common_type_copies_between_every_pair_of_engines() {
         }
         // The table as each engine reads it is the same before anything is copied.
         let approximate = side.label == "SQLite";
-        let written: Vec<Vec<String>> = rows(&side.session, &select(&source_table))
-            .await
-            .iter()
-            .map(|row| normalized_row(row, approximate))
-            .collect();
-        assert_eq!(written, expected(approximate), "{} as written", side.label);
+        let with_bytes = has_bytes(side);
+        let written: Vec<Vec<String>> = rows(
+            &side.session,
+            &select(side, &source_table, with_bytes),
+            columns(with_bytes).len(),
+        )
+        .await
+        .iter()
+        .map(|row| normalized_row(row, approximate))
+        .collect();
+        assert_eq!(
+            written,
+            expected(approximate, with_bytes),
+            "{} as written",
+            side.label
+        );
     }
     let mut copied = 0;
     for (s, source) in sides.iter().enumerate() {
@@ -457,7 +528,7 @@ async fn a_table_of_every_common_type_copies_between_every_pair_of_engines() {
                 &format!("drop table if exists {target_table}"),
             )
             .await;
-            let request = CopyRequest {
+            let mut request = CopyRequest {
                 source_schema: source.schema.into(),
                 source_table: source_table.clone(),
                 target_schema: target.schema.into(),
@@ -471,9 +542,29 @@ async fn a_table_of_every_common_type_copies_between_every_pair_of_engines() {
                 commit_every: 2,
             };
             let pair = format!("{} → {}", source.label, target.label);
-            let plan = plan_copy(&source.session, &target.session, &request, &NONE, false)
+            let mut plan = plan_copy(&source.session, &target.session, &request, &NONE, false)
                 .await
                 .unwrap_or_else(|e| panic!("{pair}: {e}"));
+            // The binary column goes as bytes to a connection that loads them, and as hex text
+            // to PostgreSQL and DuckDB, which read it as bytes; elsewhere it is refused until it
+            // is left out (ADR-069's point 8). Until every plugin pinned loads bytes (SDB-464),
+            // such a pair goes without it.
+            let loads_bytes = target.session.connection().capabilities().insert_bytes
+                || matches!(target.session.dialect().name(), "postgres" | "duckdb");
+            let mut with_bytes = has_bytes(source);
+            if with_bytes && !loads_bytes {
+                assert_eq!(
+                    plan.blocked,
+                    [(BYTES.to_string(), Blocked::Binary)],
+                    "{pair}"
+                );
+                eprintln!("{pair}: without the binary column (the target loads no bytes)");
+                request.skip = vec![BYTES.into()];
+                with_bytes = false;
+                plan = plan_copy(&source.session, &target.session, &request, &NONE, false)
+                    .await
+                    .unwrap_or_else(|e| panic!("{pair}: {e}"));
+            }
             assert!(plan.blocked.is_empty(), "{pair}: {:?}", plan.blocked);
             // A zone the target cannot keep is said.
             let tz = plan.columns.iter().find(|c| c.name == "tz").unwrap();
@@ -499,12 +590,16 @@ async fn a_table_of_every_common_type_copies_between_every_pair_of_engines() {
             .unwrap_or_else(|e| panic!("{pair}: {e}"));
             assert_eq!(summary.rows, 3, "{pair}");
             let approximate = source.label == "SQLite" || target.label == "SQLite";
-            let read: Vec<Vec<String>> = rows(&target.session, &select(&target_table))
-                .await
-                .iter()
-                .map(|row| normalized_row(row, approximate))
-                .collect();
-            assert_eq!(read, expected(approximate), "{pair}");
+            let read: Vec<Vec<String>> = rows(
+                &target.session,
+                &select(target, &target_table, with_bytes),
+                columns(with_bytes).len(),
+            )
+            .await
+            .iter()
+            .map(|row| normalized_row(row, approximate))
+            .collect();
+            assert_eq!(read, expected(approximate, with_bytes), "{pair}");
             run(&target.session, &format!("drop table {target_table}")).await;
             copied += 1;
         }
@@ -522,8 +617,8 @@ async fn a_table_of_every_common_type_copies_between_every_pair_of_engines() {
     }
 }
 
-/// Binary goes where the target reads hex text as bytes, and is refused, saying so, elsewhere
-/// (ADR-069's point 8); a left-out column lets the rest go.
+/// Binary goes where the target's connection loads bytes (SDB-464) or reads hex text as bytes,
+/// and is refused, saying so, elsewhere (ADR-069's point 8); a left-out column lets the rest go.
 #[tokio::test(flavor = "multi_thread")]
 async fn binary_copies_where_the_target_reads_it_and_is_refused_elsewhere() {
     let _turn = crate::serial::file_turn(module_path!());
@@ -569,7 +664,10 @@ async fn binary_copies_where_the_target_reads_it_and_is_refused_elsewhere() {
             types: Vec::new(),
             commit_every: 0,
         };
-        let reads_bytes = matches!(target.session.dialect().name(), "postgres" | "duckdb");
+        // As bytes where the connection loads them (SDB-464), as hex text where the engine reads
+        // it as bytes.
+        let reads_bytes = target.session.connection().capabilities().insert_bytes
+            || matches!(target.session.dialect().name(), "postgres" | "duckdb");
         let outcome = run_copy(
             &duck.session,
             &target.session,
@@ -587,6 +685,9 @@ async fn binary_copies_where_the_target_reads_it_and_is_refused_elsewhere() {
                 "postgres" => {
                     format!("select encode(payload, 'hex') from {target_table} where id = 1")
                 }
+                "sqlserver" => format!(
+                    "select convert(varchar(max), payload, 2) from {target_table} where id = 1"
+                ),
                 _ => format!("select hex(payload) from {target_table} where id = 1"),
             };
             let read = rows_one(&target.session, &hex).await;

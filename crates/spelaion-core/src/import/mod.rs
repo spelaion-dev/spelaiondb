@@ -26,11 +26,13 @@ mod source;
 mod staged;
 mod xlsx;
 
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 use spelaion_config::Safeguards;
 use spelaion_driver_api::{
-    Dialect, DriverError, InsertTarget, ObjectKind, TableInfo, TextRows, TransactionState,
+    Cell, ColumnKind as RowKind, Dialect, DriverError, InsertTarget, ObjectKind, TableInfo,
+    TextRows, TransactionState,
 };
 
 pub use detect::ColumnKind;
@@ -333,6 +335,11 @@ pub(crate) struct Resolved {
     /// For each target column, the source column it reads.
     sources: Vec<usize>,
     kinds: Vec<TargetKind>,
+    /// Each target column's type, as the table has it or as it is created.
+    types: Vec<String>,
+    /// The target columns whose values arrive as hex text and load as bytes: a copy's binary
+    /// columns into a connection that takes bytes (SDB-464). None for a file's import.
+    bytes: Vec<bool>,
     /// The table of our own the rows load into, on ClickHouse (ADR-066), qualified and quoted:
     /// dropped if the import does not end.
     staging: Option<String>,
@@ -461,9 +468,10 @@ pub(crate) async fn resolve_columns(
     let mut targets: Vec<String> = Vec::new();
     let mut sources = Vec::new();
     let mut kinds = Vec::new();
+    let mut types = Vec::new();
     let mut new_columns: Vec<(String, String)> = Vec::new();
     for (i, mapping) in columns.iter().enumerate() {
-        let (name, kind) = match mapping {
+        let (name, native) = match mapping {
             ColumnMapping::Skip => continue,
             ColumnMapping::Existing(name) => {
                 let Some(info) = table_info.as_ref() else {
@@ -473,18 +481,18 @@ pub(crate) async fn resolve_columns(
                 };
                 let column = table_column(info, name)
                     .ok_or_else(|| ImportError::Invalid(format!("{table} has no column {name}")))?;
-                (column.name.clone(), target_kind(&column.native_type))
+                (column.name.clone(), column.native_type.clone())
             }
             ColumnMapping::New { name, sql_type } => {
                 check_name("column", name)?;
                 let sql_type = sql_type.trim();
                 // Appending to a table that has the column already: it is used as it is.
                 if let Some(column) = table_info.as_ref().and_then(|t| table_column(t, name)) {
-                    (column.name.clone(), target_kind(&column.native_type))
+                    (column.name.clone(), column.native_type.clone())
                 } else {
                     check_sql_type(sql_type)?;
                     new_columns.push((name.clone(), sql_type.to_string()));
-                    (name.clone(), target_kind(sql_type))
+                    (name.clone(), sql_type.to_string())
                 }
             }
         };
@@ -495,7 +503,8 @@ pub(crate) async fn resolve_columns(
         }
         targets.push(name);
         sources.push(i);
-        kinds.push(kind);
+        kinds.push(target_kind(&native));
+        types.push(native);
     }
     if targets.is_empty() {
         return Err(ImportError::Invalid("no column is imported".into()));
@@ -587,9 +596,26 @@ pub(crate) async fn resolve_columns(
         },
         target,
         sources,
+        bytes: vec![false; kinds.len()],
         kinds,
+        types,
         staging: staging.map(|ours| qualified_name(dialect, schema, &[ours])),
     })
+}
+
+impl Resolved {
+    /// The type of each column loaded, in the order the rows have them: as the table has it, or
+    /// as the import creates it.
+    pub(crate) fn column_types(&self) -> &[String] {
+        &self.types
+    }
+
+    /// Which columns load as bytes, each sent as hex text (a copy's binary columns, SDB-464).
+    /// Only for a connection that takes bytes (`Capabilities::insert_bytes`).
+    pub(crate) fn load_as_bytes(&mut self, bytes: Vec<bool>) {
+        debug_assert_eq!(bytes.len(), self.kinds.len());
+        self.bytes = bytes;
+    }
 }
 
 /// The statement the rows go through, as shown: what the driver sends, values apart.
@@ -1065,6 +1091,26 @@ fn read_batches(
     (rx, reader)
 }
 
+/// A value on its way into the rows a driver loads.
+enum Loaded<'a> {
+    Text(Cow<'a, str>),
+    Bytes(Vec<u8>),
+}
+
+/// The bytes of hex text (`00ff…`, either case), `None` if it is not hex.
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let digit = |b: u8| (b as char).to_digit(16);
+            Some((digit(pair[0])? * 16 + digit(pair[1])?) as u8)
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn load(
     session: &Session,
@@ -1112,31 +1158,54 @@ async fn load(
                 });
             }
         };
-        // The batch as the columns of text a driver loads (in process or through a plugin).
-        let mut rows = TextRows::builder(resolved.sources.len());
+        // The batch as the columns a driver loads (in process or through a plugin): text, and
+        // bytes where the copy sends them (SDB-464).
+        let column_kinds: Vec<RowKind> = resolved
+            .bytes
+            .iter()
+            .map(|&bytes| if bytes { RowKind::Bytes } else { RowKind::Text })
+            .collect();
+        let mut rows = TextRows::builder_with(&column_kinds);
         for (offset, row) in batch.into_iter().enumerate() {
-            let mut values = Vec::with_capacity(resolved.sources.len());
+            let mut values: Vec<Option<Loaded<'_>>> = Vec::with_capacity(resolved.sources.len());
+            let mut failure = None;
             for (column, &source) in resolved.sources.iter().enumerate() {
                 let Some(text) = row[source].as_deref() else {
                     values.push(None);
                     continue;
                 };
-                match normalizer.value(column, text) {
-                    Ok(text) => values.push(Some(text)),
+                let value = if resolved.bytes[column] {
+                    unhex(text)
+                        .map(Loaded::Bytes)
+                        .ok_or_else(|| "a binary value did not arrive as hex".to_string())
+                } else {
+                    normalizer.value(column, text).map(Loaded::Text)
+                };
+                match value {
+                    Ok(value) => values.push(Some(value)),
                     Err(message) => {
-                        rollback(open).await;
-                        let row = read + offset as u64 + 1;
-                        return Err(ImportError::Failed {
-                            first: row,
-                            last: row,
-                            committed,
-                            message: format!("{}: {message}", resolved.target.columns[column]),
-                        });
+                        failure = Some((column, message));
+                        break;
                     }
                 }
             }
-            rows.push(values.iter().map(|value| value.as_deref()))
-                .map_err(|e| ImportError::Source(e.to_string()))?;
+            if let Some((column, message)) = failure {
+                rollback(open).await;
+                let row = read + offset as u64 + 1;
+                return Err(ImportError::Failed {
+                    first: row,
+                    last: row,
+                    committed,
+                    message: format!("{}: {message}", resolved.target.columns[column]),
+                });
+            }
+            rows.push_cells(values.iter().map(|value| {
+                value.as_ref().map(|value| match value {
+                    Loaded::Text(text) => Cell::Text(text),
+                    Loaded::Bytes(bytes) => Cell::Bytes(bytes),
+                })
+            }))
+            .map_err(|e| ImportError::Source(e.to_string()))?;
         }
         let rows = rows.finish();
         // Cut where a transaction ends, so commits fall every `commit_every` rows.
@@ -1277,6 +1346,20 @@ async fn commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A copy's binary values arrive as hex and load as their bytes (SDB-464).
+    #[test]
+    fn hex_turns_back_into_its_bytes() {
+        assert_eq!(unhex("00ff10"), Some(vec![0, 255, 16]));
+        assert_eq!(unhex("0A0b"), Some(vec![10, 11]));
+        assert_eq!(unhex(""), Some(Vec::new()));
+        assert_eq!(unhex("0"), None);
+        assert_eq!(unhex("zz"), None);
+        assert_eq!(unhex("\\x00"), None);
+        let every: Vec<u8> = (0..=255).collect();
+        let hex: String = every.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(unhex(&hex), Some(every));
+    }
 
     /// A reader that panics halfway (SDB-163). Before, the end of its channel read as the end
     /// of the file: the rows read so far were committed and the import reported success.

@@ -93,7 +93,7 @@ What each minor version added:
 | 1.0 | Everything not listed below |
 | 1.1 | Requests for engines whose language is not SQL (`run` kind `request`), `connect`'s `options`, and the object kinds `collection`, `node_label` and `relationship_type` (ADR-056) |
 | 1.2 | A relation's properties, partitions and dependencies: `object_properties`, `table_partitions` and `object_dependencies` (SDB-393) |
-| 1.3 | The schema object kinds `sink`, `connection` and `secret`, the server object kinds `cluster` and `cluster_replica`, and `server_object_definition` (ADR-082) |
+| 1.3 | The schema object kinds `sink`, `connection` and `secret`, the server object kinds `cluster` and `cluster_replica`, and `server_object_definition` (ADR-082); columns of bytes in `insert_rows` (nullable `LargeBinary`) and the `insert_bytes` capability (SDB-464), which a plugin built on 1.3's first SDK (`plugin-sdk-v0.4.0`) does not say |
 
 The core never sends what a version added to a plugin that chose an older one: a request, or
 a `connect` with `options`, is refused in the core with a message that names both versions;
@@ -103,6 +103,8 @@ partitions, dependencies it cannot tell), as a compiled-in driver without them w
 In the other direction, a plugin that answered an older version than it speaks leaves what
 its version did not have out of its answers: an object of a kind 1.3 added is not in a list
 sent to a core that chose 1.2, which would fail to read the whole list for it.
+Rows with a column of bytes go only to a plugin that chose 1.3 and said `insert_bytes`; the core
+refuses them for any other before anything is sent.
 
 ## Errors
 A request that fails answers with an `error` whose `code` is `-32000` and whose `data` is the
@@ -131,7 +133,7 @@ the secrets it gave that plugin.
 
 {"jsonrpc":"2.0","id":2,"result":{"capabilities":{"transactions":true,"cancel":true,
  "explain":true,"editable_results":true,"schemas":true,"insert_rows":true,
- "bound_params":true}}}
+ "bound_params":true,"insert_bytes":true}}}
 ```
 
 - **The password travels here and nowhere else.** A plugin keeps it in memory for as long as
@@ -240,7 +242,9 @@ statement read after it.
 ## Loading rows
 `insert_rows` loads rows into a table (ADR-038). The rows arrive first, as data frames on a
 stream the core chooses: one Arrow IPC stream whose columns are nullable `LargeUtf8`, one per
-target column, in order. Then the request:
+target column, in order. From 1.3 a column may be nullable `LargeBinary` instead: bytes, which the
+plugin binds as the engine's binary type (a copy's binary column, SDB-464). The core sends one
+only to a plugin whose `connect` answered `"insert_bytes": true`. Then the request:
 
 ```json
 {"jsonrpc":"2.0","id":9,"method":"insert_rows","params":{"session":1,"stream":12,

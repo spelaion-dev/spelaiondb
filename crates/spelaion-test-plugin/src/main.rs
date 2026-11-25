@@ -19,11 +19,12 @@ use std::time::Duration;
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use async_trait::async_trait;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ColumnInfo, ColumnMeta, ConnectParams, Connection, Dependencies,
-    DependencyInfo, DependencyKind, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
-    InsertTarget, KeepAlive, LogicalType, Notice, ObjectInfo, ObjectKind, ObjectProperty,
-    PartitionInfo, Partitioning, PlanMode, Result, ResultSchema, SchemaInfo, SchemaObject,
-    SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo, TextRows, TransactionState,
+    CancelHandle, Capabilities, Cell, ColumnInfo, ColumnMeta, ConnectParams, Connection,
+    Dependencies, DependencyInfo, DependencyKind, Driver, DriverError, EventStream, ExecEvent,
+    ExecOptions, InsertTarget, KeepAlive, LogicalType, Notice, ObjectInfo, ObjectKind,
+    ObjectProperty, PartitionInfo, Partitioning, PlanMode, Result, ResultSchema, SchemaInfo,
+    SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo, TextRows,
+    TransactionState,
 };
 use spelaion_plugin_protocol::{Frame, Message, RpcError, code, read_frame, write_frame};
 use tokio::sync::Notify;
@@ -147,9 +148,10 @@ fn minor_zero() {
                 }
                 Message::result(
                     id,
+                    // It says it takes bytes, which 1.0 had not: the core must not believe it.
                     serde_json::json!({"capabilities": {"transactions": false, "cancel": false,
                         "explain": false, "editable_results": false, "schemas": false,
-                        "insert_rows": false, "bound_params": false}}),
+                        "insert_rows": false, "bound_params": false, "insert_bytes": true}}),
                 )
             }
             // It would read an unknown kind of run as an error, or worse: the core must never
@@ -161,6 +163,9 @@ fn minor_zero() {
             Some("object_properties" | "table_partitions" | "object_dependencies") => {
                 std::process::exit(5)
             }
+            // Rows with bytes (1.3, SDB-464) would be read as text, or refused: the core must
+            // never send them.
+            Some("insert_rows") => std::process::exit(6),
             _ => Message::error(
                 id,
                 RpcError {
@@ -284,6 +289,7 @@ impl Driver for Made {
                 schemas: true,
                 insert_rows: true,
                 bound_params: true,
+                insert_bytes: true,
             },
             cancelled: Arc::new(Notify::new()),
             in_flight: Arc::new(Mutex::new(None)),
@@ -879,8 +885,23 @@ impl Connection for MadeConnection {
             target.table,
             target.columns.join(",")
         );
+        // Text as it came, bytes as `0x` and their hex (SDB-464).
         let mut inserted = INSERTED.lock().expect("lock poisoned");
-        inserted.extend(rows.to_vecs().into_iter().map(|row| (name.clone(), row)));
+        for row in 0..rows.len() {
+            let values = rows
+                .cells(row)
+                .map(|cell| {
+                    cell.map(|cell| match cell {
+                        Cell::Text(text) => text.to_string(),
+                        Cell::Bytes(bytes) => {
+                            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+                            format!("0x{hex}")
+                        }
+                    })
+                })
+                .collect();
+            inserted.push((name.clone(), values));
+        }
         Ok(count)
     }
 }

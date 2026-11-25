@@ -145,6 +145,7 @@ async fn a_cancel_still_on_its_way_never_stops_the_next_run() {
             schemas: false,
             insert_rows: false,
             bound_params: false,
+            insert_bytes: false,
         },
     };
     let session = Arc::new(Session::new(

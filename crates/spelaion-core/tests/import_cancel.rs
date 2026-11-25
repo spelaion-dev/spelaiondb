@@ -174,6 +174,7 @@ fn session(engine: &Arc<Engine>) -> Arc<Session> {
             schemas: true,
             insert_rows: true,
             bound_params: false,
+            insert_bytes: false,
         },
     };
     Arc::new(Session::new(

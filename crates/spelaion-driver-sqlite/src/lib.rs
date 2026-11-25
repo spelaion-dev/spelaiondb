@@ -14,9 +14,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rusqlite::OpenFlags;
+use rusqlite::types::{ToSqlOutput, ValueRef};
 use spelaion_driver_api::thread_cancel::{Canceller, Closer, Work};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, Dependencies, Driver, DriverError,
+    CancelHandle, Capabilities, Cell, ConnectParams, Connection, Dependencies, Driver, DriverError,
     EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo,
     ObjectProperty, ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo,
     TextRows, TransactionState,
@@ -135,6 +136,7 @@ impl Driver for SqliteDriver {
                 schemas: true,           // main, temp and attached databases (ATTACH)
                 insert_rows: true,
                 bound_params: true,
+                insert_bytes: true,
             },
         }))
     }
@@ -238,8 +240,17 @@ fn insert(conn: &rusqlite::Connection, sql: &str, rows: TextRows, work: &Work) -
         if row % 1024 == 0 {
             work.check()?;
         }
+        // Text as text, which the column's affinity converts; bytes as a blob (SDB-464).
+        // Lent, not copied.
+        let values = rows.cells(row).map(|cell| {
+            ToSqlOutput::Borrowed(match cell {
+                None => ValueRef::Null,
+                Some(Cell::Text(text)) => ValueRef::Text(text.as_bytes()),
+                Some(Cell::Bytes(bytes)) => ValueRef::Blob(bytes),
+            })
+        });
         inserted += statement
-            .execute(rusqlite::params_from_iter(rows.row(row)))
+            .execute(rusqlite::params_from_iter(values))
             .map_err(exec::map_error)? as u64;
     }
     Ok(inserted)

@@ -1,6 +1,7 @@
 # ADR-069: Copying tables between connections: an import whose source is a read
 
-- **Status:** Accepted (implemented; binary into five engines waits for SDB-464)
+- **Status:** Accepted (implemented; binary as bytes once every SQL plugin pinned speaks
+  protocol 1.3, SDB-464)
 - **Date:** 2026-11-24
 - **Builds on:** ADR-020 (read barriers), ADR-029 (connection types), ADR-031 (transactions),
   ADR-034 (streaming exports), ADR-038 (imports), ADR-060 (jobs), ADR-066 (ClickHouse imports)
@@ -93,17 +94,24 @@ another, and some have no exact counterpart.
    timestamp with zone written as UTC for MySQL and ClickHouse. A value the target refuses
    (`NaN` in MySQL, a year before 1 on most engines) fails the batch it is in, as a bad value
    does in an import, and says which rows.
-8. **Binary columns** travel as hex text (`insert_rows` carries text: plugin protocol 1.0).
-   PostgreSQL and DuckDB read that text as bytes. MySQL, MariaDB, SQLite and ClickHouse would
-   store the hex text itself, and SQL Server refuses it. So into those five targets a binary
-   column cannot be copied yet: the preview says so, and the copy is refused unless the user
-   leaves the column out. Binary columns in `insert_rows` (protocol 1.2, every SQL plugin) are
-   SDB-464, in the same release (v0.16): the copy is not done until binary copies between every
-   pair too.
+8. **Binary columns travel as bytes** (SDB-464). `insert_rows` takes a column of bytes beside
+   the text ones (`ColumnKind::Bytes`, plugin protocol 1.3), from a connection that says so
+   (`Capabilities::insert_bytes`): every SQL engine's binds them as its binary type. A binary
+   column goes as its bytes into a column that stores them as they are (`bytea`, `varbinary`,
+   the `blob`s, SQLite's `BLOB` or a column with no type, ClickHouse's `String`), which a new
+   table's mapped type always is, and loses nothing; into a text column of a table that is there
+   it goes as its hex text, as before. A connection without `insert_bytes` (a plugin of an older
+   protocol, which the core never sends bytes) gets the hex text: PostgreSQL and DuckDB read it
+   as bytes, and into MySQL, MariaDB, SQLite, SQL Server and ClickHouse the column is refused
+   until it is left out, the preview saying why. ClickHouse has no binary type: its `String`
+   reads as text, so as a source its binary data copies as text.
+   - *Superseded (2026-11-24):* this point first said binary into those five targets could not
+     be copied at all; it waited for SDB-464, in the same release.
 9. **Tests:** the done-when sets the bar. A table with every common type, created on each engine
    that can be a target (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, DuckDB, ClickHouse),
    is copied to each of them (49 pairs), and the data read back is compared value by value,
-   with each pair's expected losses asserted.
+   with each pair's expected losses asserted. The table has a binary column holding every byte
+   (but on ClickHouse, which has no binary type), compared as its hex.
 
 ## Alternatives
 - **Dump and restore (`pg_dump`, `mysqldump`, their SQL):** exact within one engine, but useless
@@ -113,6 +121,7 @@ another, and some have no exact counterpart.
   mapped columns and the primary key are what a copy can promise.
 - **Arrow batches straight to the target:** no text in between, but `insert_rows` takes text
   (protocol 1.0), and the server's own conversion from text is what imports are tested on.
+  Bytes are the one exception (protocol 1.3): no engine reads every byte back from one text.
 - **Binary in this first version, through a new protocol first:** every SQL plugin would have to
   be released before the copy lands. Binary into PostgreSQL and DuckDB works now, and for the
   rest the copy says so.

@@ -30,6 +30,11 @@ pub const DETAILS: Version = Version { major: 1, minor: 2 };
 /// object kinds `cluster` and `cluster_replica`, and `server_object_definition` (ADR-082).
 pub const CATALOG_KINDS: Version = Version { major: 1, minor: 3 };
 
+/// Also in 1.3: columns of bytes in `insert_rows` and the `insert_bytes` capability (SDB-464). A
+/// plugin built on 1.3's first SDK (`plugin-sdk-v0.4.0`) does not say `insert_bytes`, which
+/// reads as false: it is never sent bytes.
+pub const BYTES: Version = Version { major: 1, minor: 3 };
+
 /// How many record batches a plugin may have sent on a stream without credit given back, when
 /// it has no reason to choose otherwise.
 pub const DEFAULT_CREDIT: u32 = 8;

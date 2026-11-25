@@ -126,6 +126,7 @@ async fn a_cancel_that_reached_the_engine_before_its_statement_is_sent_again_onc
             schemas: false,
             insert_rows: false,
             bound_params: false,
+            insert_bytes: false,
         },
     );
     let session = Arc::new(Session::new(

@@ -93,6 +93,7 @@ fn session() -> Session {
                 schemas: false,
                 insert_rows: false,
                 bound_params: false,
+                insert_bytes: false,
             },
         }),
         Arc::new(spelaion_dialect::SqliteDialect),
