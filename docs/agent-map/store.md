@@ -8,7 +8,9 @@
   the export dialog's last choices in `export.rs` (SDB-66: each value checked against its
   known values and bounds when saved and when read, an unusable one read as its default),
   the explorer's filters and bookmarks, the editor's open tabs per workspace and recent files in
-  `tabs.rs`, each table's filter history and default filter in `table_filters.rs`; later the
-  schema cache). A new migration is appended to `MIGRATIONS` and its test finds it by its text,
+  `tabs.rs`, each table's filter history and default filter in `table_filters.rs`, saved ER
+  diagrams in `er_diagrams.rs` (ADR-084: a name and a document per workspace and connection,
+  never interpreted here; `spelaion-core`'s `er/saved.rs` writes and checks the document; a
+  moved connection keeps them); later the schema cache). A new migration is appended to `MIGRATIONS` and its test finds it by its text,
   never by "the last one". `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.

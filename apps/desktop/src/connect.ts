@@ -118,6 +118,7 @@ export function defaultTabLabel(tab: Tab): string {
   if (tab.file) return tab.file.name;
   if (tab.tableDetails) return `${tab.tableDetails.name} · ${i18n.t(`shell:folders.${tab.tableDetails.kind}`)}`;
   if (tab.table) return tab.table.name;
+  if (tab.savedDiagram) return tab.savedDiagram.name;
   if (tab.diagram) {
     const scope = tab.diagram;
     if (scope.kind === "schema") return i18n.t("shell:diagram.titleSchema", { schema: scope.schema });
@@ -372,6 +373,14 @@ export async function closeTabs(ids: string[]) {
     const text = unsaved.length === 1 && targets.length === 1
       ? i18n.t("editor:edit.closeUnsaved")
       : i18n.t("editor:edit.closeUnsavedMany", { count: unsaved.length, tabs: unsaved.map(tabLabel).join(", ") });
+    if (!(await confirm(text, { kind: "warning" }))) return;
+  }
+  // Diagram tabs whose arrangement was not saved (ADR-084).
+  const arranged = targets.filter((t) => t.diagramModified === true);
+  if (arranged.length > 0) {
+    const text = arranged.length === 1 && targets.length === 1
+      ? i18n.t("shell:diagram.closeUnsaved")
+      : i18n.t("shell:diagram.closeUnsavedMany", { count: arranged.length, tabs: arranged.map(tabLabel).join(", ") });
     if (!(await confirm(text, { kind: "warning" }))) return;
   }
   // File tabs with unsaved changes (ADR-036): save, don't save or cancel.

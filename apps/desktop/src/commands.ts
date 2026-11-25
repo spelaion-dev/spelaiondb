@@ -15,7 +15,7 @@ import { duplicateConnection } from "./connectionCopies";
 import { disconnectAll, hasSessions } from "./connectionControl";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
-import { openDiagram } from "./diagramTabs";
+import { SAVE_DIAGRAM_EVENT, openDiagram } from "./diagramTabs";
 import { usePreferences } from "./preferences";
 import { copyDiagnostics, openIssuePage } from "./diagnostics";
 import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, GRID_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type GridCommand, type ResultMeta, type Tab } from "./store";
@@ -341,10 +341,16 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "file.openPlan": { run: () => openSavedPlan() },
   "editor.explain": { enabled: runnableTab, run: editorCommand("explain") },
   "file.save": {
-    enabled: (c) => editorTab(c) !== undefined,
-    // A file tab saves its file; a console saves its query by name (ADR-036).
-    label: (c) => (tabOf(c)?.file ? "app:tabs.saveFile" : "app:commands.saveQuery"),
+    enabled: (c) => editorTab(c) !== undefined || Boolean(tabOf(c)?.diagram),
+    // A file tab saves its file; a console saves its query by name (ADR-036); a diagram tab
+    // saves the diagram (ADR-084).
+    label: (c) => (tabOf(c)?.diagram ? "app:commands.saveDiagram" : tabOf(c)?.file ? "app:tabs.saveFile" : "app:commands.saveQuery"),
     run: (c) => {
+      const diagram = tabOf(c);
+      if (diagram?.diagram) {
+        window.dispatchEvent(new CustomEvent(SAVE_DIAGRAM_EVENT, { detail: diagram.id }));
+        return;
+      }
       const tab = editorTab(c);
       if (!tab) return;
       if (tab.file) {

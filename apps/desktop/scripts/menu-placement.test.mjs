@@ -57,10 +57,11 @@ test("the ER diagram's table menu is kept inside the window", () => {
   // SDB-255: it was placed at the raw click point, like the explorer's before SDB-246.
   assert.doesNotMatch(diagram, /left:\s*menu\.x/);
   assert.match(diagram, /<ObjectMenu at=\{menu\}>/);
-  // The export menu opens under its toolbar button (CSS), not at a click: the only other one.
+  // The Export and More menus open under their toolbar buttons (CSS), not at a click: the only
+  // other ones (ADR-084 added More).
   const raw = diagram.match(/<div[^>]*className="grid-menu object-menu[^"]*"/g) ?? [];
   assert.deepEqual(
     raw.map((tag) => tag.match(/className="([^"]*)"/)[1]),
-    ["grid-menu object-menu er-export-menu"],
+    ["grid-menu object-menu er-export-menu", "grid-menu object-menu er-export-menu"],
   );
 });

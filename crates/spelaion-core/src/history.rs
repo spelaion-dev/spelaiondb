@@ -363,6 +363,11 @@ enum Request {
         value: Option<String>,
         reply: Reply<()>,
     },
+    /// Saved ER diagrams (ADR-084), checked by `er/saved.rs` on both sides of this step.
+    ErDiagrams {
+        call: crate::er::DiagramStoreCall,
+        reply: Reply<crate::er::DiagramStoreAnswer>,
+    },
     /// A table data tab's filter history and default (`table_filters.rs`).
     TableFilters {
         table: FilteredTable,
@@ -726,6 +731,9 @@ impl QueryHistory {
                                 &name,
                                 value.as_deref(),
                             ));
+                        }
+                        Request::ErDiagrams { call, reply } => {
+                            let _ = reply.send(crate::er::stored_diagrams(&store, call));
                         }
                         Request::TableFilters {
                             table,
@@ -1451,6 +1459,16 @@ impl QueryHistory {
             reply,
         })
         .await
+    }
+
+    /// One step of the store's actor on saved ER diagrams. Nothing is checked here:
+    /// `er/saved.rs` checks what goes in and what comes out.
+    pub(crate) async fn stored_er_diagrams(
+        &self,
+        call: crate::er::DiagramStoreCall,
+    ) -> Result<crate::er::DiagramStoreAnswer, HistoryError> {
+        self.request(|reply| Request::ErDiagrams { call, reply })
+            .await
     }
 
     /// Changes what the store remembers of a table's filters and reads it back, in one step

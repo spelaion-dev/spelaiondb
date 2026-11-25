@@ -152,9 +152,15 @@ pub use editor_snippets::{
     SnippetError, check_script_template, check_snippet,
 };
 pub use er::{
-    Cardinality, DiagramError, DiagramScope, ErColumn, ErColumns, ErEdge, ErKeyMark, ErLayout,
-    ErLayoutOptions, ErMetrics, ErModel, ErNode, ErPoint, ErRelation, ErRow, ErSide, ErTable,
-    MAX_DIAGRAM_TABLES, MAX_DIAGRAM_TEXT_BYTES, ReadProgress, TableName, dbml, layout as er_layout,
+    Cardinality, DiagramError, DiagramScope, ErArrangement, ErColor, ErColumn, ErColumns, ErEdge,
+    ErGoneNode, ErGroup, ErGroupFrame, ErKeyMark, ErLayout, ErLayoutOptions, ErMetrics, ErModel,
+    ErNode, ErNote, ErNoteBox, ErPlacement, ErPoint, ErRelation, ErRow, ErSide, ErTable,
+    MAX_COORDINATE as MAX_DIAGRAM_COORDINATE, MAX_DIAGRAM_NAME, MAX_DIAGRAM_TABLES,
+    MAX_DIAGRAM_TEXT_BYTES, MAX_GROUPS as MAX_DIAGRAM_GROUPS, MAX_NOTE_CHARS, MAX_NOTE_WIDTH,
+    MAX_NOTES as MAX_DIAGRAM_NOTES, MAX_PLACED_TABLES, MIN_NOTE_WIDTH, ReadProgress, SavedDiagram,
+    SavedDiagramContent, SavedDiagramError, SavedDiagramSummary, TableName, arrange as er_arrange,
+    check_arrangement as check_diagram_arrangement, check_diagram_name,
+    check_scope as check_diagram_scope, dbml, decode_diagram, encode_diagram, layout as er_layout,
     mermaid, read_model as read_er_model, save_diagram_text,
 };
 pub use export::{

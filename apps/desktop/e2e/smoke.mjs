@@ -5978,6 +5978,9 @@ try {
     await viewer.waitFor({ state: "detached" });
   }
 
+  // Where the saved ER diagram's table, note and group were drawn when it was saved (SDB-219),
+  // checked again after the restart below.
+  let savedDiagramMarks = null;
   step("ER diagram: read from the explorer's catalog, laid out once by the core, panned and zoomed, exported");
   {
     const queryTitle = (await page.locator(".tabbar .tab.active").innerText()).trim();
@@ -6045,6 +6048,108 @@ try {
     await page.keyboard.press("Control+w");
     await page.locator(".tabbar .tab", { hasText: "orders · ER diagram" }).waitFor({ state: "detached" });
 
+    // SDB-219 (ADR-084): a diagram saved with a table moved, a note and a colored group opens
+    // again the same from the palette, and its four exports still work. The restart step
+    // opens it once more and deletes it.
+    {
+      await page.getByRole("button", { name: "Expand or collapse orders", exact: true }).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "ER diagram of related tables" }).click();
+      await page.locator(".tabbar .tab.active", { hasText: "orders · ER diagram" }).waitFor();
+      await canvas.locator(".er-node").nth(1).waitFor();
+      const layoutCount = async () => Number(await canvas.getAttribute("data-layouts"));
+      const before = await layoutCount();
+      const customer = canvas.locator(".er-node:not(.focus)");
+      const startTransform = await customer.getAttribute("transform");
+      const from = await customer.locator(".er-box").boundingBox();
+      await page.mouse.move(from.x + 24, from.y + 8);
+      await page.mouse.down();
+      await page.mouse.move(from.x + 24 - 140, from.y + 8 + 200, { steps: 6 });
+      await page.mouse.up();
+      await page.waitForFunction((n) => Number(document.querySelector(".tab-panel:not([hidden]) .er-canvas")?.getAttribute("data-layouts")) > n, before);
+      assert.notEqual(await customer.getAttribute("transform"), startTransform, "the table moved");
+      await view.locator(".er-status", { hasText: "Unsaved changes" }).waitFor();
+      await page.locator(".tabbar .tab.active .tab-unsaved").waitFor();
+      // A note, in amber.
+      await view.getByRole("button", { name: "Add note", exact: true }).click();
+      const noteDialog = page.getByRole("dialog", { name: "Note" });
+      await noteDialog.locator("textarea").fill("Orders are never deleted.\nAsk billing first.");
+      await noteDialog.getByRole("radio", { name: "Amber" }).click();
+      await noteDialog.getByRole("button", { name: "Done" }).click();
+      const note = canvas.locator(".er-note.er-color-amber", { hasText: "Orders are never deleted." });
+      await note.waitFor();
+      // It lands in empty space next to the focused table, never on it.
+      const noteBox = await note.locator("rect").boundingBox();
+      const ordersBox = await canvas.locator(".er-node.focus .er-box").boundingBox();
+      assert.ok(
+        noteBox.x >= ordersBox.x + ordersBox.width || noteBox.x + noteBox.width <= ordersBox.x
+          || noteBox.y >= ordersBox.y + ordersBox.height || noteBox.y + noteBox.height <= ordersBox.y,
+        `the new note does not cover the table: ${JSON.stringify({ noteBox, ordersBox })}`,
+      );
+      // A blue group around orders, from its menu: the table's header, since its rows (each with
+      // its own tooltip) cover the middle of its box.
+      await canvas.locator(".er-node.focus .er-title").click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Group…" }).click();
+      const groupDialog = page.getByRole("dialog", { name: "Group of tables" });
+      await groupDialog.getByRole("textbox").fill("Sales");
+      await groupDialog.getByRole("radio", { name: "Blue" }).click();
+      await groupDialog.getByRole("button", { name: "Done" }).click();
+      await canvas.locator(".er-group-frame.er-color-blue", { hasText: "Sales" }).waitFor();
+      // Saved under a name: the tab takes it and the unsaved mark goes.
+      await view.getByRole("button", { name: "Save", exact: true }).click();
+      const saveDialog = page.getByRole("dialog", { name: "Save the diagram" });
+      await saveDialog.getByRole("textbox").fill("Orders diagram");
+      await saveDialog.getByRole("button", { name: "Save", exact: true }).click();
+      await view.locator(".er-status", { hasText: "Saved as Orders diagram" }).waitFor();
+      await page.locator(".tabbar .tab.active", { hasText: "Orders diagram" }).waitFor();
+      assert.equal(await page.locator(".tabbar .tab.active .tab-unsaved").count(), 0);
+      const marks = async () => ({
+        customer: await customer.getAttribute("transform"),
+        note: await canvas.locator(".er-note").getAttribute("transform"),
+        group: await canvas.locator(".er-group-frame").getAttribute("transform"),
+      });
+      savedDiagramMarks = await marks();
+      await shot("sdb-219-saved");
+      await setTheme("dark", "dark");
+      await shot("sdb-219-saved-dark");
+      await setTheme("light", "light");
+      // Closed (it asks nothing: it is saved) and opened again from the palette.
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab", { hasText: "Orders diagram" }).waitFor({ state: "detached" });
+      await page.keyboard.press("Control+Shift+P");
+      const savedPalette = page.getByRole("dialog", { name: "Command palette" });
+      await savedPalette.getByRole("combobox").fill("Orders diagram");
+      await savedPalette.locator(".palette-item", { hasText: "Saved ER diagram" }).first().click();
+      await page.locator(".tabbar .tab.active", { hasText: "Orders diagram" }).waitFor();
+      await canvas.locator(".er-note", { hasText: "Orders are never deleted." }).waitFor();
+      await canvas.locator(".er-group-frame", { hasText: "Sales" }).waitFor();
+      assert.deepEqual(await marks(), savedDiagramMarks, "the saved diagram opens again the same");
+      assert.equal(await canvas.locator(".er-node.new, .er-gone").count(), 0, "no table is new or gone");
+      assert.equal(await page.locator(".tabbar .tab.active .tab-unsaved").count(), 0);
+      await shot("sdb-219-reopened");
+      // Its exports: the images carry the note and the group; the texts are the model's.
+      const exports = {};
+      for (const [extension, item] of Object.entries({ png: "PNG image…", svg: "SVG image…", mmd: "Mermaid…", dbml: "DBML…" })) {
+        const target = join(tmpdir(), `spelaion-sdb219-${process.pid}.${extension}`);
+        await page.evaluate((path) => (window.__spelaionSavePath = path), target);
+        await view.getByRole("button", { name: "Export", exact: true }).click();
+        await page.getByRole("menuitem", { name: item }).click();
+        await view.getByText(`Saved spelaion-sdb219-${process.pid}.${extension}`).waitFor({ timeout: 60_000 });
+        exports[extension] = target;
+      }
+      await page.evaluate(() => delete window.__spelaionSavePath);
+      assert.deepEqual([...readFileSync(exports.png).subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const savedSvg = readFileSync(exports.svg, "utf8");
+      assert.ok(savedSvg.includes("Sales") && savedSvg.includes("Orders are never deleted.") && !savedSvg.includes("var(--"), "the SVG carries the note, the group and real colors");
+      assert.ok(!savedSvg.includes(">New<"), "the marks of the screen stay out of the file");
+      const { default: savedMermaid } = await import("mermaid");
+      await savedMermaid.parse(readFileSync(exports.mmd, "utf8"));
+      const { Parser: SavedParser } = await import("@dbml/core");
+      assert.equal(new SavedParser().parse(readFileSync(exports.dbml, "utf8"), "dbml").schemas.flatMap((schema) => schema.tables).length, 2);
+      for (const path of Object.values(exports)) rmSync(path, { force: true });
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab", { hasText: "Orders diagram" }).waitFor({ state: "detached" });
+    }
+
     // The schema's explorer menu: the demo's three tables, product with no keys.
     const mainRow = page.getByRole("button", { name: "Expand or collapse schema main" });
     await mainRow.scrollIntoViewIfNeeded();
@@ -6089,8 +6194,20 @@ try {
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.wheel(0, -600);
       await page.waitForFunction((before) => document.querySelector(".tab-panel:not([hidden]) .er-zoom")?.textContent !== before, zoomBefore);
+      // Dragging a table moves it (ADR-084): the pan starts on the background between them.
+      const empty = await page.evaluate(({ x, y, width, height }) => {
+        for (let dy = 8; dy < height - 8; dy += 6) {
+          for (let dx = 8; dx < width - 8; dx += 6) {
+            const element = document.elementFromPoint(x + dx, y + dy);
+            if (element?.closest(".er-canvas") && !element.closest("[data-node],[data-gone],[data-note],[data-group]")) return { x: x + dx, y: y + dy };
+          }
+        }
+        return null;
+      }, box);
+      assert.ok(empty, "the diagram has background to drag");
+      await page.mouse.move(empty.x, empty.y);
       await page.mouse.down();
-      await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 80, { steps: 5 });
+      await page.mouse.move(empty.x + 120, empty.y + 80, { steps: 5 });
       await page.mouse.up();
       await schemaCanvas.focus();
       for (const key of ["ArrowLeft", "ArrowDown", "+", "-", "1", "0"]) await page.keyboard.press(key);
@@ -10818,6 +10935,36 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await change.getByRole("button", { name: "Accept the change" }).click();
   await change.waitFor({ state: "detached" });
   await panel.locator(".status-connected").waitFor();
+  // SDB-219: the ER diagram saved before the restart opens again the same from the palette,
+  // over the catalog read again, then it is deleted and this console is shown again.
+  if (savedDiagramMarks) {
+    const consoleLabel = (await page.locator(".tabbar .tab.active .tab-label").innerText()).trim();
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("Orders diagram");
+    await palette.locator(".palette-item", { hasText: "Saved ER diagram" }).first().click();
+    await page.locator(".tabbar .tab.active", { hasText: "Orders diagram" }).waitFor();
+    const diagramCanvas = page.locator(".tab-panel:not([hidden]) .er-canvas");
+    await diagramCanvas.locator(".er-note", { hasText: "Orders are never deleted." }).waitFor({ timeout: 60_000 });
+    await diagramCanvas.locator(".er-group-frame", { hasText: "Sales" }).waitFor();
+    assert.deepEqual({
+      customer: await diagramCanvas.locator(".er-node:not(.focus)").getAttribute("transform"),
+      note: await diagramCanvas.locator(".er-note").getAttribute("transform"),
+      group: await diagramCanvas.locator(".er-group-frame").getAttribute("transform"),
+    }, savedDiagramMarks, "the saved diagram opens again the same after a restart");
+    await shot("sdb-219-after-restart");
+    const diagramView = page.locator(".tab-panel:not([hidden]) .er-view");
+    await diagramView.getByRole("button", { name: "More diagram actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete saved diagram…" }).click();
+    const confirmDelete = page.getByRole("dialog", { name: "Delete saved diagram?" });
+    await confirmDelete.getByText('"Orders diagram" is deleted from this computer', { exact: false }).waitFor();
+    await confirmDelete.getByRole("button", { name: "Delete diagram" }).click();
+    await diagramView.locator(".er-status", { hasText: "Deleted the saved diagram Orders diagram" }).waitFor();
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab", { hasText: "Orders diagram" }).waitFor({ state: "detached" });
+    await page.locator(".tabbar .tab .tab-label").filter({ hasText: new RegExp(`^${consoleLabel}$`) }).click();
+    await panel.locator(".status-connected").waitFor();
+  }
   // History saving is still off for this connection: this first run is not recorded.
   await panel.locator(".cm-content").click();
   await page.keyboard.insertText("select 'history_resumed_marker' as resumed;");

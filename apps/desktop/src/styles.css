@@ -76,6 +76,20 @@
   --chart-7: #6250d6;
   --chart-8: #e34948;
   --chart-other: var(--tone-neutral);
+  /* A saved ER diagram's notes and groups (ADR-084): a named palette, the outline and a soft
+     fill each; text on the fill stays --fg. */
+  --er-color-gray: var(--tone-neutral);
+  --er-color-gray-soft: var(--tone-neutral-soft);
+  --er-color-blue: var(--tone-blue);
+  --er-color-blue-soft: var(--tone-blue-soft);
+  --er-color-green: var(--tone-green);
+  --er-color-green-soft: var(--tone-green-soft);
+  --er-color-amber: var(--tone-amber);
+  --er-color-amber-soft: var(--tone-amber-soft);
+  --er-color-red: var(--tone-red);
+  --er-color-red-soft: var(--tone-red-soft);
+  --er-color-purple: #6250d6;
+  --er-color-purple-soft: #eeebfb;
   /* The map view (ADR-045): its plain background, the shapes, a hovered shape, and the ring
      around points so they read on tiles too. */
   --map-bg: #eef1f4;
@@ -245,6 +259,8 @@
   --chart-7: #9085e9;
   --chart-8: #e66767;
   --chart-other: var(--tone-neutral);
+  --er-color-purple: #9085e9;
+  --er-color-purple-soft: #2a2547;
   --map-bg: #23272d;
   --map-shape: #6ea8ff;
   --map-shape-fill: rgba(110, 168, 255, 0.22);
@@ -5814,6 +5830,40 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .er-edge path { fill: none; stroke: var(--muted); stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
 .er-edge .er-ring { fill: var(--bg); stroke: var(--muted); stroke-width: 1.25; }
 .er-edge.lit path, .er-edge.lit .er-ring { stroke: var(--accent); stroke-width: 2; }
+/* A saved diagram (ADR-084): tables, notes and group frames move by dragging; a table not
+   placed yet is marked new, one that is gone is outlined and says so. */
+.er-node, .er-note, .er-group-frame, .er-gone { cursor: move; }
+.er-node.new .er-box { stroke: var(--accent); stroke-dasharray: 4 3; }
+.er-mark { font-family: var(--font-ui); font-size: var(--text-xs); font-weight: 600; }
+.er-mark.new { fill: var(--accent-text); }
+.er-gone .er-box { fill: var(--bg); stroke: var(--line-strong); stroke-dasharray: 5 4; }
+.er-gone .er-title { fill: var(--muted); }
+.er-gone .er-mark { fill: var(--muted); font-weight: 400; }
+.er-gone text, .er-note text, .er-group-frame text { font-family: var(--font-code); font-size: var(--text-sm); }
+.er-gone .er-mark, .er-node .er-mark { font-family: var(--font-ui); font-size: var(--text-xs); }
+.er-note rect { stroke-width: 1; }
+.er-note text { fill: var(--fg); }
+.er-group-frame rect { stroke-width: 1.5; }
+.er-group-frame text { fill: var(--fg); font-weight: 600; }
+.er-note.selected rect, .er-group-frame.selected rect { stroke: var(--accent); stroke-width: 2; }
+.er-color-gray rect { fill: var(--er-color-gray-soft); stroke: var(--er-color-gray); }
+.er-color-blue rect { fill: var(--er-color-blue-soft); stroke: var(--er-color-blue); }
+.er-color-green rect { fill: var(--er-color-green-soft); stroke: var(--er-color-green); }
+.er-color-amber rect { fill: var(--er-color-amber-soft); stroke: var(--er-color-amber); }
+.er-color-red rect { fill: var(--er-color-red-soft); stroke: var(--er-color-red); }
+.er-color-purple rect { fill: var(--er-color-purple-soft); stroke: var(--er-color-purple); }
+.er-swatches { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.er-swatch { display: inline-flex; align-items: center; gap: var(--space-xs); }
+.er-swatch::before { content: ""; width: 12px; height: 12px; border-radius: var(--radius-sm); border: 1px solid var(--swatch-line); background: var(--swatch-fill); }
+.er-swatch.er-color-gray { --swatch-fill: var(--er-color-gray-soft); --swatch-line: var(--er-color-gray); }
+.er-swatch.er-color-blue { --swatch-fill: var(--er-color-blue-soft); --swatch-line: var(--er-color-blue); }
+.er-swatch.er-color-green { --swatch-fill: var(--er-color-green-soft); --swatch-line: var(--er-color-green); }
+.er-swatch.er-color-amber { --swatch-fill: var(--er-color-amber-soft); --swatch-line: var(--er-color-amber); }
+.er-swatch.er-color-red { --swatch-fill: var(--er-color-red-soft); --swatch-line: var(--er-color-red); }
+.er-swatch.er-color-purple { --swatch-fill: var(--er-color-purple-soft); --swatch-line: var(--er-color-purple); }
+.er-swatch[aria-checked="true"] { border-color: var(--accent); outline: 1px solid var(--accent); }
+.er-note-text { width: 100%; min-height: 96px; resize: vertical; font-family: var(--font-code); font-size: var(--text-sm); }
+.er-unsaved { color: var(--muted); }
 
 /* Settings → Plugins (ADR-055): one row per plugin of ours, divided by hairlines. */
 .plugins-catalogue { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-md); min-height: var(--control-md); margin: 0 0 var(--space-md); }
