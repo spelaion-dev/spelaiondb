@@ -2035,7 +2035,9 @@ select {
   min-width: 0;
   padding-bottom: var(--space-xs);
 }
-.result-tabs button {
+/* Only the result tabs look like tabs (SDB-523): the toolbar beside them is in the same bar, and
+   its buttons are ghost icon buttons and toggles, never tabs. */
+.result-tab-list button {
   flex: 0 0 auto;
   white-space: nowrap;
   border: none;
@@ -2047,9 +2049,13 @@ select {
   padding: var(--space-xs) var(--space-lg);
   color: var(--muted);
 }
-.result-tabs button.active {
+.result-tab-list button.active {
   color: var(--fg);
   box-shadow: var(--shadow-active-tab);
+}
+.result-tools button.ghost:not(.active),
+.result-tabs > .results-maximize:not(.active) {
+  color: var(--muted);
 }
 .result-tools .result-refresh {
   display: grid;
@@ -5582,7 +5588,10 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 @media (max-width:1100px) { .plan-main { flex-direction:column; } .plan-inspector { flex:0 1 var(--plan-inspector-compact-share); max-height:var(--plan-inspector-compact-share); border-inline-start:0; border-top:1px solid var(--line); } .plan-inspector .empty { padding:var(--space-lg); } .plan-heading { padding:var(--space-md); } .plan-heading button { font-size:var(--text-sm); } }
 
 /* Charts from a result (ADR-040). */
-.result-chart-toggle {
+/* The toolbar's toggles (the chart, and the transposed rows of SDB-386): an icon button whose
+   pressed state is the accent on its soft background, as every pressed toggle (SDB-523). */
+.result-chart-toggle,
+.result-transpose-toggle {
   display: grid;
   place-items: center;
   flex: none;
@@ -5591,7 +5600,8 @@ button.value-picker-row.selected { background: var(--accent-soft); }
   padding: 0;
   border-radius: var(--radius-md);
 }
-.result-chart-toggle.active { color: var(--accent); background: var(--accent-soft); }
+.result-chart-toggle.active,
+.result-transpose-toggle.active { color: var(--accent); background: var(--accent-soft); }
 .result-view {
   flex: 1;
   min-width: 0;
