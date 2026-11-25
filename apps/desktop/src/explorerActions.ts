@@ -7,7 +7,7 @@
 
 import { create } from "zustand";
 import { explorerSession } from "./windowContext";
-import { databaseOf, keyOf, sameConnection, tabKey, tabOnConnection, type ConnectionKey } from "./connectionKey";
+import { databaseOf, keyOf, sameConnection, tabOnConnection, type ConnectionKey } from "./connectionKey";
 import {
   call,
   commands,
@@ -120,7 +120,7 @@ export const isPlainTable = (object: ObjectItem) => !isView(object) && object.ki
 /** SQL written by the core, in a new tab of the connection (on the schema's database where the
  *  engine has one per schema): nothing runs unless `run` (a routine's "Run…"). */
 export function openSqlTab(connection: ConnectionKey, session: string, schema: string | undefined, sql: string, run = false) {
-  const tab = useApp.getState().addTab(tabKey(connection), sql);
+  const tab = useApp.getState().addTab(connection, sql);
   // "Run…": the tab runs its script once connected, asking the call's parameters first.
   if (run) useApp.getState().updateTab(tab, { runOnOpen: true });
   connectTabFromExplorer(tab, session, schema === undefined ? undefined : explorerDatabase(connection, schema));
@@ -128,7 +128,7 @@ export function openSqlTab(connection: ConnectionKey, session: string, schema: s
 
 /** Pages of the table in a table data tab (double-click or "View rows"). */
 export function openRelationRows(connection: ConnectionKey, session: string, object: ObjectItem) {
-  const tab = useApp.getState().addTableTab(tabKey(connection), object.schema, object.name);
+  const tab = useApp.getState().addTableTab(connection, object.schema, object.name);
   connectTabFromExplorer(tab, session, explorerDatabase(connection, object.schema));
 }
 
@@ -168,7 +168,7 @@ export function copyToConnection(connection: ConnectionKey, session: string, obj
 
 /** The ER diagram of the table's related tables, or of the tables chosen with Ctrl+click. */
 export function openRelationDiagram(connection: ConnectionKey, session: string, object: ObjectItem, chosen: { schema: string; name: string }[] | null = null) {
-  openDiagram(tabKey(connection), chosen ? { kind: "tables", tables: chosen } : { kind: "focus", schema: object.schema, table: object.name }, session);
+  openDiagram(connection, chosen ? { kind: "tables", tables: chosen } : { kind: "focus", schema: object.schema, table: object.name }, session);
 }
 
 // ------------------------------------------------------------------- other schema objects
@@ -234,7 +234,7 @@ export function importIntoNewTable(connection: ConnectionKey, session: string, s
 
 /** The ER diagram of the schema, with the connection's object filter (ADR-025). */
 export function openSchemaDiagram(connection: ConnectionKey, session: string, schema: string, filter: NameFilter | null) {
-  openDiagram(tabKey(connection), { kind: "schema", schema, filter }, session);
+  openDiagram(connection, { kind: "schema", schema, filter }, session);
 }
 
 /** "New table…" opens the create table form (ADR-047); another kind opens the core's statement
@@ -263,7 +263,7 @@ export function dropSchema(connection: ConnectionKey, session: string, schema: s
 export function schemaEditorTab(connection: ConnectionKey): string | null {
   const app = useApp.getState();
   const tab = app.tabs.find((t) => t.id === app.activeTab);
-  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && tabOnConnection(tab.connectionId, connection) && isConnected(tab) && !isRunning(tab)
+  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && tabOnConnection(tab, connection) && isConnected(tab) && !isRunning(tab)
     ? tab.id
     : null;
 }

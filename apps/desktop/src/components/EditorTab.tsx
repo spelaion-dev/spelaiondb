@@ -1,7 +1,7 @@
 // An editor tab: its own session in the core (ADR-004), editor, execution and results.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { connectionKey, connectionTag } from "../connectionKey";
+import { type ConnectionKey, connectionOfTag, connectionTag, keyOf, listedConnection, stillOnConnection, tabConnection, tabConnectionOf, tabOnConnection } from "../connectionKey";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -114,9 +114,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const updateTab = useApp((s) => s.updateTab);
   const setConnection = useApp((s) => s.setConnection);
   const updateRun = useApp((s) => s.updateRun);
-  const historySaving = useApp((s) => tab.connectionId !== null && s.historySaving.includes(tab.connectionId));
+  const historySaving = useApp((s) => {
+    const connection = tabConnection(tab);
+    return connection !== null && s.historySaving.includes(connectionTag(connection));
+  });
   const workspaceChanging = useApp((s) => s.workspaceChanging);
-  const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
+  const ownConnection = tabConnection(tab);
+  const connection = (ownConnection ? listedConnection(connections, ownConnection) : undefined) ?? null;
   const supportsDatabase = !tab.table && databaseSwitching(connection?.engine);
   // A schema picker where the session has a schema of its own and no database picker does it
   // (PostgreSQL, DuckDB): it shows, and changes, where unqualified names are found (ADR-037).
@@ -141,7 +145,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const databaseBusyRef = useRef(false);
   const workspace = useApp((s) => s.workspace?.workspace ?? null);
   // SQL completion only where the language is SQL (ADR-056).
-  const completion = useCompletionCatalog(tab.id, tab.connectionId ? connectionTag(connectionKey(tab.connectionId)) : null, workspace, database, tabStatus === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
+  const completion = useCompletionCatalog(tab.id, ownConnection ? connectionTag(ownConnection) : null, workspace, database, tabStatus === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   /** This tab's runs, counted: each result remembers which one produced it (SDB-378). */
@@ -219,19 +223,19 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  opened like this tab's session, or its row in the explorer. The name was resolved from
    *  the catalog already read; a column leads to its table. */
   function showName(name: ResolvedName, action: NameAction) {
-    const connectionId = tab.connectionId;
-    if (!connectionId) return;
+    const connection = tabConnection(tab);
+    if (!connection) return;
     const { schema, name: table } = name.table;
     const app = useApp.getState();
     if (action === "reveal") {
       app.setSidebarSection("connections");
-      app.revealInExplorer({ connection: connectionKey(connectionId), schema, name: table, connect: true });
+      app.revealInExplorer({ connection, schema, name: table, connect: true });
       return;
     }
-    const existing = app.tabs.some((other) => other.connectionId === connectionId && other.tableDetails?.schema === schema
+    const existing = app.tabs.some((other) => tabOnConnection(other, connection) && other.tableDetails?.schema === schema
       && other.tableDetails.name === table && other.tableDetails.kind === "columns");
-    const details = app.addTableDetailsTab(connectionId, schema, table, "columns");
-    if (!existing) connectTabFromExplorer(details, tab.id, explorerDatabase(connectionKey(connectionId), schema) ?? database ?? undefined);
+    const details = app.addTableDetailsTab(connection, schema, table, "columns");
+    if (!existing) connectTabFromExplorer(details, tab.id, explorerDatabase(connection, schema) ?? database ?? undefined);
   }
   useEffect(() => {
     if (!notice) return;
@@ -314,8 +318,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     : (queryTable?.writable ? queryTable : null);
   /** The table whose foreign keys the active result follows. */
   const keyTable = tab.table
-    ? { schema: tab.table.schema, name: tab.table.name, connectionId: tab.connectionId }
-    : (queryTable ? { schema: queryTable.schema, name: queryTable.name, connectionId: tab.connectionId } : undefined);
+    ? { schema: tab.table.schema, name: tab.table.name, connection: tabConnection(tab) }
+    : (queryTable ? { schema: queryTable.schema, name: queryTable.name, connection: tabConnection(tab) } : undefined);
   const checkingEditability = tab.table
     ? primaryKey === null
     : !ended(activeResult) || running || (queryText !== undefined && queryTable === undefined);
@@ -601,12 +605,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const countSequence = useRef(0);
   async function countTable() {
     const view = tab.table;
-    const connectionId = tab.connectionId;
+    const counted = tabConnection(tab);
     const sequence = ++countSequence.current;
     if (!view || !(await ensureConnected())) return;
     const matchingView = () => {
       const current = useApp.getState().tabs.find((item) => item.id === tab.id);
-      if (sequence !== countSequence.current || !current || current.connectionId !== connectionId ||
+      if (sequence !== countSequence.current || !current || !stillOnConnection(current, counted) ||
           !current.table || current.table.schema !== view.schema || current.table.name !== view.name ||
           current.table.filter !== view.filter) return undefined;
       return current.table;
@@ -834,7 +838,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function openTablePage(view: TableView) {
     let first = view;
     if (!view.filter && tab.connectionId) {
-      const saved = await call(commands.tableFilters(connectionKey(tab.connectionId), tab.database ?? null, view.schema, view.name)).catch(() => null);
+      const saved = await call(commands.tableFilters(tabConnectionOf(tab.connectionId, tab.connectionFolder), tab.database ?? null, view.schema, view.name)).catch(() => null);
       if (saved?.default) {
         first = { ...view, filter: saved.default };
         updateTab(tab.id, { table: first });
@@ -864,7 +868,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     });
     if (!name) return;
     try {
-      await call(commands.saveSnippet(name, tab.sql, tab.connectionId ? connectionKey(tab.connectionId) : null));
+      await call(commands.saveSnippet(name, tab.sql, tabConnection(tab)));
       updateTab(tab.id, { snippetName: name });
       useApp.getState().refreshSnippets();
       setNotice({ text: t("snippets.saved", { name }), error: false });
@@ -1006,7 +1010,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }
       });
     return () => { cancelled = true; };
-  }, [supportsDatabase, tab.id, tabStatus, tab.connectionId, running, databaseRefresh]);
+  }, [supportsDatabase, tab.id, tabStatus, tab.connectionId, tab.connectionFolder, running, databaseRefresh]);
 
   // The session's schema, read after connecting and after each script (a SET search_path in
   // it changes it), as the database is.
@@ -1031,7 +1035,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }
       });
     return () => { cancelled = true; };
-  }, [supportsSchema, tab.id, tabStatus, tab.connectionId, running, schemaRefresh]);
+  }, [supportsSchema, tab.id, tabStatus, tab.connectionId, tab.connectionFolder, running, schemaRefresh]);
 
   async function changeSchema(next: string) {
     if (!next || schemaBusy) return;
@@ -1161,7 +1165,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     setConnection(tab.id, CONNECTING);
     try {
       // On the database the tab is on (ADR-074, SDB-505), never quietly another.
-      const session = await openTabSession(tab.id, connectionKey(tab.connectionId));
+      const session = await openTabSession(tab.id, tabConnectionOf(tab.connectionId, tab.connectionFolder));
       if (session === null) {
         setConnection(tab.id, DISCONNECTED);
         return false;
@@ -1209,7 +1213,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
   }
 
-  async function changeConnection(id: string) {
+  /** `value`: the picked connection's tag, or "" for none. */
+  async function changeConnection(value: string) {
     if (pendingCount > 0 || saving.now() || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
@@ -1218,7 +1223,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // The rows on screen came from the other connection: read-only until run again (SDB-137).
     setQueryTarget(null);
     // Another connection starts on its own database (ADR-074, SDB-505).
-    updateTab(tab.id, { connectionId: id || null, database: null, connectionState: DISCONNECTED });
+    const picked = connectionOfTag(value);
+    updateTab(tab.id, { connectionId: picked?.id ?? null, connectionFolder: picked?.folder ?? null, database: null, connectionState: DISCONNECTED });
   }
 
   // "Run…" on a routine (ADR-047): the whole script once, as soon as the tab is connected and
@@ -1308,7 +1314,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (!refreshingEdits && (pendingCount > 0 || saving.now())) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (queryPageBusy.current || startingRun.current || restoringView.current) return;
     if (!request.text.trim() || running || databaseBusyRef.current || useApp.getState().workspaceChanging ||
-        (tab.connectionId && useApp.getState().historySaving.includes(tab.connectionId))) return;
+        (tabConnection(tab) && useApp.getState().historySaving.includes(connectionTag(tabConnection(tab)!)))) return;
     startingRun.current = true;
     try {
     if (!(await ensureConnected())) return;
@@ -1529,7 +1535,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }, runId));
         useApp.getState().refreshHistory();
         if (mayChangeCompletionCatalog(request.text, connection?.engine ?? null)) {
-          if (tab.connectionId) schemasRefreshed(connectionKey(tab.connectionId));
+          if (tab.connectionId) schemasRefreshed(tabConnectionOf(tab.connectionId, tab.connectionFolder));
         }
         notifyFinished(tab, summary, elapsedMs);
         break;
@@ -1650,7 +1656,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const mirror: ResultsMirror = {
     tab: tab.id,
     name: tabLabel(tab),
-    connectionId: tab.connectionId,
+    connection: ownConnection,
     run: tab.run,
     running,
     connectFailed: connectFailure(tab) !== null,
@@ -1664,7 +1670,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   // Every change of what the panel would show goes to the results window.
   useEffect(() => {
     if (resultsWindow) void sendMirror(resultsWindow, mirror).catch(() => undefined);
-  }, [resultsWindow, tab.run, tab.connectionId, mirror.name, running, mirror.connectFailed, runStatusLine, cancelRequested, refreshDisabled, refreshRestoring]);
+  }, [resultsWindow, tab.run, tab.connectionId, tab.connectionFolder, mirror.name, running, mirror.connectFailed, runStatusLine, cancelRequested, refreshDisabled, refreshRestoring]);
   // Its requests, carried out by this tab as its own panel's would be.
   useEffect(() => {
     if (!resultsWindow) return;
@@ -1709,22 +1715,21 @@ export function EditorTab({ tab }: { tab: Tab }) {
     <div className="editor-tab">
       <span className="sr-only" role="status">{runStatusLine}</span>
       {variablesOpen && !tab.table && (
-        <VariablesDialog tabId={tab.id} connectionId={tab.connectionId} connectionName={connection?.name ?? null} onClose={() => setVariablesOpen(false)} />
+        <VariablesDialog tabId={tab.id} connection={tabConnection(tab)} connectionName={connection?.name ?? null} onClose={() => setVariablesOpen(false)} />
       )}
       <div className="toolbar">
         <select
-          value={tab.connectionId ?? ""}
+          value={ownConnection ? connectionTag(ownConnection) : ""}
           onChange={(e) => void changeConnection(e.target.value)}
           aria-label={t("connection")}
           // The chosen connection's description, which an open list may not show per option.
           title={(() => {
-            const chosen = connections.find((c) => c.id === tab.connectionId);
-            return chosen ? connectionTooltip(chosen) : t("connection");
+            return connection ? connectionTooltip(connection) : t("connection");
           })()}
           disabled={running || databaseBusy || tabStatus === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
           <option value="">{t("noConnection")}</option>
           {connections.map((c) => (
-            <option key={c.id} value={c.id} title={connectionTooltip(c)}>
+            <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))} title={connectionTooltip(c)}>
               {c.name} ({c.engine}
               {c.kind ? `, ${c.kind.name}` : c.env ? `, ${c.env}` : ""})
             </option>
@@ -1862,7 +1867,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             editable={primaryKey === null ? null : primaryKey.length > 0 && !connection?.readOnly}
             readOnlyConnection={connection?.readOnly ?? false}
             pending={pendingCount}
-            connectionId={tab.connectionId}
+            connection={ownConnection}
             session={tab.id}
             columns={tableColumns}
             loaded={!!tab.run && !running && !tab.run.error && tab.run.results.length > 0}
@@ -1981,10 +1986,10 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             runStatus={runStatusLine}
             cancelRequested={cancelRequested}
             session={tab.id}
-            connectionId={tab.connectionId}
+            connection={ownConnection}
             table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
             serverSort={tab.table ? { sort: tab.table.sort ?? NO_TABLE_SORT, onSort: (sort) => void sortTable(sort) } : undefined}
-            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0, all: undefined, total: undefined }), connectionId: tab.connectionId } : undefined}
+            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0, all: undefined, total: undefined }), connection: ownConnection } : undefined}
             keyTable={keyTable}
             editing={editing}
             columnComments={tab.table ? columnComments : undefined}
@@ -2038,7 +2043,7 @@ export function Results({
   cancelRequested,
   onCancelRun,
   session,
-  connectionId,
+  connection,
   table,
   onSelect,
   onSorted,
@@ -2079,7 +2084,7 @@ export function Results({
   cancelRequested: boolean;
   onCancelRun(): void;
   session: string;
-  connectionId: string | null;
+  connection: ConnectionKey | null;
   table: { schema: string; name: string; filter: string; orderBy: string } | null;
   onSelect(id: number | null): void;
   onSorted(result: number, sort: SortState[]): void;
@@ -2088,9 +2093,9 @@ export function Results({
   serverSort?: { sort: SortState[]; onSort(sort: SortState[]): void };
   /** Reads a paged query again from the server in a sort's order (see `ResultGrid`). */
   onQuerySort?(result: number, sort: SortState[]): Promise<boolean>;
-  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connection: ConnectionKey | null };
   /** The table whose foreign keys the result follows (SDB-93). */
-  keyTable?: { schema: string; name: string; connectionId: string | null };
+  keyTable?: { schema: string; name: string; connection: ConnectionKey | null };
   editing?: GridEditing;
   columnComments?: Record<string, string>;
   editingState: GridEditingState;
@@ -2128,7 +2133,7 @@ export function Results({
   /** The rows each grid has selected (positions, not values), for the Transpose button. */
   const selectedRows = useRef<Record<number, number[]>>({});
   // A connection that could not open may need a plugin that is not installed.
-  const connectionEngine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? null);
+  const connectionEngine = useApp((s) => (connection ? listedConnection(s.connections, connection)?.engine ?? null : null));
   const maximizeButton = maximize && (
     <button
       className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
@@ -2180,7 +2185,7 @@ export function Results({
             key={`export-${active.id}`}
             result={active}
             session={session}
-            connectionId={connectionId}
+            connection={connection}
             sql={table ? null : (active.sql ?? null)}
             table={table}
             hidden={hiddenColumns[active.id] ?? []}

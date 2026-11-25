@@ -2,7 +2,7 @@
 // dialog shows it, and it runs only when the user confirms here (or opens it in the editor).
 
 import { useEffect, useRef, useState } from "react";
-import { listedConnection, type ConnectionKey, tabKey } from "../connectionKey";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ObjectChangeItem } from "../api";
 import type { ObjectChangePreview } from "../bindings";
@@ -75,7 +75,7 @@ export function ObjectChangeDialog({
 
   function openInEditor() {
     if (!sql) return;
-    const tab = useApp.getState().addTab(tabKey(identity), sql);
+    const tab = useApp.getState().addTab(identity, sql);
     connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
     onClose();
   }

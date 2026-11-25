@@ -4,9 +4,8 @@
 // explorer, its sessions, the catalog it publishes, and the dialogs and pickers it opens hold
 // the pair too, never the bare id, so two folders' connections of the same id never meet.
 //
-// A tab still names its connection by the bare id of the one folder open: tabs gain the folder
-// with the card that makes them belong to it (ADR-075 point 7). Where the explorer meets a tab,
-// it goes through `tabOnConnection` and `tabKey` here, and `connectionKey` (`connectionKey.ts`).
+// A tab holds both halves too (`connectionId` and `connectionFolder`, ADR-075 point 7, SDB-502):
+// `tabConnection` gives its identity, and `tabOnConnection` and `stillOnConnection` compare it.
 //
 // Pure (no store, no runtime imports), so `tabState.ts` and its tests can use it.
 
@@ -46,7 +45,7 @@ export function sameConnection(a: { folder?: string | null; id: string }, b: { f
 }
 
 /** The listed connection `key` names, if it is listed. */
-export function listedConnection(connections: ConnectionItem[], key: ConnectionKey): ConnectionItem | undefined {
+export function listedConnection(connections: ConnectionItem[], key: { folder?: string | null; id: string }): ConnectionItem | undefined {
   return connections.find((item) => sameConnection(item, key));
 }
 
@@ -87,12 +86,31 @@ export function withConnection(keys: ConnectionKey[], key: ConnectionKey, presen
   return keys.filter((item) => !sameConnection(item, key));
 }
 
-/** Whether a tab's connection (its bare id, of the one folder open) is `key`. */
-export function tabOnConnection(connectionId: string | null, key: ConnectionKey): boolean {
-  return connectionId !== null && connectionId === key.id;
+/** What a tab knows of its connection: its id and the folder it is from (ADR-075). */
+export interface TabConnection {
+  connectionId: string | null;
+  connectionFolder: string | null;
 }
 
-/** What a tab opened from the explorer on `key` names its connection by. */
-export function tabKey(key: ConnectionKey): string {
-  return key.id;
+/** A tab's connection as its identity: its id and its folder; null for a tab with none. */
+export function tabConnection(tab: TabConnection): ConnectionKey | null {
+  return tab.connectionId === null ? null : { folder: tab.connectionFolder, id: tab.connectionId };
+}
+
+/** The identity of a tab's connection `id` (a tab that has one), with the tab's folder. */
+export function tabConnectionOf(id: string, folder: string | null): ConnectionKey {
+  return { folder, id };
+}
+
+/** Whether a tab is still on `key` (a connection, or none): a check after an await that the
+ *  user did not change the tab's connection meanwhile. */
+export function stillOnConnection(tab: TabConnection, key: ConnectionKey | null): boolean {
+  const own = tabConnection(tab);
+  return own === null || key === null ? own === key : sameConnection(own, key);
+}
+
+/** Whether a tab's connection is `key`: the same folder and the same id. */
+export function tabOnConnection(tab: TabConnection, key: ConnectionKey): boolean {
+  const own = tabConnection(tab);
+  return own !== null && sameConnection(own, key);
 }

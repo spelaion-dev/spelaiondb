@@ -12,6 +12,8 @@ import {
   listedConnection,
   onDatabase,
   sameConnection,
+  stillOnConnection,
+  tabConnection,
   tabOnConnection,
   withConnection,
 } from "../src/connectionIdentity.ts";
@@ -66,10 +68,24 @@ test("the listed connection is found by its folder and its id", () => {
   assert.deepEqual(keyOf(connections[0]), shop);
 });
 
-test("a tab names its connection by its id while one folder is open", () => {
-  assert.equal(tabOnConnection("prod/orders", shop), true);
-  assert.equal(tabOnConnection(null, shop), false);
-  assert.equal(tabOnConnection("prod/customers", shop), false);
+test("a tab holds its connection's folder and id, and is on only that connection", () => {
+  const onShop = { connectionId: "prod/orders", connectionFolder: "/work/shop" };
+  const none = { connectionId: null, connectionFolder: null };
+  assert.deepEqual(tabConnection(onShop), shop);
+  assert.equal(tabConnection(none), null);
+  assert.equal(tabOnConnection(onShop, shop), true);
+  assert.equal(tabOnConnection(onShop, crm), false, "the same id in another folder");
+  assert.equal(tabOnConnection(none, shop), false);
+  assert.equal(tabOnConnection({ connectionId: "~/local", connectionFolder: null }, personal), true);
+});
+
+test("a tab is still on its connection only if neither half changed", () => {
+  const onShop = { connectionId: "prod/orders", connectionFolder: "/work/shop" };
+  assert.equal(stillOnConnection(onShop, shop), true);
+  assert.equal(stillOnConnection(onShop, crm), false);
+  assert.equal(stillOnConnection(onShop, null), false);
+  assert.equal(stillOnConnection({ connectionId: null, connectionFolder: null }, null), true);
+  assert.equal(stillOnConnection({ connectionId: null, connectionFolder: null }, shop), false);
 });
 
 test("another database of a connection has its own tag, and is still that connection (ADR-074)", () => {

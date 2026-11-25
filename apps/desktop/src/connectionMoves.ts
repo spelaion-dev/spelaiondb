@@ -5,7 +5,7 @@
 
 import { call, commands, type ConnectionItem } from "./api";
 import { explorerSession } from "./windowContext";
-import { connectionKey, keyOf } from "./connectionKey";
+import { keyOf, tabOnConnection } from "./connectionKey";
 import i18n from "./i18n";
 import { refreshConnections } from "./components/Sidebar";
 import { useApp } from "./store";
@@ -28,7 +28,7 @@ export function foldersOf(connections: ConnectionItem[], personal: boolean): str
 
 /** Why the connection cannot move now, or null: a tab connected to it must disconnect first. */
 export function moveBlocked(connection: ConnectionItem): string | null {
-  return connectionInUse(useApp.getState().tabs, connection.id) ? i18n.t("connections:move.inUse", { name: connection.name }) : null;
+  return connectionInUse(useApp.getState().tabs, keyOf(connection)) ? i18n.t("connections:move.inUse", { name: connection.name }) : null;
 }
 
 /** Moves a connection to `folder` and shows it there. Returns its new id. */
@@ -45,13 +45,12 @@ export async function moveConnection(connection: ConnectionItem, folder: string)
   const moved = await call(commands.moveConnection(key, folder));
   if (moved.id !== connection.id) {
     for (const tab of useApp.getState().tabs) {
-      if (tab.connectionId === connection.id) app.updateTab(tab.id, { connectionId: moved.id });
+      if (tabOnConnection(tab, key)) app.updateTab(tab.id, { connectionId: moved.id });
     }
     app.setConnectionOpen(key, false);
   }
   await refreshConnections();
-  // Moving between the repository and the personal folder changes its folder too: the new
-  // identity is the listed one.
-  app.revealInExplorer({ connection: connectionKey(moved.id) });
+  // A connection moves within its layer: its folder stays, only its id changes.
+  app.revealInExplorer({ connection: { folder: key.folder, id: moved.id } });
   return moved.id;
 }

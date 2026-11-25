@@ -9,7 +9,7 @@ import { call, commands, type OpenTabItem, type RestoredTabsItem } from "./api";
 import { connectionFailedRun, openTabSession } from "./connect";
 import { isModified } from "./sqlFiles";
 import { useApp, type Tab } from "./store";
-import { connectionKey } from "./connectionKey";
+import { stillOnConnection, tabConnectionOf } from "./connectionKey";
 import { CONNECTING, DISCONNECTED, connectFailed, connectedWith, hasSession } from "./tabState";
 
 /** Longest wait before the tabs as they are now go to the core. */
@@ -37,7 +37,7 @@ function snapshot(tabs: Tab[], activeTab: string | null): { tabs: OpenTabItem[];
       connection: tab.connectionId,
       database: tab.connectionId ? (tab.database ?? null) : null,
       // The core keeps the tab under this folder, or under the window's key (ADR-075).
-      folder: tab.connectionId ? connectionKey(tab.connectionId).folder : null,
+      folder: tab.connectionId ? tab.connectionFolder : null,
       pinned: tab.pinned ?? false,
       onError: tab.runOptions?.onError ?? null,
       timeoutSeconds: tab.runOptions?.timeoutSeconds ?? null,
@@ -111,12 +111,12 @@ async function reconnectRestored() {
   for (const id of ids) {
     const tab = useApp.getState().tabs.find((t) => t.id === id);
     if (!tab?.connectionId || hasSession(tab)) continue;
-    const connectionId = tab.connectionId;
+    const connection = tabConnectionOf(tab.connectionId, tab.connectionFolder);
     useApp.getState().setConnection(id, CONNECTING);
     try {
-      const session = await openTabSession(id, connectionKey(connectionId));
+      const session = await openTabSession(id, connection);
       const now = useApp.getState().tabs.find((t) => t.id === id);
-      if (!now || now.connectionId !== connectionId) {
+      if (!now || !stillOnConnection(now, connection)) {
         await call(commands.disconnect(id)).catch(() => undefined);
         continue;
       }

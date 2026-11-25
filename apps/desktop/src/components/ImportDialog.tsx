@@ -20,7 +20,7 @@ import type {
   IfExistsItem,
 } from "../bindings";
 import { connectTabFromExplorer, explorerDatabase, refreshExplorer } from "../connect";
-import { listedConnection, tabKey, type ConnectionKey } from "../connectionKey";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { isTextField, useFocusedPaste } from "../focusedPaste";
 import { readClipboardText } from "../clipboardText";
 import { chooseOpenFile } from "../dialogs";
@@ -357,7 +357,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
   }
 
   function openTable(target: { schema: string; table: string }) {
-    const tab = useApp.getState().addTableTab(tabKey(request.connection), target.schema, target.table);
+    const tab = useApp.getState().addTableTab(request.connection, target.schema, target.table);
     connectTabFromExplorer(tab, request.session, explorerDatabase(request.connection, target.schema));
     close();
   }

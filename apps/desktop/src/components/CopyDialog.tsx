@@ -12,7 +12,7 @@ import { create } from "zustand";
 import { call, commands } from "../api";
 import type { CopyHowItem, CopyPlanItem_Serialize, CopyRequestItem, IfExistsItem, ImportProgressItem, LossItem } from "../bindings";
 import { connectTabFromExplorer, explorerDatabase, openSession, refreshExplorer } from "../connect";
-import { connectionOfTag, connectionTag, keyOf, listedConnection, tabKey, type ConnectionKey } from "../connectionKey";
+import { connectionOfTag, connectionTag, keyOf, listedConnection, type ConnectionKey } from "../connectionKey";
 import { explorerSessionOpen } from "../tabState";
 import { errorText as message, loadedValue, type Loaded } from "../dialogState";
 import { explorerSession } from "../explorerActions";
@@ -248,7 +248,7 @@ function CopyForm({ request }: { request: CopyRequest }) {
   function openTable(done: { schema: string; table: string }) {
     if (!targetSession) return;
     if (!targetKey) return;
-    const tab = useApp.getState().addTableTab(tabKey(targetKey), done.schema, done.table);
+    const tab = useApp.getState().addTableTab(targetKey, done.schema, done.table);
     connectTabFromExplorer(tab, targetSession, explorerDatabase(targetKey, done.schema));
     close();
   }

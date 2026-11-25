@@ -332,7 +332,7 @@ export default function App() {
         </div>
       </main>
       {connectionDialog && (
-        <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : connectionDialog.imports ? "import" : "add"} dialog={connectionDialog} />
+        <AddConnection key={connectionDialog.kind === "edit" ? connectionTag(connectionDialog.connection) : connectionDialog.imports ? "import" : "add"} dialog={connectionDialog} />
       )}
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
       {movingConnection && <MoveConnection key={movingConnection.id} connection={movingConnection} />}

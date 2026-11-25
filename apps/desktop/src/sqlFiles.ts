@@ -5,6 +5,7 @@
 import i18n from "./i18n";
 import { call, commands, type FileFormatItem, type SaveFileOutcome, type SqlFileItem } from "./api";
 import { chooseOpenFile, chooseSavePath, sqlFileFilters } from "./dialogs";
+import { tabConnection, type ConnectionKey } from "./connectionKey";
 import { useApp, useDialogs, type Tab, type TabFile } from "./store";
 
 /** Fired on `window` when the recent files changed (a file was opened, saved or forgotten). */
@@ -55,7 +56,7 @@ export async function openFileDialog(): Promise<void> {
 /** Opens a file in a tab (or shows its tab if it is open). The tab takes the active tab's
  *  connection, unless `connectionId` says which (null: none, as for a file opened from
  *  outside the app, SDB-397, which must not connect on its own). */
-export async function openFilePath(path: string, options: { connectionId?: string | null } = {}): Promise<string | null> {
+export async function openFilePath(path: string, options: { connection?: ConnectionKey | null } = {}): Promise<string | null> {
   const app = useApp.getState();
   const open = app.tabs.find((t) => t.file && samePath(t.file.path, path));
   if (open) {
@@ -76,10 +77,10 @@ export async function openFilePath(path: string, options: { connectionId?: strin
     recentChanged();
   }
   const active = app.tabs.find((t) => t.id === app.activeTab);
-  const connectionId = options.connectionId !== undefined
-    ? options.connectionId
-    : active && !active.table && !active.tableDetails && !active.diagram ? active.connectionId : null;
-  const id = useApp.getState().addTab(connectionId, file.text);
+  const connection = options.connection !== undefined
+    ? options.connection
+    : active && !active.table && !active.tableDetails && !active.diagram ? tabConnection(active) : null;
+  const id = useApp.getState().addTab(connection, file.text);
   useApp.getState().updateTab(id, { file: tabFile(file) });
   return id;
 }

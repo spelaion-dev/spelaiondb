@@ -4,7 +4,7 @@
 import { call, commands } from "./api";
 import type { DiagramScopeItem_Deserialize, SavedDiagramItem_Serialize as SavedDiagramItem } from "./bindings";
 import { explorerSession } from "./windowContext";
-import { connectionKey, holdsConnection } from "./connectionKey";
+import { holdsConnection, type ConnectionKey } from "./connectionKey";
 import { connectTabFromExplorer, explorerDatabase, openSession, sourceDatabase } from "./connect";
 import { useApp } from "./store";
 import { CONNECTING, DISCONNECTED, connectFailed, connectedWith } from "./tabState";
@@ -17,19 +17,19 @@ function scopeSchema(scope: DiagramScopeItem_Deserialize): string | undefined {
   return scope.kind === "tables" ? scope.tables[0]?.schema : scope.schema;
 }
 
-/** Opens a diagram of `scope` on `connectionId` (or shows the tab already open on it), its
+/** Opens a diagram of `scope` on `connection` (or shows the tab already open on it), its
  *  session cloned from `source`: the explorer's by default, or a tab's. */
-export function openDiagram(connectionId: string, scope: DiagramScopeItem_Deserialize, source = explorerSession(connectionKey(connectionId))) {
+export function openDiagram(connection: ConnectionKey, scope: DiagramScopeItem_Deserialize, source = explorerSession(connection)) {
   // An empty table filter is no filter: the same diagram, the same tab.
   if (scope.kind === "schema" && scope.filter && scope.filter.include.length === 0 && scope.filter.exclude.length === 0) {
     scope = { ...scope, filter: null };
   }
   // The database it is read from is the source's (ADR-074, SDB-506): a schema of the same name
   // in another database of the connection is another diagram.
-  const [tab, created] = useApp.getState().addDiagramTab(connectionId, scope, undefined, sourceDatabase(source));
+  const [tab, created] = useApp.getState().addDiagramTab(connection, scope, undefined, sourceDatabase(source));
   if (!created) return;
   const schema = scopeSchema(scope);
-  connectTabFromExplorer(tab, source, schema === undefined ? undefined : explorerDatabase(connectionKey(connectionId), schema));
+  connectTabFromExplorer(tab, source, schema === undefined ? undefined : explorerDatabase(connection, schema));
 }
 
 /** Opens a saved diagram in a tab of its own (or shows the one already open): its scope comes
@@ -37,11 +37,9 @@ export function openDiagram(connectionId: string, scope: DiagramScopeItem_Deseri
  *  from the explorer's when the explorer is connected, else opened as a new one. */
 export async function openSavedDiagram(item: SavedDiagramItem): Promise<void> {
   const detail = await call(commands.openSavedDiagram(item.id));
-  // A tab keeps its connection's id; the diagram names its connection by folder and id.
   const key = detail.saved.connection;
-  const connectionId = key.id;
   const scope: DiagramScopeItem_Deserialize = detail.scope;
-  const [tab, created] = useApp.getState().addDiagramTab(connectionId, scope, { id: detail.saved.id, name: detail.saved.name });
+  const [tab, created] = useApp.getState().addDiagramTab(key, scope, { id: detail.saved.id, name: detail.saved.name });
   if (!created) return;
   const schema = scopeSchema(scope);
   const database = schema === undefined ? undefined : explorerDatabase(key, schema);

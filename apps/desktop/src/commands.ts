@@ -76,7 +76,7 @@ import { compareSchemas } from "./schemaCompare";
 import { useImport } from "./components/ImportDialog";
 import { ended } from "./resultEnd";
 import { canStartRun, explorerSessionOpen, isConnected, isRunning, sessionReadOnly } from "./tabState";
-import { connectionKey, keyOf, listedConnection, tabKey, tabOnConnection, type ConnectionKey } from "./connectionKey";
+import { type ConnectionKey, keyOf, listedConnection, tabConnection, tabConnectionOf, tabOnConnection } from "./connectionKey";
 
 export interface CommandContext {
   /** The tab the command acts on: the menu's tab, or the active one (none behind Settings). */
@@ -178,7 +178,7 @@ function toggleSection(section: "connections" | "processes" | "search") {
 function importSession(context: CommandContext): { session: string; connection: ConnectionKey } | null {
   const tab = tabOf(context);
   if (!tab?.connectionId) return null;
-  const connection = connectionKey(tab.connectionId);
+  const connection = tabConnectionOf(tab.connectionId, tab.connectionFolder);
   if (isConnected(tab)) return { session: tab.id, connection };
   if (explorerSessionOpen(useApp.getState().explorerConnected, connection)) {
     return { session: explorerSession(connection), connection };
@@ -209,20 +209,21 @@ function diagramSource(context: CommandContext): Tab | undefined {
 /** A diagram around the active tab's table, or of its editor's current schema. */
 async function openActiveDiagram(context: CommandContext) {
   const tab = diagramSource(context);
-  if (!tab?.connectionId) return;
+  const connection = tab ? tabConnection(tab) : null;
+  if (!tab || !connection) return;
   const table = tab.table ?? tab.tableDetails;
   if (table) {
-    openDiagram(tab.connectionId, { kind: "focus", schema: table.schema, table: table.name }, tab.id);
+    openDiagram(connection, { kind: "focus", schema: table.schema, table: table.name }, tab.id);
     return;
   }
   const schema = await call(core.activeSchema(tab.id));
-  if (schema !== null) openDiagram(tab.connectionId, { kind: "schema", schema, filter: null }, tab.id);
+  if (schema !== null) openDiagram(connection, { kind: "schema", schema, filter: null }, tab.id);
 }
 
-/** The identity of the active tab's connection, if it has one. */
-function tabConnection(context: CommandContext): ConnectionKey | null {
-  const id = tabOf(context)?.connectionId;
-  return id ? connectionKey(id) : null;
+/** The identity of the active tab's connection, if it has one (its folder and its id). */
+function activeTabConnection(context: CommandContext): ConnectionKey | null {
+  const tab = tabOf(context);
+  return tab ? tabConnection(tab) : null;
 }
 
 function stepTab(back: boolean) {
@@ -327,8 +328,9 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     // From the main window only: a connection's window shows that connection already.
     enabled: (c) => windowContext().kind === "main" && Boolean(tabOf(c)?.connectionId),
     run: (c) => {
-      const id = tabOf(c)?.connectionId;
-      const connection = useApp.getState().connections.find((item) => item.id === id);
+      const tab = tabOf(c);
+      const key = tab ? tabConnection(tab) : null;
+      const connection = key ? listedConnection(useApp.getState().connections, key) : undefined;
       if (connection) void openConnectionWindow(connection);
     },
   },
@@ -431,8 +433,8 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   // All but the active tab's connection.
   "connections.disconnectOthers": {
-    enabled: (c) => Boolean(tabOf(c)?.connectionId) && hasSessions(tabConnection(c)),
-    run: (c) => void disconnectAll(tabConnection(c)),
+    enabled: (c) => Boolean(tabOf(c)?.connectionId) && hasSessions(activeTabConnection(c)),
+    run: (c) => void disconnectAll(activeTabConnection(c)),
   },
   "editor.cancel": { enabled: (c) => isRunning(editorTab(c)), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
@@ -557,7 +559,7 @@ function showInExplorer(target: { connection: ConnectionKey; schema?: string; na
 }
 
 function newConsole(connection: ConnectionKey, schema: string) {
-  const tab = useApp.getState().addTab(tabKey(connection));
+  const tab = useApp.getState().addTab(connection);
   connectTabFromExplorer(tab, explorerSession(connection), explorerDatabase(connection, schema));
 }
 
@@ -575,12 +577,12 @@ function openStructure(connection: ConnectionKey, object: ObjectItem) {
   const app = useApp.getState();
   const existing = app.tabs.some(
     (tab) =>
-      tabOnConnection(tab.connectionId, connection) &&
+      tabOnConnection(tab, connection) &&
       tab.tableDetails?.schema === object.schema &&
       tab.tableDetails.name === object.name &&
       tab.tableDetails.kind === "columns",
   );
-  const tab = app.addTableDetailsTab(tabKey(connection), object.schema, object.name, "columns");
+  const tab = app.addTableDetailsTab(connection, object.schema, object.name, "columns");
   if (!existing) connectTabFromExplorer(tab, explorerSession(connection), explorerDatabase(connection, object.schema));
 }
 
@@ -717,7 +719,7 @@ export function objectActions(item: PaletteObject): PaletteObjectAction[] {
           },
         },
         { id: "showInExplorer", label: "app:palette.actions.showInExplorer", run: () => showInExplorer({ connection: keyOf(connection) }) },
-        { id: "edit", label: "connections:edit", run: () => useApp.getState().setConnectionDialog({ kind: "edit", id: connection.id }) },
+        { id: "edit", label: "connections:edit", run: () => useApp.getState().setConnectionDialog({ kind: "edit", connection: keyOf(connection) }) },
         { id: "duplicate", label: "connections:copies.duplicate", run: () => duplicateConnection(connection) },
         { id: "delete", label: "connections:delete", danger: true, run: () => useApp.getState().setDeletingConnection(connection) },
       ];

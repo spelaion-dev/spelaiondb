@@ -3,7 +3,7 @@
 // catalog, the dialog shows it as it follows the form, and Apply runs exactly that script.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listedConnection, type ConnectionKey, tabKey } from "../connectionKey";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { AlterationPreviewItem, ColumnEditItem_Serialize as ColumnEditItem, DroppedConstraintItem, TableAlterationItem, TableStructureItem_Serialize as TableStructureItem } from "../bindings";
@@ -106,7 +106,7 @@ export function StructureDialog({
 
   function openInEditor() {
     if (preview.kind !== "ready") return;
-    const tab = useApp.getState().addTab(tabKey(identity), preview.value.sql);
+    const tab = useApp.getState().addTab(identity, preview.value.sql);
     connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
     onClose();
   }

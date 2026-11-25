@@ -28,7 +28,7 @@ export async function openLaunchRequest(request: LaunchRequestItem): Promise<voi
   }
   for (const path of request.files) {
     // A tab of its own, with no connection: it never connects on its own.
-    await openFilePath(path, { connectionId: null });
+    await openFilePath(path, { connection: null });
   }
   if (request.plan) await openSavedPlan(request.plan);
   if (request.connection) {

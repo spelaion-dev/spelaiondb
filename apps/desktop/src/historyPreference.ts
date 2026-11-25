@@ -3,7 +3,7 @@
 // same for personal and repository connections. The connection form changes it on Save.
 
 import { call, commands } from "./api";
-import { connectionKey } from "./connectionKey";
+import { connectionTag, sameConnection, type ConnectionKey } from "./connectionKey";
 import i18n from "./i18n";
 import { useApp } from "./store";
 
@@ -11,17 +11,18 @@ import { useApp } from "./store";
  * Saves the setting and shows it on the connection. Runs on that connection wait while it
  * changes (`historySaving`), so no statement is recorded, or left out, half-way.
  */
-export async function saveHistoryPreference(connectionId: string, enabled: boolean): Promise<void> {
+export async function saveHistoryPreference(connection: ConnectionKey, enabled: boolean): Promise<void> {
   const app = useApp.getState();
-  if (app.workspaceChanging || app.historySaving.includes(connectionId)) {
+  const tag = connectionTag(connection);
+  if (app.workspaceChanging || app.historySaving.includes(tag)) {
     throw new Error(i18n.t("connections:fields.historyBusy"));
   }
-  app.setHistorySaving(connectionId, true);
+  app.setHistorySaving(tag, true);
   try {
-    await call(commands.setHistoryEnabled(connectionKey(connectionId), enabled));
+    await call(commands.setHistoryEnabled(connection, enabled));
     const current = useApp.getState();
-    current.setConnections(current.connections.map((c) => (c.id === connectionId ? { ...c, historyEnabled: enabled } : c)));
+    current.setConnections(current.connections.map((c) => (sameConnection(c, connection) ? { ...c, historyEnabled: enabled } : c)));
   } finally {
-    useApp.getState().setHistorySaving(connectionId, false);
+    useApp.getState().setHistorySaving(tag, false);
   }
 }

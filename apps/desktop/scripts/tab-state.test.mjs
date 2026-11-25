@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import test from "node:test";
+import { connectionTag } from "../src/connectionIdentity.ts";
 import {
   CONNECTING,
   DISCONNECTED,
@@ -43,7 +44,7 @@ const src = resolve(import.meta.dirname, "../src");
 
 /** A tab with only what the selectors read. */
 function tab(fields = {}) {
-  return { id: "tab-1", connectionId: "pg", connectionState: DISCONNECTED, run: null, ...fields };
+  return { id: "tab-1", connectionId: "pg", connectionFolder: null, connectionState: DISCONNECTED, run: null, ...fields };
 }
 
 const running = { running: true, results: [], activeResult: null, messages: [], error: null, startedAt: 1, elapsedMs: null };
@@ -152,16 +153,19 @@ test("over every tab: busy, in use and open answer for one connection", () => {
     tab({ id: "c", connectionId: "lite", connectionState: sessionLost("reset", null, false) }),
     tab({ id: "d", connectionId: "ms", run: running }),
   ];
-  assert.equal(connectionBusy(tabs, "pg"), true);
-  assert.equal(connectionBusy(tabs, "my"), false);
-  assert.equal(connectionBusy(tabs, "ms"), true);
-  assert.equal(connectionInUse(tabs, "pg"), true);
-  assert.equal(connectionInUse(tabs, "my"), true);
-  assert.equal(connectionInUse(tabs, "lite"), false);
-  assert.equal(connectionInUse(tabs, "ms"), true);
-  // The explorer names a connection by its folder and its id (ADR-075); a tab by its id.
+  // A connection is its folder and its id (ADR-075), in a tab as in the explorer.
   const personal = (id) => ({ folder: null, id });
   const repository = (id) => ({ folder: "/work/shop", id });
+  assert.equal(connectionBusy(tabs, personal("pg")), true);
+  assert.equal(connectionBusy(tabs, personal("my")), false);
+  assert.equal(connectionBusy(tabs, personal("ms")), true);
+  assert.equal(connectionInUse(tabs, personal("pg")), true);
+  assert.equal(connectionInUse(tabs, personal("my")), true);
+  assert.equal(connectionInUse(tabs, personal("lite")), false);
+  assert.equal(connectionInUse(tabs, personal("ms")), true);
+  // Another folder's connection of the same id is not busy or in use through these tabs.
+  assert.equal(connectionBusy(tabs, repository("pg")), false);
+  assert.equal(connectionInUse(tabs, repository("my")), false);
   assert.equal(connectionOpen(tabs, [], personal("my")), true);
   assert.equal(connectionOpen(tabs, [], personal("pg")), false);
   assert.equal(connectionOpen(tabs, [personal("pg")], personal("pg")), true);
@@ -172,9 +176,13 @@ test("over every tab: busy, in use and open answer for one connection", () => {
   assert.equal(explorerSessionOpen([repository("pg")], personal("pg")), false);
   assert.equal(explorerSessionOpen([repository("pg")], repository("pg")), true);
   // What the explorer subscribes to: only connected tabs count, and a run changes nothing.
-  assert.deepEqual(connectedConnections(tabs), ["my"]);
+  assert.deepEqual(connectedConnections(tabs), [connectionTag(personal("my"))]);
   const withRun = tabs.map((item) => (item.id === "b" ? { ...item, run: running } : item));
   assert.deepEqual(connectedConnections(withRun), connectedConnections(tabs));
+  // A connected tab of a folder opens only that folder's connection of its id.
+  const inShop = tabs.map((item) => (item.id === "b" ? { ...item, connectionFolder: "/work/shop" } : item));
+  assert.equal(connectionOpen(inShop, [], repository("my")), true);
+  assert.equal(connectionOpen(inShop, [], personal("my")), false);
 });
 
 /** The kinds of question the dialog store queues, read from its `Requests` interface. */

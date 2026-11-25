@@ -5,7 +5,7 @@
 // form only collects the choice; the core validates it, checks trust and runs kubectl.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { connectionKey } from "../connectionKey";
+import { type ConnectionKey, connectionTag } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands, type KubeEditor, type KubePort, type KubernetesDraftItem, type TunnelItem } from "../api";
 import { errorText, type Loaded } from "../dialogState";
@@ -76,7 +76,7 @@ type ConnectionProps = {
   mode: "connection";
   enabled: boolean;
   onEnabled(enabled: boolean): void;
-  editing: string | null;
+  editing: ConnectionKey | null;
   /** The connection's port: the resource's port when going through Kubernetes. */
   port: number | null;
   defaultPort: number | null;
@@ -126,11 +126,12 @@ export function KubernetesTab(
 
   /** A change resets what depends on it, except what the profile sets. */
   const set = (patch: Partial<KubernetesDraftItem>) => onChange(withoutProfileFields({ ...value, ...patch }, shared));
-  const editor: KubeEditor = connection
-    ? { kind: "connection", personal: props.personal, editing: connection.editing ? connectionKey(connection.editing) : null, profile: connection.profile || null }
+  const editor: KubeEditor = props.mode === "connection"
+    ? { kind: "connection", personal: props.personal, editing: props.editing, profile: props.profile || null }
     : { kind: "profile", personal: props.personal, editing: props.editing };
   const profileKey = connection ? connection.profile : "";
-  const provenance = `${props.personal}|${props.editing}|${props.trusted}|${profileKey}`;
+  const editingText = props.mode === "connection" ? (props.editing ? connectionTag(props.editing) : "") : (props.editing ?? "");
+  const provenance = `${props.personal}|${editingText}|${props.trusted}|${profileKey}`;
   const contexts = useKubectl(enabled, `${provenance}|${tools}`, () => call(commands.kubeContexts(value, editor)));
   const namespaces = useKubectl(enabled, `${provenance}|${tools}|${value.context}`, () => call(commands.kubeNamespaces(value, editor)));
   const names = useKubectl(enabled, `${provenance}|${tools}|${value.context}|${value.namespace}|${kind}`, () => call(commands.kubeNames(value, kind, editor)));

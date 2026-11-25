@@ -17,7 +17,7 @@ import { DISCONNECTED, hasSession, hasUnsavedEdits, isRunning } from "./tabState
 function targets(keep: ConnectionKey | null): { tabs: Tab[]; explorer: ConnectionKey[] } {
   const app = useApp.getState();
   return {
-    tabs: app.tabs.filter((tab) => tab.connectionId !== null && (keep === null || !tabOnConnection(tab.connectionId, keep)) && hasSession(tab)),
+    tabs: app.tabs.filter((tab) => tab.connectionId !== null && (keep === null || !tabOnConnection(tab, keep)) && hasSession(tab)),
     explorer: app.explorerConnected.filter((connection) => keep === null || !sameConnection(connection, keep)),
   };
 }

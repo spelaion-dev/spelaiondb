@@ -1,6 +1,6 @@
 // A connection's identity in the page (ADR-075, SDB-495): the pure helpers are in
 // `connectionIdentity.ts`; this adds what needs the listed connections, for what still holds a
-// bare id (a tab, the history, a launch).
+// bare id (a launch, the MCP page).
 
 import { useApp } from "./store";
 import type { ConnectionKey } from "./connectionIdentity.ts";

@@ -2,7 +2,7 @@
 // objects and columns, kept in the personal settings. The core matches them.
 
 import { useState } from "react";
-import { connectionKey } from "../connectionKey";
+import { keyOf } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem, type ExplorerFilter, type NameFilter } from "../api";
 
@@ -65,7 +65,7 @@ export function ExplorerFilterDialog({
     setSaving(true);
     setError(null);
     try {
-      await call(commands.setExplorerFilter(connectionKey(connection.id), next));
+      await call(commands.setExplorerFilter(keyOf(connection), next));
       onSaved(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
