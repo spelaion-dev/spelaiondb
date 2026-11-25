@@ -190,6 +190,20 @@ pub async fn open_other_database(
     .await?)
 }
 
+/// The connection `database` opens only as (ADR-074 point 3), if another one of the
+/// configuration, with the same login as `own`'s, has it as its own database: the explorer
+/// shows it as such and leads there instead of opening it. `None` for `own`'s own database.
+pub fn database_owner(
+    own: &OpenConnection,
+    database: &str,
+    configuration: &Configuration<'_>,
+) -> Option<(ConnectionId, String)> {
+    if database == own.resolved.params.database || own.resolved.engine != Engine::Postgres {
+        return None;
+    }
+    owner(configuration, &own.resolved, database)
+}
+
 /// The connection's resolved definition on `database`: only the database changes, and the
 /// default schema, which belongs to its own database (ADR-074 point 4), is left unset.
 pub(crate) fn on_database(own: &ResolvedConnection, database: &str) -> ResolvedConnection {

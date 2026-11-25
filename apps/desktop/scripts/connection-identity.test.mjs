@@ -6,9 +6,11 @@ import test from "node:test";
 import {
   connectionOfTag,
   connectionTag,
+  databaseOf,
   holdsConnection,
   keyOf,
   listedConnection,
+  onDatabase,
   sameConnection,
   tabOnConnection,
   withConnection,
@@ -36,7 +38,7 @@ test("a tag reads back as the pair it was written from, and nothing else reads a
   for (const key of [shop, crm, personal, { folder: "a\"b", id: "c\u0000d" }]) {
     assert.deepEqual(connectionOfTag(connectionTag(key)), key);
   }
-  for (const text of ["prod/orders", "", "[1,2]", "[null]", "[null,\"a\",\"b\"]", "{}", "[\"a\",3]"]) {
+  for (const text of ["prod/orders", "", "[1,2]", "[null]", "[null,\"a\",3]", "[null,\"a\",\"b\",\"c\"]", "{}", "[\"a\",3]"]) {
     assert.equal(connectionOfTag(text), null, text);
   }
 });
@@ -68,4 +70,18 @@ test("a tab names its connection by its id while one folder is open", () => {
   assert.equal(tabOnConnection("prod/orders", shop), true);
   assert.equal(tabOnConnection(null, shop), false);
   assert.equal(tabOnConnection("prod/customers", shop), false);
+});
+
+test("another database of a connection has its own tag, and is still that connection (ADR-074)", () => {
+  const billing = onDatabase(shop, "billing");
+  assert.equal(databaseOf(billing), "billing");
+  assert.equal(databaseOf(shop), null);
+  assert.equal(sameConnection(billing, shop), true, "the connection's filters and commands stay its");
+  assert.notEqual(connectionTag(billing), connectionTag(shop), "its session and catalog are its own");
+  assert.notEqual(connectionTag(billing), connectionTag(onDatabase(crm, "billing")));
+  assert.notEqual(connectionTag(billing), connectionTag(onDatabase(shop, "Billing")), "names are case-sensitive");
+  assert.deepEqual(connectionOfTag(connectionTag(billing)), billing);
+  // Its own database is the connection as it always was: the same tag as before.
+  assert.equal(connectionTag(onDatabase(shop, null)), connectionTag(shop));
+  assert.equal(databaseOf(onDatabase(billing, null)), null);
 });

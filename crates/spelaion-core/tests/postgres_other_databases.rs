@@ -14,8 +14,8 @@ use futures_util::StreamExt;
 use spelaion_config::{Config, ConnectionId, Resolver, Source, SystemBackend, TrustStore, load};
 use spelaion_core::{
     Configuration, ConnectionDatabases, CoreEvent, Engines, OpenConnection, OpenOptions,
-    OtherDatabaseError, ResultStore, Session, TunnelPool, connection_databases, open_connection,
-    open_other_database,
+    OtherDatabaseError, ResultStore, Session, TunnelPool, connection_databases, database_owner,
+    open_connection, open_other_database,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, SecretRequest};
@@ -274,6 +274,14 @@ async fn postgres_other_database_opens_through_the_connections_tunnel_as_that_co
     );
     // Its own first, then what the file names and the server lists.
     assert_eq!(opened(&own).await, ["spelaion", BILLING, OWNED]);
+    // The explorer shows which one has a connection of its own, and leads there (SDB-504).
+    let owner = database_owner(&own, OWNED, &ws.configuration()).map(|(_, name)| name);
+    assert!(
+        owner.is_some_and(|n| n.contains("owned")),
+        "{OWNED} belongs to `owned`"
+    );
+    assert_eq!(database_owner(&own, BILLING, &ws.configuration()), None);
+    assert_eq!(database_owner(&own, "spelaion", &ws.configuration()), None);
 
     let billing = ws.other(&own, BILLING).await.expect("opening billing");
     assert_eq!(

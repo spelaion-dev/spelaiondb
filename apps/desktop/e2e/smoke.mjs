@@ -7267,6 +7267,79 @@ try {
     await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor({ state: "detached" });
   }
 
+  step("explorer: a PostgreSQL connection's databases, each opened when first expanded (SDB-504)");
+  {
+    // A personal connection that opens every database of the server (ADR-074), made in the form.
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    const wizard = page.locator(".modal.wizard");
+    await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+    await wizard.getByLabel("Name", { exact: true }).fill("PG all databases");
+    await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+    await wizard.getByLabel("Port", { exact: true }).fill("15432");
+    await wizard.getByLabel("Database", { exact: true }).fill("spelaion");
+    await wizard.getByLabel("User", { exact: true }).fill("spelaion");
+    await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+    await wizard.getByRole("radiogroup", { name: "Databases" }).getByRole("radio", { name: "Every database of the server" }).check();
+    await wizard.getByRole("tab", { name: "Options" }).click();
+    await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+    await wizard.getByRole("button", { name: "Save", exact: true }).click();
+    await wizard.waitFor({ state: "detached" });
+    assert.match(readFileSync(join(userDir, "connections", "pg-all-databases.toml"), "utf8"), /all_databases = true/);
+
+    const node = page.locator('.node:has(> .connection-row:has-text("PG all databases"))');
+    await node.locator(".connection-row .twisty").click();
+    await page.getByRole("dialog").getByText("Password for PG all databases").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    // Its own database first, then the server's, never a template.
+    const databaseRow = (name) => node.locator(".database-row").filter({ has: page.locator(".label", { hasText: new RegExp(`^${name}$`) }) });
+    await databaseRow("spelaion \\(its own\\)").waitFor();
+    await databaseRow("spelaion_gis").waitFor();
+    assert.equal(await databaseRow("template1").count(), 0, "templates are not listed");
+    assert.equal(await node.locator(".database-row").first().locator(".label").innerText(), "spelaion (its own)");
+
+    // Expanding another database opens exactly one more session, on that database.
+    const sessionsOn = (database) => Number(execFileSync("docker", [
+      "compose", "-f", join(root, "testing/docker/compose.yaml"), "exec", "-T", "postgres",
+      "psql", "-U", "spelaion", "-d", "spelaion", "-X", "-q", "-tA", "-c",
+      `select count(*) from pg_stat_activity where datname = '${database}'`,
+    ], { encoding: "utf8" }).trim());
+    const before = sessionsOn("spelaion_gis");
+    const gis = databaseRow("spelaion_gis");
+    // A `has` locator is resolved inside each candidate, so it starts from its row, not the page.
+    const gisNode = node.locator(".database-node").filter({
+      has: page.locator(".database-row").filter({ has: page.locator(".label", { hasText: /^spelaion_gis$/ }) }),
+    });
+    await gis.locator(".twisty").click();
+    await gisNode.locator(".row .label", { hasText: /^public$/ }).first().waitFor();
+    assert.equal(sessionsOn("spelaion_gis"), before + 1, "one session for the expanded database");
+    await shot("sdb-504-databases");
+    await setTheme("dark", "dark");
+    await shot("sdb-504-databases-dark");
+    await setTheme("light", "light");
+
+    // A query opened from its row is connected to that database.
+    await gis.click({ button: "right" });
+    await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "New query", exact: true }).click();
+    const gisPanel = page.locator(".tab-panel:not([hidden])");
+    await gisPanel.locator(".status-connected").waitFor();
+    await gisPanel.locator(".cm-content").click();
+    await page.keyboard.insertText("select current_database() where current_database() = 'spelaion_gis';");
+    await run(gisPanel);
+    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    await page.locator(".tabbar .tab.active .close").click();
+
+    // Disconnecting from its row closes its session; deleting the connection closes the rest.
+    await gis.click({ button: "right" });
+    await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "Disconnect", exact: true }).click();
+    await gisNode.locator(".row .label", { hasText: /^public$/ }).first().waitFor({ state: "detached" });
+    await (await connectionMenu("PG all databases")).getByRole("menuitem", { name: "Delete…" }).click();
+    const deleteAll = page.getByRole("dialog", { name: "Delete connection?" });
+    await deleteAll.getByRole("button", { name: "Delete connection", exact: true }).click();
+    await deleteAll.waitFor({ state: "detached" });
+    await page.locator(".connection-row", { hasText: "PG all databases" }).waitFor({ state: "detached" });
+  }
+
   step("import: a CSV into a new table, with its preview, columns and SQL shown first");
   {
     // ADR-038. A value made of quotes and SQL must arrive as plain text.

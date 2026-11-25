@@ -1,4 +1,13 @@
 {
+  "databases": {
+    "own": "{{name}} (its own)",
+    "toggle": "Expand or collapse database {{name}}",
+    "menu": "Database {{name}}",
+    "disconnect": "Disconnect",
+    "ownedHint": "{{name}} has a connection of its own, {{connection}}: it opens there, with that connection's settings.",
+    "openOwner": "Open in {{connection}}",
+    "ownOnly": "Only its own database is shown: {{reason}}"
+  },
   "queryTab": "Query {{number}}",
   "openFolderTitle": "Open folder with .spelaion/",
   "personal": "Personal",

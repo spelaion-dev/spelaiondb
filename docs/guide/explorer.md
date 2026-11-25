@@ -9,6 +9,17 @@ folders by type: **Tables** (partitioned ones marked P), **Foreign tables**, **V
 (MySQL) and **Synonyms** (SQL Server); only the folders with something in them appear. After
 the schemas come **Roles**, **Users**, **Logins**, **Tablespaces** and **Extensions**, as
 the engine has them (MySQL's accounts only for users that may read `mysql.user`).
+A PostgreSQL connection that opens other databases of its server (its file names them in
+`databases`, or sets `all_databases`; see [Connections](connections.md)) has a level more:
+under it, its databases, its own first, each with its schemas and its **Extensions**.
+**Roles** and **Tablespaces** belong to the server and stay under the connection. Another
+database connects only when its row is first expanded, in a session of its own with the
+connection's settings, and its row's menu has **New query** (a tab on that database) and
+**Disconnect**. A database that another connection with the same login has as its own shows
+**Open in** that connection instead: it opens there, with that connection's settings. A
+connection that names no other database looks as it always did. If the server's databases
+cannot be listed (an older PostgreSQL plugin), its own database is shown and the reason
+under the connection.
 The plug over the explorer shows only the connected connections (those opened in the
 explorer or used by a connected tab); click it again to see all of them.
 The magnifying glass over the explorer (or **Ctrl+Shift+F**) opens its quick filter: only

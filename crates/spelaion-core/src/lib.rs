@@ -236,7 +236,7 @@ pub use open::{
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
 pub use other_database::{
-    Configuration, ConnectionDatabases, OtherDatabaseError, connection_databases,
+    Configuration, ConnectionDatabases, OtherDatabaseError, connection_databases, database_owner,
     open_other_database,
 };
 pub use panics::{INTERNAL_ERROR, Panicked, catch_panic, install_panic_log};

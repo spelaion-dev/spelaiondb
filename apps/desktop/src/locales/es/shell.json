@@ -1,4 +1,13 @@
 {
+  "databases": {
+    "own": "{{name}} (la suya)",
+    "toggle": "Desplegar o plegar la base de datos {{name}}",
+    "menu": "Base de datos {{name}}",
+    "disconnect": "Desconectar",
+    "ownedHint": "{{name}} tiene su propia conexión, {{connection}}: se abre allí, con los ajustes de esa conexión.",
+    "openOwner": "Abrir en {{connection}}",
+    "ownOnly": "Solo se muestra su propia base de datos: {{reason}}"
+  },
   "queryTab": "Consulta {{number}}",
   "openFolderTitle": "Abrir carpeta con .spelaion/",
   "personal": "Personal",
