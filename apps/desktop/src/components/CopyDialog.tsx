@@ -11,7 +11,9 @@ import { useTranslation } from "react-i18next";
 import { create } from "zustand";
 import { call, commands } from "../api";
 import type { CopyHowItem, CopyPlanItem_Serialize, CopyRequestItem, IfExistsItem, ImportProgressItem, LossItem } from "../bindings";
-import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase, openSession } from "../connect";
+import { connectTabFromExplorer, explorerDatabase, openSession, refreshExplorer } from "../connect";
+import { connectionOfTag, connectionTag, keyOf, listedConnection, tabKey, type ConnectionKey } from "../connectionKey";
+import { explorerSessionOpen } from "../tabState";
 import { errorText as message, loadedValue, type Loaded } from "../dialogState";
 import { explorerSession } from "../explorerActions";
 import { startJob } from "../jobs";
@@ -20,7 +22,8 @@ import { confirmShown, useJobPhase } from "../useDialogState";
 
 /** The table the dialog copies. */
 export interface CopyRequest {
-  connectionId: string;
+  /** The source connection's identity (ADR-075). */
+  connection: ConnectionKey;
   /** The source connection's explorer session: the copy opens its own from it. */
   session: string;
   schema: string;
@@ -53,7 +56,9 @@ function CopyForm({ request }: { request: CopyRequest }) {
   const close = useCopy((s) => s.close);
   const connections = useApp((s) => s.connections);
   const [engines, setEngines] = useState<string[]>([]);
-  const [targetId, setTargetId] = useState("");
+  /** The target connection, as its `connectionTag` (the picker's value); empty: none. */
+  const [targetTag, setTargetTag] = useState("");
+  const targetKey = connectionOfTag(targetTag);
   const [target, setTarget] = useState<Target>({ kind: "none" });
   const [schemas, setSchemas] = useState<string[]>([]);
   const [schema, setSchema] = useState("");
@@ -72,7 +77,7 @@ function CopyForm({ request }: { request: CopyRequest }) {
   const { phase, running } = job;
   const copyId = phase.kind === "running" ? phase.id : null;
   const sequence = useRef(0);
-  const source = connections.find((c) => c.id === request.connectionId) ?? null;
+  const source = listedConnection(connections, request.connection) ?? null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -90,25 +95,26 @@ function CopyForm({ request }: { request: CopyRequest }) {
 
   // The target connection's explorer session: connected as the explorer would (its password,
   // trust and changes asked as there) when it is not open yet.
-  async function chooseTarget(id: string) {
-    setTargetId(id);
+  async function chooseTarget(tag: string) {
+    setTargetTag(tag);
+    const key = connectionOfTag(tag);
     setSchemas([]);
     setSchema("");
     setPlanned({ kind: "idle" });
-    if (!id) {
+    if (!key) {
       setTarget({ kind: "none" });
       return;
     }
-    const session = explorerSession(id);
+    const session = explorerSession(key);
     setTarget({ kind: "connecting" });
     try {
-      if (!useApp.getState().explorerConnected.includes(id)) {
-        const opened = await openSession(session, id);
+      if (!explorerSessionOpen(useApp.getState().explorerConnected, key)) {
+        const opened = await openSession(session, key);
         if (!opened) {
           setTarget({ kind: "none" });
           return;
         }
-        useApp.getState().setExplorerConnected(id, true);
+        useApp.getState().setExplorerConnected(key, true);
       }
       setTarget({ kind: "ready", session });
     } catch (e) {
@@ -188,7 +194,7 @@ function CopyForm({ request }: { request: CopyRequest }) {
     const target = plan.target;
     if (!confirmed) {
       // The risks point into the statements, then the insert, then what runs after it.
-      const asked = await confirmShown(connections.find((c) => c.id === targetId)?.name ?? "", {
+      const asked = await confirmShown((targetKey && listedConnection(connections, targetKey)?.name) ?? "", {
         sql: target.insert,
         statements: [...target.statements, target.insert, ...target.finish],
         risks: target.risks,
@@ -212,7 +218,7 @@ function CopyForm({ request }: { request: CopyRequest }) {
             schema: done.schema,
             table: done.table,
           });
-          if (done.createdTable) window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: targetId }));
+          if (done.createdTable && targetKey) refreshExplorer(targetKey);
           break;
         }
         case "needsConfirmation":
@@ -241,8 +247,9 @@ function CopyForm({ request }: { request: CopyRequest }) {
 
   function openTable(done: { schema: string; table: string }) {
     if (!targetSession) return;
-    const tab = useApp.getState().addTableTab(targetId, done.schema, done.table);
-    connectTabFromExplorer(tab, targetSession, explorerDatabase(targetId, done.schema));
+    if (!targetKey) return;
+    const tab = useApp.getState().addTableTab(tabKey(targetKey), done.schema, done.table);
+    connectTabFromExplorer(tab, targetSession, explorerDatabase(targetKey, done.schema));
     close();
   }
 
@@ -288,10 +295,10 @@ function CopyForm({ request }: { request: CopyRequest }) {
               <legend>{t("copy.target")}</legend>
               <label className="field">
                 {t("copy.connection")}
-                <select value={targetId} disabled={target.kind === "connecting"} onChange={(e) => void chooseTarget(e.target.value)}>
+                <select value={targetTag} disabled={target.kind === "connecting"} onChange={(e) => void chooseTarget(e.target.value)}>
                   <option value="">{t("copy.chooseConnection")}</option>
                   {targetChoices.map((c) => (
-                    <option key={c.id} value={c.id}>
+                    <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))}>
                       {c.name}
                     </option>
                   ))}

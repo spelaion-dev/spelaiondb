@@ -3,6 +3,7 @@
 // script (or it opens in the editor).
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { listedConnection, type ConnectionKey, tabKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { AlterationPreviewItem, NewTableItem } from "../bindings";
@@ -31,16 +32,16 @@ const FIRST: Record<string, { key: string; text: string }> = {
 
 let nextId = 1;
 
-export function CreateTableDialog({ session, connectionId, schema, onClose, onDone }: {
+export function CreateTableDialog({ session, identity, schema, onClose, onDone }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   schema: string;
   onClose(): void;
   /** After it ran: the explorer reads the schema again. */
   onDone(table: string): void;
 }) {
   const { t } = useTranslation("shell");
-  const connection = useApp((s) => s.connections.find((c) => c.id === connectionId));
+  const connection = useApp((s) => listedConnection(s.connections, identity));
   const types = FIRST[connection?.engine ?? ""] ?? { key: "INTEGER", text: "VARCHAR(255)" };
   const [name, setName] = useState("");
   const [columns, setColumns] = useState<Column[]>(() => [
@@ -93,8 +94,8 @@ export function CreateTableDialog({ session, connectionId, schema, onClose, onDo
 
   function openInEditor() {
     if (preview.kind !== "ready") return;
-    const tab = useApp.getState().addTab(connectionId, preview.value.sql);
-    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, schema));
+    const tab = useApp.getState().addTab(tabKey(identity), preview.value.sql);
+    connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
     onClose();
   }
 

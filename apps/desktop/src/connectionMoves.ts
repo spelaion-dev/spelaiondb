@@ -5,11 +5,11 @@
 
 import { call, commands, type ConnectionItem } from "./api";
 import { explorerSession } from "./windowContext";
-import { connectionKey } from "./connectionKey";
+import { connectionKey, keyOf } from "./connectionKey";
 import i18n from "./i18n";
 import { refreshConnections } from "./components/Sidebar";
 import { useApp } from "./store";
-import { connectionInUse } from "./tabState";
+import { connectionInUse, explorerSessionOpen } from "./tabState";
 
 /** A connection's folder path as the core takes it: `prod/eu`, or `""` for none. */
 export function folderOf(connection: ConnectionItem): string {
@@ -37,18 +37,21 @@ export async function moveConnection(connection: ConnectionItem, folder: string)
   if (blocked) throw new Error(blocked);
   const app = useApp.getState();
   // The explorer's own session reads only the catalog: it closes, and expanding reconnects.
-  if (app.explorerConnected.includes(connection.id)) {
-    await call(commands.disconnect(explorerSession(connection.id))).catch(() => undefined);
-    app.setExplorerConnected(connection.id, false);
+  const key = keyOf(connection);
+  if (explorerSessionOpen(app.explorerConnected, key)) {
+    await call(commands.disconnect(explorerSession(key))).catch(() => undefined);
+    app.setExplorerConnected(key, false);
   }
-  const moved = await call(commands.moveConnection(connectionKey(connection.id), folder));
+  const moved = await call(commands.moveConnection(key, folder));
   if (moved.id !== connection.id) {
     for (const tab of useApp.getState().tabs) {
       if (tab.connectionId === connection.id) app.updateTab(tab.id, { connectionId: moved.id });
     }
-    app.setConnectionOpen(connection.id, false);
+    app.setConnectionOpen(key, false);
   }
   await refreshConnections();
-  app.revealInExplorer({ connectionId: moved.id });
+  // Moving between the repository and the personal folder changes its folder too: the new
+  // identity is the listed one.
+  app.revealInExplorer({ connection: connectionKey(moved.id) });
   return moved.id;
 }

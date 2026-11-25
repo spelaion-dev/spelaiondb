@@ -7,9 +7,11 @@
 
 import { create } from "zustand";
 import type { NameFilter, ObjectItem, SchemaColumnItem, SchemaObjectItem } from "./api";
+import { connectionTag, type ConnectionKey } from "./connectionIdentity.ts";
 
 export interface CatalogSchema {
-  connectionId: string;
+  /** The connection's identity (ADR-075): two folders' connections of the same id are apart. */
+  connection: ConnectionKey;
   schema: string;
   relations: ObjectItem[];
   others: SchemaObjectItem[];
@@ -23,26 +25,48 @@ export interface CatalogSchema {
 interface CatalogStore {
   schemas: Record<string, CatalogSchema>;
   publish(entry: CatalogSchema): void;
-  forget(connectionId: string, schema: string): void;
+  forget(connection: ConnectionKey, schema: string): void;
   /** Keeps the columns read for a schema that is still published (a forgotten one stays so). */
-  setColumns(connectionId: string, schema: string, columns: SchemaColumnItem[]): void;
+  setColumns(connection: ConnectionKey, schema: string, columns: SchemaColumnItem[]): void;
 }
 
-const keyOf = (connectionId: string, schema: string) => `${connectionId}\u0000${schema}`;
+/** The key of a schema in `schemas`, from its connection's `connectionTag` and its name. */
+export const catalogKeyOfTag = (tag: string, schema: string) => JSON.stringify([tag, schema]);
+
+/** The key of a schema in `schemas` (ADR-075: its connection's folder and id, and its name). */
+export const catalogKey = (connection: ConnectionKey, schema: string) => catalogKeyOfTag(connectionTag(connection), schema);
+
+/** What `catalogKeyOfTag` wrote, or null. */
+export function catalogKeyParts(key: string): { tag: string; schema: string } | null {
+  try {
+    const value: unknown = JSON.parse(key);
+    if (Array.isArray(value) && value.length === 2 && typeof value[0] === "string" && typeof value[1] === "string") return { tag: value[0], schema: value[1] };
+  } catch {
+    // Not a key.
+  }
+  return null;
+}
+
+/** The catalog as the metadata search reads it (`dbSearch.ts`): each connection as its tag. */
+export function searchCatalog(schemas: CatalogSchema[]): (Omit<CatalogSchema, "connection"> & { connection: string })[] {
+  return schemas.map((entry) => ({ ...entry, connection: connectionTag(entry.connection) }));
+}
+
+const keyOf = catalogKey;
 
 export const useCatalog = create<CatalogStore>((set) => ({
   schemas: {},
-  publish: (entry) => set((s) => ({ schemas: { ...s.schemas, [keyOf(entry.connectionId, entry.schema)]: entry } })),
-  setColumns: (connectionId, schema, columns) =>
+  publish: (entry) => set((s) => ({ schemas: { ...s.schemas, [keyOf(entry.connection, entry.schema)]: entry } })),
+  setColumns: (connection, schema, columns) =>
     set((s) => {
-      const key = keyOf(connectionId, schema);
+      const key = keyOf(connection, schema);
       const entry = s.schemas[key];
       if (!entry) return s;
       return { schemas: { ...s.schemas, [key]: { ...entry, columns } } };
     }),
-  forget: (connectionId, schema) =>
+  forget: (connection, schema) =>
     set((s) => {
-      const key = keyOf(connectionId, schema);
+      const key = keyOf(connection, schema);
       if (!(key in s.schemas)) return s;
       const schemas = { ...s.schemas };
       delete schemas[key];

@@ -159,12 +159,18 @@ test("over every tab: busy, in use and open answer for one connection", () => {
   assert.equal(connectionInUse(tabs, "my"), true);
   assert.equal(connectionInUse(tabs, "lite"), false);
   assert.equal(connectionInUse(tabs, "ms"), true);
-  assert.equal(connectionOpen(tabs, [], "my"), true);
-  assert.equal(connectionOpen(tabs, [], "pg"), false);
-  assert.equal(connectionOpen(tabs, ["pg"], "pg"), true);
+  // The explorer names a connection by its folder and its id (ADR-075); a tab by its id.
+  const personal = (id) => ({ folder: null, id });
+  const repository = (id) => ({ folder: "/work/shop", id });
+  assert.equal(connectionOpen(tabs, [], personal("my")), true);
+  assert.equal(connectionOpen(tabs, [], personal("pg")), false);
+  assert.equal(connectionOpen(tabs, [personal("pg")], personal("pg")), true);
   assert.equal(isConnected(tabs[1]), true);
-  assert.equal(explorerSessionOpen(["pg"], "pg"), true);
-  assert.equal(explorerSessionOpen(["pg"], "my"), false);
+  assert.equal(explorerSessionOpen([personal("pg")], personal("pg")), true);
+  assert.equal(explorerSessionOpen([personal("pg")], personal("my")), false);
+  // Another folder's connection of the same id is another connection.
+  assert.equal(explorerSessionOpen([repository("pg")], personal("pg")), false);
+  assert.equal(explorerSessionOpen([repository("pg")], repository("pg")), true);
   // What the explorer subscribes to: only connected tabs count, and a run changes nothing.
   assert.deepEqual(connectedConnections(tabs), ["my"]);
   const withRun = tabs.map((item) => (item.id === "b" ? { ...item, run: running } : item));

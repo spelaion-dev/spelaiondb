@@ -4,6 +4,7 @@
 // The core writes the GRANT or REVOKE, the dialog shows it, and it runs as shown.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands } from "../api";
@@ -43,14 +44,14 @@ function placeOf(target: PrivilegeTargetItem, t: TFunction<"shell">): string {
   return target.columns.length > 0 ? `${place} (${target.columns.join(", ")})` : place;
 }
 
-export function PrivilegesDialog({ session, connectionId, target, onClose }: {
+export function PrivilegesDialog({ session, identity, target, onClose }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   target: PrincipalTargetItem;
   onClose(): void;
 }) {
   const { t } = useTranslation("shell");
-  const connection = useApp((s) => s.connections.find((c) => c.id === connectionId));
+  const connection = useApp((s) => listedConnection(s.connections, identity));
   const ids = useId();
   const [scopes, setScopes] = useState<PrivilegeScopeInfoItem[] | null>(null);
   const [granted, setGranted] = useState<GrantedPrivilegeItem[] | null>(null);

@@ -857,7 +857,7 @@ function ConnectionForm(props: {
         const app = useApp.getState();
         const tabs = app.tabs.filter((tab) => tab.connectionId === editing);
         await Promise.all(
-          [...tabs.map((tab) => tab.id), explorerSession(editing)].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
+          [...tabs.map((tab) => tab.id), explorerSession(connectionKey(editing))].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
         );
         for (const tab of tabs) app.setConnection(tab.id, DISCONNECTED);
       }

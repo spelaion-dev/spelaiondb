@@ -9,6 +9,7 @@
 import i18n from "./i18n";
 import { closeTabs, newQueryOnConnection } from "./connect";
 import { useApp } from "./store";
+import { connectionKey } from "./connectionKey";
 import { isConnected } from "./tabState";
 import { SINGLE, otherPaneTab, paneOf, split, type SplitDirection } from "./splitView";
 
@@ -105,7 +106,7 @@ export function splitTab(id: string, direction: SplitDirection) {
   }
   const previous = app.recentTabs.find((other) => other !== id && app.tabs.some((t) => t.id === other));
   const beside = previous
-    ?? (tab.connectionId && isConnected(tab) ? newQueryOnConnection(tab.connectionId) : app.addTab(tab.connectionId));
+    ?? (tab.connectionId && isConnected(tab) ? newQueryOnConnection(connectionKey(tab.connectionId)) : app.addTab(tab.connectionId));
   useApp.getState().setLayout(split(SINGLE, id, beside, direction), beside);
 }
 

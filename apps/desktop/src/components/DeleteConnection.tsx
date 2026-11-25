@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { explorerSession } from "../windowContext";
-import { connectionKey } from "../connectionKey";
+import { connectionKey, keyOf } from "../connectionKey";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem } from "../api";
 import { useApp } from "../store";
@@ -30,7 +30,7 @@ export function DeleteConnection({ connection }: { connection: ConnectionItem })
       if (!(await confirmOpenTransactions(tabs.map((tab) => tab.id), "disconnect"))) return;
       // Close what uses it before the file disappears: tabs stay open, without a connection.
       await Promise.all(
-        [...tabs.map((tab) => tab.id), explorerSession(connection.id)].map((session) =>
+        [...tabs.map((tab) => tab.id), explorerSession(keyOf(connection))].map((session) =>
           call(commands.disconnect(session)).catch(() => undefined),
         ),
       );

@@ -23,6 +23,8 @@ import { startJob } from "../jobs";
 import { useSchemaCompare } from "../schemaCompare";
 import { useApp } from "../store";
 import { explorerSessionOpen } from "../tabState";
+import { connectionOfTag, connectionTag, keyOf, listedConnection } from "../connectionKey";
+import type { CompareSource } from "../schemaCompare";
 import { useJobPhase } from "../useDialogState";
 
 type Report = SchemaComparisonItem_Serialize;
@@ -32,20 +34,24 @@ export function SchemaCompareDialog() {
   const source = useSchemaCompare((s) => s.source);
   const close = useSchemaCompare((s) => s.close);
   if (!source) return null;
-  return <CompareDialog key={`${source.connectionId}\u0000${source.schema}`} source={source} onClose={close} />;
+  return <CompareDialog key={JSON.stringify([connectionTag(source.connection), source.schema])} source={source} onClose={close} />;
 }
 
-function CompareDialog({ source, onClose }: { source: { connectionId: string; schema: string }; onClose(): void }) {
+function CompareDialog({ source, onClose }: { source: CompareSource; onClose(): void }) {
   const { t } = useTranslation("shell");
   const connections = useApp((s) => s.connections);
   const connected = useApp((s) => s.explorerConnected);
-  const sourceConnection = connections.find((c) => c.id === source.connectionId);
+  const sourceConnection = listedConnection(connections, source.connection);
+  /** The source's and the target's identities as their tags: the picker's values and the
+   *  effects' dependencies (ADR-075). */
+  const sourceTag = connectionTag(source.connection);
   // Connections the comparison can read now: connected in the explorer, of the source's engine.
   const targets = useMemo(
-    () => connections.filter((c) => c.sql && c.engine === sourceConnection?.engine && explorerSessionOpen(connected, c.id)),
+    () => connections.filter((c) => c.sql && c.engine === sourceConnection?.engine && explorerSessionOpen(connected, keyOf(c))),
     [connections, connected, sourceConnection?.engine],
   );
-  const [target, setTarget] = useState(source.connectionId);
+  const [target, setTarget] = useState(sourceTag);
+  const targetKey = connectionOfTag(target) ?? source.connection;
   const [schemas, setSchemas] = useState<string[] | null>(null);
   const [targetSchema, setTargetSchema] = useState("");
   const [unavailable, setUnavailable] = useState<string | null>(null);
@@ -59,27 +65,27 @@ function CompareDialog({ source, onClose }: { source: { connectionId: string; sc
   useEffect(() => {
     let current = true;
     void (async () => {
-      for (const id of new Set([source.connectionId, target])) {
-        const reason = await call(commands.schemaCompareSupport(explorerSession(id))).catch(errorText);
+      for (const tag of new Set([sourceTag, target])) {
+        const reason = await call(commands.schemaCompareSupport(explorerSession(connectionOfTag(tag) ?? source.connection))).catch(errorText);
         if (!current) return;
         if (reason) return setUnavailable(reason);
       }
       if (current) setUnavailable(null);
     })();
     return () => { current = false; };
-  }, [source.connectionId, target]);
+  }, [sourceTag, target]);
 
   // The target connection's schemas, read from the server; another schema than the source's
   // first when the target is the same connection.
   useEffect(() => {
     let current = true;
     setSchemas(null);
-    call(commands.listSchemas(explorerSession(target), null, false))
+    call(commands.listSchemas(explorerSession(targetKey), null, false))
       .then((list) => {
         if (!current) return;
         const names = list.filter((s) => !s.system).map((s) => s.name);
         setSchemas(names);
-        const other = target === source.connectionId ? names.find((n) => n !== source.schema) : undefined;
+        const other = target === sourceTag ? names.find((n) => n !== source.schema) : undefined;
         setTargetSchema(other ?? names.find((n) => n === source.schema) ?? names[0] ?? "");
       })
       .catch((e: unknown) => {
@@ -88,7 +94,7 @@ function CompareDialog({ source, onClose }: { source: { connectionId: string; sc
         setError(errorText(e));
       });
     return () => { current = false; };
-  }, [target, source.connectionId, source.schema]);
+  }, [target, sourceTag, source.schema]);
 
   // The core keeps a comparison until the dialog lets it go.
   useEffect(() => {
@@ -106,7 +112,7 @@ function CompareDialog({ source, onClose }: { source: { connectionId: string; sc
     progress.onmessage = (event) => job.progress(id, event);
     try {
       const outcome = await call(
-        commands.compareSchemas(explorerSession(source.connectionId), source.schema, explorerSession(target), targetSchema, id.channel, progress),
+        commands.compareSchemas(explorerSession(source.connection), source.schema, explorerSession(targetKey), targetSchema, id.channel, progress),
       );
       switch (outcome.kind) {
         case "done":
@@ -135,7 +141,7 @@ function CompareDialog({ source, onClose }: { source: { connectionId: string; sc
     setError(null);
     try {
       const script = await call(commands.schemaCompareScript(report.comparison, drops));
-      openSqlTab(target, explorerSession(target), targetSchema, script.sql);
+      openSqlTab(targetKey, explorerSession(targetKey), targetSchema, script.sql);
       onClose();
     } catch (e) {
       setError(t("compare.scriptFailed", { detail: errorText(e) }));
@@ -162,13 +168,13 @@ function CompareDialog({ source, onClose }: { source: { connectionId: string; sc
         }}
       >
         <h2>{title}</h2>
-        <p className="muted small">{t("compare.source", { connection: sourceConnection?.name ?? source.connectionId, schema: source.schema })}</p>
+        <p className="muted small">{t("compare.source", { connection: sourceConnection?.name ?? source.connection.id, schema: source.schema })}</p>
         <div className="form-pair">
           <label className="field grow">
             <span>{t("compare.targetConnection")}</span>
             <select name="targetConnection" value={target} disabled={running} onChange={(e) => { setTarget(e.target.value); job.reset(); }}>
               {targets.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))}>{c.name}</option>
               ))}
             </select>
           </label>

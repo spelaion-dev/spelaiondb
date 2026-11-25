@@ -36,7 +36,7 @@ export async function ensureEditorAccess(connectionId: string): Promise<boolean>
 async function showNew(id: string, notice: string) {
   await refreshConnections();
   const app = useApp.getState();
-  app.revealInExplorer({ connectionId: id });
+  app.revealInExplorer({ connection: connectionKey(id) });
   app.setConnectionDialog({ kind: "edit", id, notice });
 }
 

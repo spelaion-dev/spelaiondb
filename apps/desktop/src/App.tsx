@@ -30,7 +30,8 @@ import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
 import { ErDiagramView } from "./components/ErDiagram";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest, answerWindowCloseRequest, newQueryOnConnection, tabLabel } from "./connect";
+import { answerQuitRequest, answerWindowCloseRequest, explorerSessionClosed, newQueryOnConnection, tabLabel } from "./connect";
+import { connectionTag, keyOf, listedConnection, type ConnectionKey } from "./connectionKey";
 import { explorerConnectionOf, windowConnection, windowContext } from "./windowContext";
 import { DEFAULT_SHARE, MAX_SHARE, MIN_SHARE, paneOf, resized, type Pane, type SplitLayout } from "./splitView";
 import { commandSpec, globalCommandFor, type CommandId } from "./commandRegistry";
@@ -104,7 +105,7 @@ export default function App() {
     if (saved.width !== width) void setSidePanel(saved.hidden, width);
   };
   const paletteOpen = useApp((s) => s.paletteOpen);
-  const [processConnection, setProcessConnection] = useState<string | null>(null);
+  const [processConnection, setProcessConnection] = useState<ConnectionKey | null>(null);
   const connections = useApp((s) => s.connections);
   const workspaceChanging = useApp((s) => s.workspaceChanging);
   // The MCP server page fills the window: it has no sidebar.
@@ -113,7 +114,7 @@ export default function App() {
   useEffect(() => {
     setSidebarSection((section) => (section === "mcp" ? "connections" : section));
   }, [activeTab, tabIds.length]);
-  const selectedProcessConnection = connections.find((connection) => connection.id === processConnection);
+  const selectedProcessConnection = processConnection === null ? undefined : listedConnection(connections, processConnection);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
   const maxSidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, windowWidth - EDITOR_MIN - ACTIVITY_WIDTH));
@@ -148,7 +149,7 @@ export default function App() {
       // double click in the explorer connects one; nothing of the folder's tabs comes with it,
       // and nothing it opens is kept for the next start.
       if (ownConnection !== null) {
-        if (useApp.getState().connections.some((connection) => connection.id === ownConnection)) newQueryOnConnection(ownConnection);
+        if (listedConnection(useApp.getState().connections, ownConnection)) newQueryOnConnection(ownConnection);
         return;
       }
       // The open folder's tabs come back disconnected, with their text (ADR-036).
@@ -177,7 +178,7 @@ export default function App() {
       useApp.getState().setConnection(session, sessionLost(reason, idleSeconds, openTransaction));
       const explorerConnection = explorerConnectionOf(session);
       if (explorerConnection !== null) {
-        window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: explorerConnection, idleSeconds } }));
+        explorerSessionClosed(explorerConnection, idleSeconds);
       }
     });
     // The core keeps each editor tab's transaction (ADR-031); the tab only shows it.
@@ -323,7 +324,7 @@ export default function App() {
             )}
           </div>
           {sidebarSection === "processes" && (selectedProcessConnection
-            ? <ScreenBoundary screen="process monitor"><ProcessMonitor key={selectedProcessConnection.id} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} /></ScreenBoundary>
+            ? <ScreenBoundary screen="process monitor"><ProcessMonitor key={connectionTag(keyOf(selectedProcessConnection))} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} /></ScreenBoundary>
             : <div className="process-welcome"><h2>{t("shell:processMonitor.title")}</h2><p>{t("shell:processMonitor.choose")}</p></div>)}
           {sidebarSection === "mcp" && <ScreenBoundary screen="mcp"><McpPage /></ScreenBoundary>}
           {historyOpen && <HistoryPanel />}
@@ -337,7 +338,7 @@ export default function App() {
       {movingConnection && <MoveConnection key={movingConnection.id} connection={movingConnection} />}
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       {openObject && (
-        <OpenObjectDialog initialConnection={openObject.connectionId} onClose={() => useApp.getState().setOpenObject(null)} />
+        <OpenObjectDialog initialConnection={openObject.connection} onClose={() => useApp.getState().setOpenObject(null)} />
       )}
       {paletteOpen && <CommandPalette onClose={() => useApp.getState().setPaletteOpen(false)} />}
       <ExplorerDialogHost />

@@ -1,7 +1,7 @@
 // An editor tab: its own session in the core (ADR-004), editor, execution and results.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { connectionKey } from "../connectionKey";
+import { connectionKey, connectionTag } from "../connectionKey";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -11,7 +11,7 @@ import type { KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, Load
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
-import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT, tabLabel } from "../connect";
+import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, schemasRefreshed, SET_ACTIVE_SCHEMA_EVENT, tabLabel } from "../connect";
 import { detachResults, reattachResults, sendMirror, serveRequests, type ResultsMirror, type ResultsRequest } from "../resultsWindow";
 import { connectionTooltip } from "../connectionInfo";
 import { afterRun, endResult, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../runResults";
@@ -137,7 +137,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const databaseBusyRef = useRef(false);
   const workspace = useApp((s) => s.workspace?.workspace ?? null);
   // SQL completion only where the language is SQL (ADR-056).
-  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tabStatus === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
+  const completion = useCompletionCatalog(tab.id, tab.connectionId ? connectionTag(connectionKey(tab.connectionId)) : null, workspace, database, tabStatus === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   /** This tab's runs, counted: each result remembers which one produced it (SDB-378). */
@@ -221,13 +221,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const app = useApp.getState();
     if (action === "reveal") {
       app.setSidebarSection("connections");
-      app.revealInExplorer({ connectionId, schema, name: table, connect: true });
+      app.revealInExplorer({ connection: connectionKey(connectionId), schema, name: table, connect: true });
       return;
     }
     const existing = app.tabs.some((other) => other.connectionId === connectionId && other.tableDetails?.schema === schema
       && other.tableDetails.name === table && other.tableDetails.kind === "columns");
     const details = app.addTableDetailsTab(connectionId, schema, table, "columns");
-    if (!existing) connectTabFromExplorer(details, tab.id, explorerDatabase(connectionId, schema) ?? database ?? undefined);
+    if (!existing) connectTabFromExplorer(details, tab.id, explorerDatabase(connectionKey(connectionId), schema) ?? database ?? undefined);
   }
   useEffect(() => {
     if (!notice) return;
@@ -1115,7 +1115,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
     setConnection(tab.id, CONNECTING);
     try {
-      const session = await openSession(tab.id, tab.connectionId);
+      const session = await openSession(tab.id, connectionKey(tab.connectionId));
       if (session === null) {
         setConnection(tab.id, DISCONNECTED);
         return false;
@@ -1482,7 +1482,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }, runId));
         useApp.getState().refreshHistory();
         if (mayChangeCompletionCatalog(request.text, connection?.engine ?? null)) {
-          window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: tab.connectionId }));
+          if (tab.connectionId) schemasRefreshed(connectionKey(tab.connectionId));
         }
         notifyFinished(tab, summary, elapsedMs);
         break;

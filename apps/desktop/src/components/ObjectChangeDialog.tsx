@@ -2,6 +2,7 @@
 // dialog shows it, and it runs only when the user confirms here (or opens it in the editor).
 
 import { useEffect, useRef, useState } from "react";
+import { listedConnection, type ConnectionKey, tabKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ObjectChangeItem } from "../api";
 import type { ObjectChangePreview } from "../bindings";
@@ -12,7 +13,7 @@ import { usePreviewThenApply } from "../useDialogState";
 
 export function ObjectChangeDialog({
   session,
-  connectionId,
+  identity,
   schema,
   title,
   confirmLabel,
@@ -23,7 +24,7 @@ export function ObjectChangeDialog({
   onDone,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   /** The schema the SQL is opened in, if it goes to the editor. */
   schema: string;
   title: string;
@@ -39,7 +40,7 @@ export function ObjectChangeDialog({
   onDone(): void;
 }) {
   const { t } = useTranslation("shell");
-  const connection = useApp((s) => s.connections.find((c) => c.id === connectionId));
+  const connection = useApp((s) => listedConnection(s.connections, identity));
   const [newName, setNewName] = useState(rename?.current ?? "");
   const [cascading, setCascading] = useState(false);
   /** "Cascade" is offered only where the core says the engine has it. */
@@ -74,8 +75,8 @@ export function ObjectChangeDialog({
 
   function openInEditor() {
     if (!sql) return;
-    const tab = useApp.getState().addTab(connectionId, sql);
-    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, schema));
+    const tab = useApp.getState().addTab(tabKey(identity), sql);
+    connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
     onClose();
   }
 

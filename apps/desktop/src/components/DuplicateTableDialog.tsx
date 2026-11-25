@@ -6,6 +6,7 @@
 // connection refuses them. The rows are copied by the server, never through the app.
 
 import { useEffect, useState } from "react";
+import { type ConnectionKey, tabKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { DuplicatePlanItem, TablePartItem } from "../bindings";
@@ -14,13 +15,13 @@ import { useApp } from "../store";
 
 export function DuplicateTableDialog({
   session,
-  connectionId,
+  identity,
   schema,
   name,
   onClose,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   schema: string;
   name: string;
   onClose(): void;
@@ -56,9 +57,9 @@ export function DuplicateTableDialog({
   function openTab(run: boolean) {
     if (!plan) return;
     const app = useApp.getState();
-    const tab = app.addTab(connectionId, plan.sql);
+    const tab = app.addTab(tabKey(identity), plan.sql);
     if (run) app.updateTab(tab, { runOnOpen: true });
-    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, newSchema));
+    connectTabFromExplorer(tab, session, explorerDatabase(identity, newSchema));
     onClose();
   }
 

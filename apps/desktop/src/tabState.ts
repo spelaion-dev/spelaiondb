@@ -11,6 +11,7 @@
 import type { RunStateItem, TransactionStatusItem } from "./bindings";
 import type { QuestionKind } from "./dialogStore";
 import type { Tab } from "./store";
+import { holdsConnection, tabOnConnection, type ConnectionKey } from "./connectionIdentity.ts";
 
 /**
  * A tab's connection. Each state carries only what exists in it: a lost session has its reason
@@ -213,8 +214,8 @@ export function connectionInUse(tabs: Tab[], connectionId: string): boolean {
 }
 
 /** The connection is open, for the explorer: its own session, or a connected tab's. */
-export function connectionOpen(tabs: Tab[], explorerConnected: string[], connectionId: string): boolean {
-  return explorerConnected.includes(connectionId) || connectedConnections(tabs).includes(connectionId);
+export function connectionOpen(tabs: Tab[], explorerConnected: ConnectionKey[], connection: ConnectionKey): boolean {
+  return holdsConnection(explorerConnected, connection) || connectedConnections(tabs).some((id) => tabOnConnection(id, connection));
 }
 
 /** The connections a connected tab uses, in tab order (repeated when several tabs share one):
@@ -225,8 +226,8 @@ export function connectedConnections(tabs: Tab[]): string[] {
 
 /** The explorer's own session on the connection is open (what the data search and the
  *  explorer's actions run on). */
-export function explorerSessionOpen(explorerConnected: string[], connectionId: string): boolean {
-  return explorerConnected.includes(connectionId);
+export function explorerSessionOpen(explorerConnected: ConnectionKey[], connection: ConnectionKey): boolean {
+  return holdsConnection(explorerConnected, connection);
 }
 
 // ----------------------------------------------------------------- questions
