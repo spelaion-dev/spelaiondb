@@ -50,7 +50,7 @@ export function explorerConnectionOf(session: string): string | null {
 
 /** The connection this window was opened for, or null in the main window. */
 export function windowConnection(): string | null {
-  return current.kind === "connection" ? current.connectionId : null;
+  return current.kind === "connection" ? current.connection.id : null;
 }
 
 function unknownWindow(context: never): never {

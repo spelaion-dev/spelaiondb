@@ -1252,12 +1252,12 @@ export const commands = {
 	 *  committed, applied or saved; the servers roll back open transactions.
 	 */
 	quitApp: () => typedError<null, string>(__TAURI_INVOKE("quit_app")),
-	windowContext: () => __TAURI_INVOKE<WindowContextItem>("window_context"),
+	windowContext: () => __TAURI_INVOKE<WindowContextItem_Serialize>("window_context"),
 	/**
 	 *  Opens `connection` in a window of its own, titled `title`: its own tabs and explorer, its
 	 *  own sessions, over the same core. Nothing is connected or run until its page asks.
 	 */
-	openConnectionWindow: (connection: string, title: string) => typedError<string, string>(__TAURI_INVOKE("open_connection_window", { connection, title })),
+	openConnectionWindow: (connection: ConnectionKeyItem_Deserialize, title: string) => typedError<string, string>(__TAURI_INVOKE("open_connection_window", { connection, title })),
 	/**
 	 *  Shows the results of the calling window's editor tab `tab` in a window of their own, or
 	 *  brings forward the one already showing them. The rows stay in the core's store: the new
@@ -7595,12 +7595,25 @@ export type VariableItem = {
 export type WindowCloseRequested = Record<string, never>;
 
 /**  What the page of a window shows, as the registry says it (ADR-060: read, never guessed). */
-export type WindowContextItem = { kind: "main" } | 
+export type WindowContextItem = WindowContextItem_Serialize | WindowContextItem_Deserialize;
+
+/**  What the page of a window shows, as the registry says it (ADR-060: read, never guessed). */
+export type WindowContextItem_Deserialize = { kind: "main" } | 
 /**
  *  `label` prefixes the window's session keys (`connection-2/tab-1`), so no two windows
  *  ever name the same session.
  */
-{ kind: "connection"; label: string; connectionId: string } | 
+{ kind: "connection"; label: string; connection: ConnectionKeyItem_Deserialize } | 
+/**  The results of `owner`'s editor tab `tab` (its session key). */
+{ kind: "results"; label: string; owner: string; tab: string };
+
+/**  What the page of a window shows, as the registry says it (ADR-060: read, never guessed). */
+export type WindowContextItem_Serialize = { kind: "main" } | 
+/**
+ *  `label` prefixes the window's session keys (`connection-2/tab-1`), so no two windows
+ *  ever name the same session.
+ */
+{ kind: "connection"; label: string; connection: ConnectionKeyItem_Serialize } | 
 /**  The results of `owner`'s editor tab `tab` (its session key). */
 { kind: "results"; label: string; owner: string; tab: string };
 
