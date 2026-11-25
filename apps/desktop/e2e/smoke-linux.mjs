@@ -187,6 +187,20 @@ async function replaceQuery(sql) {
   await wd.insertText(sql);
 }
 async function run() {
+  // The tab ignores the shortcut while it cannot start a run: while it connects, and while a
+  // server whose tabs choose a database (SQL Server, MySQL, MariaDB) lists its databases just
+  // after connecting. "Run script" is disabled exactly then, so the run waits for it (SDB-520:
+  // a press that landed in that moment ran nothing, and "Result 2" never came). A press while a
+  // run is going (Cancel shows instead of Run) is ignored as before, never waited for.
+  await wd.waitFor(
+    (p) => {
+      if (document.querySelector(`${p} .editor-action-cancel`)) return true;
+      const button = [...document.querySelectorAll(`${p} .editor-action-run`)].find((b) => b.getAttribute("aria-label") === "Run script");
+      return button && !button.disabled;
+    },
+    [P],
+    { what: "the tab ready to run (Run script enabled)" },
+  );
   await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
   await wd.press("Control+Shift+Enter");
 }

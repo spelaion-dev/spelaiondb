@@ -408,6 +408,12 @@ try {
     return panel;
   }
   async function run(panel) {
+    // The tab ignores the shortcut while it cannot start a run: while it connects, and while a
+    // server whose tabs choose a database (SQL Server, MySQL, MariaDB) lists its databases just
+    // after connecting. "Run script" is disabled exactly then, so the run waits for it (SDB-520).
+    // A press while a run is going (Cancel shows instead of Run) is ignored as before, never
+    // waited for; "attached", since maximized results hide the editor's toolbar.
+    await panel.locator('.editor-action-cancel, .editor-action-run[aria-label="Run script"]:enabled').first().waitFor({ state: "attached" });
     await panel.locator(".cm-content").click();
     await page.keyboard.press("Control+Shift+Enter");
   }
