@@ -25,6 +25,7 @@
 /crates/spelaion-config/src/secrets.rs          @petilolz @frglez
 /crates/spelaion-config/src/trust.rs            @petilolz @frglez
 /crates/spelaion-config/src/resolve.rs          @petilolz @frglez
+/crates/spelaion-config/src/folders.rs          @petilolz @frglez
 /crates/spelaion-ssh/src/hostkeys.rs            @petilolz @frglez
 /crates/spelaion-ssh/src/auth.rs                @petilolz @frglez
 
