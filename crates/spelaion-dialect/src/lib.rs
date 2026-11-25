@@ -25,6 +25,7 @@ pub mod neo4j;
 pub mod oracle;
 pub mod postgres;
 pub mod redis;
+mod scanner;
 pub mod spanner;
 pub mod sqlite;
 pub mod sqlserver;

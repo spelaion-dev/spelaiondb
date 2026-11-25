@@ -1,6 +1,6 @@
 # ADR-065: One lexical scanner per dialect, read by everything that needs to know what is code
 
-- **Status:** Accepted (not implemented)
+- **Status:** Accepted (being implemented: the scanner type and PostgreSQL, SDB-453)
 - **Date:** 2026-11-23
 - **Extends:** ADR-005 (each engine has a dialect) and ADR-041 (the dialects and the barriers
   live in the core; a plugin names one of the core's dialects, or none)
