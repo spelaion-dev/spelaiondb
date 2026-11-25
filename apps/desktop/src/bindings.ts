@@ -307,8 +307,10 @@ export const commands = {
 	 *  one comes back disconnected, in the window's order, with its text and a note when its
 	 *  connection or file is gone. A connection is looked up in the folder the tab was kept under
 	 *  (and personal ones among the personal connections), never in another folder. Nothing is run.
+	 *  With `folder` (an open folder's root, as listed), only that folder's tabs: it was just
+	 *  opened beside the others, whose tabs are on screen.
 	 */
-	restoreTabsForWorkspace: () => typedError<RestoredTabsItem_Serialize, string>(__TAURI_INVOKE("restore_tabs_for_workspace")),
+	restoreTabsForWorkspace: (folder: string | null) => typedError<RestoredTabsItem_Serialize, string>(__TAURI_INVOKE("restore_tabs_for_workspace", { folder })),
 	/**
 	 *  The window's tabs as they are now, in the tab bar's order (ADR-075): the core keeps each
 	 *  under its connection's folder, or under the window's key, and writes them within a second
@@ -1036,7 +1038,7 @@ export const commands = {
 	 *  Opens `path` beside the folders already open (ADR-075): nothing closes. The same root again
 	 *  is the folder already open; an eleventh is refused. The page shows the last one opened.
 	 */
-	addFolder: (path: string) => typedError<OpenFoldersItem, string>(__TAURI_INVOKE("add_folder", { path })),
+	addFolder: (path: string) => typedError<AddedFolderItem, string>(__TAURI_INVOKE("add_folder", { path })),
 	/**
 	 *  Closes the open folder of `root` (as listed) and its sessions (ADR-075). Personal
 	 *  connections' sessions and other folders' stay.
@@ -1373,6 +1375,15 @@ export const events = {
 };
 
 /* Types */
+/**  A folder `add_folder` opened, or found open already (ADR-075). */
+export type AddedFolderItem = {
+	/**  Its canonical root, as `OpenFolderItem::root` names it. */
+	root: string,
+	/**  It was not open before: its kept tabs come back (`restore_tabs_for_workspace`). */
+	added: boolean,
+	folders: OpenFolderItem[],
+};
+
 /**  The script a structure form would run, written by the core, to show before it does. */
 export type AlterationPreviewItem = {
 	/**  The whole script, as shown and as sent back to apply it. */
@@ -6463,11 +6474,21 @@ export type RestoredTabItem = RestoredTabItem_Serialize | RestoredTabItem_Deseri
 export type RestoredTabItem_Deserialize = {
 	tab: OpenTabItem_Deserialize,
 	notes: RestoreNoteItem[],
+	/**
+	 *  Its place in the window when it was kept, if it was kept with one: a folder opened
+	 *  again puts its tabs back there among the tabs on screen.
+	 */
+	position?: number | null,
 };
 
 export type RestoredTabItem_Serialize = {
 	tab: OpenTabItem_Serialize,
 	notes: RestoreNoteItem[],
+	/**
+	 *  Its place in the window when it was kept, if it was kept with one: a folder opened
+	 *  again puts its tabs back there among the tabs on screen.
+	 */
+	position: number | null,
 };
 
 /**

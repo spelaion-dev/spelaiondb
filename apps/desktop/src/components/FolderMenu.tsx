@@ -1,12 +1,15 @@
-// The explorer's folder button (SDB-397): open another folder, or one of the recent folders,
-// each removable from the list. Opening goes through `switchFolder` (it asks about what
-// closing the sessions would lose, and the folder then through repository trust).
+// The explorer's folder button (SDB-397, ADR-075): add a folder, close one of the open
+// folders, or add one of the recent folders, each removable from the list. Adding goes
+// through `addFolder` (it closes nothing, so it asks nothing; the folder then goes through its
+// own repository trust); closing through `closeFolder`, which asks about what closing that
+// folder's sessions would lose.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RecentFolderItem } from "../bindings";
 import { Icon } from "./Icons";
-import { RECENT_FOLDERS_EVENT, forgetRecentFolder, isOpenFolder, recentFolders, switchFolder } from "../folders";
+import { RECENT_FOLDERS_EVENT, addFolder, closeFolder, folderNames, forgetRecentFolder, isOpenFolder, recentFolders } from "../folders";
+import { useApp } from "../store";
 
 export function FolderMenuButton({ disabled, onOpenFolder }: { disabled: boolean; onOpenFolder(): void }) {
   const { t } = useTranslation("shell");
@@ -37,6 +40,8 @@ export function FolderMenuButton({ disabled, onOpenFolder }: { disabled: boolean
 function FolderMenu({ x, y, onOpenFolder, onClose }: { x: number; y: number; onOpenFolder(): void; onClose(): void }) {
   const { t } = useTranslation("shell");
   const [recent, setRecent] = useState<RecentFolderItem[] | null>(null);
+  const openFolders = useApp((s) => s.openFolders);
+  const names = folderNames(openFolders);
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
 
@@ -58,7 +63,7 @@ function FolderMenu({ x, y, onOpenFolder, onClose }: { x: number; y: number; onO
       left: Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)),
       top: Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)),
     });
-  }, [x, y, recent]);
+  }, [x, y, recent, openFolders]);
 
   useEffect(() => {
     ref.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
@@ -97,6 +102,35 @@ function FolderMenu({ x, y, onOpenFolder, onClose }: { x: number; y: number; onO
       <button role="menuitem" onClick={() => { onClose(); onOpenFolder(); }}>
         <span>{t("openFolderMenu")}</span>
       </button>
+      {openFolders.length > 0 && (
+        <>
+          <hr />
+          <div className="menu-heading muted small">{t("openFolders")}</div>
+          {openFolders.map((folder) => {
+            const name = names.get(folder.root) ?? folder.path;
+            return (
+              <div key={folder.root} className="recent-file">
+                <span className="open-folder-name" title={folder.path}>
+                  <span>{name}</span>
+                  <span className="menu-shortcut recent-path">{folder.path}</span>
+                </span>
+                <button
+                  role="menuitem"
+                  className="ghost small recent-forget"
+                  aria-label={t("closeFolder", { name })}
+                  title={t("closeFolder", { name })}
+                  onClick={() => {
+                    onClose();
+                    void closeFolder(folder.root);
+                  }}
+                >
+                  <Icon name="x" />
+                </button>
+              </div>
+            );
+          })}
+        </>
+      )}
       <hr />
       <div className="menu-heading muted small">{t("recentFolders")}</div>
       {recent !== null && recent.length === 0 && <div className="menu-empty muted small">{t("noRecentFolders")}</div>}
@@ -109,7 +143,7 @@ function FolderMenu({ x, y, onOpenFolder, onClose }: { x: number; y: number; onO
             title={folder.exists ? folder.path : t("recentFolderMissing", { path: folder.path })}
             onClick={() => {
               onClose();
-              void switchFolder(folder.path);
+              void addFolder(folder.path);
             }}
           >
             <span>{folder.name}</span>

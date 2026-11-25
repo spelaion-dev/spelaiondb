@@ -73,7 +73,7 @@ function schedule() {
   timer = setTimeout(sendNow, SEND_DELAY_MS);
 }
 
-/** Sends what is waiting and has the core write it (before switching folders). */
+/** Sends what is waiting and has the core write it (before folders change). */
 export async function flushTabs(): Promise<void> {
   sendNow();
   await call(commands.flushTabs()).catch(() => undefined);
@@ -94,7 +94,7 @@ export function detachTabs() {
 export async function restoreTabs(): Promise<void> {
   let kept: RestoredTabsItem;
   try {
-    kept = await call(commands.restoreTabsForWorkspace());
+    kept = await call(commands.restoreTabsForWorkspace(null));
   } catch {
     return;
   }
@@ -102,6 +102,31 @@ export async function restoreTabs(): Promise<void> {
   restored = true;
   lastSent = JSON.stringify(snapshot(useApp.getState().tabs, useApp.getState().activeTab));
   if (kept.reconnect) void reconnectRestored();
+}
+
+/** Puts back the kept tabs of the folder `root` (as listed), just opened beside the others,
+ *  among the tabs on screen (ADR-075). They come back disconnected; nothing connects. */
+export async function restoreFolderTabs(root: string): Promise<void> {
+  const kept = await call(commands.restoreTabsForWorkspace(root));
+  useApp.getState().addRestoredTabs(kept.tabs);
+}
+
+/** Runs `change` (a folder opened or closed beside the others) with the tabs written first and
+ *  none sent meanwhile: the core keeps a set per open folder, so the tabs on screen must match
+ *  the open folders again (a closed folder's taken out, an opened one's put back) before they
+ *  are sent, or a folder's kept tabs would be written as none. */
+export async function whileFoldersChange<T>(change: () => Promise<T>): Promise<T> {
+  const keeping = restored;
+  await flushTabs();
+  detachTabs();
+  try {
+    return await change();
+  } finally {
+    if (keeping) {
+      restored = true;
+      schedule();
+    }
+  }
 }
 
 /** Connects the restored tabs that have a connection, one at a time, as a click would: a

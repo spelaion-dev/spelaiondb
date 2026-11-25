@@ -9,12 +9,18 @@
     "ownOnly": "Solo se muestra su propia base de datos: {{reason}}"
   },
   "queryTab": "Consulta {{number}}",
-  "openFolderTitle": "Abrir carpeta con .spelaion/",
+  "openFolderTitle": "Añadir una carpeta con .spelaion/",
   "personal": "Personal",
   "noFolder": "Ninguna carpeta abierta",
-  "openAnotherFolder": "Abrir otra carpeta",
+  "openAnotherFolder": "Añadir o cerrar carpetas",
   "folderMenu": "Carpetas",
-  "openFolderMenu": "Abrir carpeta…",
+  "openFolderMenu": "Añadir carpeta…",
+  "openFolders": "Carpetas abiertas",
+  "closeFolder": "Cerrar {{name}}",
+  "foldersOpen_one": "{{count}} carpeta",
+  "foldersOpen_other": "{{count}} carpetas",
+  "folderGroup": "Conexiones de {{name}}",
+  "folderEmpty": "Esta carpeta no tiene conexiones.",
   "recentFolders": "Carpetas recientes",
   "noRecentFolders": "Aún no hay carpetas recientes.",
   "recentFolderMissing": "{{path}} ya no existe",
@@ -611,7 +617,7 @@
       "close": "¿Cerrar con una transacción abierta?",
       "disconnect": "¿Desconectar con una transacción abierta?",
       "quit": "¿Salir con una transacción abierta?",
-      "folder": "¿Abrir otra carpeta con una transacción abierta?"
+      "folder": "¿Cerrar la carpeta con una transacción abierta?"
     },
     "explanation_one": "Esta pestaña tiene una transacción abierta. Su sesión terminará y el servidor deshará lo que no se haya confirmado:",
     "explanation_other": "Estas pestañas tienen una transacción abierta. Sus sesiones terminarán y el servidor deshará lo que no se haya confirmado:",
@@ -621,13 +627,13 @@
       "close": "Cerrar y deshacer",
       "disconnect": "Desconectar y deshacer",
       "quit": "Salir y deshacer",
-      "folder": "Abrir y deshacer"
+      "folder": "Cerrar carpeta y deshacer"
     },
     "titleRunning": {
       "close": "¿Cerrar con una consulta en ejecución?",
       "disconnect": "¿Desconectar con una consulta en ejecución?",
       "quit": "¿Salir con una consulta en ejecución?",
-      "folder": "¿Abrir otra carpeta con una consulta en ejecución?"
+      "folder": "¿Cerrar la carpeta con una consulta en ejecución?"
     },
     "running_one": "La consulta de esta pestaña sigue en ejecución. Se cancelará:",
     "running_other": "Las consultas de estas pestañas siguen en ejecución. Se cancelarán:",
@@ -635,13 +641,13 @@
       "close": "Cerrar y cancelar",
       "disconnect": "Desconectar y cancelar",
       "quit": "Salir y cancelar",
-      "folder": "Abrir y cancelar"
+      "folder": "Cerrar carpeta y cancelar"
     },
     "titleUnsaved": {
       "close": "¿Cerrar con cambios de filas sin aplicar?",
       "disconnect": "¿Desconectar con cambios de filas sin aplicar?",
       "quit": "¿Salir con cambios de filas sin aplicar?",
-      "folder": "¿Abrir otra carpeta con cambios de filas sin aplicar?"
+      "folder": "¿Cerrar la carpeta con cambios de filas sin aplicar?"
     },
     "unsaved_one": "Esta pestaña tiene cambios de filas sin aplicar. Se perderán:",
     "unsaved_other": "Estas pestañas tienen cambios de filas sin aplicar. Se perderán:",
@@ -650,13 +656,13 @@
       "close": "Cerrar y descartar",
       "disconnect": "Desconectar y descartar",
       "quit": "Salir y descartar",
-      "folder": "Abrir y descartar"
+      "folder": "Cerrar carpeta y descartar"
     },
     "titleUnkept": {
       "close": "¿Cerrar la ventana con SQL sin guardar?",
       "disconnect": "¿Desconectar con SQL sin guardar?",
       "quit": "¿Salir con SQL sin guardar?",
-      "folder": "¿Abrir otra carpeta con SQL sin guardar?"
+      "folder": "¿Cerrar la carpeta con SQL sin guardar?"
     },
     "unkept_one": "El SQL de esta pestaña solo se guarda en esta ventana. Se perderá:",
     "unkept_other": "El SQL de estas pestañas solo se guarda en esta ventana. Se perderá:",
@@ -665,7 +671,7 @@
       "close": "Cerrar y descartar",
       "disconnect": "Desconectar y descartar",
       "quit": "Salir y descartar",
-      "folder": "Abrir y descartar"
+      "folder": "Cerrar carpeta y descartar"
     }
   },
   "exportTable": "Exportar…",

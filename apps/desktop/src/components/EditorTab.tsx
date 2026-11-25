@@ -1,5 +1,6 @@
 // An editor tab: its own session in the core (ADR-004), editor, execution and results.
 
+import { useConnectionName } from "../folders";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type ConnectionKey, connectionOfTag, connectionTag, keyOf, listedConnection, stillOnConnection, tabConnection, tabConnectionOf, tabOnConnection } from "../connectionKey";
 import { Channel } from "@tauri-apps/api/core";
@@ -109,6 +110,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const tabStatus = statusName(tab);
   const running = isRunning(tab);
   const { t, i18n } = useTranslation("editor");
+  const shownName = useConnectionName();
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const connections = useApp((s) => s.connections);
   const updateTab = useApp((s) => s.updateTab);
@@ -1730,7 +1732,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           <option value="">{t("noConnection")}</option>
           {connections.map((c) => (
             <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))} title={connectionTooltip(c)}>
-              {c.name} ({c.engine}
+              {shownName(c)} ({c.engine}
               {c.kind ? `, ${c.kind.name}` : c.env ? `, ${c.env}` : ""})
             </option>
           ))}

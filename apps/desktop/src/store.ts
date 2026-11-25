@@ -5,7 +5,7 @@ import type { EditorActionId } from "./editorActions";
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFormatItem, OnErrorItem, RestoreNoteItem, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
-import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
+import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, OpenFolderItem, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
 import { DISCONNECTED, withReadOnly, withTransaction, type TabConnection } from "./tabState";
 import { SINGLE, show, survivingPane, withoutTabs, type SplitLayout } from "./splitView";
 import { sessionPrefix } from "./windowContext";
@@ -281,6 +281,36 @@ function nextActive(tabs: Tab[], recent: string[], current: string | null): stri
 
 let tabCounter = 0;
 
+/** A tab the core restored (ADR-036): disconnected, with its text and nothing to run. */
+function restoredTab({ tab: kept, notes }: RestoredTabItem): Tab {
+  tabCounter += 1;
+  const file = kept.file ?? null;
+  return {
+    id: `${sessionPrefix()}tab-${tabCounter}`,
+    number: tabCounter,
+    title: kept.title ?? undefined,
+    pinned: kept.pinned || undefined,
+    connectionId: kept.connection ?? null,
+    database: kept.connection ? (kept.database ?? null) : null,
+    connectionFolder: kept.connection ? kept.folder ?? null : null,
+    connectionState: DISCONNECTED,
+    sql: kept.text,
+    run: null,
+    snippetName: kept.snippetName ?? undefined,
+    runOptions: kept.onError || kept.timeoutSeconds ? { onError: kept.onError ?? null, timeoutSeconds: kept.timeoutSeconds ?? null } : undefined,
+    file: file
+      ? {
+          path: file.path,
+          name: file.path.split(/[\\/]/).pop() ?? file.path,
+          format: file.format,
+          hash: file.hash ?? null,
+          savedText: file.modified ? null : kept.text,
+        }
+      : undefined,
+    restoreNotes: notes.length > 0 ? notes : undefined,
+  };
+}
+
 /** The text a new script starts with (SDB-384); empty for none. The core keeps and checks it;
  *  `snippetStore.ts` puts here what the core answered. */
 let newScriptTemplate = "";
@@ -349,6 +379,9 @@ const MAX_CLOSED_TABS = 20;
 
 interface AppStore {
   workspace: WorkspaceInfo | null;
+  /** The folders the window holds open (ADR-075), in the order they were opened, each with
+   *  its own trust and configuration problems (`list_folders`). */
+  openFolders: OpenFolderItem[];
   connections: ConnectionItem[];
   tabs: Tab[];
   activeTab: string | null;
@@ -400,6 +433,7 @@ interface AppStore {
    *  the column, which `sidebarSection` alone says. */
   sidePanelToRestore: SidePanel;
   setWorkspace(info: WorkspaceInfo): void;
+  setOpenFolders(folders: OpenFolderItem[]): void;
   setConnections(list: ConnectionItem[]): void;
   /** Opens an editor tab. Without `sql` it is a new script: it starts with the user's
    *  template, if there is one. A tab opened for some text (a file, a history entry, generated
@@ -415,8 +449,10 @@ interface AppStore {
    *  from the connection's own. The second value says whether the tab is new (and needs
    *  connecting). */
   addDiagramTab(connection: ConnectionKey, scope: DiagramScopeItem_Deserialize, saved?: { id: number; name: string }, database?: string | null): [string, boolean];
-  /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
-  closeTabs(ids: string[]): void;
+  /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). `remember`
+   *  (the default) lets Ctrl+Shift+T reopen them; a closed folder's tabs are kept by the core
+   *  instead, and come back with the folder (ADR-075). */
+  closeTabs(ids: string[], remember?: boolean): void;
   /** Opens again the last closed query tab (its connection, SQL and name, not its results). */
   reopenTab(): void;
   /** Closed query tabs, the last one at the end. */
@@ -439,6 +475,9 @@ interface AppStore {
   /** Replaces every tab with the ones the core restored for the open folder (ADR-036): all
    *  disconnected, with their text and nothing to run. Closed tabs are forgotten. */
   restoreTabs(restored: RestoredTabItem[], active: number | null): void;
+  /** Puts a folder's restored tabs (it was just opened beside the others) among the tabs on
+   *  screen, each at the place it was kept at, or at the end. The active tab stays. */
+  addRestoredTabs(restored: RestoredTabItem[]): void;
   updateTab(id: string, patch: Partial<Tab>): void;
   /** Moves the tab's connection to `next` (built with `tabState.ts`'s transitions). */
   setConnection(id: string, next: TabConnection): void;
@@ -514,6 +553,8 @@ export const useApp = create<AppStore>((set) => ({
   sidePanelToRestore: "connections",
   bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
+  openFolders: [],
+  setOpenFolders: (openFolders) => set({ openFolders }),
   setConnections: (connections) => set({ connections }),
   addTab: (connection, sql) => {
     tabCounter += 1;
@@ -564,12 +605,12 @@ export const useApp = create<AppStore>((set) => ({
   closedTabs: [],
   recentTabs: [],
   renamingTab: null,
-  closeTabs: (ids) =>
+  closeTabs: (ids, remember = true) =>
     set((s) => {
       const closing = new Set(ids);
       const closed: ClosedTab[] = [];
       s.tabs.forEach((tab, index) => {
-        const snapshot = closing.has(tab.id) ? snapshotOf(tab) : null;
+        const snapshot = remember && closing.has(tab.id) ? snapshotOf(tab) : null;
         if (snapshot) closed.push({ snapshot, index });
       });
       const tabs = s.tabs.filter((t) => !closing.has(t.id));
@@ -654,38 +695,21 @@ export const useApp = create<AppStore>((set) => ({
     ? { layout }
     : { layout, activeTab: focus, recentTabs: [focus, ...s.recentTabs.filter((id) => id !== focus)] })),
   restoreTabs: (restored, active) => {
-    const tabs: Tab[] = restored.map(({ tab: kept, notes }) => {
-      tabCounter += 1;
-      const file = kept.file ?? null;
-      return {
-        id: `${sessionPrefix()}tab-${tabCounter}`,
-        number: tabCounter,
-        title: kept.title ?? undefined,
-        pinned: kept.pinned || undefined,
-        connectionId: kept.connection ?? null,
-        database: kept.connection ? (kept.database ?? null) : null,
-        connectionFolder: kept.connection ? kept.folder ?? null : null,
-        connectionState: DISCONNECTED,
-        sql: kept.text,
-        run: null,
-        snippetName: kept.snippetName ?? undefined,
-        runOptions: kept.onError || kept.timeoutSeconds ? { onError: kept.onError ?? null, timeoutSeconds: kept.timeoutSeconds ?? null } : undefined,
-        file: file
-          ? {
-              path: file.path,
-              name: file.path.split(/[\\/]/).pop() ?? file.path,
-              format: file.format,
-              hash: file.hash ?? null,
-              savedText: file.modified ? null : kept.text,
-            }
-          : undefined,
-        restoreNotes: notes.length > 0 ? notes : undefined,
-      };
-    });
+    const tabs = restored.map(restoredTab);
     const ordered = pinnedFirst(tabs);
     const activeTab = (active !== null ? tabs[active]?.id : undefined) ?? ordered[ordered.length - 1]?.id ?? null;
     set({ tabs: ordered, activeTab, layout: SINGLE, recentTabs: activeTab ? [activeTab] : [], closedTabs: [], renamingTab: null });
   },
+  addRestoredTabs: (restored) => set((s) => {
+    const tabs = [...s.tabs];
+    // By their kept places, so each lands where it was among the ones put back before it.
+    const placed = restored
+      .map((item, order) => ({ item, order }))
+      .sort((a, b) => (a.item.position ?? Number.MAX_SAFE_INTEGER) - (b.item.position ?? Number.MAX_SAFE_INTEGER) || a.order - b.order);
+    for (const { item } of placed) tabs.splice(Math.min(item.position ?? tabs.length, tabs.length), 0, restoredTab(item));
+    const ordered = pinnedFirst(tabs);
+    return { tabs: ordered, activeTab: s.activeTab ?? ordered[ordered.length - 1]?.id ?? null };
+  }),
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   setConnection: (id, next) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, connectionState: next } : t)) })),
   setTransaction: (id, transaction) => set((s) => changeConnection(s, id, (c) => withTransaction(c, transaction))),

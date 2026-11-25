@@ -13,7 +13,9 @@ picks the engine and fills host,
 port, database, user, SSL mode and the password field (which is saved like a typed one).
 
 - **Save in:** *Project* writes `.spelaion/connections/<folder>/<name>.toml` in the
-  repository, shared through git; *Personal* keeps it in your personal directory.
+  repository, shared through git; *Personal* keeps it in your personal directory. With several
+  repositories open, each one is a choice of its own, named as in the explorer; importing
+  connections asks the same. A pasted connection is always personal.
 - **Password:** saved in the system keychain, asked every time, or read from an environment
   variable. It is never written to the connection file.
 - **SSH:** choose a tunnel, or create and edit one with **New tunnel…** / **Edit tunnel…**:

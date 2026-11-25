@@ -1484,6 +1484,17 @@ pub struct OpenFoldersItem {
     pub folders: Vec<OpenFolderItem>,
 }
 
+/// A folder `add_folder` opened, or found open already (ADR-075).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AddedFolderItem {
+    /// Its canonical root, as `OpenFolderItem::root` names it.
+    pub root: String,
+    /// It was not open before: its kept tabs come back (`restore_tabs_for_workspace`).
+    pub added: bool,
+    pub folders: Vec<OpenFolderItem>,
+}
+
 /// One open folder.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -7256,6 +7267,10 @@ impl From<spelaion_core::RestoreNote> for RestoreNoteItem {
 pub struct RestoredTabItem {
     pub tab: OpenTabItem,
     pub notes: Vec<RestoreNoteItem>,
+    /// Its place in the window when it was kept, if it was kept with one: a folder opened
+    /// again puts its tabs back there among the tabs on screen.
+    #[serde(default)]
+    pub position: Option<u32>,
 }
 
 /// The kept tabs of the window and of every open folder (ADR-075), checked by the core and in

@@ -169,8 +169,11 @@ fn connection_file<'a>(
 /// one comes back disconnected, in the window's order, with its text and a note when its
 /// connection or file is gone. A connection is looked up in the folder the tab was kept under
 /// (and personal ones among the personal connections), never in another folder. Nothing is run.
+/// With `folder` (an open folder's root, as listed), only that folder's tabs: it was just
+/// opened beside the others, whose tabs are on screen.
 #[command]
 pub(crate) async fn restore_tabs_for_workspace(
+    folder: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<RestoredTabsItem> {
     // What the tabs were written under before anything else is (a reload may run).
@@ -180,8 +183,16 @@ pub(crate) async fn restore_tabs_for_workspace(
         .last()
         .map(|(_, connections)| connections.clone())
         .unwrap_or_default();
+    if let Some(folder) = &folder
+        && !scopes.iter().any(|(scope, _)| scope == folder)
+    {
+        return Err(format!("{folder} is not open"));
+    }
     let mut sets = Vec::with_capacity(scopes.len());
-    for (scope, _) in &scopes {
+    for (scope, _) in scopes
+        .iter()
+        .filter(|(scope, _)| folder.as_ref().is_none_or(|folder| folder == scope))
+    {
         let saved = state
             .history
             .open_tabs(scope.clone())
@@ -211,11 +222,16 @@ pub(crate) async fn restore_tabs_for_workspace(
         tabs: tabs
             .into_iter()
             .map(|(scope, t)| {
+                let position = t.tab.window_position;
                 let mut tab: OpenTabItem = t.tab.into();
-                tab.folder = (!scope.is_empty() && tab.connection.is_some()).then_some(scope);
+                // A folder's connection is that folder's; a personal one (kept under the
+                // folder that was open before ADR-075) has none.
+                let folder = tab_scope(tab.connection.as_deref(), Some(&scope));
+                tab.folder = (!folder.is_empty()).then_some(folder);
                 RestoredTabItem {
                     tab,
                     notes: t.notes.into_iter().map(Into::into).collect(),
+                    position,
                 }
             })
             .collect(),

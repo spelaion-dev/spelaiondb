@@ -863,18 +863,27 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
 /// Opens `path` beside the folders already open (ADR-075): nothing closes. The same root again
 /// is the folder already open; an eleventh is refused. The page shows the last one opened.
 #[command]
-async fn add_folder(path: String, state: State<'_, AppState>) -> CmdResult<OpenFoldersItem> {
+async fn add_folder(path: String, state: State<'_, AppState>) -> CmdResult<AddedFolderItem> {
     let switch = state.folder.begin_switch().map_err(|e| e.to_string())?;
-    {
+    let (root, added) = {
         let mut folders = state.folders.write().await;
-        folders.add(Path::new(&path)).map_err(|e| e.to_string())?;
-        // What a personal connection reads changed: work started before is stale.
-        switch.path_changed();
-        let _ = open_folders::remember(&state.user_dir, &folders.paths());
-    }
+        let before = folders.folders().len();
+        let index = folders.add(Path::new(&path)).map_err(|e| e.to_string())?;
+        let added = folders.folders().len() > before;
+        if added {
+            // What a personal connection reads changed: work started before is stale.
+            switch.path_changed();
+            let _ = open_folders::remember(&state.user_dir, &folders.paths());
+        }
+        (folders.folders()[index].root.display().to_string(), added)
+    };
     let _ = state.history.add_recent_folder(path).await;
     drop(switch);
-    state.open_folders_item().await
+    Ok(AddedFolderItem {
+        root,
+        added,
+        folders: state.open_folders_item().await?.folders,
+    })
 }
 
 /// Closes the open folder of `root` (as listed) and its sessions (ADR-075). Personal
@@ -908,7 +917,12 @@ async fn trust_workspace(root: String, state: State<'_, AppState>) -> CmdResult<
         .open_configs()
         .await
         .into_iter()
-        .find(|config| config.workspace_root.as_deref() == Some(Path::new(&root)))
+        // Named by its root as opened, or canonical as the open folders list it (ADR-075).
+        .find(|config| {
+            config.workspace_root.as_deref() == Some(Path::new(&root))
+                || (config.workspace_root.is_some()
+                    && spelaion_config::repository_scope(config) == root)
+        })
         .ok_or("the folder changed; trust it again")?;
     state.change_trust(|trust| trust.trust_if_untrusted(&config))?;
     drop(config);

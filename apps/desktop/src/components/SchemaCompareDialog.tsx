@@ -4,6 +4,7 @@
 // them; the dialog shows its report and asks it for the script, which opens in a new editor tab
 // on the target's connection, never run from here (ADR-026, ADR-053).
 
+import { useConnectionName } from "../folders";
 import { useEffect, useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -39,6 +40,7 @@ export function SchemaCompareDialog() {
 
 function CompareDialog({ source, onClose }: { source: CompareSource; onClose(): void }) {
   const { t } = useTranslation("shell");
+  const shownName = useConnectionName();
   const connections = useApp((s) => s.connections);
   const connected = useApp((s) => s.explorerConnected);
   const sourceConnection = listedConnection(connections, source.connection);
@@ -174,7 +176,7 @@ function CompareDialog({ source, onClose }: { source: CompareSource; onClose(): 
             <span>{t("compare.targetConnection")}</span>
             <select name="targetConnection" value={target} disabled={running} onChange={(e) => { setTarget(e.target.value); job.reset(); }}>
               {targets.map((c) => (
-                <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))}>{c.name}</option>
+                <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))}>{shownName(c)}</option>
               ))}
             </select>
           </label>

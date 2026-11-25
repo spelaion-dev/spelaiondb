@@ -22,7 +22,7 @@ import {
 } from "../commands";
 import { fuzzyMatch } from "../fuzzy";
 import { openFilePath, recentFiles } from "../sqlFiles";
-import { folderSwitchBlocked, isOpenFolder, recentFolders, switchFolder } from "../folders";
+import { addFolder, folderSwitchBlocked, isOpenFolder, recentFolders } from "../folders";
 import type { RecentFolderItem, SavedDiagramItem_Serialize as SavedDiagramItem } from "../bindings";
 import { call, commands } from "../api";
 import { openSavedDiagram } from "../diagramTabs";
@@ -246,9 +246,9 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
         window.setTimeout(() => void openFilePath(entry.path), 0);
         break;
       case "folder":
-        // As from the folder menu: it asks first about what closing the sessions would lose.
+        // As from the folder menu: added beside the open folders, closing nothing (ADR-075).
         onClose();
-        window.setTimeout(() => void switchFolder(entry.path), 0);
+        window.setTimeout(() => void addFolder(entry.path), 0);
         break;
       case "diagram":
         // Stays open with the error if the core cannot read it (ADR-084).

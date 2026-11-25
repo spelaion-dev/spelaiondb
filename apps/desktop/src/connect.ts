@@ -158,8 +158,9 @@ export async function confirmOpenTransactions(sessions: string[], action: "close
  * user accepted; nothing is applied, committed or saved either way. Unsaved `.sql` text is not
  * asked about: tabs come back with it (ADR-036).
  */
-export async function confirmLeaving(action: "quit" | "folder" | "close", open: string[], unkept: string[] = []): Promise<boolean> {
-  const tabs = useApp.getState().tabs;
+export async function confirmLeaving(action: "quit" | "folder" | "close", open: string[], unkept: string[] = [], among?: string[]): Promise<boolean> {
+  // `among`: only these tabs lose their sessions (a folder closing, ADR-075); else every tab.
+  const tabs = useApp.getState().tabs.filter((t) => among === undefined || among.includes(t.id));
   const unsaved = tabs.filter(hasUnsavedEdits).map((t) => t.id);
   // A tab with an open transaction is asked about once, under it (SDB-253).
   const running = runningOutsideTransactions(tabs.filter(isRunning).map((t) => t.id), open);

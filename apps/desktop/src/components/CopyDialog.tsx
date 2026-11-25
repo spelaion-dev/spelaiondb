@@ -5,6 +5,7 @@
 // maps the columns, writes and checks every statement and loads the rows: only the user's
 // choices and the core's answers pass through here.
 
+import { useConnectionName } from "../folders";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
@@ -52,6 +53,7 @@ export function CopyDialog() {
 
 function CopyForm({ request }: { request: CopyRequest }) {
   const { t, i18n } = useTranslation("editor");
+  const shownName = useConnectionName();
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const close = useCopy((s) => s.close);
   const connections = useApp((s) => s.connections);
@@ -299,7 +301,7 @@ function CopyForm({ request }: { request: CopyRequest }) {
                   <option value="">{t("copy.chooseConnection")}</option>
                   {targetChoices.map((c) => (
                     <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))}>
-                      {c.name}
+                      {shownName(c)}
                     </option>
                   ))}
                 </select>
