@@ -296,6 +296,9 @@ enum Request {
     AuditTools {
         reply: Reply<Vec<String>>,
     },
+    AuditFolders {
+        reply: Reply<Vec<String>>,
+    },
     AuditSessions {
         limit: usize,
         reply: Reply<Vec<AuditSession>>,
@@ -614,6 +617,9 @@ impl QueryHistory {
                         }
                         Request::AuditTools { reply } => {
                             let _ = reply.send(store.audit_tools());
+                        }
+                        Request::AuditFolders { reply } => {
+                            let _ = reply.send(store.audit_folders());
                         }
                         Request::AuditSessions { limit, reply } => {
                             let _ = reply.send(store.audit_sessions(limit));
@@ -1266,6 +1272,11 @@ impl QueryHistory {
 
     pub async fn audit_tools(&self) -> Result<Vec<String>, HistoryError> {
         self.request(|reply| Request::AuditTools { reply }).await
+    }
+
+    /// The folders the MCP activity records (ADR-075), for the Activity tab's filter.
+    pub async fn audit_folders(&self) -> Result<Vec<String>, HistoryError> {
+        self.request(|reply| Request::AuditFolders { reply }).await
     }
 
     pub async fn audit_sessions(&self, limit: usize) -> Result<Vec<AuditSession>, HistoryError> {

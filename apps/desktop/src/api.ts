@@ -112,6 +112,7 @@ import {
   type TestReportItem,
   type TestStepItem,
   type McpAccessItem_Serialize,
+  type McpAccessGroupItem_Serialize,
   type McpClientItem_Serialize,
   type McpClientsItem_Serialize,
   type McpInstallPlanItem,
@@ -120,6 +121,7 @@ import {
   type AuditEventItem_Serialize,
   type AuditSessionItem,
   type AuditStatusItem,
+  type AuditFolderItem,
   type ErrorAnswerItem,
   type OnErrorItem,
   type RunOptionsItem_Deserialize,
@@ -207,11 +209,12 @@ export type { ColumnStatsTarget, StatStateItem };
 export type IndexDetails = TableDetails["indexes"][number];
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
 export type McpAccessItem = McpAccessItem_Serialize;
+export type McpAccessGroupItem = McpAccessGroupItem_Serialize;
 export type McpClientItem = McpClientItem_Serialize;
 export type McpClientsItem = McpClientsItem_Serialize;
 export type { McpInstallPlanItem, McpSettingsItem, ToolOutputItem };
 export type AuditEventItem = AuditEventItem_Serialize;
-export type { AuditSessionItem, AuditStatusItem };
+export type { AuditFolderItem, AuditSessionItem, AuditStatusItem };
 export type UpdateStatus = UpdateStatus_Serialize;
 export type InstallStatus = InstallStatus_Serialize;
 /** How this copy of the app gets a new version: only `inApp` may offer "Install and restart". */

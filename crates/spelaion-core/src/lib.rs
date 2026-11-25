@@ -3,6 +3,7 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+mod agent_folders;
 pub mod agent_state;
 mod app_log;
 pub mod audit;
@@ -101,6 +102,7 @@ mod value_view;
 mod variables;
 mod write;
 
+pub use agent_folders::{AgentFolder, ConnectionAgents, FolderAgents, agents_by_folder};
 pub use agent_state::{AgentFailure, FailureCode, access_code, all_agents_read_only};
 pub use app_log::{AppLog, MAX_LOG_BYTES};
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
@@ -292,8 +294,9 @@ pub use shortcuts::{MAX_SHORTCUT_LENGTH, MAX_SHORTCUT_OVERRIDES, ShortcutError, 
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};
 pub use spelaion_store::ShortcutOverride;
 pub use spelaion_store::{
-    AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
-    HistoryOutcome, HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
+    AuditFilter, AuditFolder, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry,
+    HistoryFilter, HistoryOutcome, HistoryPage, HistoryStatus, Snippet, SnippetFilter,
+    SnippetFolder, ToolOutput,
 };
 pub use spelaion_store::{
     BackupPreferences, Bookmark, BookmarkKind, DEFAULT_EDITOR_ZOOM, DEFAULT_INTERFACE_SIZE,

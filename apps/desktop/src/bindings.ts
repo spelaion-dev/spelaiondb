@@ -86,14 +86,22 @@ export const commands = {
 	mcpSettings: () => typedError<McpSettingsItem, string>(__TAURI_INVOKE("mcp_settings")),
 	/**  Read-only mode for every agent (ADR-033): `spelaiondb mcp` reads it on every call. */
 	setMcpReadOnly: (readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_read_only", { readOnly })),
-	/**  Changes only the local write restriction, in the workspace that the user was shown. */
+	/**
+	 *  Changes only the local write restriction of one folder's connection, in the workspace that
+	 *  the user was shown: another folder's connection of the same id keeps its own (ADR-075).
+	 */
 	setMcpConnectionReadOnly: (connection: ConnectionKeyItem_Deserialize, workspace: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_connection_read_only", { connection, workspace, readOnly })),
 	setMcpOutputFormat: (format: ToolOutputItem) => typedError<null, string>(__TAURI_INVOKE("set_mcp_output_format", { format })),
-	/**  What agents can do on each connection, as the core decides it. */
-	mcpAccess: () => typedError<McpAccessItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
+	/**
+	 *  What agents can do on every open folder's connections, each under its folder as that
+	 *  folder decides it, then the personal ones (ADR-033, ADR-075 point 9; decided by the core).
+	 */
+	mcpAccess: () => typedError<McpAccessGroupItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
 	/**  The MCP activity the filter keeps, newest first (ADR-033); secrets masked by the core. */
 	auditEvents: (filter: AuditFilterItem_Deserialize, offset: number, limit: number) => typedError<AuditPageItem_Serialize, string>(__TAURI_INVOKE("audit_events", { filter, offset, limit })),
 	auditTools: () => typedError<string[], string>(__TAURI_INVOKE("audit_tools")),
+	/**  The folders the MCP activity records (ADR-075), for the Activity tab's filter. */
+	auditFolders: () => typedError<string[], string>(__TAURI_INVOKE("audit_folders")),
 	/**  The latest `spelaiondb mcp` processes and their calls. */
 	auditSessions: () => typedError<AuditSessionItem[], string>(__TAURI_INVOKE("audit_sessions")),
 	/**
@@ -1385,6 +1393,11 @@ export type AuditEventItem_Deserialize = {
 	rows?: number | null,
 	durationMs?: number | null,
 	detail?: string | null,
+	/**
+	 *  The connection's folder (ADR-075); none for a personal connection, and for entries
+	 *  written before 0.17.
+	 */
+	folder?: string | null,
 };
 
 /**  One MCP call, with its secrets already masked by the core. */
@@ -1400,6 +1413,11 @@ export type AuditEventItem_Serialize = {
 	rows: number | null,
 	durationMs: number | null,
 	detail: string | null,
+	/**
+	 *  The connection's folder (ADR-075); none for a personal connection, and for entries
+	 *  written before 0.17.
+	 */
+	folder: string | null,
 };
 
 export type AuditFilterItem = AuditFilterItem_Serialize | AuditFilterItem_Deserialize;
@@ -1409,6 +1427,8 @@ export type AuditFilterItem_Deserialize = {
 	tool?: string | null,
 	status?: AuditStatusItem | null,
 	session?: string | null,
+	/**  Only one folder's entries, or only those with none (ADR-075). */
+	folder?: AuditFolderItem | null,
 };
 
 export type AuditFilterItem_Serialize = {
@@ -1416,7 +1436,16 @@ export type AuditFilterItem_Serialize = {
 	tool: string | null,
 	status: AuditStatusItem | null,
 	session: string | null,
+	/**  Only one folder's entries, or only those with none (ADR-075). */
+	folder: AuditFolderItem | null,
 };
+
+/**  The folder the Activity tab keeps (ADR-075). */
+export type AuditFolderItem = 
+/**  Entries of this folder: its canonical root, as the log records it. */
+{ kind: "folder"; root: string } | 
+/**  Entries with no folder: on a personal connection, or written before 0.17. */
+{ kind: "noFolder" };
 
 export type AuditFormatItem = "csv" | "json";
 
@@ -4703,11 +4732,37 @@ export type MappedConnectionItem_Serialize = {
 	change: EngineChangeItem_Serialize,
 };
 
+/**
+ *  One open folder's connections, or the personal ones, with what agents can do on each as
+ *  that folder decides it.
+ */
+export type McpAccessGroupItem = McpAccessGroupItem_Serialize | McpAccessGroupItem_Deserialize;
+
+/**
+ *  One open folder's connections, or the personal ones, with what agents can do on each as
+ *  that folder decides it.
+ */
+export type McpAccessGroupItem_Deserialize = {
+	folder: McpFolderItem,
+	connections: McpAccessItem_Deserialize[],
+};
+
+/**
+ *  One open folder's connections, or the personal ones, with what agents can do on each as
+ *  that folder decides it.
+ */
+export type McpAccessGroupItem_Serialize = {
+	folder: McpFolderItem,
+	connections: McpAccessItem_Serialize[],
+};
+
 /**  What agents can do on one connection, as the core decides it. */
 export type McpAccessItem = McpAccessItem_Serialize | McpAccessItem_Deserialize;
 
 /**  What agents can do on one connection, as the core decides it. */
 export type McpAccessItem_Deserialize = {
+	/**  Its folder (ADR-075): the repository's canonical root, none for a personal connection. */
+	folder?: string | null,
 	id: string,
 	name: string,
 	engine: string,
@@ -4724,6 +4779,8 @@ export type McpAccessItem_Deserialize = {
 
 /**  What agents can do on one connection, as the core decides it. */
 export type McpAccessItem_Serialize = {
+	/**  Its folder (ADR-075): the repository's canonical root, none for a personal connection. */
+	folder: string | null,
 	id: string,
 	name: string,
 	engine: string,
@@ -4805,6 +4862,16 @@ export type McpDiffLineItem = {
 	/**  Lines left out, for a gap. */
 	skipped: number,
 };
+
+/**  Whose connections a group of the MCP page's Security tab holds (ADR-075). */
+export type McpFolderItem = 
+/**
+ *  An open repository folder: its canonical root, the path it was opened as, and whether
+ *  it is trusted.
+ */
+{ kind: "repository"; root: string; path: string; trusted: boolean } | 
+/**  The personal connections, which every MCP server serves. */
+{ kind: "personal" };
 
 export type McpInstallDoneItem = McpInstallDoneItem_Serialize | McpInstallDoneItem_Deserialize;
 

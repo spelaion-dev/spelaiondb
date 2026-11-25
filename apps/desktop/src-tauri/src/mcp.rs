@@ -3,11 +3,12 @@
 
 use spelaion_desktop_macros::command;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use spelaion_config::TrustStore;
 use spelaion_config::mcp_clients::{
     self, CliSource, ClientEnv, InstallState, McpClient, Os, ServerCommand,
 };
+use spelaion_config::{Config, TrustStore};
 use tauri::State;
 
 use crate::dto::*;
@@ -165,7 +166,25 @@ pub async fn set_mcp_read_only(read_only: bool, state: State<'_, AppState>) -> C
         .map_err(|e| e.to_string())
 }
 
-/// Changes only the local write restriction, in the workspace that the user was shown.
+/// The configuration that holds `connection`: its open folder's (ADR-075), or the one shown
+/// for a personal connection, which every folder's configuration has.
+async fn config_of(
+    state: &AppState,
+    connection: &crate::dto::ConnectionKeyItem,
+) -> CmdResult<Arc<Config>> {
+    match &connection.folder {
+        None => Ok(state.config().await),
+        Some(folder) => state
+            .open_configs()
+            .await
+            .into_iter()
+            .find(|config| spelaion_config::repository_scope(config) == *folder)
+            .ok_or_else(|| "the folder of this connection is not open any more".to_string()),
+    }
+}
+
+/// Changes only the local write restriction of one folder's connection, in the workspace that
+/// the user was shown: another folder's connection of the same id keeps its own (ADR-075).
 #[command]
 pub async fn set_mcp_connection_read_only(
     connection: crate::dto::ConnectionKeyItem,
@@ -173,7 +192,7 @@ pub async fn set_mcp_connection_read_only(
     read_only: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let config = state.config().await;
+    let config = config_of(&state, &connection).await?;
     let id = crate::connection_in(&config, &connection)?;
     let entry = config
         .connection(&id)
@@ -203,59 +222,21 @@ pub async fn set_mcp_output_format(
         .map_err(|e| e.to_string())
 }
 
-/// What agents can do on each connection, as the core decides it.
+/// What agents can do on every open folder's connections, each under its folder as that
+/// folder decides it, then the personal ones (ADR-033, ADR-075 point 9; decided by the core).
 #[command]
-pub async fn mcp_access(state: State<'_, AppState>) -> CmdResult<Vec<McpAccessItem>> {
+pub async fn mcp_access(state: State<'_, AppState>) -> CmdResult<Vec<McpAccessGroupItem>> {
     state.reload().await;
-    // Asked as the server asks it: a setting that cannot be read makes every agent read-only,
-    // so the page shows what a running server decides instead of an error.
-    let all_read_only = spelaion_core::all_agents_read_only(
-        false,
-        state
-            .history
-            .mcp_settings()
-            .await
-            .map(|(read_only, _)| read_only),
-    );
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let config = state.config().await;
-    let trusted = config
-        .workspace_root
-        .as_deref()
-        .is_some_and(|root| trust.is_trusted(root));
-    let types = spelaion_config::ConnectionTypes::load(&config, &trust);
-    let mut access = Vec::with_capacity(config.connections.len());
-    for entry in &config.connections {
-        let workspace = spelaion_core::agent_workspace(&config, entry.id.source);
-        let read_only_override = match &workspace {
-            Some(workspace) => state
-                .history
-                .mcp_connection_read_only(workspace.clone(), entry.id.to_string())
-                .await
-                .ok(),
-            None => None,
-        };
-        let view = spelaion_core::agent_view_with_override(
-            entry,
-            trusted,
-            all_read_only,
-            read_only_override.unwrap_or(true),
-        );
-        let kind = entry
-            .file
-            .env
-            .as_deref()
-            .and_then(|env| types.get(env))
-            .map(ConnectionTypeItem::from);
-        access.push(McpAccessItem::new(
-            entry,
-            view,
-            kind,
-            workspace,
-            read_only_override,
-        ));
-    }
-    Ok(access)
+    let open = state.open_configs().await;
+    let shown = state.config().await;
+    Ok(
+        spelaion_core::agents_by_folder(&open, &shown, &trust, &state.history)
+            .await
+            .into_iter()
+            .map(McpAccessGroupItem::from)
+            .collect(),
+    )
 }
 
 /// The MCP activity the filter keeps, newest first (ADR-033); secrets masked by the core.
@@ -280,6 +261,16 @@ pub async fn audit_events(
 #[command]
 pub async fn audit_tools(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     state.history.audit_tools().await.map_err(|e| e.to_string())
+}
+
+/// The folders the MCP activity records (ADR-075), for the Activity tab's filter.
+#[command]
+pub async fn audit_folders(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    state
+        .history
+        .audit_folders()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The latest `spelaiondb mcp` processes and their calls.

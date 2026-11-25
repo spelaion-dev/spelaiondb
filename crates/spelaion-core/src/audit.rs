@@ -188,7 +188,7 @@ pub fn write_audit(
         AuditFormat::Csv => {
             writeln!(
                 out,
-                "time,session,client,connection,tool,statement,status,rows,duration_ms,detail"
+                "time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder"
             )?;
             for entry in entries.iter().map(redacted) {
                 let fields = [
@@ -202,6 +202,9 @@ pub fn write_audit(
                     entry.rows.map(|n| n.to_string()).unwrap_or_default(),
                     entry.duration_ms.map(|n| n.to_string()).unwrap_or_default(),
                     entry.detail.clone().unwrap_or_default(),
+                    // The connection's folder (ADR-075); empty for a personal connection and
+                    // for entries written before 0.17.
+                    entry.folder.clone().unwrap_or_default(),
                 ];
                 let line = fields
                     .iter()
@@ -227,6 +230,7 @@ pub fn write_audit(
                         "rows": e.rows,
                         "duration_ms": e.duration_ms,
                         "detail": e.detail,
+                        "folder": e.folder,
                     })
                 })
                 .collect();
@@ -333,10 +337,12 @@ mod tests {
         let mut lines = text.split("\r\n").flat_map(|l| l.split('\n'));
         assert_eq!(
             lines.next(),
-            Some("time,session,client,connection,tool,statement,status,rows,duration_ms,detail")
+            Some(
+                "time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder"
+            )
         );
         assert!(
-            text.contains("2025-11-07T21:13:20.123Z,s1,claude-code,~/shop,run_query,\"select 1,\n2\",ok,2,5,\"note, with \"\"quotes\"\"\"\n"),
+            text.contains("2025-11-07T21:13:20.123Z,s1,claude-code,~/shop,run_query,\"select 1,\n2\",ok,2,5,\"note, with \"\"quotes\"\"\",\n"),
             "{text}"
         );
         assert!(
@@ -364,6 +370,30 @@ mod tests {
         assert_eq!(parsed[0]["status"], "refused");
         assert_eq!(parsed[0]["time"], "2025-11-07T21:13:20.123Z");
         assert_eq!(parsed[0]["tool"], "run_query");
+        assert_eq!(parsed[0]["folder"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn both_exports_carry_the_folder() {
+        // ADR-075: two folders' `prod/orders` are told apart in an export too.
+        let of = |folder: &str| AuditEntry {
+            folder: Some(folder.into()),
+            ..entry("select 1", Decision::Executed)
+        };
+        let entries = [of("/work/service-a"), of("/work/service-b")];
+        let mut csv = Vec::new();
+        write_audit(&entries, AuditFormat::Csv, &mut csv).unwrap();
+        let csv = String::from_utf8(csv).unwrap();
+        assert!(
+            csv.contains(",ok,2,5,\"note, with \"\"quotes\"\"\",/work/service-a\n"),
+            "{csv}"
+        );
+        assert!(csv.contains(",/work/service-b\n"), "{csv}");
+        let mut json = Vec::new();
+        write_audit(&entries, AuditFormat::Json, &mut json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(parsed[0]["folder"], "/work/service-a");
+        assert_eq!(parsed[1]["folder"], "/work/service-b");
     }
 
     #[test]

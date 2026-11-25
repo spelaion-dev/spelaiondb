@@ -4838,6 +4838,8 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .mcp-access th { font-weight: 600; color: var(--muted); }
 .mcp-access-readWrite { color: var(--tone-amber); font-weight: 600; }
 .mcp-access-hidden { color: var(--muted); }
+/* One open folder's connections, or the personal ones (ADR-075). */
+.mcp-access .mcp-folder-row th { color: var(--fg); padding-top: var(--space-md); border-bottom-color: var(--line-strong); }
 @media (max-width: 900px) {
   .mcp-configuration { grid-template-columns: 1fr; }
 }

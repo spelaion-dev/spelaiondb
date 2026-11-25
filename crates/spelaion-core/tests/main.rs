@@ -15,6 +15,7 @@ mod engines;
 mod serial;
 mod support;
 
+mod agent_folders;
 mod agents_engines;
 mod babelfish;
 mod backup;

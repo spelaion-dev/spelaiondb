@@ -100,7 +100,11 @@
     "refusedCount_other": "{{count}} refused",
     "failedCount_one": "{{count}} failed",
     "failedCount_other": "{{count}} failed",
-    "openSession": "Show calls"
+    "openSession": "Show calls",
+    "folder": "Folder",
+    "allFolders": "All folders",
+    "noFolder": "No folder",
+    "noFolderHint": "A personal connection, or a call recorded before folders were"
   },
   "security": {
     "output": {
@@ -122,6 +126,10 @@
       "agents": "Agents can",
       "type": "Type and its safeguards in the app",
       "none": "No connections yet.",
+      "oneFolder": "An agent's MCP server serves one folder, the one it is started in or given with --workspace, and your personal connections. Each folder's connections show under it as a server started there sees them.",
+      "personal": "Personal connections",
+      "folderUntrusted": "not trusted",
+      "noneInFolder": "No connections in this folder.",
       "readOnly": "Read only",
       "readWrite": "Read and write",
       "notExposed": "Nothing: not exposed to agents",

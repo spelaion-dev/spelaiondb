@@ -213,10 +213,10 @@ let app = startApp({ SPELAION_E2E_STARTUP_CHOICE: "start-over" });
 
 /** Runs `spelaiondb mcp` as an AI client would (stdio, JSON-RPC): `list_connections`, then each
  *  call, as the client "smoke-agent". Needs the CLI, built with the app (see the top). */
-async function agentSession(calls) {
+async function agentSession(calls, workspace = demo) {
   const cli = process.env.SPELAION_E2E_CLI ?? join(root, "target/release/spelaiondb" + (process.platform === "win32" ? ".exe" : ""));
   if (!existsSync(cli)) throw new Error(`${cli} is missing: in apps/desktop, run npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli`);
-  const agent = spawn(cli, ["mcp", "--workspace", demo], {
+  const agent = spawn(cli, ["mcp", "--workspace", workspace], {
     env: { ...process.env, SPELAION_USER_DIR: userDir },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -11267,7 +11267,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByRole("button", { name: "Export CSV" }).click();
   await mcp.getByText("4 events exported to", { exact: false }).waitFor();
   const activityCsv = readFileSync(csvPath, "utf8");
-  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail\n"), activityCsv);
+  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder\n"), activityCsv);
   assert.ok(activityCsv.includes(",smoke-agent,shop,execute_write,alter user bob password '***',refused,"), activityCsv);
   assert.ok(!activityCsv.includes("hunter2"), activityCsv);
   const jsonPath = join(userDir, "activity.json");
@@ -11295,6 +11295,88 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await events.getByText("Log cleared").waitFor();
   await page.getByRole("button", { name: "Connections", exact: true }).click();
   await mcp.waitFor({ state: "detached" });
+
+  step("MCP server page with two folders open: each folder's connections and activity apart (SDB-503)");
+  {
+    // A second repository folder with a connection of the same id as the demo's `shop`, on a
+    // copy of its database, that lets agents write: its local restriction then shows.
+    const second = join(userDir, "second-folder");
+    mkdirSync(join(second, ".spelaion", "connections"), { recursive: true });
+    copyFileSync(join(demo, "data", "shop.db"), join(second, "shop.db"));
+    writeFileSync(
+      join(second, ".spelaion", "connections", "shop.toml"),
+      `schema_version = 1\nname = "Second shop"\nengine = "sqlite"\ndatabase = '${join(second, "shop.db")}'\n\n[mcp]\nexposed = true\nwrites = "allow"\n`,
+    );
+    const invoke = (command, args) => page.evaluate(([c, a]) => window.__TAURI_INTERNALS__.invoke(c, a), [command, args]);
+    const opened = await invoke("add_folder", { path: second });
+    const secondRoot = opened.folders.find((f) => f.path === second).root;
+    await invoke("trust_workspace", { root: second });
+    const demoRoot = opened.folders.find((f) => f.path !== second).root;
+
+    // Security: each folder's `shop` under its folder; the override of one leaves the other.
+    await page.getByRole("button", { name: "MCP server", exact: true }).click();
+    await mcp.getByRole("tab", { name: "Security" }).click();
+    await mcp.getByText("An agent's MCP server serves one folder", { exact: false }).waitFor();
+    const shopIn = (root) => mcp.locator(`tbody[data-folder="${root.replaceAll("\\", "\\\\")}"] tr[data-connection="shop"]`);
+    await shopIn(secondRoot).waitFor();
+    await shopIn(demoRoot).waitFor();
+    await mcp.getByRole("rowgroup", { name: "second-folder" }).waitFor();
+    await mcp.getByRole("rowgroup", { name: "Personal connections" }).waitFor();
+    await shot("sdb-503-security-folders");
+    const restriction = (root) => shopIn(root).getByRole("checkbox", { name: /^Make agents read-only on / });
+    // The box shows what the core stored: it changes once the change is saved and read back,
+    // not at the click (`setChecked` would see it unchanged at once).
+    const restrict = async (root, on) => {
+      await restriction(root).click();
+      await page.waitForFunction(
+        ([sel, want]) => document.querySelector(sel)?.checked === want && !document.querySelector(sel)?.disabled,
+        [`tbody[data-folder="${root.replaceAll("\\", "\\\\")}"] tr[data-connection="shop"] input[type=checkbox]`, on],
+      );
+    };
+    const demoBefore = await restriction(demoRoot).isChecked();
+    assert.equal(await restriction(secondRoot).isChecked(), false, "no restriction yet");
+    await shopIn(secondRoot).getByText("Read and write").waitFor();
+    await restrict(secondRoot, true);
+    await shopIn(secondRoot).getByText("Local MCP restriction.").waitFor();
+    assert.equal(await restriction(demoRoot).isChecked(), demoBefore, "the demo folder's shop keeps its own override");
+    // The restriction is the second folder's: a server started there refuses the write.
+    await agentSession([["execute_write", { connection: "shop", sql: "insert into product (name) values ('restricted')" }]], second);
+
+    // Activity: a server started in each folder, told apart and filtered by folder.
+    await agentSession([["run_query", { connection: "shop", sql: "select 'from the second folder'" }]], second);
+    await agentSession([["run_query", { connection: "shop", sql: "select 'from the demo folder'" }]]);
+    await mcp.getByRole("tab", { name: "Activity" }).click();
+    await mcp.getByRole("button", { name: "Refresh" }).click();
+    const folderFilter = mcp.getByLabel("Folder", { exact: true });
+    await folderFilter.locator("option", { hasText: "second-folder" }).waitFor({ state: "attached" });
+    await folderFilter.selectOption({ label: "second-folder" });
+    await events.getByRole("row").filter({ hasText: "from the second folder" }).getByText("second-folder").waitFor();
+    await events.getByRole("row").filter({ hasText: "insert into product (name) values ('restricted')" }).getByText("Refused").waitFor();
+    assert.equal(await events.getByText("from the demo folder").count(), 0);
+    // Every call shown is the second folder's (its `list_connections` calls too).
+    const shownFolders = await events.locator("tbody tr td:nth-child(2)").allInnerTexts();
+    assert.ok(shownFolders.length >= 2 && shownFolders.every((name) => name === "second-folder"), shownFolders.join(" | "));
+    await shot("sdb-503-activity-by-folder");
+    // The export carries the folder.
+    const folderCsv = join(userDir, "activity-second.csv");
+    await page.evaluate((path) => { window.__spelaionSavePath = path; }, folderCsv);
+    await mcp.getByRole("button", { name: "Export CSV" }).click();
+    await mcp.getByText(`${shownFolders.length} events exported to`, { exact: false }).waitFor();
+    await page.evaluate(() => { delete window.__spelaionSavePath; });
+    const exported = readFileSync(folderCsv, "utf8").trimEnd().split("\n").slice(1);
+    assert.ok(exported.length === shownFolders.length && exported.every((line) => line.endsWith(`,${secondRoot}`)), exported.join("\n"));
+    // Entries with no folder: the clearing record.
+    await folderFilter.selectOption("noFolder");
+    await events.getByText("Log cleared").waitFor();
+    await folderFilter.selectOption("all");
+    // Leave the second folder's restriction as it was.
+    await mcp.getByRole("tab", { name: "Security" }).click();
+    await restrict(secondRoot, false);
+
+    await page.getByRole("button", { name: "Connections", exact: true }).click();
+    await mcp.waitFor({ state: "detached" });
+    await invoke("close_folder", { root: secondRoot });
+  }
 
   step("tabs: close all, then close others asks once for a transaction and a running query, keeps pinned tabs, and reopen brings tabs back disconnected");
   {

@@ -1268,6 +1268,119 @@ async fn audit_entries_record_the_folder_the_server_serves() {
     assert_eq!(app_store(&p.user_dir).recent(1).unwrap()[0].folder, None);
 }
 
+/// ADR-075 (SDB-503): the MCP page's local restriction of one folder's connection, set in the
+/// scope the page shows for that row (`agents_by_folder`, with every folder open), is what a
+/// server started in that folder obeys; a server started in the other folder, on a connection
+/// of the same id, keeps writing. The restriction is a safeguard: it must land where it says.
+#[tokio::test]
+async fn the_restriction_set_for_one_folders_row_holds_for_a_server_started_there() {
+    let user_dir = temp("restrict-folder-user");
+    let mut repos = Vec::new();
+    for name in ["restrict-a", "restrict-b"] {
+        let repo = temp(name);
+        let db = database(&repo);
+        let connections = repo.join(".spelaion/connections");
+        std::fs::create_dir_all(&connections).unwrap();
+        std::fs::write(connections.join("shop.toml"), writable_connection(&db, "")).unwrap();
+        let config = spelaion_config::load(Some(&repo), &user_dir);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+        repos.push((repo, db));
+    }
+    // The page's list, with both folders open and `b` the one shown.
+    let open: Vec<std::sync::Arc<spelaion_config::Config>> = repos
+        .iter()
+        .map(|(repo, _)| std::sync::Arc::new(spelaion_config::load(Some(repo), &user_dir)))
+        .collect();
+    let history = spelaion_core::QueryHistory::open(spelaion_config::state_db(&user_dir)).unwrap();
+    let trust = TrustStore::load(&user_dir).unwrap();
+    let groups = spelaion_core::agents_by_folder(&open, &open[1], &trust, &history).await;
+    // The row of `a`'s `shop`, though `a` is not the folder shown.
+    let row = &groups[0].connections[0];
+    assert_eq!(row.entry.id.to_string(), "shop");
+    history
+        .set_mcp_connection_read_only(
+            row.override_scope.clone().expect("a scope"),
+            row.entry.id.to_string(),
+            true,
+        )
+        .await
+        .unwrap();
+    let in_a = server(Some(&repos[0].0), &user_dir, false);
+    let in_b = server(Some(&repos[1].0), &user_dir, false);
+    let refused_write = write(&in_a, "shop", INSERT).await;
+    assert!(refused(&refused_write), "{}", body(&refused_write));
+    assert!(
+        body(&refused_write).contains("local MCP restriction"),
+        "{}",
+        body(&refused_write)
+    );
+    assert_eq!(rows(&repos[0].1), 1);
+    let allowed = write(&in_b, "shop", INSERT).await;
+    assert!(!refused(&allowed), "{}", body(&allowed));
+    assert_eq!(rows(&repos[1].1), 2);
+    // And the page reads it back on that row only.
+    let groups = spelaion_core::agents_by_folder(&open, &open[1], &trust, &history).await;
+    assert_eq!(groups[0].connections[0].read_only_override, Some(true));
+    assert_eq!(groups[1].connections[0].read_only_override, Some(false));
+}
+
+/// ADR-075 point 9 (SDB-503): a server serves the one folder it is started in and the personal
+/// connections, never the folders the app has open. Another trusted folder the window holds,
+/// remembered in the personal folder as the app keeps it, lends it nothing: not its
+/// connections, not its connection of the same id.
+#[tokio::test]
+async fn a_server_lists_nothing_of_another_folder_the_app_has_open() {
+    let user_dir = temp("open-folders-user");
+    let mut repos = Vec::new();
+    for (name, id) in [("open-a", "orders"), ("open-b", "billing")] {
+        let repo = temp(name);
+        let db = database(&repo);
+        let connections = repo.join(".spelaion/connections");
+        std::fs::create_dir_all(&connections).unwrap();
+        // Both have `shared`; only `b` has `billing`.
+        for file in [format!("{id}.toml"), "shared.toml".to_string()] {
+            std::fs::write(connections.join(file), writable_connection(&db, "")).unwrap();
+        }
+        let config = spelaion_config::load(Some(&repo), &user_dir);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+        repos.push(repo);
+    }
+    // The window holds both folders open, as the desktop remembers them.
+    std::fs::write(
+        user_dir.join("desktop-open-folders.json"),
+        serde_json::json!({ "schema_version": 1, "folders": repos }).to_string(),
+    )
+    .unwrap();
+    let server = server(Some(&repos[0]), &user_dir, false);
+    let list = listed(&server).await;
+    assert!(list.contains("- orders"), "{list}");
+    assert!(list.contains("- shared"), "{list}");
+    assert!(
+        !list.contains("billing"),
+        "another open folder's connection: {list}"
+    );
+    assert_eq!(
+        list.matches("- shared").count(),
+        1,
+        "one connection per id: {list}"
+    );
+    let other = query(&server, "billing", "select count(*) from notes").await;
+    assert_eq!(code(&other).0, "not_exposed", "{}", body(&other));
+    // `shared` is this folder's, and its calls are recorded under this folder only.
+    let read = query(&server, "shared", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    let root = std::fs::canonicalize(&repos[0])
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(
+        app_store(&user_dir).recent(1).unwrap()[0].folder.as_deref(),
+        Some(root.as_str())
+    );
+}
+
 #[tokio::test]
 async fn a_broken_file_exposes_nothing_until_it_is_fixed() {
     let p = personal(false);

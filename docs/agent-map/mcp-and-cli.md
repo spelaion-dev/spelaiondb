@@ -46,5 +46,11 @@
   of the folder the server serves for a repository connection, none for a personal one or for
   entries from before 0.17; `audit_folder` takes it from the call's snapshot through
   `ConnectionKey`); the app's Activity tab reads it through `spelaion-core::audit`, which masks
-  secrets (`redact_secrets`) before anything is shown or exported. Clearing (`clear_audit`) is
+  secrets (`redact_secrets`) before anything is shown or exported. The Activity tab filters by
+  folder (`AuditFilter.folder`: `AuditFolder::Folder(root)` or `NoFolder`, a store query) and
+  lists the recorded folders (`audit_folders`); both exports end with a `folder` column. The
+  Security tab's rows come from `spelaion_core::agents_by_folder` (`agent_folders.rs`, SDB-503):
+  each open repository folder's connections under it, decided with that folder's trust, types
+  and override scope, then the personal ones; `set_mcp_connection_read_only` finds the
+  connection's own folder by its key. The server itself never reads the open folders. Clearing (`clear_audit`) is
   the only delete and leaves a record.
