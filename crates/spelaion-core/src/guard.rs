@@ -770,9 +770,13 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
 /// A statement as its engine's dialect reads it (ADR-065, SDB-518): which bytes are code and
 /// which are comments, from the dialect's own `code_ranges`, the reading its splitter shares.
 /// The guard never decides on its own what a comment is: a `#` is one only where the dialect
-/// says so, and a block comment nests only where the dialect nests it.
+/// says so, and a block comment nests only where the dialect nests it. Its first word is the
+/// dialect's scanner's, where the dialect has one (`Dialect::first_word`, SDB-455).
 struct Lexical<'a> {
     sql: &'a str,
+    /// The statement's first word, as the dialect's scanner reads it; `None` for a dialect
+    /// without one, whose first word is read from `code` and `comments`.
+    scanned_first_word: Option<String>,
     /// Whether each byte is code.
     code: Vec<bool>,
     /// The comments, in order.
@@ -819,6 +823,7 @@ impl<'a> Lexical<'a> {
         }
         Self {
             sql,
+            scanned_first_word: dialect.first_word(sql),
             code,
             comments,
         }
@@ -827,6 +832,9 @@ impl<'a> Lexical<'a> {
     /// The first word of the statement in lower case, after white space and comments; empty
     /// when something else comes first (a string, a quoted name, a sign).
     fn first_word(&self) -> String {
+        if let Some(word) = &self.scanned_first_word {
+            return word.clone();
+        }
         let mut i = 0;
         let mut comments = self.comments.iter().peekable();
         while i < self.sql.len() {

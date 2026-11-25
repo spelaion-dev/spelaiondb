@@ -108,7 +108,9 @@
   from `Dialect::sql_mode`): the guard asks if any reading is risky and a read-only connection
   refuses unless every reading passes; the default reading is always one of them.
   A SQL Server batch the parser cannot read (T-SQL needs no `;`) is read token by token: a
-  `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word in it asks. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word in it asks. The guard's first word is the
+  dialect's scanner's where the dialect has one (`Dialect::first_word`, SDB-455: SQL Server);
+  otherwise `Lexical` reads it through the dialect's `code_ranges`. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
   closes the ones a connection type says are idle too long, never with a transaction open
   (ADR-029): every use goes through its `Tracked` connection, and
   nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's
