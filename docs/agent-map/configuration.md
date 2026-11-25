@@ -24,6 +24,13 @@
   `definition.rs` (SDB-426) is what a connection's session is opened from, without secrets
   (its file, its network profile, `user.toml`, the connection types, the repository and its
   trust), compared before a session is made from another one; nothing secret is read for it.
+  With several folders open, `Config::connection_definition_open` (each open folder's `Config`
+  and whether it is trusted) makes a personal connection's definition cover what it reads of
+  every folder (its trust, its types, its `known_hosts`, and the profile it names wherever it
+  comes from), so a change in any of them stops its sessions being reused (SDB-526); a folder's
+  connection's, and every one with one folder open, is `connection_definition`'s. It and the
+  resolver find the folders and the profile in one place, `folders.rs`: never look them up
+  twice.
   Poolers and bastions (SDB-396): a PostgreSQL connection's `pooler` (`session` or
   `transaction`), MySQL's and MariaDB's `cleartext_password` and the `databases` a MySQL,
   MariaDB or SQL Server connection shows load only on those engines (`load.rs`); a pooler in
