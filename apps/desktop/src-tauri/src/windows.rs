@@ -20,6 +20,7 @@ use tauri::{Manager, State};
 use tauri_specta::Event as _;
 use tokio::sync::oneshot;
 
+use crate::dto::ConnectionKeyItem;
 use crate::{AppState, CmdResult};
 
 /// The main window's label (`tauri.conf.json`).
@@ -29,9 +30,10 @@ pub const MAIN: &str = "main";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowKind {
     Main,
-    /// One connection, by its id: the window's explorer and pickers offer only it.
+    /// One connection, by its identity (ADR-075): the window's explorer and pickers offer
+    /// only it.
     Connection {
-        connection: String,
+        connection: ConnectionKeyItem,
     },
     /// The results of the editor tab `tab` (its session key) of the window `owner`.
     Results {
@@ -239,7 +241,7 @@ pub enum WindowContextItem {
     #[serde(rename_all = "camelCase")]
     Connection {
         label: String,
-        connection_id: String,
+        connection: ConnectionKeyItem,
     },
     /// The results of `owner`'s editor tab `tab` (its session key).
     #[serde(rename_all = "camelCase")]
@@ -268,10 +270,9 @@ pub struct ResultsWindowClosed {
 pub fn window_context(window: tauri::Window, state: State<'_, AppState>) -> WindowContextItem {
     let label = window.label().to_owned();
     match state.windows.kind(&label) {
-        Some(WindowKind::Connection { connection }) => WindowContextItem::Connection {
-            label,
-            connection_id: connection,
-        },
+        Some(WindowKind::Connection { connection }) => {
+            WindowContextItem::Connection { label, connection }
+        }
         Some(WindowKind::Results { owner, tab }) => {
             WindowContextItem::Results { label, owner, tab }
         }
@@ -283,11 +284,13 @@ pub fn window_context(window: tauri::Window, state: State<'_, AppState>) -> Wind
 /// own sessions, over the same core. Nothing is connected or run until its page asks.
 #[command]
 pub async fn open_connection_window(
-    connection: String,
+    connection: ConnectionKeyItem,
     title: String,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
+    // Only a connection of the folder open gets a window (ADR-075).
+    crate::connection_in(&*state.config.read().await, &connection)?;
     let label = state.windows.add(WindowKind::Connection { connection });
     let size = interface_size(&state).await;
     if let Err(e) = crate::open_window(&app, &label, &title, size) {
@@ -418,7 +421,10 @@ mod tests {
 
     fn connection(id: &str) -> WindowKind {
         WindowKind::Connection {
-            connection: id.to_owned(),
+            connection: ConnectionKeyItem {
+                folder: None,
+                id: id.to_owned(),
+            },
         }
     }
 

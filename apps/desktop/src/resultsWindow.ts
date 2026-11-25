@@ -86,7 +86,7 @@ export async function reattachResults(tab: string): Promise<void> {
 
 /** Opens `connection` in a window of its own (SDB-30). */
 export async function openConnectionWindow(connection: ConnectionItem): Promise<string> {
-  return call(commands.openConnectionWindow(connection.id, i18n.t("app:detach.connectionTitle", { name: connection.name })));
+  return call(commands.openConnectionWindow({ folder: connection.folder, id: connection.id }, i18n.t("app:detach.connectionTitle", { name: connection.name })));
 }
 
 /** The tab's window: sends what its panel shows to the results window `label`. */
