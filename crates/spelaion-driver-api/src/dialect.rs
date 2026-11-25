@@ -59,6 +59,15 @@ pub trait Dialect: Send + Sync {
         code_ranges(script, standard_skip)
     }
 
+    /// The first word of `statement` in lower case, read by this dialect's lexical scanner
+    /// (ADR-065): after white space and comments, the letters its first code starts with; empty
+    /// when a string, a quoted name or a sign comes first. The guard decides from it when the
+    /// SQL parser cannot read a statement. `None` for a dialect whose readers have not moved
+    /// onto a scanner: the guard then reads the statement through [`Dialect::code_ranges`].
+    fn first_word(&self, _statement: &str) -> Option<String> {
+        None
+    }
+
     /// Whether this is a language that is not SQL (ADR-056), whose statements become requests
     /// ([`Dialect::to_request`]).
     fn reads_requests(&self) -> bool {
