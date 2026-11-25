@@ -246,9 +246,9 @@ async function openSessionInner(session: string, key: ConnectionKey): Promise<st
   const connect = () => call(commands.connect(session, key, null, false, editor));
   let outcome = await connect();
   if (outcome.kind === "untrusted") {
-    const workspace = app.workspace?.workspace ?? null;
-    if (!(await dialogs.askTrust(workspace))) return null;
-    useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace ?? "")));
+    // The folder the connection reads (ADR-075), which may not be the one shown.
+    if (!(await dialogs.askTrust(outcome.root))) return null;
+    useApp.getState().setWorkspace(await call(commands.trustWorkspace(outcome.root)));
     outcome = await connect();
   }
   const reviewed = await reviewChanges(outcome, connect);

@@ -1981,8 +1981,9 @@ pub enum ConnectOutcome {
     AuthFailed { message: String, can_remember: bool },
     /// The user declined an SSH question or cancelled an authentication prompt.
     Cancelled,
-    /// The repository is not trusted: ask before resolving anything.
-    Untrusted,
+    /// The repository `root` is not trusted: ask before resolving anything. With several
+    /// folders open (ADR-075) it is the folder the connection reads, not always the one shown.
+    Untrusted { root: String },
     /// A repository connection or tunnel is new or changed since the repository was trusted
     /// (ADR-022): show the change and ask before resolving anything.
     Changed {
@@ -2027,7 +2028,10 @@ impl From<spelaion_core::SkippedSetup> for SkippedSetupItem {
 )]
 pub enum EditorAccessOutcome {
     Ready,
-    Untrusted,
+    /// The connection's repository `root` is not trusted.
+    Untrusted {
+        root: String,
+    },
     Changed {
         /// `connection:<id>`, for `accept_change`.
         item: String,
@@ -5768,8 +5772,8 @@ pub enum ConnectionTestOutcome {
         /// The connection's TLS does not check its server (SDB-395), from its resolved form.
         tls_warning: Option<TlsWarningItem>,
     },
-    /// The repository is not trusted: ask before resolving anything.
-    Untrusted,
+    /// The repository `root` is not trusted: ask before resolving anything.
+    Untrusted { root: String },
     /// A repository connection or tunnel is new or changed since it was trusted (ADR-022).
     Changed {
         item: String,

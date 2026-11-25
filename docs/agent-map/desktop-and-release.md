@@ -266,7 +266,16 @@
   `restore_tabs_for_workspace` restores every open folder's and the window's, in the window's
   order. So a tab on a personal connection, or none, stays across a change of folder, and the
   page never names a folder key itself. History and saved queries list every open folder's
-  (`library.rs`'s `open_scopes`).
+  (`library.rs`'s `open_scopes`). Every command that takes a connection finds it with
+  `AppState::connection_config` (SDB-502): the configuration of the open folder its identity
+  names (the shown one for a personal connection), then `connection_in`; never
+  `connection_in(&state.config())`, which only knows the shown folder. Where a new or imported
+  repository connection goes is `folder_config(repository)` (`add_connection`'s and the
+  import's `repository`, the shown folder when none). `list_connections` lists every open
+  folder's connections and the personal ones once (`listed_connections`), each with its own
+  folder's types, and a connection's sessions are told apart by folder as well as id. An
+  "untrusted" outcome (`ConnectOutcome`, `ConnectionTestOutcome`, `EditorAccessOutcome`) names
+  the folder it is about (`root`), which the page trusts: not always the shown one.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.
