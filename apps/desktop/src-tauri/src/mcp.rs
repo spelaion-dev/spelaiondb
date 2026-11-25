@@ -168,16 +168,16 @@ pub async fn set_mcp_read_only(read_only: bool, state: State<'_, AppState>) -> C
 /// Changes only the local write restriction, in the workspace that the user was shown.
 #[command]
 pub async fn set_mcp_connection_read_only(
-    connection: String,
+    connection: crate::dto::ConnectionKeyItem,
     workspace: String,
     read_only: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let config = state.config.read().await;
-    let id = crate::parse_id(&connection);
+    let id = crate::connection_in(&config, &connection)?;
     let entry = config
         .connection(&id)
-        .ok_or_else(|| format!("unknown connection: {connection}"))?;
+        .ok_or_else(|| format!("unknown connection: {}", connection.id))?;
     if !entry.file_path.is_file()
         || spelaion_core::agent_workspace(&config, entry.id.source).as_deref()
             != Some(workspace.as_str())

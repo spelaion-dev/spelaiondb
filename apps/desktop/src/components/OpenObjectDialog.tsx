@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { explorerSession } from "../windowContext";
+import { connectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands, type FoundObjectItem } from "../api";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
@@ -70,7 +71,7 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
       void (async () => {
         try {
           // The tree's own view: its filter and whether it shows system schemas (ADR-025).
-          const filter = await call(commands.getExplorerFilter(connectionId));
+          const filter = await call(commands.getExplorerFilter(connectionKey(connectionId)));
           const showSystem = usePreferences.getState().explorer.showSystem;
           const answer = await call(
             commands.searchObjects(explorerSession(connectionId), text, filter.schemas, filter.objects, showSystem),

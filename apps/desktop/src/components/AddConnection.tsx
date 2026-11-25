@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { explorerSession } from "../windowContext";
+import { connectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import {
   call,
@@ -90,7 +91,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
       try {
         if (!(await ensureEditorAccess(editing))) { close(); return; }
         // The "Serialize" variant only differs in optional markers: same fields.
-        const edited = await call(commands.connectionDraft(editing));
+        const edited = await call(commands.connectionDraft(connectionKey(editing)));
         const draft = edited.draft as ConnectionDraft;
         setRevision(edited.revision);
         setPasswordStored(edited.passwordStored);
@@ -797,7 +798,7 @@ function ConnectionForm(props: {
     setTestError(null);
     try {
       const attempt = () =>
-        test.run((job, onStep) => call(commands.testConnection(request, typedPassword || null, editing ?? null, networkOnly, job, onStep)));
+        test.run((job, onStep) => call(commands.testConnection(request, typedPassword || null, editing ? connectionKey(editing) : null, networkOnly, job, onStep)));
       let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
@@ -835,7 +836,7 @@ function ConnectionForm(props: {
       if (editing) {
         // The local setting first: if it cannot change, nothing was written yet.
         if (historyEnabled !== savedHistory) await saveHistoryPreference(editing, historyEnabled);
-        await call(commands.updateConnection(editing, request, stored, props.revision ?? ""));
+        await call(commands.updateConnection(connectionKey(editing), request, stored, props.revision ?? ""));
       } else {
         const id = await call(commands.addConnection(request, stored));
         await refreshConnections();

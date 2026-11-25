@@ -4,6 +4,7 @@
 
 import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
 import { explorerSession } from "./windowContext";
+import { connectionKey } from "./connectionKey";
 import { runningOutsideTransactions } from "./closeQuestion";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
@@ -218,7 +219,7 @@ async function openSessionInner(session: string, connectionId: string): Promise<
   const name = connection?.name ?? connectionId;
   const editor = isEditorSession(session);
 
-  const connect = () => call(commands.connect(session, connectionId, null, false, editor));
+  const connect = () => call(commands.connect(session, connectionKey(connectionId), null, false, editor));
   let outcome = await connect();
   if (outcome.kind === "untrusted") {
     const workspace = app.workspace?.workspace ?? null;
@@ -236,7 +237,7 @@ async function openSessionInner(session: string, connectionId: string): Promise<
     if (outcome.kind === "authFailed") error = outcome.message;
     const answer = await dialogs.askPassword(name, outcome.canRemember, error);
     if (!answer) return null;
-    outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember, editor));
+    outcome = await call(commands.connect(session, connectionKey(connectionId), answer.password, answer.remember, editor));
   }
   if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables" || outcome.kind === "cancelled") return null;
   // Setup statements the connection skipped (ADR-037) are said in the tab until dismissed.

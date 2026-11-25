@@ -68,7 +68,7 @@ export const commands = {
 	/**  Read-only mode for every agent (ADR-033): `spelaiondb mcp` reads it on every call. */
 	setMcpReadOnly: (readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_read_only", { readOnly })),
 	/**  Changes only the local write restriction, in the workspace that the user was shown. */
-	setMcpConnectionReadOnly: (connection: string, workspace: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_connection_read_only", { connection, workspace, readOnly })),
+	setMcpConnectionReadOnly: (connection: ConnectionKeyItem_Deserialize, workspace: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_connection_read_only", { connection, workspace, readOnly })),
 	setMcpOutputFormat: (format: ToolOutputItem) => typedError<null, string>(__TAURI_INVOKE("set_mcp_output_format", { format })),
 	/**  What agents can do on each connection, as the core decides it. */
 	mcpAccess: () => typedError<McpAccessItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
@@ -378,23 +378,23 @@ export const commands = {
 	 *  any: its stored password is used when none is typed. `network_only` stops before logging
 	 *  in. The steps, their errors and the diagnostics come from the core, redacted.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null, networkOnly: boolean, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, job, onStep })),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: ConnectionKeyItem_Deserialize | null, networkOnly: boolean, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, job, onStep })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
 	 *  configuration. Returns the new connection's identifier.
 	 */
 	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<string, string>(__TAURI_INVOKE("add_connection", { draft, password })),
 	/**  Checks whether an existing connection can be opened in the editor. */
-	connectionEditorAccess: (connection: string) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
+	connectionEditorAccess: (connection: ConnectionKeyItem_Deserialize) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
 	/**  The form of an existing connection, to edit it. */
-	connectionDraft: (connection: string) => typedError<EditedConnectionItem_Serialize, string>(__TAURI_INVOKE("connection_draft", { connection })),
+	connectionDraft: (connection: ConnectionKeyItem_Deserialize) => typedError<EditedConnectionItem_Serialize, string>(__TAURI_INVOKE("connection_draft", { connection })),
 	/**
 	 *  Saves an edited connection (same file; for `keychain`, a typed password replaces the
 	 *  stored one) and reloads the configuration.
 	 */
-	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
+	updateConnection: (connection: ConnectionKeyItem_Deserialize, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
 	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
-	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
+	deleteConnection: (connection: ConnectionKeyItem_Deserialize) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
 	/**
 	 *  The form mapped to another engine (ADR-030): what still applies is kept, the rest is
 	 *  changed or dropped by the core; nothing is saved until the form is.
@@ -404,16 +404,16 @@ export const commands = {
 	 *  Duplicates a connection next to the original (ADR-030). A stored password is copied to the
 	 *  copy's own keychain entry by the core; a repository connection must be as trusted.
 	 */
-	duplicateConnection: (connection: string) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
+	duplicateConnection: (connection: ConnectionKeyItem_Deserialize) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
 	/**
 	 *  Moves a connection to another folder (`""` for none) in its layer. The core moves its
 	 *  file, its keychain password and, for a repository connection, what trust pinned for it,
 	 *  without adding any (ADR-022); its explorer filter, bookmarks, history setting and saved
 	 *  tabs follow. A connection in use is not moved: the UI disconnects it first.
 	 */
-	moveConnection: (connection: string, folder: string) => typedError<MovedItem, string>(__TAURI_INVOKE("move_connection", { connection, folder })),
+	moveConnection: (connection: ConnectionKeyItem_Deserialize, folder: string) => typedError<MovedItem, string>(__TAURI_INVOKE("move_connection", { connection, folder })),
 	/**  The text Ctrl+C puts on the clipboard for a connection: without secrets or programs. */
-	copyConnection: (connection: string) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
+	copyConnection: (connection: ConnectionKeyItem_Deserialize) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
 	/**  A personal connection from clipboard text, checked by the core as untrusted input. */
 	pasteConnection: (text: string) => typedError<PastedItem, string>(__TAURI_INVOKE("paste_connection", { text })),
 	/**  The pattern new connections are named with (ADR-030). */
@@ -559,13 +559,13 @@ export const commands = {
 	 *  as it reads it, and a default that no longer passes comes back as refused, never as a
 	 *  filter.
 	 */
-	tableFilters: (connection: string, schema: string, name: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("table_filters", { connection, schema, name })),
+	tableFilters: (connection: ConnectionKeyItem_Deserialize, schema: string, name: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("table_filters", { connection, schema, name })),
 	/**  Remembers a filter the tab just used, checked by the core first. */
-	recordTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("record_table_filter", { connection, schema, name, filter })),
+	recordTableFilter: (connection: ConnectionKeyItem_Deserialize, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("record_table_filter", { connection, schema, name, filter })),
 	/**  Takes one filter out of a table's history. */
-	forgetTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, schema, name, filter })),
+	forgetTableFilter: (connection: ConnectionKeyItem_Deserialize, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, schema, name, filter })),
 	/**  Saves the filter a table's tab opens with (checked by the core), or drops it (`None`). */
-	setTableDefaultFilter: (connection: string, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, schema, name, filter })),
+	setTableDefaultFilter: (connection: ConnectionKeyItem_Deserialize, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, schema, name, filter })),
 	/**
 	 *  Every column of a schema's relations, read with one catalog query on the explorer's
 	 *  session: metadata search keeps them with the schema (ADR-043).
@@ -884,7 +884,7 @@ export const commands = {
 	 *  Saves the query under `name` for the open workspace (or personally outside one),
 	 *  replacing a saved query with that name. Returns its identifier.
 	 */
-	saveSnippet: (name: string, sql: string, connection: string | null) => typedError<number, string>(__TAURI_INVOKE("save_snippet", { name, sql, connection })),
+	saveSnippet: (name: string, sql: string, connection: ConnectionKeyItem_Deserialize | null) => typedError<number, string>(__TAURI_INVOKE("save_snippet", { name, sql, connection })),
 	/**  Saved queries of the open workspace and the personal ones, by name. */
 	listSnippets: (search: string) => typedError<SnippetItem_Serialize[], string>(__TAURI_INVOKE("list_snippets", { search })),
 	deleteSnippet: (id: number) => typedError<boolean, string>(__TAURI_INVOKE("delete_snippet", { id })),
@@ -954,12 +954,12 @@ export const commands = {
 	 */
 	substituteVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("substitute_variables", { session, sql, tab })),
 	/**  A connection's variables, by name (SDB-383): local values, kept in the local store. */
-	connectionVariables: (connection: string) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
+	connectionVariables: (connection: ConnectionKeyItem_Deserialize) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
 	/**
 	 *  Sets one of a connection's variables, or removes it (`null`). The store refuses a name or
 	 *  a value that cannot be one.
 	 */
-	setConnectionVariable: (connection: string, name: string, value: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_variable", { connection, name, value })),
+	setConnectionVariable: (connection: ConnectionKeyItem_Deserialize, name: string, value: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_variable", { connection, name, value })),
 	/**
 	 *  Whether a name and a value can be a variable's, as the core decides it (for a tab's own
 	 *  variables, which never leave the page's memory).
@@ -1047,12 +1047,12 @@ export const commands = {
 	snippetFolders: () => typedError<SnippetFolderItem[], string>(__TAURI_INVOKE("snippet_folders")),
 	createSnippetFolder: (name: string) => typedError<number, string>(__TAURI_INVOKE("create_snippet_folder", { name })),
 	moveSnippet: (id: number, folder: number | null) => typedError<null, string>(__TAURI_INVOKE("move_snippet", { id, folder })),
-	setHistoryEnabled: (connection: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
+	setHistoryEnabled: (connection: ConnectionKeyItem_Deserialize, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
 	/**
 	 *  Opens a session (`session` is chosen by the UI). If a password is needed, it says so
 	 *  instead of failing, so the UI can ask for it.
 	 */
-	connect: (session: string, connection: string, password: string | null, remember: boolean, editor: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember, editor })),
+	connect: (session: string, connection: ConnectionKeyItem_Deserialize, password: string | null, remember: boolean, editor: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember, editor })),
 	/**
 	 *  Open an independent tab from an existing explorer session, reusing its in-memory
 	 *  credentials and exact resolved connection while the configuration still says the same
@@ -1171,22 +1171,22 @@ export const commands = {
 	/**  Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024). */
 	listServerObjects: (session: string) => typedError<ServerObjectItem_Serialize[], string>(__TAURI_INVOKE("list_server_objects", { session })),
 	/**  A connection's explorer filter (ADR-025), personal and per workspace. */
-	getExplorerFilter: (connection: string) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
-	setExplorerFilter: (connection: string, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
+	getExplorerFilter: (connection: ConnectionKeyItem_Deserialize) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
+	setExplorerFilter: (connection: ConnectionKeyItem_Deserialize, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
 	/**
 	 *  The explorer's bookmarks (ADR-026) of the personal connections and of the open workspace's,
 	 *  for the connections that exist now.
 	 */
-	listBookmarks: () => typedError<BookmarkItem[], string>(__TAURI_INVOKE("list_bookmarks")),
-	addBookmark: (bookmark: BookmarkItem) => typedError<null, string>(__TAURI_INVOKE("add_bookmark", { bookmark })),
+	listBookmarks: () => typedError<BookmarkItem_Serialize[], string>(__TAURI_INVOKE("list_bookmarks")),
+	addBookmark: (bookmark: BookmarkItem_Deserialize) => typedError<null, string>(__TAURI_INVOKE("add_bookmark", { bookmark })),
 	/**  Whether the bookmark was there. */
-	removeBookmark: (bookmark: BookmarkItem) => typedError<boolean, string>(__TAURI_INVOKE("remove_bookmark", { bookmark })),
+	removeBookmark: (bookmark: BookmarkItem_Deserialize) => typedError<boolean, string>(__TAURI_INVOKE("remove_bookmark", { bookmark })),
 	/**
 	 *  "Hide" or "Show only" on the schemas, objects or columns chosen in the explorer: their
 	 *  names, with their wildcard characters escaped, go into the connection's filter. Returns the
 	 *  new filter.
 	 */
-	filterExplorerName: (connection: string, kind: FilterKindItem, names: string[], action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, names, action })),
+	filterExplorerName: (connection: ConnectionKeyItem_Deserialize, kind: FilterKindItem, names: string[], action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, names, action })),
 	/**  The DDL of an object, to open in a new tab (nothing runs). */
 	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
 	/**
@@ -1509,8 +1509,24 @@ export type BlockingNodeItem = {
 };
 
 /**  An object bookmarked in the explorer (ADR-026). */
-export type BookmarkItem = {
-	connection: string,
+export type BookmarkItem = BookmarkItem_Serialize | BookmarkItem_Deserialize;
+
+/**  An object bookmarked in the explorer (ADR-026). */
+export type BookmarkItem_Deserialize = {
+	/**  The connection's identity (ADR-075). */
+	connection: ConnectionKeyItem_Deserialize,
+	/**  The schema the object is in, or the schema itself (with an empty `name`). */
+	schema: string,
+	name: string,
+	kind: BookmarkKindItem,
+	/**  A function's arguments…; empty if nothing tells it apart from others of its name. */
+	detail: string,
+};
+
+/**  An object bookmarked in the explorer (ADR-026). */
+export type BookmarkItem_Serialize = {
+	/**  The connection's identity (ADR-075). */
+	connection: ConnectionKeyItem_Serialize,
 	/**  The schema the object is in, or the schema itself (with an empty `name`). */
 	schema: string,
 	name: string,
@@ -2191,6 +2207,11 @@ export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deseriali
 export type ConnectionItem_Deserialize = {
 	/**  `prod/orders`, or `~/local` if it is personal. */
 	id: string,
+	/**
+	 *  The folder of its identity (ADR-075): the repository's canonical root, or none for a
+	 *  personal connection. With `id`, what every command that takes a connection is given.
+	 */
+	folder?: string | null,
 	name: string,
 	/**  What the database is for, in the user's words; may span lines. */
 	description?: string | null,
@@ -2227,6 +2248,11 @@ export type ConnectionItem_Deserialize = {
 export type ConnectionItem_Serialize = {
 	/**  `prod/orders`, or `~/local` if it is personal. */
 	id: string,
+	/**
+	 *  The folder of its identity (ADR-075): the repository's canonical root, or none for a
+	 *  personal connection. With `id`, what every command that takes a connection is given.
+	 */
+	folder: string | null,
 	name: string,
 	/**  What the database is for, in the user's words; may span lines. */
 	description: string | null,
@@ -2258,6 +2284,33 @@ export type ConnectionItem_Serialize = {
 	 *  its own, so the editor's schema picker is off.
 	 */
 	pooler: PoolerItem | null,
+};
+
+/**
+ *  A connection's identity as the page holds it and sends it back (ADR-075, SDB-495): its
+ *  folder (the repository's canonical root as the core wrote it, none for a personal
+ *  connection) and its id's text. The core checks both against what is open before using it.
+ */
+export type ConnectionKeyItem = ConnectionKeyItem_Serialize | ConnectionKeyItem_Deserialize;
+
+/**
+ *  A connection's identity as the page holds it and sends it back (ADR-075, SDB-495): its
+ *  folder (the repository's canonical root as the core wrote it, none for a personal
+ *  connection) and its id's text. The core checks both against what is open before using it.
+ */
+export type ConnectionKeyItem_Deserialize = {
+	folder?: string | null,
+	id: string,
+};
+
+/**
+ *  A connection's identity as the page holds it and sends it back (ADR-075, SDB-495): its
+ *  folder (the repository's canonical root as the core wrote it, none for a personal
+ *  connection) and its id's text. The core checks both against what is open before using it.
+ */
+export type ConnectionKeyItem_Serialize = {
+	folder: string | null,
+	id: string,
 };
 
 /**
@@ -4135,10 +4188,10 @@ export type KubeEditor = KubeEditor_Serialize | KubeEditor_Deserialize;
  */
 export type KubeEditor_Deserialize = 
 /**
- *  The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
- *  the Kubernetes network profile it uses, whose settings come first.
+ *  The connection form's Kubernetes tab; `editing` is the connection's identity, and
+ *  `profile` the Kubernetes network profile it uses, whose settings come first.
  */
-{ kind: "connection"; personal: boolean; editing?: string | null; profile?: string | null } | 
+{ kind: "connection"; personal: boolean; editing?: ConnectionKeyItem_Deserialize | null; profile?: string | null } | 
 /**  The network profile editor; `editing` is the profile's name. */
 { kind: "profile"; personal: boolean; editing?: string | null };
 
@@ -4148,10 +4201,10 @@ export type KubeEditor_Deserialize =
  */
 export type KubeEditor_Serialize = 
 /**
- *  The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
- *  the Kubernetes network profile it uses, whose settings come first.
+ *  The connection form's Kubernetes tab; `editing` is the connection's identity, and
+ *  `profile` the Kubernetes network profile it uses, whose settings come first.
  */
-{ kind: "connection"; personal: boolean; editing: string | null; profile: string | null } | 
+{ kind: "connection"; personal: boolean; editing: ConnectionKeyItem_Serialize | null; profile: string | null } | 
 /**  The network profile editor; `editing` is the profile's name. */
 { kind: "profile"; personal: boolean; editing: string | null };
 

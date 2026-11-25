@@ -1,6 +1,7 @@
 // An editor tab: its own session in the core (ADR-004), editor, execution and results.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { connectionKey } from "../connectionKey";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -829,7 +830,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function openTablePage(view: TableView) {
     let first = view;
     if (!view.filter && tab.connectionId) {
-      const saved = await call(commands.tableFilters(tab.connectionId, view.schema, view.name)).catch(() => null);
+      const saved = await call(commands.tableFilters(connectionKey(tab.connectionId), view.schema, view.name)).catch(() => null);
       if (saved?.default) {
         first = { ...view, filter: saved.default };
         updateTab(tab.id, { table: first });
@@ -859,7 +860,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     });
     if (!name) return;
     try {
-      await call(commands.saveSnippet(name, tab.sql, tab.connectionId));
+      await call(commands.saveSnippet(name, tab.sql, tab.connectionId ? connectionKey(tab.connectionId) : null));
       updateTab(tab.id, { snippetName: name });
       useApp.getState().refreshSnippets();
       setNotice({ text: t("snippets.saved", { name }), error: false });

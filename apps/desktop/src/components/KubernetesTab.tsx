@@ -5,6 +5,7 @@
 // form only collects the choice; the core validates it, checks trust and runs kubectl.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { connectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands, type KubeEditor, type KubePort, type KubernetesDraftItem, type TunnelItem } from "../api";
 import { errorText, type Loaded } from "../dialogState";
@@ -126,7 +127,7 @@ export function KubernetesTab(
   /** A change resets what depends on it, except what the profile sets. */
   const set = (patch: Partial<KubernetesDraftItem>) => onChange(withoutProfileFields({ ...value, ...patch }, shared));
   const editor: KubeEditor = connection
-    ? { kind: "connection", personal: props.personal, editing: connection.editing, profile: connection.profile || null }
+    ? { kind: "connection", personal: props.personal, editing: connection.editing ? connectionKey(connection.editing) : null, profile: connection.profile || null }
     : { kind: "profile", personal: props.personal, editing: props.editing };
   const profileKey = connection ? connection.profile : "";
   const provenance = `${props.personal}|${props.editing}|${props.trusted}|${profileKey}`;
