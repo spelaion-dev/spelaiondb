@@ -71,7 +71,11 @@
   destructive statement never passes the guard unasked; it also checks the `:name` scanner
   (`params.rs`: only placeholders in code are found and bound, a value stays in its literal),
   that pasted text, any import file and any `.sql` file read without a panic, and that SQLite
-  itself agrees with its splitter on where each statement ends. `guard.rs` lists the statements the app
+  itself agrees with its splitter on where each statement ends. It also checks that the guard
+  reads a statement's first word as the splitter does (ADR-065, SDB-452): a DROP, or an
+  unreadable TRUNCATE, DELETE or UPDATE, first to the splitter is asked about, and a DROP asked
+  about is first. What it has found and a card will fix is in `GUARD_KNOWN`, each entry let
+  through only in its own shape; the fix takes its entry out. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
   connection's type asks for: data changes on Production, every run where it confirms
   execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
