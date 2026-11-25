@@ -8,8 +8,11 @@
 //!   the UI only draws the result, and panning or zooming never asks for it again.
 //! - [`mermaid`] and [`dbml`] write the model as text for other tools, and
 //!   [`save_diagram_text`] writes such a text to the file the user chose.
+//! - [`saved`] keeps a diagram the user arranged (ADR-084): its scope, display options, table
+//!   positions, notes and groups, as local data checked whenever it is read back.
 
 mod layout;
+mod saved;
 mod text;
 
 use std::collections::{BTreeSet, HashMap};
@@ -22,8 +25,15 @@ use spelaion_driver_api::{
 use crate::sql_file::replace_atomically;
 
 pub use layout::{
-    ErColumns, ErEdge, ErKeyMark, ErLayout, ErLayoutOptions, ErMetrics, ErNode, ErPoint, ErRow,
-    ErSide, layout,
+    ErColumns, ErEdge, ErGoneNode, ErGroupFrame, ErKeyMark, ErLayout, ErLayoutOptions, ErMetrics,
+    ErNode, ErNoteBox, ErPoint, ErRow, ErSide, arrange, layout,
+};
+pub(crate) use saved::{DiagramStoreAnswer, DiagramStoreCall, stored_diagrams};
+pub use saved::{
+    ErArrangement, ErColor, ErGroup, ErNote, ErPlacement, MAX_COORDINATE, MAX_DIAGRAM_NAME,
+    MAX_GROUPS, MAX_NOTE_CHARS, MAX_NOTE_WIDTH, MAX_NOTES, MAX_PLACED_TABLES, MIN_NOTE_WIDTH,
+    SavedDiagram, SavedDiagramContent, SavedDiagramError, SavedDiagramSummary, check_arrangement,
+    check_diagram_name, check_scope, decode_diagram, encode_diagram,
 };
 pub use text::{dbml, mermaid};
 

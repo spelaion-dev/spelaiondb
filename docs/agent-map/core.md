@@ -144,7 +144,14 @@
   `er/` is the ER diagram, ADR-046: the model read from the explorer's catalog, its layered layout
   computed once per model and display options, and its Mermaid and DBML text, which must parse
   with their own tools: `tests/er_diagram.rs` writes `apps/desktop/scripts/fixtures/er` and
-  `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again)
+  `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again;
+  `er/saved.rs` is a saved diagram, ADR-084: an arrangement (scope, display options, table
+  positions, notes, groups) kept in the store as a versioned JSON document of its own types,
+  checked when saved and every time it is read back, never applied in part; `layout::arrange`
+  places it: placed tables where they were, new ones laid out among themselves below them,
+  gone ones where they were, notes wrapped and groups framed by the core so the image exports
+  match; `tests/er_diagram.rs` saves one on every engine and opens it again after reopening the
+  store)
   and `cursor.rs` finds the statement under the editor's cursor, says what Run will send
   (`run_target`, the Run button's label) and writes the text of the statements picked from a
   selection or from the cursor to the end (`pick_statements`, `from_cursor`): the rest written

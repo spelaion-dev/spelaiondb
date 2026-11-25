@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 mod aside;
 mod backup;
 mod editor_snippets;
+mod er_diagrams;
 mod export;
 mod library;
 mod map;
@@ -23,6 +24,10 @@ mod typed_values_tests;
 pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
 pub use editor_snippets::{EditorSnippet, is_snippet_name};
+pub use er_diagrams::{
+    ER_DIAGRAM_DOCUMENT_MAX, ER_DIAGRAM_NAME_MAX, ErDiagramSave, MAX_ER_DIAGRAMS, StoredErDiagram,
+    StoredErDiagramDocument,
+};
 pub use export::{
     EXPORT_ENCODINGS, EXPORT_FORMATS, EXPORT_KEYWORD_CASES, EXPORT_MAX_ROWS_PER_INSERT,
     EXPORT_NAME_CASES, EXPORT_NULL_TEXT_MAX, EXPORT_PATTERN_MAX, ExportPreferences,
@@ -273,6 +278,8 @@ const MIGRATIONS: &[&str] = &["create table audit (
     // The folder of the connection an entry is about (ADR-075, SDB-495): two repositories may
     // each have a `prod/orders`. Rows written before have none.
     "alter table audit add column folder text;",
+    // Saved ER diagrams (ADR-084).
+    er_diagrams::MIGRATION,
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -1456,6 +1463,7 @@ impl Store {
             "mcp_read_only_connections",
             "table_filter_history",
             "table_filter_defaults",
+            "er_diagrams",
         ] {
             transaction.execute(
                 &format!(

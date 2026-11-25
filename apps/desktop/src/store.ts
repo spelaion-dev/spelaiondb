@@ -144,6 +144,10 @@ export interface Tab {
   /** An ER diagram (ADR-046) of a schema, chosen tables or one table and its neighbours, read
    *  from the catalog on this tab's own session. */
   diagram?: DiagramScopeItem_Deserialize;
+  /** The saved diagram (ADR-084) this diagram tab shows, once it has been saved or opened. */
+  savedDiagram?: { id: number; name: string };
+  /** The diagram tab's arrangement changed since it was saved or opened: closing asks first. */
+  diagramModified?: boolean;
   /** A local saved plan, opened without executing SQL. */
   plan?: { path: string };
   /** The label of the window its results are shown in (SDB-30), until the core says that
@@ -395,9 +399,10 @@ interface AppStore {
    *  `filter` when given (a followed foreign key's, written by the core). */
   addTableTab(connectionId: string, schema: string, name: string, filter?: string): string;
   addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
-  /** Opens an ER diagram tab, or shows the one already open on the same scope. The second value
-   *  says whether the tab is new (and needs connecting). */
-  addDiagramTab(connectionId: string, scope: DiagramScopeItem_Deserialize): [string, boolean];
+  /** Opens an ER diagram tab, or shows the one already open on the same scope (or on the same
+   *  saved diagram, ADR-084). The second value says whether the tab is new (and needs
+   *  connecting). */
+  addDiagramTab(connectionId: string, scope: DiagramScopeItem_Deserialize, saved?: { id: number; name: string }): [string, boolean];
   /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
   closeTabs(ids: string[]): void;
   /** Opens again the last closed query tab (its connection, SQL and name, not its results). */
@@ -529,13 +534,16 @@ export const useApp = create<AppStore>((set) => ({
     app.updateTab(id, { tableDetails: { schema, name, kind } });
     return id;
   },
-  addDiagramTab: (connectionId, scope): [string, boolean] => {
+  addDiagramTab: (connectionId, scope, saved): [string, boolean] => {
     const app = useApp.getState();
     const key = JSON.stringify(scope);
-    const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.diagram && JSON.stringify(tab.diagram) === key);
+    // A saved diagram has a tab of its own; an unsaved one is found by its scope.
+    const existing = app.tabs.find((tab) =>
+      tab.connectionId === connectionId && tab.diagram &&
+      (saved ? tab.savedDiagram?.id === saved.id : !tab.savedDiagram && JSON.stringify(tab.diagram) === key));
     if (existing) { app.setActiveTab(existing.id); return [existing.id, false]; }
     const id = app.addTab(connectionId, "");
-    app.updateTab(id, { diagram: scope });
+    app.updateTab(id, saved ? { diagram: scope, savedDiagram: saved } : { diagram: scope });
     return [id, true];
   },
   closedTabs: [],

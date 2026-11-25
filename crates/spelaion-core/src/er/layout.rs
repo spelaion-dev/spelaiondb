@@ -14,11 +14,18 @@
 //!    referenced table at the row of the column it points to (the box's side when columns are
 //!    hidden), with a straight stub at each end for the crow's foot marks and a curve between.
 //!
+//! A saved diagram's arrangement (ADR-084) changes steps 2 to 4: tables the user placed stay
+//! where they were put, the others (new ones) are laid out the same way among themselves and
+//! go below them, and tables that are gone are drawn as a box with their name where they were.
+//! Its notes are wrapped to their width and its groups framed around their tables here too, so
+//! the screen and the image exports agree.
+//!
 //! Everything is in pixels; the UI draws it as it comes and pans or zooms with a transform.
 
 use std::collections::HashMap;
 
-use super::{Cardinality, ErModel, ErTable};
+use super::saved::{ErArrangement, ErColor, MAX_COORDINATE, MAX_NOTE_WIDTH, MIN_NOTE_WIDTH};
+use super::{Cardinality, ErModel, ErTable, TableName};
 
 /// Longest column name, type, comment and table name a box shows; longer ones end in "…".
 pub const MAX_COLUMN_CHARS: usize = 40;
@@ -44,6 +51,10 @@ const STUB: f64 = 18.0;
 const BULGE: f64 = 48.0;
 /// Rounds of crossing reduction (each one forwards and backwards).
 const ORDER_ROUNDS: usize = 4;
+/// Space between a group's frame and its tables.
+const GROUP_PAD: f64 = 16.0;
+/// Most lines a note shows; the rest of its text ends in "…".
+const MAX_NOTE_LINES: usize = 60;
 
 /// Which columns a box lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +160,47 @@ pub struct ErNode {
     pub name_x: f64,
     pub type_x: f64,
     pub comment_x: f64,
+    /// Not placed by the saved arrangement: laid out by the core below the placed tables.
+    pub new: bool,
+}
+
+/// A table the arrangement placed that the catalog no longer has in the diagram's scope: a box
+/// with its name where it was.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErGoneNode {
+    pub schema: String,
+    pub name: String,
+    pub title: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// A note, its text wrapped to its width.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErNoteBox {
+    /// Its position in the arrangement's notes.
+    pub note: usize,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub lines: Vec<String>,
+    pub color: ErColor,
+}
+
+/// A group's frame around its tables, its name above them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErGroupFrame {
+    /// Its position in the arrangement's groups.
+    pub group: usize,
+    pub label: String,
+    pub color: ErColor,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 /// A relation's line: from the referencing table's box to the referenced one's.
@@ -171,11 +223,18 @@ pub struct ErEdge {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErLayout {
+    /// The top left corner of everything drawn (0, 0 for an automatic layout; a table placed
+    /// by hand may be left of or above it).
+    pub x: f64,
+    pub y: f64,
     pub width: f64,
     pub height: f64,
     pub line_height: f64,
     pub nodes: Vec<ErNode>,
     pub edges: Vec<ErEdge>,
+    pub gone: Vec<ErGoneNode>,
+    pub notes: Vec<ErNoteBox>,
+    pub groups: Vec<ErGroupFrame>,
 }
 
 /// Columns a character takes in a monospace font: two for the wide ones of East Asian scripts
@@ -318,6 +377,7 @@ fn node_for(model: &ErModel, index: usize, options: &ErLayoutOptions, cw: f64, l
         name_x,
         type_x,
         comment_x,
+        new: false,
     }
 }
 
@@ -332,21 +392,334 @@ fn measure(value: f64, fallback: f64, max: f64) -> f64 {
 
 /// Places `model`'s tables and routes its relations.
 pub fn layout(model: &ErModel, options: &ErLayoutOptions, metrics: &ErMetrics) -> ErLayout {
+    arrange(model, options, metrics, &ErArrangement::default())
+}
+
+/// A position from an arrangement within bounds (the caller checked it; this keeps the layout
+/// finite whatever it is given).
+fn bounded(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(-MAX_COORDINATE, MAX_COORDINATE).round()
+    } else {
+        0.0
+    }
+}
+
+/// Places `model`'s tables as `arrangement` says (ADR-084) and routes its relations: with no
+/// positions, the automatic layout; with some, placed tables where they were put, new ones laid
+/// out among themselves below them, and gone ones where they were.
+pub fn arrange(
+    model: &ErModel,
+    options: &ErLayoutOptions,
+    metrics: &ErMetrics,
+    arrangement: &ErArrangement,
+) -> ErLayout {
     let cw = measure(metrics.char_width, 7.0, 64.0);
     // Whole pixels, so rows line up with the relations that point at them.
     let lh = measure(metrics.line_height, 18.0, 128.0).round();
     let mut nodes: Vec<ErNode> = (0..model.tables.len())
         .map(|i| node_for(model, i, options, cw, lh))
         .collect();
-    let n = nodes.len();
+    let links: Vec<(usize, usize)> = model.relations.iter().map(|r| (r.from, r.to)).collect();
+    let mut gone: Vec<ErGoneNode> = Vec::new();
+    if arrangement.positions.is_empty() {
+        place(&mut nodes, &links);
+    } else {
+        let present: HashMap<TableName, usize> = model
+            .tables
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.key(), i))
+            .collect();
+        let mut placed = vec![false; nodes.len()];
+        for p in &arrangement.positions {
+            let (x, y) = (bounded(p.x), bounded(p.y));
+            match present.get(&p.table) {
+                Some(&i) => {
+                    nodes[i].x = x;
+                    nodes[i].y = y;
+                    placed[i] = true;
+                }
+                None => gone.push(gone_node(model, &p.table, x, y, cw, lh)),
+            }
+        }
+        let new: Vec<usize> = (0..nodes.len()).filter(|&i| !placed[i]).collect();
+        if !new.is_empty() {
+            let position: HashMap<usize, usize> =
+                new.iter().enumerate().map(|(k, &i)| (i, k)).collect();
+            let mut block: Vec<ErNode> = new.iter().map(|&i| nodes[i].clone()).collect();
+            let block_links: Vec<(usize, usize)> = links
+                .iter()
+                .filter_map(|(a, b)| Some((*position.get(a)?, *position.get(b)?)))
+                .collect();
+            place(&mut block, &block_links);
+            // Below everything placed, from its left edge.
+            let mut left = f64::INFINITY;
+            let mut bottom = f64::NEG_INFINITY;
+            let placed_boxes = (0..nodes.len())
+                .filter(|&i| placed[i])
+                .map(|i| (nodes[i].x, nodes[i].y + nodes[i].height))
+                .chain(gone.iter().map(|g| (g.x, g.y + g.height)));
+            for (x, y) in placed_boxes {
+                left = left.min(x);
+                bottom = bottom.max(y);
+            }
+            let (dx, dy) = if left.is_finite() {
+                (left - MARGIN, bottom + GROUP_GAP - MARGIN)
+            } else {
+                (0.0, 0.0)
+            };
+            for (k, &i) in new.iter().enumerate() {
+                nodes[i].x = (block[k].x + dx).round();
+                nodes[i].y = (block[k].y + dy).round();
+                nodes[i].new = true;
+            }
+        }
+    }
+    let edges = route(model, &nodes, lh);
+    let notes = note_boxes(arrangement, cw, lh);
+    let groups = group_frames(model, arrangement, &nodes, &gone, lh);
 
+    let mut bounds = Bounds::default();
+    for n in &nodes {
+        bounds.add(n.x, n.y, n.width, n.height);
+    }
+    for g in &gone {
+        bounds.add(g.x, g.y, g.width, g.height);
+    }
+    for n in &notes {
+        bounds.add(n.x, n.y, n.width, n.height);
+    }
+    for g in &groups {
+        bounds.add(g.x, g.y, g.width, g.height);
+    }
+    for p in edges.iter().flat_map(|e| e.points.iter()) {
+        bounds.add(p.x, p.y, 0.0, 0.0);
+    }
+    let (x, y, width, height) = bounds.with_margin();
+    ErLayout {
+        x,
+        y,
+        width,
+        height,
+        line_height: lh,
+        nodes,
+        edges,
+        gone,
+        notes,
+        groups,
+    }
+}
+
+/// The smallest rectangle around what is drawn.
+struct Bounds {
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+}
+
+impl Default for Bounds {
+    fn default() -> Self {
+        Self {
+            left: f64::INFINITY,
+            top: f64::INFINITY,
+            right: f64::NEG_INFINITY,
+            bottom: f64::NEG_INFINITY,
+        }
+    }
+}
+
+impl Bounds {
+    fn add(&mut self, x: f64, y: f64, width: f64, height: f64) {
+        self.left = self.left.min(x);
+        self.top = self.top.min(y);
+        self.right = self.right.max(x + width);
+        self.bottom = self.bottom.max(y + height);
+    }
+
+    /// Its corner and size with [`MARGIN`] around it, in whole pixels; an empty diagram is a
+    /// margin's square at the origin.
+    fn with_margin(&self) -> (f64, f64, f64, f64) {
+        if !self.left.is_finite() {
+            return (0.0, 0.0, 2.0 * MARGIN, 2.0 * MARGIN);
+        }
+        let x = (self.left - MARGIN).floor();
+        let y = (self.top - MARGIN).floor();
+        (
+            x,
+            y,
+            (self.right + MARGIN - x).ceil(),
+            (self.bottom + MARGIN - y).ceil(),
+        )
+    }
+}
+
+/// The box of a table that is gone: its name only, outlined where it was.
+fn gone_node(model: &ErModel, table: &TableName, x: f64, y: f64, cw: f64, lh: f64) -> ErGoneNode {
+    let same_schema = model.single_schema()
+        && model
+            .tables
+            .first()
+            .is_none_or(|t| t.schema == table.schema);
+    let name = if same_schema || table.schema.is_empty() {
+        table.name.clone()
+    } else {
+        format!("{}.{}", table.schema, table.name)
+    };
+    let title = shorten(&name, MAX_TITLE_CHARS);
+    let width = (PAD_X * 2.0 + cells(&title) as f64 * cw).max(MIN_BOX_WIDTH);
+    ErGoneNode {
+        schema: table.schema.clone(),
+        name: table.name.clone(),
+        title,
+        x,
+        y,
+        width: width.ceil(),
+        height: (PAD_Y * 2.0 + lh).ceil(),
+    }
+}
+
+/// `text` wrapped in lines of at most `max` cells: by words, a word longer than a line cut,
+/// the user's own line breaks kept, tabs and other control characters read as spaces, and no
+/// blank lines at either end.
+pub(crate) fn wrap(text: &str, max: usize) -> Vec<String> {
+    let max = max.max(1);
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        let flat: String = paragraph
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let mut line = String::new();
+        let mut used = 0;
+        for word in flat.split(' ').filter(|w| !w.is_empty()) {
+            let width = cells(word);
+            if used > 0 && used + 1 + width <= max {
+                line.push(' ');
+                line.push_str(word);
+                used += 1 + width;
+                continue;
+            }
+            if used > 0 {
+                lines.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            for c in word.chars() {
+                let w = char_cells(c);
+                if used > 0 && used + w > max {
+                    lines.push(std::mem::take(&mut line));
+                    used = 0;
+                }
+                line.push(c);
+                used += w;
+            }
+        }
+        lines.push(line);
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    let first = lines
+        .iter()
+        .position(|l| !l.is_empty())
+        .unwrap_or(lines.len());
+    lines.drain(..first);
+    lines
+}
+
+fn note_boxes(arrangement: &ErArrangement, cw: f64, lh: f64) -> Vec<ErNoteBox> {
+    arrangement
+        .notes
+        .iter()
+        .enumerate()
+        .map(|(i, note)| {
+            let width = if note.width.is_finite() {
+                note.width.clamp(MIN_NOTE_WIDTH, MAX_NOTE_WIDTH).round()
+            } else {
+                MIN_NOTE_WIDTH
+            };
+            let columns = ((width - 2.0 * PAD_X) / cw).floor().max(1.0) as usize;
+            let mut lines = wrap(&note.text, columns);
+            if lines.len() > MAX_NOTE_LINES {
+                lines.truncate(MAX_NOTE_LINES);
+                if let Some(last) = lines.last_mut() {
+                    *last = shorten(&format!("{last} …"), columns);
+                }
+            }
+            let shown = lines.len().max(1) as f64;
+            ErNoteBox {
+                note: i,
+                x: bounded(note.x),
+                y: bounded(note.y),
+                width,
+                height: (PAD_Y * 2.0 + shown * lh).ceil(),
+                lines,
+                color: note.color,
+            }
+        })
+        .collect()
+}
+
+fn group_frames(
+    model: &ErModel,
+    arrangement: &ErArrangement,
+    nodes: &[ErNode],
+    gone: &[ErGoneNode],
+    lh: f64,
+) -> Vec<ErGroupFrame> {
+    let present: HashMap<TableName, usize> = model
+        .tables
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.key(), i))
+        .collect();
+    arrangement
+        .groups
+        .iter()
+        .enumerate()
+        .filter_map(|(i, group)| {
+            let mut bounds = Bounds::default();
+            for table in &group.tables {
+                if let Some(&n) = present.get(table) {
+                    let node = &nodes[n];
+                    bounds.add(node.x, node.y, node.width, node.height);
+                } else if let Some(g) = gone
+                    .iter()
+                    .find(|g| g.schema == table.schema && g.name == table.name)
+                {
+                    bounds.add(g.x, g.y, g.width, g.height);
+                }
+            }
+            // A group none of whose tables is drawn has nothing to frame.
+            bounds.left.is_finite().then(|| {
+                let top = bounds.top - GROUP_PAD - lh;
+                ErGroupFrame {
+                    group: i,
+                    label: shorten(&group.name, MAX_TITLE_CHARS),
+                    color: group.color,
+                    x: bounds.left - GROUP_PAD,
+                    y: top,
+                    width: bounds.right - bounds.left + 2.0 * GROUP_PAD,
+                    height: bounds.bottom + GROUP_PAD - top,
+                }
+            })
+        })
+        .collect()
+}
+
+/// Lays out `nodes` (sized already) by `links` between them, from referencing to referenced:
+/// groups of joined tables largest first, then the tables with no keys, packed in rows from
+/// ([`MARGIN`], [`MARGIN`]).
+fn place(nodes: &mut [ErNode], links: &[(usize, usize)]) {
+    let n = nodes.len();
     let mut parents = vec![Vec::new(); n];
     let mut neighbours = vec![Vec::new(); n];
-    for r in &model.relations {
-        if r.from != r.to {
-            parents[r.from].push(r.to);
-            neighbours[r.from].push(r.to);
-            neighbours[r.to].push(r.from);
+    for &(from, to) in links {
+        if from != to {
+            parents[from].push(to);
+            neighbours[from].push(to);
+            neighbours[to].push(from);
         }
     }
     for list in parents.iter_mut().chain(neighbours.iter_mut()) {
@@ -384,7 +757,7 @@ pub fn layout(model: &ErModel, options: &ErLayoutOptions, metrics: &ErMetrics) -
     // Each block (a group, or all the single tables) laid out at its own origin.
     let mut blocks: Vec<(Vec<usize>, f64, f64)> = Vec::new();
     for group in joined {
-        let (w, h) = place_group(&group, &parents, &neighbours, &mut nodes);
+        let (w, h) = place_group(&group, &parents, &neighbours, nodes);
         blocks.push((group, w, h));
     }
     let singles: Vec<usize> = single.into_iter().flatten().collect();
@@ -401,24 +774,12 @@ pub fn layout(model: &ErModel, options: &ErLayoutOptions, metrics: &ErMetrics) -
         blocks.push((singles, w, h));
     }
     let rects: Vec<(f64, f64)> = blocks.iter().map(|(_, w, h)| (*w, *h)).collect();
-    let (positions, width, height) = shelf_pack(&rects, GROUP_GAP, GROUP_GAP);
+    let (positions, _, _) = shelf_pack(&rects, GROUP_GAP, GROUP_GAP);
     for ((members, _, _), (bx, by)) in blocks.iter().zip(positions) {
         for &i in members {
             nodes[i].x = (nodes[i].x + bx + MARGIN).round();
             nodes[i].y = (nodes[i].y + by + MARGIN).round();
         }
-    }
-    let edges = route(model, &nodes, lh);
-    let right = edges
-        .iter()
-        .flat_map(|e| e.points.iter().map(|p| p.x))
-        .fold(width + MARGIN, f64::max);
-    ErLayout {
-        width: (right + MARGIN).ceil(),
-        height: (height + 2.0 * MARGIN).ceil(),
-        line_height: lh,
-        nodes,
-        edges,
     }
 }
 
@@ -906,6 +1267,185 @@ mod tests {
         assert_eq!((own.from_side, own.to_side), (ErSide::Right, ErSide::Right));
         assert!(own.points[2].x > out.nodes[0].x + out.nodes[0].width);
         assert_ne!(own.points[0].y, own.points[5].y);
+    }
+
+    fn name(table: &str) -> TableName {
+        TableName {
+            schema: "s".into(),
+            name: table.into(),
+        }
+    }
+
+    fn shop() -> ErModel {
+        ErModel::from_tables(
+            vec![
+                table("s", "customer", &[("id", "int", false)], &["id"], &[]),
+                table(
+                    "s",
+                    "orders",
+                    &[("id", "int", false), ("customer", "int", false)],
+                    &["id"],
+                    &[("orders_customer", &["customer"], "customer", &["id"])],
+                ),
+                table(
+                    "s",
+                    "line",
+                    &[("id", "int", false), ("orders", "int", false)],
+                    &["id"],
+                    &[("line_orders", &["orders"], "orders", &["id"])],
+                ),
+                table(
+                    "s",
+                    "fresh",
+                    &[("id", "int", false), ("line", "int", false)],
+                    &["id"],
+                    &[("fresh_line", &["line"], "line", &["id"])],
+                ),
+            ],
+            None,
+        )
+    }
+
+    #[test]
+    fn placed_tables_stay_new_ones_go_below_and_gone_ones_where_they_were() {
+        use crate::er::saved::{ErGroup, ErNote, ErPlacement};
+        let model = shop();
+        let arrangement = ErArrangement {
+            positions: vec![
+                ErPlacement {
+                    table: name("customer"),
+                    x: -300.0,
+                    y: -50.0,
+                },
+                ErPlacement {
+                    table: name("orders"),
+                    x: 400.0,
+                    y: 10.0,
+                },
+                ErPlacement {
+                    table: name("dropped"),
+                    x: 100.0,
+                    y: 300.0,
+                },
+            ],
+            notes: vec![ErNote {
+                x: 900.0,
+                y: -200.0,
+                width: 160.0,
+                text: "Customers come from the CRM; a very long word: abcdefghijklmnopqrstuvwxyz\n\nKeep it."
+                    .into(),
+                color: ErColor::Amber,
+            }],
+            groups: vec![
+                ErGroup {
+                    name: "Sales".into(),
+                    color: ErColor::Blue,
+                    tables: vec![name("customer"), name("dropped")],
+                },
+                ErGroup {
+                    name: "Nothing here".into(),
+                    color: ErColor::Red,
+                    tables: vec![name("elsewhere")],
+                },
+            ],
+        };
+        let out = arrange(&model, &options(ErColumns::All), &METRICS, &arrangement);
+        let node = |n: &str| {
+            let i = model.tables.iter().position(|t| t.name == n).unwrap();
+            &out.nodes[i]
+        };
+        assert_eq!((node("customer").x, node("customer").y), (-300.0, -50.0));
+        assert_eq!((node("orders").x, node("orders").y), (400.0, 10.0));
+        assert!(!node("customer").new && !node("orders").new);
+        // The new ones, laid out among themselves (line left of fresh, which references it),
+        // below everything placed, the gone table included.
+        let (line, fresh) = (node("line"), node("fresh"));
+        assert!(line.new && fresh.new);
+        assert!(line.x < fresh.x);
+        assert!(line.y >= 300.0 + out.gone[0].height + GROUP_GAP - 1.0);
+        assert_eq!(line.x, -300.0);
+        assert_eq!(out.gone.len(), 1);
+        assert_eq!(
+            (out.gone[0].name.as_str(), out.gone[0].x, out.gone[0].y),
+            ("dropped", 100.0, 300.0)
+        );
+        // Relations are routed between the boxes where they are: orders is right of customer.
+        let edge = out
+            .edges
+            .iter()
+            .find(|e| e.name == "orders_customer")
+            .unwrap();
+        assert_eq!(
+            (edge.from_side, edge.to_side),
+            (ErSide::Left, ErSide::Right)
+        );
+        assert_eq!(edge.points[0].x, 400.0);
+        // The note is wrapped to its width: (160 - 20) / 7 = 20 cells a line.
+        let note = &out.notes[0];
+        assert!(
+            note.lines.iter().all(|l| cells(l) <= 20),
+            "{:?}",
+            note.lines
+        );
+        assert!(note.lines.contains(&"abcdefghijklmnopqrst".to_string()));
+        assert!(note.lines.contains(&String::new()));
+        assert_eq!(note.lines.last().map(String::as_str), Some("Keep it."));
+        assert_eq!(note.height, 12.0 + note.lines.len() as f64 * 18.0);
+        // A group frames its tables there and gone; one with none drawn has no frame.
+        assert_eq!(out.groups.len(), 1);
+        let frame = &out.groups[0];
+        assert_eq!((frame.group, frame.label.as_str()), (0, "Sales"));
+        assert!(frame.x < -300.0 && frame.y < -50.0 - 18.0);
+        assert!(frame.y + frame.height > 300.0 + out.gone[0].height);
+        // The bounds hold everything, left of and above the origin too.
+        assert!(out.x < -300.0 - 16.0 && out.y < -200.0);
+        assert!(out.x + out.width >= 900.0 + 160.0);
+        for n in &out.nodes {
+            assert!(out.y + out.height >= n.y + n.height);
+        }
+    }
+
+    #[test]
+    fn without_positions_the_layout_is_automatic() {
+        let model = shop();
+        let plain = layout(&model, &options(ErColumns::All), &METRICS);
+        let same = arrange(
+            &model,
+            &options(ErColumns::All),
+            &METRICS,
+            &ErArrangement::default(),
+        );
+        assert_eq!(plain, same);
+        assert_eq!((plain.x, plain.y), (0.0, 0.0));
+        assert!(plain.nodes.iter().all(|n| !n.new));
+        assert!(plain.gone.is_empty() && plain.notes.is_empty() && plain.groups.is_empty());
+        // Fixing every table where the automatic layout put it changes nothing.
+        let fixed = ErArrangement {
+            positions: model
+                .tables
+                .iter()
+                .zip(&plain.nodes)
+                .map(|(t, n)| crate::er::saved::ErPlacement {
+                    table: t.key(),
+                    x: n.x,
+                    y: n.y,
+                })
+                .collect(),
+            ..ErArrangement::default()
+        };
+        let again = arrange(&model, &options(ErColumns::All), &METRICS, &fixed);
+        assert_eq!(again.nodes, plain.nodes);
+        assert_eq!(again.edges, plain.edges);
+    }
+
+    #[test]
+    fn wrapping_keeps_words_and_line_breaks() {
+        assert_eq!(wrap("one two three", 7), ["one two", "three"]);
+        assert_eq!(wrap("\n\nab\n\ncd\n\n", 5), ["ab", "", "cd"]);
+        assert_eq!(wrap("abcdefgh", 3), ["abc", "def", "gh"]);
+        assert_eq!(wrap("a\tb", 5), ["a b"]);
+        assert_eq!(wrap("表表表", 4), ["表表", "表"]);
+        assert!(wrap("   ", 4).is_empty());
     }
 
     #[test]

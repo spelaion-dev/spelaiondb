@@ -15,13 +15,32 @@ export const commands = {
 	readDiagram: (session: string, diagram: number, scope: DiagramScopeItem_Deserialize, onProgress: Channel<DiagramProgressItem>) => typedError<DiagramSummaryItem_Serialize, string>(__TAURI_INVOKE("read_diagram", { session, diagram, scope, onProgress })),
 	/**
 	 *  Where each table of the diagram goes and how its relations are drawn, for these display
-	 *  options and font measures. Panning and zooming never ask for it again.
+	 *  options and font measures, and as `arrangement` places tables, notes and groups (checked by
+	 *  the core first; with no positions the layout is automatic). Panning and zooming never ask
+	 *  for it again.
 	 */
-	diagramLayout: (diagram: number, options: DiagramOptionsItem, metrics: DiagramMetricsItem) => typedError<DiagramLayoutItem_Serialize, string>(__TAURI_INVOKE("diagram_layout", { diagram, options, metrics })),
+	diagramLayout: (diagram: number, options: DiagramOptionsItem, metrics: DiagramMetricsItem, arrangement: DiagramArrangementItem) => typedError<DiagramLayoutItem_Serialize, string>(__TAURI_INVOKE("diagram_layout", { diagram, options, metrics, arrangement })),
 	/**  Writes the diagram's whole model as Mermaid or DBML (written by the core) to `path`. */
 	saveDiagramText: (diagram: number, format: DiagramTextFormatItem, path: string) => typedError<null, string>(__TAURI_INVOKE("save_diagram_text", { diagram, format, path })),
 	/**  Forgets a diagram's model (its tab closed or read it again under another id). */
 	closeDiagram: (diagram: number) => typedError<null, string>(__TAURI_INVOKE("close_diagram", { diagram })),
+	/**
+	 *  The saved diagrams of the open folder's connections, each checked by the core: one that
+	 *  cannot be read says why.
+	 */
+	savedDiagrams: () => typedError<SavedDiagramItem_Serialize[], string>(__TAURI_INVOKE("saved_diagrams")),
+	/**  A saved diagram with what it holds, read back and checked by the core. */
+	openSavedDiagram: (id: number) => typedError<SavedDiagramDetailItem_Serialize, string>(__TAURI_INVOKE("open_saved_diagram", { id })),
+	/**
+	 *  Saves a diagram of `connection` under `name`: a new one, or over `id`. The core checks the
+	 *  name, the scope and the arrangement; another saved diagram of the connection with the same
+	 *  name is refused.
+	 */
+	saveDiagram: (connection: ConnectionKeyItem_Deserialize, id: number | null, name: string, scope: DiagramScopeItem_Deserialize, options: DiagramOptionsItem, arrangement: DiagramArrangementItem) => typedError<SavedDiagramDetailItem_Serialize, string>(__TAURI_INVOKE("save_diagram", { connection, id, name, scope, options, arrangement })),
+	/**  Renames a saved diagram, keeping what it holds. */
+	renameSavedDiagram: (id: number, name: string) => typedError<SavedDiagramItem_Serialize, string>(__TAURI_INVOKE("rename_saved_diagram", { id, name })),
+	/**  Deletes a saved diagram; whether it was there. */
+	deleteSavedDiagram: (id: number) => typedError<boolean, string>(__TAURI_INVOKE("delete_saved_diagram", { id })),
 	/**  Whether `session` can take part in a comparison: `None`, or the core's reason why not. */
 	schemaCompareSupport: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("schema_compare_support", { session })),
 	/**
@@ -2725,6 +2744,16 @@ export type DependencyItem_Serialize = {
 /**  What a dependency is. */
 export type DependencyKindItem = "table" | "view" | "materializedView" | "function" | "procedure" | "trigger" | "foreignKey" | "sequence" | "type" | "index" | "other";
 
+/**  What the user arranged: with no positions the tables follow the automatic layout. */
+export type DiagramArrangementItem = {
+	positions: DiagramPlacementItem[],
+	notes: DiagramNoteItem[],
+	groups: DiagramGroupItem[],
+};
+
+/**  The palette a note or a group is colored from (ADR-084), drawn with `--er-color-*`. */
+export type DiagramColorItem = "gray" | "blue" | "green" | "amber" | "red" | "purple";
+
 export type DiagramColumnsItem = "all" | "keys" | "none";
 
 /**
@@ -2744,22 +2773,69 @@ export type DiagramEdgeItem = {
 	points: DiagramPointItem[],
 };
 
+/**  A table the saved diagram placed that is no longer read in its scope, where it was. */
+export type DiagramGoneItem = {
+	schema: string,
+	name: string,
+	title: string,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+};
+
+/**  A group's frame around its tables. */
+export type DiagramGroupFrameItem = {
+	/**  Its position in the arrangement's groups. */
+	group: number,
+	label: string,
+	color: DiagramColorItem,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+};
+
+export type DiagramGroupItem = {
+	name: string,
+	color: DiagramColorItem,
+	tables: TableNameItem[],
+};
+
 export type DiagramLayoutItem = DiagramLayoutItem_Serialize | DiagramLayoutItem_Deserialize;
 
 export type DiagramLayoutItem_Deserialize = {
+	/**
+	 *  The top left corner of what is drawn (a table placed by hand may be left of or above
+	 *  the origin).
+	 */
+	x: number,
+	y: number,
 	width: number,
 	height: number,
 	lineHeight: number,
 	nodes: DiagramNodeItem_Deserialize[],
 	edges: DiagramEdgeItem[],
+	gone: DiagramGoneItem[],
+	notes: DiagramNoteBoxItem[],
+	groups: DiagramGroupFrameItem[],
 };
 
 export type DiagramLayoutItem_Serialize = {
+	/**
+	 *  The top left corner of what is drawn (a table placed by hand may be left of or above
+	 *  the origin).
+	 */
+	x: number,
+	y: number,
 	width: number,
 	height: number,
 	lineHeight: number,
 	nodes: DiagramNodeItem_Serialize[],
 	edges: DiagramEdgeItem[],
+	gone: DiagramGoneItem[],
+	notes: DiagramNoteBoxItem[],
+	groups: DiagramGroupFrameItem[],
 };
 
 /**  The diagram font's measures, in pixels, as the UI measured them. */
@@ -2789,6 +2865,8 @@ export type DiagramNodeItem_Deserialize = {
 	typeX: number,
 	commentX: number,
 	rows: DiagramRowItem_Deserialize[],
+	/**  Not placed by the saved diagram: laid out by the core below the placed tables. */
+	new: boolean,
 };
 
 /**  A table's box, in pixels; the row and text positions are relative to its corner. */
@@ -2809,12 +2887,42 @@ export type DiagramNodeItem_Serialize = {
 	typeX: number,
 	commentX: number,
 	rows: DiagramRowItem_Serialize[],
+	/**  Not placed by the saved diagram: laid out by the core below the placed tables. */
+	new: boolean,
+};
+
+/**  A note, its text wrapped by the core. */
+export type DiagramNoteBoxItem = {
+	/**  Its position in the arrangement's notes. */
+	note: number,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	lines: string[],
+	color: DiagramColorItem,
+};
+
+export type DiagramNoteItem = {
+	x: number | null,
+	y: number | null,
+	width: number | null,
+	text: string,
+	color: DiagramColorItem,
 };
 
 export type DiagramOptionsItem = {
 	columns: DiagramColumnsItem,
 	types: boolean,
 	comments: boolean,
+};
+
+/**  Where the user put a table: its box's top left corner. */
+export type DiagramPlacementItem = {
+	schema: string,
+	name: string,
+	x: number | null,
+	y: number | null,
 };
 
 export type DiagramPointItem = {
@@ -6407,6 +6515,50 @@ export type SaveFileOutcome = { kind: "saved"; path: string; name: string; hash:
 { kind: "deletedOnDisk" } | 
 /**  The file's encoding cannot hold this character: save as UTF-8 instead? */
 { kind: "unrepresentable"; character: string; encoding: string };
+
+/**  A saved diagram with what it holds, checked by the core just now. */
+export type SavedDiagramDetailItem = SavedDiagramDetailItem_Serialize | SavedDiagramDetailItem_Deserialize;
+
+/**  A saved diagram with what it holds, checked by the core just now. */
+export type SavedDiagramDetailItem_Deserialize = {
+	saved: SavedDiagramItem_Deserialize,
+	scope: DiagramScopeItem_Deserialize,
+	options: DiagramOptionsItem,
+	arrangement: DiagramArrangementItem,
+};
+
+/**  A saved diagram with what it holds, checked by the core just now. */
+export type SavedDiagramDetailItem_Serialize = {
+	saved: SavedDiagramItem_Serialize,
+	scope: DiagramScopeItem_Serialize,
+	options: DiagramOptionsItem,
+	arrangement: DiagramArrangementItem,
+};
+
+/**  A saved diagram as listed (ADR-084). */
+export type SavedDiagramItem = SavedDiagramItem_Serialize | SavedDiagramItem_Deserialize;
+
+/**  A saved diagram as listed (ADR-084). */
+export type SavedDiagramItem_Deserialize = {
+	id: number,
+	/**  Its connection, by its folder and its id (ADR-075). */
+	connection: ConnectionKeyItem_Deserialize,
+	name: string,
+	updatedMs: number,
+	/**  Why it cannot be opened, when it cannot. */
+	unreadable?: string | null,
+};
+
+/**  A saved diagram as listed (ADR-084). */
+export type SavedDiagramItem_Serialize = {
+	id: number,
+	/**  Its connection, by its folder and its id (ADR-075). */
+	connection: ConnectionKeyItem_Serialize,
+	name: string,
+	updatedMs: number,
+	/**  Why it cannot be opened, when it cannot. */
+	unreadable: string | null,
+};
 
 /**  A column of a schema's relation: the catalog metadata search keeps (ADR-043). */
 export type SchemaColumnItem = {

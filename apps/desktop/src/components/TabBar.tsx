@@ -159,7 +159,7 @@ function tabView(tab: Tab) {
     transaction: transaction?.kind === "followed" && transaction.inTransaction
       ? (transaction.transaction.kind === "failed" ? "failed" : "open")
       : null,
-    modified: isModified(tab),
+    modified: isModified(tab) || tab.diagramModified === true,
   };
 }
 
