@@ -405,6 +405,13 @@ pub trait Connection: Send + Sync {
         objects.retain(|o| filter.matches(&o.name));
         Ok(objects)
     }
+    /// The DDL of an object from [`Connection::list_server_objects`], ending in `;`, for the
+    /// kinds that may have one ([`ServerObjectKind::has_definition`], ADR-082).
+    async fn server_object_definition(&self, _object: &ServerObject) -> Result<String> {
+        Err(DriverError::Other(
+            "this engine has no definitions for objects outside a schema".into(),
+        ))
+    }
     /// The DDL of an object from [`Connection::list_schema_objects`], ending in `;`.
     async fn object_definition(&self, _object: &SchemaObject) -> Result<String> {
         Err(DriverError::Other(

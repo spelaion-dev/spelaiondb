@@ -1170,8 +1170,15 @@ fn drop_schema_object(
         }
         (SchemaObjectKind::Event, "mysql") => format!("DROP EVENT {name}"),
         (SchemaObjectKind::Synonym, "sqlserver") => format!("DROP SYNONYM {name}"),
+        // Materialize, the only server of the postgres dialect that lists them (ADR-082).
+        (SchemaObjectKind::Sink, "postgres") => format!("DROP SINK {name}"),
+        (SchemaObjectKind::Connection, "postgres") => format!("DROP CONNECTION {name}{cascade}"),
+        (SchemaObjectKind::Secret, "postgres") => format!("DROP SECRET {name}{cascade}"),
         (SchemaObjectKind::Domain | SchemaObjectKind::Enum | SchemaObjectKind::Type, _)
-        | (SchemaObjectKind::Event | SchemaObjectKind::Synonym, _) => return unsupported(),
+        | (SchemaObjectKind::Event | SchemaObjectKind::Synonym, _)
+        | (SchemaObjectKind::Sink | SchemaObjectKind::Connection | SchemaObjectKind::Secret, _) => {
+            return unsupported();
+        }
     })
 }
 
@@ -1616,6 +1623,31 @@ mod tests {
                 false
             ),
             "DROP SYNONYM dbo.other;\n"
+        );
+        // Materialize's, through the postgres dialect (ADR-082); a sink has no CASCADE.
+        assert_eq!(
+            drop_sql(
+                &PostgresDialect,
+                object("public", "events_out", SchemaObjectKind::Sink, None),
+                true
+            ),
+            "DROP SINK public.events_out;\n"
+        );
+        assert_eq!(
+            drop_sql(
+                &PostgresDialect,
+                object("public", "kafka", SchemaObjectKind::Connection, None),
+                true
+            ),
+            "DROP CONNECTION public.kafka CASCADE;\n"
+        );
+        assert_eq!(
+            drop_sql(
+                &PostgresDialect,
+                object("public", "pw", SchemaObjectKind::Secret, None),
+                false
+            ),
+            "DROP SECRET public.pw;\n"
         );
     }
 

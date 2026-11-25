@@ -230,7 +230,10 @@ pub fn definition_sql(object: &SchemaObject) -> Result<String> {
         | SchemaObjectKind::Domain
         | SchemaObjectKind::Type
         | SchemaObjectKind::Event
-        | SchemaObjectKind::Synonym => Err(DriverError::Other(format!(
+        | SchemaObjectKind::Synonym
+        | SchemaObjectKind::Sink
+        | SchemaObjectKind::Connection
+        | SchemaObjectKind::Secret => Err(DriverError::Other(format!(
             "SQLite has no {:?} objects",
             object.kind
         ))),

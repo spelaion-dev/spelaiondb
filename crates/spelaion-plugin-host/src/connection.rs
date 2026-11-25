@@ -17,8 +17,8 @@ use spelaion_driver_api::{
 };
 use spelaion_plugin_protocol::ipc::BatchEncoder;
 use spelaion_plugin_protocol::{
-    CatalogRequest, Connect, ConnectResult, DETAILS, Execute, InsertRows, REQUESTS, Run,
-    SessionRequest, StreamId, method,
+    CATALOG_KINDS, CatalogRequest, Connect, ConnectResult, DETAILS, Execute, InsertRows, REQUESTS,
+    Run, SessionRequest, StreamId, method,
 };
 use tokio::sync::mpsc;
 
@@ -487,6 +487,22 @@ impl Connection for PluginConnection {
             ..self.catalog()
         };
         self.ask(method::OBJECT_DEFINITION, request, "sql").await
+    }
+
+    // A plugin older than 1.3 is not asked: its engine has no such definitions, as a
+    // compiled-in driver without them would (ADR-082).
+    async fn server_object_definition(&self, object: &ServerObject) -> Result<String> {
+        if self.process.info().protocol < CATALOG_KINDS {
+            return Err(DriverError::Other(
+                "this engine has no definitions for objects outside a schema".into(),
+            ));
+        }
+        let request = CatalogRequest {
+            server_object: Some(object.clone()),
+            ..self.catalog()
+        };
+        self.ask(method::SERVER_OBJECT_DEFINITION, request, "sql")
+            .await
     }
 
     async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {

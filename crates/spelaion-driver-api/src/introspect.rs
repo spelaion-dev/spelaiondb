@@ -69,6 +69,12 @@ pub enum SchemaObjectKind {
     Event,
     /// Another name for an object (SQL Server).
     Synonym,
+    /// Where a streaming engine writes a relation's changes out (Materialize, ADR-082).
+    Sink,
+    /// How a streaming engine reaches an outside system: Kafka, a database… (Materialize).
+    Connection,
+    /// A secret a connection uses (Materialize); its value is never read.
+    Secret,
 }
 
 /// `sql` without its trailing blanks and ending in `;`, as [`crate::Connection::object_definition`]
@@ -103,6 +109,25 @@ pub enum ServerObjectKind {
     Login,
     Tablespace,
     Extension,
+    /// Compute resources that run a streaming engine's objects (Materialize, ADR-082).
+    Cluster,
+    /// One replica of a cluster; its detail names the cluster (Materialize).
+    ClusterReplica,
+}
+
+impl ServerObjectKind {
+    /// Kinds that may have a definition ([`crate::Connection::server_object_definition`]):
+    /// the explorer offers to open it only for these (ADR-082).
+    pub fn has_definition(self) -> bool {
+        match self {
+            ServerObjectKind::Cluster | ServerObjectKind::ClusterReplica => true,
+            ServerObjectKind::Role
+            | ServerObjectKind::User
+            | ServerObjectKind::Login
+            | ServerObjectKind::Tablespace
+            | ServerObjectKind::Extension => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -1,6 +1,6 @@
 # The plugin protocol
 
-**Version 1.1. Experimental until SpelaionDB 1.0: it may change in any 0.x release.**
+**Version 1.3. Experimental until SpelaionDB 1.0: it may change in any 0.x release.**
 
 An engine plugin is a program the core starts and talks to over the program's standard input
 and output (ADR-041). It is the wire to one or more engines: it connects, runs statements,
@@ -93,11 +93,16 @@ What each minor version added:
 | 1.0 | Everything not listed below |
 | 1.1 | Requests for engines whose language is not SQL (`run` kind `request`), `connect`'s `options`, and the object kinds `collection`, `node_label` and `relationship_type` (ADR-056) |
 | 1.2 | A relation's properties, partitions and dependencies: `object_properties`, `table_partitions` and `object_dependencies` (SDB-393) |
+| 1.3 | The schema object kinds `sink`, `connection` and `secret`, the server object kinds `cluster` and `cluster_replica`, and `server_object_definition` (ADR-082) |
 
 The core never sends what a version added to a plugin that chose an older one: a request, or
 a `connect` with `options`, is refused in the core with a message that names both versions;
 1.2's requests are not sent, and the engine tells none of them (no properties, no
 partitions, dependencies it cannot tell), as a compiled-in driver without them would.
+1.3's `server_object_definition` is not sent either, and its engine has no such definitions.
+In the other direction, a plugin that answered an older version than it speaks leaves what
+its version did not have out of its answers: an object of a kind 1.3 added is not in a list
+sent to a core that chose 1.2, which would fail to read the whole list for it.
 
 ## Errors
 A request that fails answers with an `error` whose `code` is `-32000` and whose `data` is the
@@ -272,6 +277,7 @@ name returns, as JSON with the field names of `spelaion-driver-api`.
 | `object_properties` (1.2) | `schema`, `name` | `{"properties": [ObjectProperty]}` |
 | `table_partitions` (1.2) | `schema`, `name` | `{"partitioning": Partitioning \| null}` |
 | `object_dependencies` (1.2) | `schema`, `name` | `{"dependencies": Dependencies \| null}` |
+| `server_object_definition` (1.3) | `server_object` | `{"sql": "…"}` |
 
 `filter` is a `NameFilter` (`{"include": ["…"], "exclude": ["…"]}`); with it the result is
 narrowed as `list_schemas_matching`, `list_objects_matching` and
@@ -289,6 +295,13 @@ An `ObjectInfo`'s `kind` is `table`, `partitioned_table`, `view`, `materialized_
 `foreign_table`, and since 1.1 also `collection` (records with no fixed columns: a MongoDB
 collection, a search index), `node_label` and `relationship_type` (a graph's). The core writes
 no SQL for the kinds 1.1 added.
+
+A `SchemaObject`'s `kind` is `function`, `procedure`, `aggregate`, `sequence`, `trigger`,
+`enum`, `domain`, `type`, `event` or `synonym`, and since 1.3 also `sink`, `connection` and
+`secret` (a streaming engine's, ADR-082; a secret is listed by name, its value never read).
+A `ServerObject`'s `kind` is `role`, `user`, `login`, `tablespace` or `extension`, and since
+1.3 also `cluster` and `cluster_replica`. `server_object_definition` is asked only for those
+two kinds, the ones the core says may have a definition.
 
 ## What a plugin must never do
 - Write anything but frames to standard output.

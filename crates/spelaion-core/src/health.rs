@@ -575,6 +575,11 @@ impl Connection for Tracked {
         self.observe(self.inner.object_definition(object).await)
     }
 
+    async fn server_object_definition(&self, object: &ServerObject) -> Result<String> {
+        let _busy = self.activity.begin().await;
+        self.observe(self.inner.server_object_definition(object).await)
+    }
+
     async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.relation_definition(schema, name).await)

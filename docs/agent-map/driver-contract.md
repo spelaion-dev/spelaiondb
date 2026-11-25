@@ -24,6 +24,14 @@
   empty list; `Dependencies::untracked` names the kinds it does not record. A plugin of an older
   protocol is not asked (`spelaion-plugin-host`). SQLite's are `spelaion-sqlite-schema`'s
   `details.rs` (a view's tables read from the program `EXPLAIN` shows, by root page).
+  Protocol 1.3 (ADR-082) adds the schema object kinds `sink`, `connection` and `secret`, the
+  server object kinds `cluster` and `cluster_replica` (Materialize's), and
+  `server_object_definition`, asked only for the kinds `ServerObjectKind::has_definition` names.
+  The host never asks an older plugin for it; the SDK (`serve.rs`, `speaks`) leaves the new
+  kinds out of the lists it sends a core that chose 1.2 or older, which could not read them.
+  A new kind is a new minor version this way: the kind, the SDK's filter, the host's guard, the
+  spec's table and `spelaion-test-plugin`'s cases (`tests/protocol.rs`), then a `plugin-sdk-v*`
+  tag the plugins move to.
   `list_columns` is every
   column of a schema in one catalog query (metadata search, ADR-043), and `execute_bound` runs
   one read with text values bound to `bound_placeholder`'s placeholders (MySQL binds them to

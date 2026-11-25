@@ -22,8 +22,8 @@ use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnInfo, ColumnMeta, ConnectParams, Connection, Dependencies,
     DependencyInfo, DependencyKind, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
     InsertTarget, KeepAlive, LogicalType, Notice, ObjectInfo, ObjectKind, ObjectProperty,
-    PartitionInfo, Partitioning, PlanMode, Result, ResultSchema, SchemaInfo, TableInfo, TextRows,
-    TransactionState,
+    PartitionInfo, Partitioning, PlanMode, Result, ResultSchema, SchemaInfo, SchemaObject,
+    SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo, TextRows, TransactionState,
 };
 use spelaion_plugin_protocol::{Frame, Message, RpcError, code, read_frame, write_frame};
 use tokio::sync::Notify;
@@ -156,6 +156,8 @@ fn minor_zero() {
             // send one.
             Some("execute") => std::process::exit(4),
             // 1.2's requests (SDB-393): a plugin of 1.0 is never asked them.
+            // 1.3's request (ADR-082): never asked of it either.
+            Some("server_object_definition") => std::process::exit(6),
             Some("object_properties" | "table_partitions" | "object_dependencies") => {
                 std::process::exit(5)
             }
@@ -764,6 +766,46 @@ impl Connection for MadeConnection {
             foreign_keys: Vec::new(),
             constraints: Vec::new(),
         })
+    }
+
+    // 1.3's kinds (ADR-082): a sink in `main`, a cluster with a replica.
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        Ok(match schema {
+            "main" => vec![SchemaObject {
+                schema: "main".into(),
+                name: "events_out".into(),
+                kind: SchemaObjectKind::Sink,
+                detail: None,
+                comment: None,
+            }],
+            _ => Vec::new(),
+        })
+    }
+
+    async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
+        let object = |name: &str, kind, detail: Option<&str>| ServerObject {
+            name: name.into(),
+            kind,
+            detail: detail.map(String::from),
+            system: false,
+        };
+        Ok(vec![
+            object("quickstart", ServerObjectKind::Cluster, Some("25cc")),
+            object(
+                "r1",
+                ServerObjectKind::ClusterReplica,
+                Some("cluster quickstart"),
+            ),
+        ])
+    }
+
+    async fn server_object_definition(&self, object: &ServerObject) -> Result<String> {
+        match (object.kind, object.name.as_str()) {
+            (ServerObjectKind::Cluster, "quickstart") => {
+                Ok("CREATE CLUSTER quickstart (SIZE = '25cc');".into())
+            }
+            _ => Err(other(&format!("no definition for {}", object.name))),
+        }
     }
 
     async fn object_properties(&self, schema: &str, name: &str) -> Result<Vec<ObjectProperty>> {
