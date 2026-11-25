@@ -221,6 +221,24 @@
   `explorerSessionClosed` (`connect.ts`), never by hand. Tabs still name their connection by
   its id (`tabKey`, `tabOnConnection`) until the card that makes them belong to a folder
   (ADR-075 point 7); the metadata search (`dbSearch.ts`) gets each connection as its tag.
+- Open folders (ADR-075, SDB-500): `AppState::folders` (`src-tauri/src/open_folders.rs`) is
+  the ordered list of open folders, at most `MAX_FOLDERS` (ten), each with its own `Config`
+  (that folder alone with the personal layer) and its canonical root; the same root is never
+  open twice. `AppState::config()` is the folder the page shows (the last one opened, or the
+  personal layer alone), `open_configs()` every open folder's: a personal connection is
+  resolved with `Resolver::with_open_folders` and its definition with
+  `connection_definition_open` over them, a folder's connection only ever with its own.
+  `reload` loads each folder again on its own and installs it only into the same opening of
+  that folder. Each `DesktopSession` records its connection's folder; `close_folder` closes
+  that folder's sessions and no other (`open_folders::sessions_of`), personal ones stay.
+  Commands: `add_folder` (closes nothing), `close_folder`, `list_folders` (each with its
+  trust), `trust_workspace(root)` for any open folder, and `open_workspace`, which the page
+  uses while it shows one folder: it closes every other open folder first. Adding or closing
+  a folder is a switch of `AppState::folder` (SDB-377), so a connection started before lands
+  nowhere. The open folders are remembered in `desktop-open-folders.json` and opened again at
+  start (a launch that names a folder opens that one); `desktop-last-workspace.txt` is read
+  once, to migrate. The unit tests of `open_folders.rs` pin the limit, the roots, the order,
+  what is remembered and what a reload may replace.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

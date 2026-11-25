@@ -173,7 +173,7 @@ pub async fn set_mcp_connection_read_only(
     read_only: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let config = state.config.read().await;
+    let config = state.config().await;
     let id = crate::connection_in(&config, &connection)?;
     let entry = config
         .connection(&id)
@@ -218,7 +218,7 @@ pub async fn mcp_access(state: State<'_, AppState>) -> CmdResult<Vec<McpAccessIt
             .map(|(read_only, _)| read_only),
     );
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let config = state.config.read().await;
+    let config = state.config().await;
     let trusted = config
         .workspace_root
         .as_deref()

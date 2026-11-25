@@ -80,7 +80,7 @@ pub async fn diagnostic_info(
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(std::path::PathBuf::from);
     let user_name = std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" }).ok();
-    let config = state.config.read().await;
+    let config = state.config().await;
     let scrubber = Scrubber::new(&config, home.as_deref(), user_name.as_deref());
     let log = log_tail(&AppLog::in_user_dir(&state.user_dir), LOG_LINES);
     Ok(report(&input, &log, &scrubber))

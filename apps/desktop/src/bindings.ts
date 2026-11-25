@@ -995,8 +995,28 @@ export const commands = {
 	 *  now), otherwise they are asked when connecting.
 	 */
 	importConnections: (client: string, path: string | null, filePassword: string | null, choices: ImportChoice[], target: ImportTarget) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, filePassword, choices, target })),
+	/**
+	 *  The page chose a folder (it shows one at a time, ADR-075): every other open folder closes,
+	 *  with its sessions, and `path` opens. Personal connections' sessions stay; the page asked
+	 *  first and disconnected its own tabs.
+	 */
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
-	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
+	/**
+	 *  Opens `path` beside the folders already open (ADR-075): nothing closes. The same root again
+	 *  is the folder already open; an eleventh is refused. The page shows the last one opened.
+	 */
+	addFolder: (path: string) => typedError<OpenFoldersItem, string>(__TAURI_INVOKE("add_folder", { path })),
+	/**
+	 *  Closes the open folder of `root` (as listed) and its sessions (ADR-075). Personal
+	 *  connections' sessions and other folders' stay.
+	 */
+	closeFolder: (root: string) => typedError<OpenFoldersItem, string>(__TAURI_INVOKE("close_folder", { root })),
+	/**  The open folders, in the order they were opened, each with its trust. */
+	listFolders: () => typedError<OpenFoldersItem, string>(__TAURI_INVOKE("list_folders")),
+	/**
+	 *  Trusts the open repository `root` (ADR-009), one of the open folders (ADR-075). The UI asks
+	 *  for it after showing what it implies.
+	 */
 	trustWorkspace: (root: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace", { root })),
 	/**
 	 *  Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
@@ -4993,6 +5013,28 @@ export type ObjectTargetItem_Serialize = { kind: "schema"; name: string } |
 
 /**  What a run does when a statement fails (ADR-035). */
 export type OnErrorItem = "stop" | "continue" | "ask";
+
+/**  One open folder. */
+export type OpenFolderItem = {
+	/**  The path as it was chosen. */
+	path: string,
+	/**  Its canonical root: what `close_folder` takes, and what a connection's folder is. */
+	root: string,
+	/**  It is (inside) a repository: it has a `.spelaion` folder. */
+	repository: boolean,
+	/**  The repository is trusted (ADR-022). */
+	trusted: boolean,
+	/**  Its configuration files with errors, with file:line:column. */
+	problems: string[],
+};
+
+/**
+ *  The folders the window holds open (ADR-075, SDB-500), in the order they were opened. The
+ *  page shows the last one (`WorkspaceInfo`) until it shows several.
+ */
+export type OpenFoldersItem = {
+	folders: OpenFolderItem[],
+};
 
 /**  The file behind a kept file tab. */
 export type OpenTabFileItem = OpenTabFileItem_Serialize | OpenTabFileItem_Deserialize;
