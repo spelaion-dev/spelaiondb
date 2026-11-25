@@ -24,6 +24,16 @@ A summary of how the pieces fit together. The reasons behind each decision are i
 
 ## Key flows
 
+**What identifies a connection (ADR-075)**
+A connection is its folder and its id: `spelaion_config::ConnectionKey`, the repository's
+canonical root (none for a personal connection) and the `ConnectionId` as it always was
+(`prod/orders`, or `~/local`). The id's text never holds a folder, and no folder is parsed out of
+it. The local store's keys (`store_scope`: the root's text, or empty) and the keychain's names
+(`repo:<root>/<id>/password`, `~/<id>/password`) come from it, unchanged from before it existed,
+and every new audit entry records the folder beside the id. A PostgreSQL connection's database
+sits beside this identity, never inside it (ADR-074). Still one folder open: the desktop's
+commands and the page take the type in the next steps of SDB-495.
+
 **Opening a connection**
 1. `spelaion-config` loads `.spelaion/` and the personal directory, and resolves the
    connection (variables, paths, secrets). Repository connections require trusting it.

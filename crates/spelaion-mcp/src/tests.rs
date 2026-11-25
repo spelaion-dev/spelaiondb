@@ -1233,6 +1233,41 @@ async fn removing_trust_hides_the_repositorys_connections() {
     assert_eq!(rows(&db), 1);
 }
 
+/// ADR-075 (SDB-495): two repositories may each have an `orders`; the audit log tells their
+/// calls apart by the folder each server serves, and a personal connection's has none.
+#[tokio::test]
+async fn audit_entries_record_the_folder_the_server_serves() {
+    let user_dir = temp("folder-user");
+    let mut roots = Vec::new();
+    for name in ["folder-a", "folder-b"] {
+        let repo = temp(name);
+        let db = database(&repo);
+        let connections = repo.join(".spelaion/connections");
+        std::fs::create_dir_all(&connections).unwrap();
+        std::fs::write(
+            connections.join("orders.toml"),
+            writable_connection(&db, ""),
+        )
+        .unwrap();
+        let config = spelaion_config::load(Some(&repo), &user_dir);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+        let server = server(Some(&repo), &user_dir, false);
+        let read = query(&server, "orders", "select count(*) from notes").await;
+        assert!(!refused(&read), "{}", body(&read));
+        let last = &app_store(&user_dir).recent(1).unwrap()[0];
+        assert_eq!(last.connection, "orders", "the id agents see stays the id");
+        let root = std::fs::canonicalize(&repo).unwrap().display().to_string();
+        assert_eq!(last.folder.as_deref(), Some(root.as_str()));
+        roots.push(root);
+    }
+    assert_ne!(roots[0], roots[1]);
+    let p = personal(false);
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    assert_eq!(app_store(&p.user_dir).recent(1).unwrap()[0].folder, None);
+}
+
 #[tokio::test]
 async fn a_broken_file_exposes_nothing_until_it_is_fixed() {
     let p = personal(false);

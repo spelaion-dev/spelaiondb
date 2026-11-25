@@ -24,6 +24,7 @@ mod engine_change;
 pub mod engine_options;
 mod error;
 mod heidisql;
+mod identity;
 mod import;
 mod import_sources;
 mod linux_dirs;
@@ -68,6 +69,7 @@ pub use edit::{
 pub use engine_change::EngineChange;
 pub use error::{ConfigError, ProblemKind, ResolveError};
 pub use heidisql::{HeidiSqlError, heidisql_has_registry, read_heidisql, read_heidisql_registry};
+pub use identity::{ConnectionKey, canonical_folder, folder_scope, repository_scope};
 pub use import::{
     DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedPassword, ImportedProxy,
     ImportedSsh, ImportedTls, KeychainItem, SavedSecrets, TargetFolder, find_duplicate,

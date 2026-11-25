@@ -239,34 +239,13 @@ impl AppState {
     }
 }
 
-/// Personal connections share history across folders; repository connections are namespaced
-/// by their canonical root so identical connection IDs in different projects never collide.
-fn history_workspace(config: &Config, source: Source) -> String {
-    match source {
-        Source::User => String::new(),
-        Source::Workspace => config
-            .workspace_root
-            .as_ref()
-            .map_or_else(String::new, |root| {
-                std::fs::canonicalize(root)
-                    .unwrap_or_else(|_| root.clone())
-                    .display()
-                    .to_string()
-            }),
-    }
-}
-
+/// The id the page sent, read by the configuration crate (ADR-075: the text never holds a
+/// folder). Where things are kept comes from the connection's identity,
+/// `spelaion_config::ConnectionKey`: personal connections share them across folders, and
+/// repository ones are kept under their canonical root, so identical ids in different projects
+/// never collide.
 fn parse_id(id: &str) -> ConnectionId {
-    match id.strip_prefix("~/") {
-        Some(path) => ConnectionId {
-            source: Source::User,
-            path: path.into(),
-        },
-        None => ConnectionId {
-            source: Source::Workspace,
-            path: id.into(),
-        },
-    }
+    ConnectionId::parse(id)
 }
 
 /// File where the last opened folder is remembered.
@@ -877,7 +856,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
         .map(|c| spelaion_core::file_tls_warning(&config, c).map(TlsWarningItem::from))
         .collect();
     let types = spelaion_config::ConnectionTypes::load(&config, &trust);
-    let workspace = history_workspace(&config, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&config);
     drop(config);
     let mut items = Vec::with_capacity(connections.len());
     for ((c, tls_warning), engine_mark) in connections.into_iter().zip(tls_warnings).zip(marks) {
@@ -926,7 +905,7 @@ async fn list_history(
     limit: u32,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<HistoryItem>> {
-    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
     state
         .history
         .list(workspace, search, limit as usize, offset as usize)
@@ -944,7 +923,7 @@ async fn save_snippet(
     connection: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
-    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
     let id = state
         .history
         .save_snippet(workspace, name, sql, connection.unwrap_or_default())
@@ -956,7 +935,7 @@ async fn save_snippet(
 /// Saved queries of the open workspace and the personal ones, by name.
 #[command]
 async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<Vec<SnippetItem>> {
-    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
     state
         .history
         .snippets(workspace, search)
@@ -967,7 +946,7 @@ async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<
 
 #[command]
 async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> {
-    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
     state
         .history
         .delete_visible_snippet(workspace, id.into())
@@ -986,7 +965,7 @@ async fn set_history_enabled(
     if config.connection(&id).is_none() {
         return Err(format!("unknown connection: {connection}"));
     }
-    let workspace = history_workspace(&config, id.source);
+    let workspace = spelaion_config::ConnectionKey::of(&config, &id).store_scope();
     drop(config);
     state
         .history
@@ -1067,8 +1046,8 @@ async fn filter_explorer_name(
 async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkItem>> {
     let workspaces = {
         let config = state.config.read().await;
-        let mut scopes = vec![history_workspace(&config, Source::User)];
-        let repository = history_workspace(&config, Source::Workspace);
+        let mut scopes = vec![spelaion_config::folder_scope(None)];
+        let repository = spelaion_config::repository_scope(&config);
         if !repository.is_empty() {
             scopes.push(repository);
         }
@@ -1123,7 +1102,7 @@ async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<S
     if config.connection(&id).is_none() {
         return Err(format!("unknown connection: {connection}"));
     }
-    Ok(history_workspace(&config, id.source))
+    Ok(spelaion_config::ConnectionKey::of(&config, &id).store_scope())
 }
 
 /// Whether there is a system keychain. Without one (Linux with no Secret Service running) the
@@ -1471,7 +1450,7 @@ async fn move_connection(
         })?;
         let workspace = match id.source {
             Source::User => None,
-            Source::Workspace => Some(history_workspace(&config, Source::Workspace)),
+            Source::Workspace => Some(spelaion_config::repository_scope(&config)),
         };
         (moved, workspace)
     };
@@ -1983,7 +1962,7 @@ async fn connect(
         };
         (
             resolved,
-            history_workspace(&config, id.source),
+            spelaion_config::ConnectionKey::of(&config, &id).store_scope(),
             definition_now(&config, &trust, &id),
         )
     };
@@ -4422,7 +4401,7 @@ async fn filtered_table(
         .ok_or_else(|| format!("unknown connection: {connection}"))?;
     let dialect =
         spelaion_core::dialect_of(entry.file.engine).ok_or("no driver for this engine")?;
-    let workspace = history_workspace(&config, id.source);
+    let workspace = spelaion_config::ConnectionKey::of(&config, &id).store_scope();
     Ok((
         spelaion_core::FilteredTable {
             workspace,

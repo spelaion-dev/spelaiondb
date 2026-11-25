@@ -7,23 +7,29 @@
 //! entries start with `~/`. Moving a repository to another folder only means its passwords
 //! are asked (and can be remembered) again.
 
+use std::path::PathBuf;
+
+use crate::identity::{ConnectionKey, canonical_folder, keychain_scope};
 use crate::load::{Config, ConnectionId, Source};
-use crate::trust::canonical;
 
 fn scope(config: &Config, source: Source) -> String {
     match source {
-        Source::User => "~".to_string(),
-        Source::Workspace => match &config.workspace_root {
-            Some(root) => format!("repo:{}", canonical(root).display()),
-            // Not reachable for loaded repository entries; kept distinct from personal ones.
-            None => "repo:".to_string(),
-        },
+        Source::User => keychain_scope(None),
+        // Not reachable without a root for loaded repository entries; an empty folder is
+        // kept distinct from personal ones.
+        Source::Workspace => keychain_scope(Some(
+            &config
+                .workspace_root
+                .as_deref()
+                .map_or_else(PathBuf::new, canonical_folder),
+        )),
     }
 }
 
-/// Entry of a connection's password: `~/<id>/password` or `repo:<root>/<id>/password`.
+/// Entry of a connection's password: `~/<id>/password` or `repo:<root>/<id>/password`, from
+/// its identity (ADR-075).
 pub fn connection_account(config: &Config, id: &ConnectionId) -> String {
-    format!("{}/{}/password", scope(config, id.source), id.path)
+    ConnectionKey::of(config, id).keychain_account()
 }
 
 /// Entry of a tunnel proxy's password (ADR-027): `~/tunnel/<name>/proxy/password` or
