@@ -26,6 +26,7 @@ mod table_copy;
 mod update;
 mod update_state;
 mod webview_args;
+mod windows;
 
 use spelaion_desktop_macros::command;
 use std::collections::HashMap;
@@ -95,9 +96,14 @@ struct AppState {
     comparisons: std::sync::Mutex<HashMap<u32, schema_compare::StoredComparison>>,
     /// The process monitor's live dashboards, by monitor session (SDB-192).
     dashboards: dashboard::Dashboards,
+    /// The open windows and what each shows (SDB-30, ADR-083): views over this one state.
+    windows: windows::Windows,
 }
 
 struct DesktopSession {
+    /// The label of the window whose page opened it (SDB-30): closing that window closes it,
+    /// and no other window's closing does.
+    window: String,
     open: Arc<OpenConnection>,
     /// A prompted password stays in memory only for the lifetime of this session.
     password: Option<Secret>,
@@ -1158,6 +1164,7 @@ async fn test_connection(
     network_only: bool,
     job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
+    window: tauri::Window,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectionTestOutcome> {
@@ -1197,7 +1204,11 @@ async fn test_connection(
             spelaion_core::TestScope::Full
         },
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app, state.pending.clone())),
+        interaction: Arc::new(AppInteraction::for_window(
+            app,
+            state.pending.clone(),
+            window.label(),
+        )),
         password: password.filter(|p| !p.is_empty()).map(Secret::new),
         name,
     };
@@ -1686,6 +1697,7 @@ async fn test_tunnel(
     proxy_password: Option<String>,
     job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
+    window: tauri::Window,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<TunnelTestOutcome> {
@@ -1712,7 +1724,11 @@ async fn test_tunnel(
         resolved,
         tunnel_passwords(passwords, proxy_password),
         &KnownHosts::for_user(&state.user_dir),
-        Arc::new(AppInteraction::new(app, state.pending.clone())),
+        Arc::new(AppInteraction::for_window(
+            app,
+            state.pending.clone(),
+            window.label(),
+        )),
         &observer,
         stop,
     )
@@ -1937,9 +1953,10 @@ async fn connect(
     password: Option<String>,
     remember: bool,
     editor: bool,
-    app: AppHandle,
+    window: tauri::Window,
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectOutcome> {
+    let app = window.app_handle().clone();
     let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
     };
@@ -1974,7 +1991,11 @@ async fn connect(
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            window.label(),
+        )),
         password: password.clone(),
         read_only_session: false,
     };
@@ -2045,6 +2066,7 @@ async fn connect(
     let old = sessions.insert(
         session,
         DesktopSession {
+            window: window.label().to_owned(),
             open,
             password,
             history_workspace,
@@ -2073,9 +2095,10 @@ async fn connect_from_session(
     session: String,
     database: Option<String>,
     editor: bool,
-    app: AppHandle,
+    window: tauri::Window,
     state: State<'_, AppState>,
 ) -> CmdResult<FromSessionOutcome> {
+    let app = window.app_handle().clone();
     if source == session {
         return Err("the source and target sessions must differ".into());
     }
@@ -2130,7 +2153,11 @@ async fn connect_from_session(
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            window.label(),
+        )),
         password: password.clone(),
         read_only_session: false,
     };
@@ -2171,6 +2198,7 @@ async fn connect_from_session(
     sessions.insert(
         session,
         DesktopSession {
+            window: window.label().to_owned(),
             open,
             password,
             history_workspace,
@@ -2466,6 +2494,18 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     if state.quit.phase() == app_lifecycle::QuitPhase::Quitting {
         return;
     }
+    // Another window (SDB-30): its own page asks, about its own tabs only; quitting is the main
+    // window's alone.
+    if window.label() != windows::MAIN {
+        let label = window.label();
+        match state.windows.close_requested(label) {
+            windows::CloseDecision::Close => return,
+            windows::CloseDecision::AskThePage => {}
+        }
+        api.prevent_close();
+        let _ = windows::WindowCloseRequested {}.emit_to(window.app_handle(), label);
+        return;
+    }
     // A command holding the sessions means there are some: the UI decides. A lost session
     // counts here too: its tab may hold row edits not applied, which only the UI knows, and the
     // UI asks about those (its transaction is gone with its connection: `open_transactions`).
@@ -2474,12 +2514,65 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
         .try_lock()
         .map(|sessions| sessions.is_empty())
         .unwrap_or(false);
-    match state.quit.close_requested(no_sessions) {
+    // A connection window may hold work its page knows about (SDB-30): quitting asks it first.
+    let nothing_to_ask = no_sessions && state.windows.connection_windows().is_empty();
+    match state.quit.close_requested(nothing_to_ask) {
         app_lifecycle::CloseDecision::Close => return,
         app_lifecycle::CloseDecision::AskTheUi => {}
     }
     api.prevent_close();
-    let _ = QuitRequested {}.emit(window.app_handle());
+    // To the main window only: another window's page never answers for quitting.
+    let _ = QuitRequested {}.emit_to(window.app_handle(), windows::MAIN);
+}
+
+/// A window is gone (SDB-30): a quit that waited for it hears so, the results windows it owned
+/// go with it, the sessions it opened close (none if its page already closed them), and the tab
+/// whose results it showed shows them again. The main window going is the app quitting.
+fn on_window_destroyed(window: &tauri::Window) {
+    let label = window.label().to_owned();
+    let app = window.app_handle().clone();
+    if label == windows::MAIN {
+        // The app quits with its main window: a results window left alone never keeps it.
+        app.exit(0);
+        return;
+    }
+    let state = app.state::<AppState>();
+    let kind = state.windows.kind(&label);
+    for owned in state.windows.closed(&label) {
+        if let Some(results) = app.get_webview_window(&owned) {
+            let _ = results.destroy();
+        }
+    }
+    if let Some(windows::WindowKind::Results { owner, tab }) = kind {
+        let _ = windows::ResultsWindowClosed { tab }.emit_to(&app, owner.as_str());
+    }
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        close_window_sessions(&state, &label).await;
+    });
+}
+
+/// Closes every session the window `label` opened, and only those, as `disconnect` closes one,
+/// and frees the results of its tabs (SDB-30).
+async fn close_window_sessions(state: &AppState, label: &str) {
+    let removed: Vec<(String, DesktopSession)> = {
+        let mut sessions = state.sessions.lock().await;
+        let keys: Vec<String> = sessions
+            .iter()
+            .filter(|(_, session)| session.window == label)
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| sessions.remove(&key).map(|session| (key, session)))
+            .collect()
+    };
+    for (key, session) in removed {
+        session.open.session.stop_paused_run();
+        state.result_tabs.close_editor(&key);
+        if let Ok(open) = Arc::try_unwrap(session.open) {
+            open.close().await;
+        }
+    }
 }
 
 #[command]
@@ -6641,6 +6734,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             quit_asking,
             quit_cancelled,
             quit_app,
+            windows::window_context,
+            windows::open_connection_window,
+            windows::open_results_window,
+            windows::close_results_window,
+            windows::close_window,
+            windows::window_stays_open,
+            windows::close_other_windows,
         ])
         .typ::<WindowErrorItem>()
         .events(tauri_specta::collect_events![
@@ -6654,7 +6754,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             plugins::PluginInstallChanged,
             plugins::PluginsChanged,
             launch::LaunchRequested,
-            update_state::UpdateChanged
+            update_state::UpdateChanged,
+            windows::WindowCloseRequested,
+            windows::ResultsWindowClosed
         ])
 }
 
@@ -6688,9 +6790,44 @@ fn open_main_window(
         .app
         .windows
         .iter()
-        .find(|window| window.label == "main")
+        .find(|window| window.label == windows::MAIN)
         .ok_or("tauri.conf.json has no \"main\" window")?;
-    let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+    build_window(app.handle(), config, interface_size)
+}
+
+/// Opens another window (SDB-30, ADR-083), registered as `label`: the main window's
+/// configuration with its own label and title. It loads the same page, which asks the core
+/// what it shows (`window_context`).
+pub(crate) fn open_window(
+    app: &AppHandle,
+    label: &str,
+    title: &str,
+    interface_size: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == windows::MAIN)
+        .ok_or("tauri.conf.json has no \"main\" window")?
+        .clone();
+    config.label = label.to_owned();
+    config.title = title.to_owned();
+    config.x = None;
+    config.y = None;
+    build_window(app, &config, interface_size)
+}
+
+/// Builds a window from `config`: every window of the app is built here, so each one gets the
+/// same webview switches (WebView2 refuses a second webview with other options over the same
+/// data folder), the clipboard access on Linux, the smoke test's place, and the interface size.
+fn build_window(
+    app: &AppHandle,
+    config: &tauri::utils::config::WindowConfig,
+    interface_size: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let window = tauri::WebviewWindowBuilder::from_config(app, config)?;
     #[cfg(target_os = "linux")]
     let window = window.enable_clipboard_access();
     // The smoke test's WebView2 switches (its debugging port), only in a build with the `e2e`
@@ -6916,6 +7053,7 @@ pub fn run() {
         diagrams: std::sync::Mutex::new(HashMap::new()),
         comparisons: std::sync::Mutex::new(HashMap::new()),
         dashboards: dashboard::Dashboards::default(),
+        windows: windows::Windows::new(),
     };
 
     let typed = builder.invoke_handler();
@@ -6932,10 +7070,10 @@ pub fn run() {
                 _ => typed(invoke),
             })
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                on_close_requested(window, api);
-            }
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => on_close_requested(window, api),
+            tauri::WindowEvent::Destroyed => on_window_destroyed(window),
+            _ => {}
         })
         .setup(move |app| {
             builder.mount_events(app);

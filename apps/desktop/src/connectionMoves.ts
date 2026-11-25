@@ -4,6 +4,7 @@
 // settings follow; this only checks it is not in use and points the tabs at its new id.
 
 import { call, commands, type ConnectionItem } from "./api";
+import { explorerSession } from "./windowContext";
 import i18n from "./i18n";
 import { refreshConnections } from "./components/Sidebar";
 import { useApp } from "./store";
@@ -36,7 +37,7 @@ export async function moveConnection(connection: ConnectionItem, folder: string)
   const app = useApp.getState();
   // The explorer's own session reads only the catalog: it closes, and expanding reconnects.
   if (app.explorerConnected.includes(connection.id)) {
-    await call(commands.disconnect(`meta:${connection.id}`)).catch(() => undefined);
+    await call(commands.disconnect(explorerSession(connection.id))).catch(() => undefined);
     app.setExplorerConnected(connection.id, false);
   }
   const moved = await call(commands.moveConnection(connection.id, folder));

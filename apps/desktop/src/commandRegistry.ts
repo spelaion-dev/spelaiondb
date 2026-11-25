@@ -104,6 +104,10 @@ export const COMMANDS = [
   { id: "view.splitDown", category: "view", label: "app:split.down", menus: ["tab"] },
   { id: "view.closeSplit", category: "view", label: "app:split.close", menus: ["tab"] },
   { id: "view.focusOtherPane", category: "view", label: "app:split.focusOther" },
+  // Other windows over the same core (SDB-30, ADR-083).
+  { id: "results.detach", category: "view", label: "app:detach.results" },
+  { id: "connection.openWindow", category: "general", label: "app:detach.openConnection" },
+  { id: "window.close", category: "general", label: "app:detach.closeWindow" },
   { id: "file.open", category: "file", label: "app:files.open", shortcut: "Ctrl+O", scope: "global", menus: ["file", "welcome"] },
   { id: "file.openPlan", category: "file", label: "editor:plan.open", menus: ["file"] },
   { id: "file.save", category: "file", label: "app:tabs.saveFile", shortcut: "Ctrl+S", scope: "global", menus: ["tab"] },

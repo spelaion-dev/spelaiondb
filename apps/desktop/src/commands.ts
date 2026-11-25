@@ -5,8 +5,10 @@
 // as the buttons and menus it stands for.
 
 import { call, commands as core, type ConnectionItem, type NameFilter, type ObjectItem, type SchemaObjectItem } from "./api";
+import { windowContext } from "./windowContext";
+import { detachResults, openConnectionWindow, reattachResults } from "./resultsWindow";
 import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./commandRegistry";
-import { closeQueryTab, connectTabFromExplorer, explorerDatabase, newQueryOnConnection } from "./connect";
+import { answerWindowCloseRequest, closeQueryTab, connectTabFromExplorer, explorerDatabase, newQueryOnConnection, tabLabel } from "./connect";
 import { readClipboardText } from "./clipboardText";
 import { toggleSidePanel } from "./sidePanel";
 import { duplicateConnection } from "./connectionCopies";
@@ -177,7 +179,7 @@ function importSession(context: CommandContext): { session: string; connectionId
   if (!tab?.connectionId) return null;
   if (isConnected(tab)) return { session: tab.id, connectionId: tab.connectionId };
   if (explorerSessionOpen(useApp.getState().explorerConnected, tab.connectionId)) {
-    return { session: `meta:${tab.connectionId}`, connectionId: tab.connectionId };
+    return { session: explorerSession(tab.connectionId), connectionId: tab.connectionId };
   }
   return null;
 }
@@ -298,6 +300,34 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "view.focusOtherPane": {
     enabled: () => useApp.getState().layout.kind === "split",
     run: () => focusOtherPane(),
+  },
+  "results.detach": {
+    enabled: (c) => editorTab(c) !== undefined,
+    label: (c) => (tabOf(c)?.resultsWindow ? "app:detach.reattach" : "app:detach.results"),
+    run: async (c) => {
+      const tab = editorTab(c);
+      if (!tab) return;
+      if (tab.resultsWindow) {
+        await reattachResults(tab.id);
+        return;
+      }
+      const label = await detachResults(tab.id, tabLabel(tab));
+      useApp.getState().updateTab(tab.id, { resultsWindow: label });
+    },
+  },
+  "connection.openWindow": {
+    // From the main window only: a connection's window shows that connection already.
+    enabled: (c) => windowContext().kind === "main" && Boolean(tabOf(c)?.connectionId),
+    run: (c) => {
+      const id = tabOf(c)?.connectionId;
+      const connection = useApp.getState().connections.find((item) => item.id === id);
+      if (connection) void openConnectionWindow(connection);
+    },
+  },
+  "window.close": {
+    // A connection's window, as its close button: it asks about its own tabs first.
+    enabled: () => windowContext().kind === "connection",
+    run: () => answerWindowCloseRequest(),
   },
   "file.open": { run: () => openFileDialog() },
   "file.openPlan": { run: () => openSavedPlan() },
@@ -514,7 +544,7 @@ function showInExplorer(target: { connectionId: string; schema?: string; name?: 
 
 function newConsole(connectionId: string, schema: string) {
   const tab = useApp.getState().addTab(connectionId);
-  connectTabFromExplorer(tab, `meta:${connectionId}`, explorerDatabase(connectionId, schema));
+  connectTabFromExplorer(tab, explorerSession(connectionId), explorerDatabase(connectionId, schema));
 }
 
 async function copyName(name: string) {
@@ -522,7 +552,7 @@ async function copyName(name: string) {
 }
 
 async function copyQualifiedName(connectionId: string, schema: string, name: string) {
-  const names = await call(core.qualifiedNames(`meta:${connectionId}`, [{ schema, names: [name] }]));
+  const names = await call(core.qualifiedNames(explorerSession(connectionId), [{ schema, names: [name] }]));
   await navigator.clipboard.writeText(names.join("\n"));
 }
 
@@ -537,7 +567,7 @@ function openStructure(connectionId: string, object: ObjectItem) {
       tab.tableDetails.kind === "columns",
   );
   const tab = app.addTableDetailsTab(connectionId, object.schema, object.name, "columns");
-  if (!existing) connectTabFromExplorer(tab, `meta:${connectionId}`, explorerDatabase(connectionId, object.schema));
+  if (!existing) connectTabFromExplorer(tab, explorerSession(connectionId), explorerDatabase(connectionId, object.schema));
 }
 
 /**

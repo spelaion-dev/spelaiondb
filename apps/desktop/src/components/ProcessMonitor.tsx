@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { explorerSession } from "../windowContext";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem } from "../api";
@@ -113,7 +114,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     async function connect() {
       try {
         // Reuse credentials from an open explorer or query without returning them to the UI.
-        const sources = [`meta:${connection.id}`, ...useApp.getState().tabs.filter((tab) => tab.connectionId === connection.id && isConnected(tab)).map((tab) => tab.id)];
+        const sources = [explorerSession(connection.id), ...useApp.getState().tabs.filter((tab) => tab.connectionId === connection.id && isConnected(tab)).map((tab) => tab.id)];
         let version: string | null = null;
         for (const source of sources) {
           try {

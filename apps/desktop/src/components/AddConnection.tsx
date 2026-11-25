@@ -3,6 +3,7 @@
 // in the core: this only collects what the user typed.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { explorerSession } from "../windowContext";
 import { useTranslation } from "react-i18next";
 import {
   call,
@@ -855,7 +856,7 @@ function ConnectionForm(props: {
         const app = useApp.getState();
         const tabs = app.tabs.filter((tab) => tab.connectionId === editing);
         await Promise.all(
-          [...tabs.map((tab) => tab.id), `meta:${editing}`].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
+          [...tabs.map((tab) => tab.id), explorerSession(editing)].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
         );
         for (const tab of tabs) app.setConnection(tab.id, DISCONNECTED);
       }

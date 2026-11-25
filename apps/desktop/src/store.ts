@@ -8,6 +8,7 @@ import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFo
 import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
 import { DISCONNECTED, withReadOnly, withTransaction, type TabConnection } from "./tabState";
 import { SINGLE, show, survivingPane, withoutTabs, type SplitLayout } from "./splitView";
+import { sessionPrefix } from "./windowContext";
 
 export interface ResultMeta {
   id: number;
@@ -144,6 +145,9 @@ export interface Tab {
   diagram?: DiagramScopeItem_Deserialize;
   /** A local saved plan, opened without executing SQL. */
   plan?: { path: string };
+  /** The label of the window its results are shown in (SDB-30), until the core says that
+   *  window closed (`ResultsWindowClosed`, also after Re-attach results). UI only, never kept. */
+  resultsWindow?: string;
   /** Pending row changes are kept in the mounted editor until saved or discarded. */
   pendingEdits?: boolean;
   savingEdits?: boolean;
@@ -495,7 +499,7 @@ export const useApp = create<AppStore>((set) => ({
   setConnections: (connections) => set({ connections }),
   addTab: (connectionId, sql) => {
     tabCounter += 1;
-    const id = `tab-${tabCounter}`;
+    const id = `${sessionPrefix()}tab-${tabCounter}`;
     const fromTemplate = sql === undefined && newScriptTemplate !== "";
     const tab: Tab = {
       id,
@@ -630,7 +634,7 @@ export const useApp = create<AppStore>((set) => ({
       tabCounter += 1;
       const file = kept.file ?? null;
       return {
-        id: `tab-${tabCounter}`,
+        id: `${sessionPrefix()}tab-${tabCounter}`,
         number: tabCounter,
         title: kept.title ?? undefined,
         pinned: kept.pinned || undefined,

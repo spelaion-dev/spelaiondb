@@ -926,6 +926,16 @@
   },
   "maximizeResults": "Maximize results ({{shortcut}})",
   "restoreResults": "Restore the editor ({{shortcut}})",
+  "detach": {
+    "action": "Show results in a new window",
+    "shownElsewhere": "The results are shown in their own window.",
+    "show": "Show results window",
+    "reattach": "Re-attach results",
+    "failed": "Could not open the results window: {{reason}}",
+    "heading": "Results of {{name}}",
+    "waiting": "Waiting for the editor tab…",
+    "reattachHint": "Shows them in the editor tab again and closes this window."
+  },
   "files": {
     "sqlFiles": "SQL files",
     "allFiles": "All files",

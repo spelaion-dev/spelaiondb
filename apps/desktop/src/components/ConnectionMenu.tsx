@@ -8,6 +8,8 @@ import type { ConnectionItem } from "../api";
 import { useApp } from "../store";
 import { disconnectAll, hasSessions } from "../connectionControl";
 import { ariaKeyShortcuts, shortcutText } from "../shortcuts";
+import { openConnectionWindow } from "../resultsWindow";
+import { windowConnection } from "../windowContext";
 
 /** The actions that need the explorer node's own state; the rest only need the store. */
 export interface ConnectionMenuActions {
@@ -119,6 +121,8 @@ export function ConnectionMenu({
     >
       {/* Open: what double-clicking the row does, then what needs the connection opened. */}
       {item(t("newQuery"), actions.newQuery)}
+      {/* Its own window, with its own tabs and sessions (SDB-30); not from that window. */}
+      {windowConnection() === null && item(t("openWindow"), () => void openConnectionWindow(connection))}
       {connected && item(t("openByName.menu"), () => app().setOpenObject({ connectionId: connection.id }), { shortcut: "openByName" })}
       {connected && item(t("refreshAllSchemas"), actions.refresh, { shortcut: "refresh" })}
       <hr />

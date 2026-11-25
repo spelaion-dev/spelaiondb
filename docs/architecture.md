@@ -136,6 +136,17 @@ anything to the user's app. No dependency was added for it. The installers regis
 files (`tauri.conf.json`'s `fileAssociations`); macOS's Finder sends them as an event, read
 the same way.
 
+**Several windows over one core (SDB-30, ADR-083)**
+The app may show more than one window, all in one process over one `AppState`: the main window,
+a connection's own window, and a tab's results in a window of their own. The desktop adapter's
+registry (`src-tauri/src/windows.rs`) says what each window shows and where its closing stands;
+each page asks it (`window_context`) before rendering. Each session records the window whose
+page opened it, and a window other than the main one prefixes its session keys with its label,
+so keys never collide. Closing a window closes its own sessions after its own question; closing
+the main window quits, after asking each connection window. A results window reads the same
+stored results by id; the tab's page sends it what it knows of the run (never a row) and carries
+out its requests, so a result is never run or fetched twice.
+
 ## Phases
 - **Phase 0** (done, 2026-11-02): risk experiments for the conditional decisions; ADR-003,
   ADR-007 and ADR-010 record what they measured.

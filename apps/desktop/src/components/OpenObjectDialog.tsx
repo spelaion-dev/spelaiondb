@@ -2,6 +2,7 @@
 // connections connected in the explorer and opens what is chosen, showing it in the tree.
 
 import { useEffect, useRef, useState } from "react";
+import { explorerSession } from "../windowContext";
 import { useTranslation } from "react-i18next";
 import { call, commands, type FoundObjectItem } from "../api";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
@@ -16,7 +17,7 @@ function errorText(e: unknown): string {
 
 /** Opens what was found: a table or view in a table data tab, anything else as its DDL. */
 export async function openFound(connectionId: string, found: FoundObjectItem) {
-  const session = `meta:${connectionId}`;
+  const session = explorerSession(connectionId);
   const app = useApp.getState();
   const { schema, name } = found.object;
   const database = explorerDatabase(connectionId, schema);
@@ -72,7 +73,7 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
           const filter = await call(commands.getExplorerFilter(connectionId));
           const showSystem = usePreferences.getState().explorer.showSystem;
           const answer = await call(
-            commands.searchObjects(`meta:${connectionId}`, text, filter.schemas, filter.objects, showSystem),
+            commands.searchObjects(explorerSession(connectionId), text, filter.schemas, filter.objects, showSystem),
           );
           if (!current) return;
           setFound(answer);

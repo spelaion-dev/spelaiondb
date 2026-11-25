@@ -8,6 +8,7 @@
 //   opens the table data tab filtered to its row by the core's filter.
 
 import { Channel } from "@tauri-apps/api/core";
+import { explorerSession } from "../windowContext";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -119,7 +120,7 @@ function NameSearch({ query, hidden, openFirst }: { query: string; hidden: boole
       for (const entry of missing) {
         const key = keyOf(entry.connectionId, entry.schema);
         try {
-          const read = await call(commands.listColumns(`meta:${entry.connectionId}`, entry.schema));
+          const read = await call(commands.listColumns(explorerSession(entry.connectionId), entry.schema));
           useCatalog.getState().setColumns(entry.connectionId, entry.schema, read);
           setFailures((f) => {
             if (!(key in f)) return f;
@@ -282,7 +283,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
       setRun((r) => withEvent(r, id, event));
     };
     try {
-      const summary = await call(commands.dataSearch(`meta:${source}`, id.channel, {
+      const summary = await call(commands.dataSearch(explorerSession(source), id.channel, {
         value,
         tables: chosenTables,
         caseSensitive,
@@ -436,7 +437,7 @@ function TableHits({ connectionId, outcome }: { connectionId: string; outcome: S
   const { status } = outcome;
   if (status.kind === "failed") return <div className="row-note" role="alert">{t("search.tableFailed", { table: name, detail: status.message })}</div>;
   if (status.kind !== "searched" || status.hits.length === 0) return null;
-  const open = (hit: SearchHitItem) => openTableData(connectionId, `meta:${connectionId}`, outcome.schema, outcome.table, hit.filter ?? "");
+  const open = (hit: SearchHitItem) => openTableData(connectionId, explorerSession(connectionId), outcome.schema, outcome.table, hit.filter ?? "");
   return (
     <section aria-label={name}>
       <div className="group-title search-table-title">{name} · {status.hits.length}{status.more ? ` · ${t("search.more")}` : ""}</div>

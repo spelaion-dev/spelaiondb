@@ -6,6 +6,7 @@
 // (`ExplorerDialogHost`): the core writes and shows the SQL first, and runs it (ADR-026).
 
 import { create } from "zustand";
+import { explorerSession } from "./windowContext";
 import {
   call,
   commands,
@@ -27,8 +28,8 @@ import { useCopy } from "./components/CopyDialog";
 import { useImport } from "./components/ImportDialog";
 import { isConnected, isRunning } from "./tabState";
 
-/** The explorer's own session on a connection, which reads its catalog. */
-export const explorerSession = (connectionId: string) => `meta:${connectionId}`;
+/** The explorer's own session on a connection, which reads its catalog: this window's (SDB-30). */
+export { explorerSession };
 
 // ------------------------------------------------------------------- what the engine offers
 
