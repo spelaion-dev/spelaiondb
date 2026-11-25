@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { call, commands, type ObjectActionsItem, type TableDetails } from "../api";
 import type { NewTableElementItem } from "../bindings";
 import { useApp, type TableDetailKind } from "../store";
@@ -17,12 +18,12 @@ const COLUMN_TYPES: Record<string, string[]> = {
 const CUSTOM_TYPE = "__custom__";
 
 /** Collects inputs only; the core writes SQL which opens in the editor for review. */
-export function NewTableElementDialog({ session, connectionId, schema, table, kind, details, actions, onClose, onSql }: {
-  session: string; connectionId: string; schema: string; table: string; kind: TableDetailKind; details: TableDetails;
+export function NewTableElementDialog({ session, identity, schema, table, kind, details, actions, onClose, onSql }: {
+  session: string; identity: ConnectionKey; schema: string; table: string; kind: TableDetailKind; details: TableDetails;
   actions: ObjectActionsItem; onClose(): void; onSql(sql: string): void;
 }) {
   const { t } = useTranslation("shell");
-  const engine = useApp((s) => s.connections.find((connection) => connection.id === connectionId)?.engine);
+  const engine = useApp((s) => listedConnection(s.connections, identity)?.engine);
   const previousFocus = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   useEffect(() => () => { if (previousFocus.current?.isConnected) previousFocus.current.focus(); }, []);
   const [name, setName] = useState("");

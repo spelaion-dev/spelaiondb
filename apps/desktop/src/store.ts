@@ -9,6 +9,7 @@ import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, RestoredT
 import { DISCONNECTED, withReadOnly, withTransaction, type TabConnection } from "./tabState";
 import { SINGLE, show, survivingPane, withoutTabs, type SplitLayout } from "./splitView";
 import { sessionPrefix } from "./windowContext";
+import { withConnection, type ConnectionKey } from "./connectionIdentity.ts";
 
 export interface ResultMeta {
   id: number;
@@ -283,7 +284,7 @@ export type ConnectionDialog =
 /** An object to show in the explorer: its connection expands (if it is connected there), then
  *  its schema and the folder holding the object, which is scrolled into view. */
 export interface ExplorerReveal {
-  connectionId: string;
+  connection: ConnectionKey;
   schema?: string;
   name?: string;
   /** Asked by the user (a bookmark): the connection connects if it is not yet. */
@@ -366,9 +367,9 @@ interface AppStore {
   /** Tags the quick filter asks of connections (all of them); empty while its box is closed. */
   explorerTags: string[];
   /** Connections expanded in the explorer: the quick filter keeps them shown. */
-  openConnections: string[];
+  openConnections: ConnectionKey[];
   /** Connections the explorer has a session on (they were opened at least once). */
-  explorerConnected: string[];
+  explorerConnected: ConnectionKey[];
   /** Tables and views chosen with Ctrl+click, in the order they were chosen (one session). */
   explorerSelection: { session: string; schema: string; name: string }[];
   /** What the explorer is asked to show; the node that shows it clears it. */
@@ -376,7 +377,7 @@ interface AppStore {
   /** The explorer's bookmarks (ADR-026), as the core lists them. */
   bookmarks: BookmarkItem[];
   /** "Open object by name" is open, on this connection first (or the active tab's). */
-  openObject: { connectionId: string | null } | null;
+  openObject: { connection: ConnectionKey | null } | null;
   /** The command palette (Ctrl+Shift+P) is open. */
   paletteOpen: boolean;
   /** `null` hides the side column (SDB-451): the one value that says what it shows (ADR-060). */
@@ -449,15 +450,15 @@ interface AppStore {
   setExplorerFilter(filter: string | null): void;
   /** Adds the tag to the quick filter (opening it) or takes it out. */
   toggleExplorerTag(tag: string): void;
-  setConnectionOpen(connection: string, open: boolean): void;
-  setExplorerConnected(connection: string, connected: boolean): void;
+  setConnectionOpen(connection: ConnectionKey, open: boolean): void;
+  setExplorerConnected(connection: ConnectionKey, connected: boolean): void;
   /** Ctrl+click: adds or removes one; choosing in another session starts again. */
   toggleExplorerSelection(item: { session: string; schema: string; name: string }): void;
   clearExplorerSelection(): void;
   revealInExplorer(target: Omit<ExplorerReveal, "nonce">): void;
   /** The explorer showed it (or cannot): later renders do not scroll to it again. */
   revealDone(nonce: number): void;
-  setOpenObject(open: { connectionId: string | null } | null): void;
+  setOpenObject(open: { connection: ConnectionKey | null } | null): void;
   setPaletteOpen(open: boolean): void;
   setSidebarSection(section: SidebarSection | ((current: SidebarSection) => SidebarSection)): void;
   /** Hides the side column, or brings back the panel it showed ("Toggle side panel", Ctrl+B). */
@@ -709,10 +710,10 @@ export const useApp = create<AppStore>((set) => ({
   toggleSidePanel: () => set((s) => ({ sidebarSection: isSidePanel(s.sidebarSection) ? null : s.sidePanelToRestore })),
   setBookmarks: (bookmarks) => set({ bookmarks }),
   setExplorerConnected: (connection, connected) => set((s) => ({
-    explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),
+    explorerConnected: withConnection(s.explorerConnected, connection, connected),
   })),
   setConnectionOpen: (connection, open) => set((s) => ({
-    openConnections: open ? [...new Set([...s.openConnections, connection])] : s.openConnections.filter((id) => id !== connection),
+    openConnections: withConnection(s.openConnections, connection, open),
   })),
   clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, connectionState: DISCONNECTED, run: null })) })),
   setResultsMaximized: (id, resultsMaximized) =>

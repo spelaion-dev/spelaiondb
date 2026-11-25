@@ -76,6 +76,7 @@ import { compareSchemas } from "./schemaCompare";
 import { useImport } from "./components/ImportDialog";
 import { ended } from "./resultEnd";
 import { canStartRun, explorerSessionOpen, isConnected, isRunning, sessionReadOnly } from "./tabState";
+import { connectionKey, keyOf, listedConnection, tabKey, tabOnConnection, type ConnectionKey } from "./connectionKey";
 
 export interface CommandContext {
   /** The tab the command acts on: the menu's tab, or the active one (none behind Settings). */
@@ -174,12 +175,13 @@ function toggleSection(section: "connections" | "processes" | "search") {
 
 /** The open session an import from the active tab copies: the tab's own, or the explorer's for
  *  its connection. */
-function importSession(context: CommandContext): { session: string; connectionId: string } | null {
+function importSession(context: CommandContext): { session: string; connection: ConnectionKey } | null {
   const tab = tabOf(context);
   if (!tab?.connectionId) return null;
-  if (isConnected(tab)) return { session: tab.id, connectionId: tab.connectionId };
-  if (explorerSessionOpen(useApp.getState().explorerConnected, tab.connectionId)) {
-    return { session: explorerSession(tab.connectionId), connectionId: tab.connectionId };
+  const connection = connectionKey(tab.connectionId);
+  if (isConnected(tab)) return { session: tab.id, connection };
+  if (explorerSessionOpen(useApp.getState().explorerConnected, connection)) {
+    return { session: explorerSession(connection), connection };
   }
   return null;
 }
@@ -217,6 +219,12 @@ async function openActiveDiagram(context: CommandContext) {
   if (schema !== null) openDiagram(tab.connectionId, { kind: "schema", schema, filter: null }, tab.id);
 }
 
+/** The identity of the active tab's connection, if it has one. */
+function tabConnection(context: CommandContext): ConnectionKey | null {
+  const id = tabOf(context)?.connectionId;
+  return id ? connectionKey(id) : null;
+}
+
 function stepTab(back: boolean) {
   const app = useApp.getState();
   const order = app.tabs.map((tab) => tab.id);
@@ -228,7 +236,7 @@ function stepTab(back: boolean) {
 
 const BINDINGS: Record<CommandId, CommandBinding> = {
   "palette.show": { run: () => useApp.getState().setPaletteOpen(true) },
-  "object.openByName": { run: () => useApp.getState().setOpenObject({ connectionId: null }) },
+  "object.openByName": { run: () => useApp.getState().setOpenObject({ connection: null }) },
   "connection.import": { run: () => useApp.getState().setConnectionDialog({ kind: "add", imports: true }) },
   "connection.add": { run: () => useApp.getState().setConnectionDialog({ kind: "add" }) },
   "data.importClipboard": {
@@ -417,8 +425,8 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   // All but the active tab's connection.
   "connections.disconnectOthers": {
-    enabled: (c) => Boolean(tabOf(c)?.connectionId) && hasSessions(tabOf(c)?.connectionId ?? null),
-    run: (c) => void disconnectAll(tabOf(c)?.connectionId ?? null),
+    enabled: (c) => Boolean(tabOf(c)?.connectionId) && hasSessions(tabConnection(c)),
+    run: (c) => void disconnectAll(tabConnection(c)),
   },
   "editor.cancel": { enabled: (c) => isRunning(editorTab(c)), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
@@ -522,10 +530,10 @@ export function isCommandId(id: string): id is CommandId {
 /** A connection or an object the explorer has read, as the palette lists it. */
 export type PaletteObject =
   | { kind: "connection"; connection: ConnectionItem }
-  | { kind: "relation"; connectionId: string; object: ObjectItem }
-  | { kind: "schemaObject"; connectionId: string; object: SchemaObjectItem }
+  | { kind: "relation"; connection: ConnectionKey; object: ObjectItem }
+  | { kind: "schemaObject"; connection: ConnectionKey; object: SchemaObjectItem }
   /** A schema the explorer has read, with the object filter it was read with (ADR-025). */
-  | { kind: "schema"; connectionId: string; schema: string; filter: NameFilter | null };
+  | { kind: "schema"; connection: ConnectionKey; schema: string; filter: NameFilter | null };
 
 export interface PaletteObjectAction {
   id: string;
@@ -536,38 +544,38 @@ export interface PaletteObjectAction {
   danger?: boolean;
 }
 
-function showInExplorer(target: { connectionId: string; schema?: string; name?: string }) {
+function showInExplorer(target: { connection: ConnectionKey; schema?: string; name?: string }) {
   const app = useApp.getState();
   app.setSidebarSection("connections");
   app.revealInExplorer(target);
 }
 
-function newConsole(connectionId: string, schema: string) {
-  const tab = useApp.getState().addTab(connectionId);
-  connectTabFromExplorer(tab, explorerSession(connectionId), explorerDatabase(connectionId, schema));
+function newConsole(connection: ConnectionKey, schema: string) {
+  const tab = useApp.getState().addTab(tabKey(connection));
+  connectTabFromExplorer(tab, explorerSession(connection), explorerDatabase(connection, schema));
 }
 
 async function copyName(name: string) {
   await navigator.clipboard.writeText(name);
 }
 
-async function copyQualifiedName(connectionId: string, schema: string, name: string) {
-  const names = await call(core.qualifiedNames(explorerSession(connectionId), [{ schema, names: [name] }]));
+async function copyQualifiedName(connection: ConnectionKey, schema: string, name: string) {
+  const names = await call(core.qualifiedNames(explorerSession(connection), [{ schema, names: [name] }]));
   await navigator.clipboard.writeText(names.join("\n"));
 }
 
 /** The structure of a table or view: its columns' details tab, as the explorer opens it. */
-function openStructure(connectionId: string, object: ObjectItem) {
+function openStructure(connection: ConnectionKey, object: ObjectItem) {
   const app = useApp.getState();
   const existing = app.tabs.some(
     (tab) =>
-      tab.connectionId === connectionId &&
+      tabOnConnection(tab.connectionId, connection) &&
       tab.tableDetails?.schema === object.schema &&
       tab.tableDetails.name === object.name &&
       tab.tableDetails.kind === "columns",
   );
-  const tab = app.addTableDetailsTab(connectionId, object.schema, object.name, "columns");
-  if (!existing) connectTabFromExplorer(tab, explorerSession(connectionId), explorerDatabase(connectionId, object.schema));
+  const tab = app.addTableDetailsTab(tabKey(connection), object.schema, object.name, "columns");
+  if (!existing) connectTabFromExplorer(tab, explorerSession(connection), explorerDatabase(connection, object.schema));
 }
 
 /**
@@ -578,49 +586,49 @@ function openStructure(connectionId: string, object: ObjectItem) {
  * Ctrl+click, the maintenance submenu) stay there. A collection, or a table of an engine whose
  * language is not SQL, only opens, copies its name and is shown in the explorer.
  */
-function relationActions(connectionId: string, object: ObjectItem): PaletteObjectAction[] {
-  const session = explorerSession(connectionId);
+function relationActions(connection: ConnectionKey, object: ObjectItem): PaletteObjectAction[] {
+  const session = explorerSession(connection);
   const opening: PaletteObjectAction[] = [
-    { id: "openData", label: "app:palette.actions.openData", run: () => openFound(connectionId, { kind: "relation", object }) },
+    { id: "openData", label: "app:palette.actions.openData", run: () => openFound(connection, { kind: "relation", object }) },
   ];
   const own = (structure: boolean): PaletteObjectAction[] => [
-    ...(structure ? [{ id: "openStructure", label: "app:palette.actions.openStructure", run: () => openStructure(connectionId, object) }] : []),
-    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, object.schema) },
+    ...(structure ? [{ id: "openStructure", label: "app:palette.actions.openStructure", run: () => openStructure(connection, object) }] : []),
+    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connection, object.schema) },
   ];
   const names: PaletteObjectAction[] = [
     { id: "copyName", label: "shell:copyName", run: () => copyName(object.name) },
-    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, object.schema, object.name) },
+    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connection, object.schema, object.name) },
   ];
   const show: PaletteObjectAction = {
     id: "showInExplorer",
     label: "app:palette.actions.showInExplorer",
-    run: () => showInExplorer({ connectionId, schema: object.schema, name: object.name }),
+    run: () => showInExplorer({ connection, schema: object.schema, name: object.name }),
   };
-  const sql = useApp.getState().connections.find((c) => c.id === connectionId)?.sql ?? true;
+  const sql = listedConnection(useApp.getState().connections, connection)?.sql ?? true;
   if (object.kind === "collection" || !sql) return [...opening, ...own(false), ...names, show];
   const table = isPlainTable(object);
-  const bookmark = relationBookmark(connectionId, object);
+  const bookmark = relationBookmark(connection, object);
   return [
     ...opening,
     ...own(true),
-    { id: "openAsSql", label: "shell:sql.openAsSql", run: () => openRelationSql(connectionId, session, object, "preview", true) },
-    { id: "export", label: "shell:exportTable", run: () => exportRelations(connectionId, session, [{ schema: object.schema, name: object.name }]) },
-    ...(table ? [{ id: "import", label: "shell:importData", run: () => importIntoTable(connectionId, session, object) }] : []),
-    { id: "copyToConnection", label: "shell:copyToConnection", run: () => copyToConnection(connectionId, session, object) },
-    ...(table ? [{ id: "erDiagram", label: "app:palette.actions.erDiagram", run: () => openRelationDiagram(connectionId, session, object) }] : []),
-    ...(object.kind === "view" ? [{ id: "editSource", label: "shell:editSource", run: () => editViewSource(connectionId, session, object) }] : []),
+    { id: "openAsSql", label: "shell:sql.openAsSql", run: () => openRelationSql(connection, session, object, "preview", true) },
+    { id: "export", label: "shell:exportTable", run: () => exportRelations(connection, session, [{ schema: object.schema, name: object.name }]) },
+    ...(table ? [{ id: "import", label: "shell:importData", run: () => importIntoTable(connection, session, object) }] : []),
+    { id: "copyToConnection", label: "shell:copyToConnection", run: () => copyToConnection(connection, session, object) },
+    ...(table ? [{ id: "erDiagram", label: "app:palette.actions.erDiagram", run: () => openRelationDiagram(connection, session, object) }] : []),
+    ...(object.kind === "view" ? [{ id: "editSource", label: "shell:editSource", run: () => editViewSource(connection, session, object) }] : []),
     ...names,
     { id: "bookmark", label: isBookmarked(bookmark) ? "shell:removeBookmark" : "shell:addBookmark", run: () => toggleBookmark(bookmark) },
-    ...(table ? [{ id: "duplicate", label: "shell:duplicate.menu", run: () => duplicateTable(connectionId, session, object) }] : []),
+    ...(table ? [{ id: "duplicate", label: "shell:duplicate.menu", run: () => duplicateTable(connection, session, object) }] : []),
     ...(canRenameRelation(object, knownObjectActions(session))
-      ? [{ id: "rename", label: "shell:objectChange.renameMenu", run: () => renameRelation(connectionId, session, object) }]
+      ? [{ id: "rename", label: "shell:objectChange.renameMenu", run: () => renameRelation(connection, session, object) }]
       : []),
-    { id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropRelation(connectionId, session, object) },
+    { id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropRelation(connection, session, object) },
     { id: "generateDdl", label: "shell:generateDdl", run: () => openRelationDdl(session, object) },
     ...relationTemplates(session, object).map((template) => ({
       id: `generate:${template}`,
       label: `shell:sql.${template}`,
-      run: () => openRelationSql(connectionId, session, object, template),
+      run: () => openRelationSql(connection, session, object, template),
     })),
     show,
   ];
@@ -632,24 +640,24 @@ function relationActions(connectionId: string, object: ObjectItem): PaletteObjec
  * (new console, show in explorer). `scripts/commands.test.mjs` compares the two lists; "Hide" and
  * "Show only" stay in the menu, since they change the connection's filter through its node.
  */
-function schemaObjectActions(connectionId: string, object: SchemaObjectItem): PaletteObjectAction[] {
-  const session = explorerSession(connectionId);
+function schemaObjectActions(connection: ConnectionKey, object: SchemaObjectItem): PaletteObjectAction[] {
+  const session = explorerSession(connection);
   const actions = knownObjectActions(session);
-  const bookmark = schemaObjectBookmark(connectionId, object);
+  const bookmark = schemaObjectBookmark(connection, object);
   return [
-    { id: "openDefinition", label: "app:palette.actions.openDefinition", run: () => openObjectDefinition(connectionId, session, object) },
-    ...(canEditRoutineSource(object, actions) ? [{ id: "editSource", label: "shell:editSource", run: () => editRoutineSource(connectionId, session, object) }] : []),
-    ...(canRunRoutine(object, actions) ? [{ id: "runRoutine", label: "shell:runRoutine", run: () => openRoutineCall(connectionId, session, object, true) }] : []),
-    ...(canGenerateCall(object, actions) ? [{ id: "generateCall", label: "shell:generateCall", run: () => openRoutineCall(connectionId, session, object) }] : []),
-    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, object.schema) },
+    { id: "openDefinition", label: "app:palette.actions.openDefinition", run: () => openObjectDefinition(connection, session, object) },
+    ...(canEditRoutineSource(object, actions) ? [{ id: "editSource", label: "shell:editSource", run: () => editRoutineSource(connection, session, object) }] : []),
+    ...(canRunRoutine(object, actions) ? [{ id: "runRoutine", label: "shell:runRoutine", run: () => openRoutineCall(connection, session, object, true) }] : []),
+    ...(canGenerateCall(object, actions) ? [{ id: "generateCall", label: "shell:generateCall", run: () => openRoutineCall(connection, session, object) }] : []),
+    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connection, object.schema) },
     { id: "copyName", label: "shell:copyName", run: () => copyName(object.name) },
-    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, object.schema, object.name) },
+    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connection, object.schema, object.name) },
     { id: "bookmark", label: isBookmarked(bookmark) ? "shell:removeBookmark" : "shell:addBookmark", run: () => toggleBookmark(bookmark) },
-    { id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropSchemaObject(connectionId, session, object) },
+    { id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropSchemaObject(connection, session, object) },
     {
       id: "showInExplorer",
       label: "app:palette.actions.showInExplorer",
-      run: () => showInExplorer({ connectionId, schema: object.schema, name: object.name }),
+      run: () => showInExplorer({ connection, schema: object.schema, name: object.name }),
     },
   ];
 }
@@ -659,33 +667,33 @@ function schemaObjectActions(connectionId: string, object: SchemaObjectItem): Pa
  * the same functions, and its own (new console, show in explorer). Refreshing, the filter and
  * the maintenance submenu stay in the menu: they act on the schema's row in the tree.
  */
-function schemaActions(connectionId: string, schema: string, filter: NameFilter | null): PaletteObjectAction[] {
-  const session = explorerSession(connectionId);
+function schemaActions(connection: ConnectionKey, schema: string, filter: NameFilter | null): PaletteObjectAction[] {
+  const session = explorerSession(connection);
   const actions = knownObjectActions(session);
-  const sql = useApp.getState().connections.find((c) => c.id === connectionId)?.sql ?? true;
-  const bookmark = schemaBookmark(connectionId, schema);
-  const editor = actions?.activeSchema ? schemaEditorTab(connectionId) : null;
+  const sql = listedConnection(useApp.getState().connections, connection)?.sql ?? true;
+  const bookmark = schemaBookmark(connection, schema);
+  const editor = actions?.activeSchema ? schemaEditorTab(connection) : null;
   return [
-    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, schema) },
+    { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connection, schema) },
     ...(editor ? [{ id: "setActiveSchema", label: "shell:setActiveSchema", run: () => setEditorSchema(editor, schema) }] : []),
     ...(sql
       ? [
-          { id: "importNewTable", label: "shell:importNewTable", run: () => importIntoNewTable(connectionId, session, schema) },
-          { id: "erDiagram", label: "shell:diagram.menuSchema", run: () => openSchemaDiagram(connectionId, session, schema, filter) },
+          { id: "importNewTable", label: "shell:importNewTable", run: () => importIntoNewTable(connection, session, schema) },
+          { id: "erDiagram", label: "shell:diagram.menuSchema", run: () => openSchemaDiagram(connection, session, schema, filter) },
           // The dialog says why when the engine cannot be compared (ADR-070).
-          { id: "compareSchemas", label: "shell:compare.menu", run: () => compareSchemas(connectionId, schema) },
+          { id: "compareSchemas", label: "shell:compare.menu", run: () => compareSchemas(connection, schema) },
         ]
       : []),
     ...schemaCreateKinds(actions).map((kind) => ({
       id: `create:${kind}`,
       label: `shell:create.${kind}`,
-      run: () => createInSchema(connectionId, session, schema, kind),
+      run: () => createInSchema(connection, session, schema, kind),
     })),
     { id: "copyName", label: "shell:copyName", run: () => copyName(schema) },
-    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, "", schema) },
+    { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connection, "", schema) },
     { id: "bookmark", label: isBookmarked(bookmark) ? "shell:removeBookmark" : "shell:addBookmark", run: () => toggleBookmark(bookmark) },
-    ...(actions?.dropSchemas ? [{ id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropSchema(connectionId, session, schema) }] : []),
-    { id: "showInExplorer", label: "app:palette.actions.showInExplorer", run: () => showInExplorer({ connectionId, schema }) },
+    ...(actions?.dropSchemas ? [{ id: "drop", label: "shell:objectChange.dropMenu", danger: true, run: () => dropSchema(connection, session, schema) }] : []),
+    { id: "showInExplorer", label: "app:palette.actions.showInExplorer", run: () => showInExplorer({ connection, schema }) },
   ];
 }
 
@@ -699,20 +707,20 @@ export function objectActions(item: PaletteObject): PaletteObjectAction[] {
           id: "newQuery",
           label: "shell:newQuery",
           run: () => {
-            newQueryOnConnection(connection.id);
+            newQueryOnConnection(keyOf(connection));
           },
         },
-        { id: "showInExplorer", label: "app:palette.actions.showInExplorer", run: () => showInExplorer({ connectionId: connection.id }) },
+        { id: "showInExplorer", label: "app:palette.actions.showInExplorer", run: () => showInExplorer({ connection: keyOf(connection) }) },
         { id: "edit", label: "connections:edit", run: () => useApp.getState().setConnectionDialog({ kind: "edit", id: connection.id }) },
         { id: "duplicate", label: "connections:copies.duplicate", run: () => duplicateConnection(connection) },
         { id: "delete", label: "connections:delete", danger: true, run: () => useApp.getState().setDeletingConnection(connection) },
       ];
     }
     case "relation":
-      return relationActions(item.connectionId, item.object);
+      return relationActions(item.connection, item.object);
     case "schemaObject":
-      return schemaObjectActions(item.connectionId, item.object);
+      return schemaObjectActions(item.connection, item.object);
     case "schema":
-      return schemaActions(item.connectionId, item.schema, item.filter);
+      return schemaActions(item.connection, item.schema, item.filter);
   }
 }

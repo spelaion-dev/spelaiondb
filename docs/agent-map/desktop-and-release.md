@@ -194,7 +194,7 @@
   stands; its unit tests pin the transitions). The page reads its kind once in `main.tsx`
   (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Session
   keys come from `store.ts` (tabs) and `explorerSession` (explorer), both with `sessionPrefix()`:
-  never write `meta:${id}` or `tab-${n}` by hand. `DesktopSession::window` is set from the
+  never write `meta:…` or `tab-${n}` by hand. `DesktopSession::window` is set from the
   calling window in `connect` / `connect_from_session`; `close_window_sessions` closes one
   window's sessions. An event meant for one window is sent with `emit_to` and heard with
   `events.x(getCurrentWebviewWindow()).listen` (a plain `listen` hears every target): SSH
@@ -209,10 +209,18 @@
   that takes a connection takes a `ConnectionKeyItem` (its folder and its id), never the id's
   text, and reads it only through `connection_in` in `lib.rs`, which refuses a pair whose
   folder is not the connection's (or that names no connection). `ConnectionItem` carries the
-  folder; bookmarks carry the identity. The page builds the pair with `connectionKey(id)`
-  (`src/connectionKey.ts`) and compares two with `sameConnection`, never `===` on objects.
-  Its own keys (rows, explorer sessions, caches) are still the bare id while one folder is
-  open.
+  folder; bookmarks carry the identity. In the page the pair is a `ConnectionKey`
+  (`src/connectionIdentity.ts`, pure and unit-tested; `connectionKey.ts` adds
+  `connectionKey(id)`, the lookup for what still holds a bare id). The explorer, its sessions,
+  `explorerActions.ts`, the catalog (`catalogKey`), the completion cache, and the dialogs and
+  pickers the explorer opens all hold it: compare two with `sameConnection` (never `===` on
+  objects, never `includes` on an array of them), and key text (maps, React keys, a
+  `<select>`'s values, session keys) with `connectionTag`, read back only with
+  `connectionOfTag`. An effect depends on the tag, not on the object. The explorer's window
+  events carry the pair: send them with `schemasRefreshed`, `refreshExplorer` and
+  `explorerSessionClosed` (`connect.ts`), never by hand. Tabs still name their connection by
+  its id (`tabKey`, `tabOnConnection`) until the card that makes them belong to a folder
+  (ADR-075 point 7); the metadata search (`dbSearch.ts`) gets each connection as its tag.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

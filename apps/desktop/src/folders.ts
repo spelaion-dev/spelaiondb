@@ -5,6 +5,7 @@
 
 import { call, commands } from "./api";
 import { explorerSession, windowContext } from "./windowContext";
+import { keyOf } from "./connectionKey";
 import type { RecentFolderItem } from "./bindings";
 import { confirmLeaving } from "./connect";
 import { useApp } from "./store";
@@ -63,7 +64,7 @@ export async function switchFolder(path: string): Promise<boolean> {
   try {
     const sessions = [
       ...now.tabs.map((t) => t.id),
-      ...now.connections.map((c) => explorerSession(c.id)),
+      ...now.connections.map((c) => explorerSession(keyOf(c))),
     ];
     // The core stops the runs the user agreed to cancel, then the sessions close.
     const running = now.tabs.filter(isRunning).map((t) => t.id);

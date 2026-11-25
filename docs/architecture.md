@@ -31,8 +31,12 @@ canonical root (none for a personal connection) and the `ConnectionId` as it alw
 it. The local store's keys (`store_scope`: the root's text, or empty) and the keychain's names
 (`repo:<root>/<id>/password`, `~/<id>/password`) come from it, unchanged from before it existed,
 and every new audit entry records the folder beside the id. A PostgreSQL connection's database
-sits beside this identity, never inside it (ADR-074). Still one folder open: the desktop's
-commands and the page take the type in the next steps of SDB-495.
+sits beside this identity, never inside it (ADR-074). Every desktop command that takes a
+connection takes the pair (`ConnectionKeyItem`) and checks it against the folder open
+(`connection_in`). In the page, the explorer, its sessions (`meta:` and the pair's tag), the
+catalog and completion caches, and the dialogs and pickers the explorer opens hold the pair
+(`connectionIdentity.ts`); a tab still names its connection by its id until tabs belong to a
+folder (ADR-075 point 7). Still one folder open.
 
 **What a connection sees with several folders open (ADR-075)**
 Each folder is one `Config`, loaded alone with the personal layer: no configuration or resolver

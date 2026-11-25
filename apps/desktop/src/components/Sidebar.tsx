@@ -1,8 +1,8 @@
 // Side panel: open repository, connections (by folder) and schema explorer.
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { explorerSession, windowConnection } from "../windowContext";
-import { connectionKey } from "../connectionKey";
+import { connectionKey, connectionTag, holdsConnection, keyOf, listedConnection, sameConnection, tabKey, tabOnConnection, type ConnectionKey } from "../connectionKey";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { chooseFolder, workspaceParent } from "../dialogs";
@@ -40,7 +40,8 @@ import {
   EXPLORER_SESSION_CLOSED_EVENT,
   openSession,
   newQueryOnConnection,
-  SCHEMAS_REFRESHED_EVENT,
+  schemasRefreshed,
+  type ExplorerSessionClosed,
 } from "../connect";
 import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInfo";
 import { connectionMatch } from "../connectionSearch";
@@ -475,13 +476,13 @@ function useObjectActions(session: string, enabled = true): ObjectActionsItem | 
 function openBackup(connection: ConnectionItem, session: string, mode: "backup" | "restore") {
   const family = backupFamily(connection.engine);
   if (!family) return;
-  useBackup.getState().open({ session, connectionId: connection.id, connectionName: connection.name, family, mode });
+  useBackup.getState().open({ session, connection: keyOf(connection), connectionName: connection.name, family, mode });
 }
 
 /** "New table", "New view"…: the core's statement, to finish in a new tab (ADR-026). */
-async function openCreate(connectionId: string, session: string, kind: CreateKindItem, schema: string) {
+async function openCreate(identity: ConnectionKey, session: string, kind: CreateKindItem, schema: string) {
   const sql = await call(commands.createSql(session, kind, schema));
-  openSqlTab(connectionId, session, kind === "schema" ? undefined : schema, sql);
+  openSqlTab(identity, session, kind === "schema" ? undefined : schema, sql);
 }
 
 /** The folder whose right-click offers "New …" of a kind. */
@@ -511,7 +512,7 @@ function DropMenuItem({ onClick }: { onClick(): void }) {
 /** Drops an object after showing the core's SQL, with "Cascade" where the engine has it. */
 function DropDialog({
   session,
-  connectionId,
+  identity,
   schema,
   name,
   target,
@@ -519,7 +520,7 @@ function DropDialog({
   onDone,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   schema: string;
   name: string;
   target: ObjectTargetItem;
@@ -530,7 +531,7 @@ function DropDialog({
   return (
     <ObjectChangeDialog
       session={session}
-      connectionId={connectionId}
+      identity={identity}
       schema={schema}
       title={t("objectChange.dropTitle", { name })}
       confirmLabel={t("objectChange.drop")}
@@ -556,11 +557,11 @@ export function ExplorerDialogHost() {
     case "sql":
       return <GeneratedSqlDialog key={dialog.sql} initialSql={dialog.sql} onClose={close} />;
     case "rename": {
-      const { session, connectionId, object, onDone } = dialog;
+      const { session, connection: identity, object, onDone } = dialog;
       return (
         <ObjectChangeDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           schema={object.schema}
           title={t("objectChange.renameTitle", { name: object.name })}
           confirmLabel={t("objectChange.rename")}
@@ -573,41 +574,41 @@ export function ExplorerDialogHost() {
           onClose={close}
           onDone={() => {
             close();
-            changedSchema(connectionId, onDone);
+            changedSchema(identity, onDone);
           }}
         />
       );
     }
     case "drop": {
-      const { session, connectionId, schema, name, target, onDone } = dialog;
+      const { session, connection: identity, schema, name, target, onDone } = dialog;
       return (
         <DropDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           schema={schema}
           name={name}
           target={target}
           onClose={close}
           onDone={() => {
             close();
-            changedSchema(connectionId, onDone);
+            changedSchema(identity, onDone);
           }}
         />
       );
     }
     case "duplicate":
-      return <DuplicateTableDialog session={dialog.session} connectionId={dialog.connectionId} schema={dialog.object.schema} name={dialog.object.name} onClose={close} />;
+      return <DuplicateTableDialog session={dialog.session} identity={dialog.connection} schema={dialog.object.schema} name={dialog.object.name} onClose={close} />;
     case "createTable": {
-      const { session, connectionId, schema, onDone } = dialog;
+      const { session, connection: identity, schema, onDone } = dialog;
       return (
         <CreateTableDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           schema={schema}
           onClose={close}
           onDone={() => {
             close();
-            changedSchema(connectionId, onDone);
+            changedSchema(identity, onDone);
           }}
         />
       );
@@ -624,21 +625,21 @@ export function ExplorerDialogHost() {
  * statement for it (a bounded page) in an editor tab, where it can be changed and run again.
  * Nothing the core writes SQL for is offered on it.
  */
-function CollectionNode({ session, connectionId, object }: { session: string; connectionId: string; object: ObjectItem }) {
+function CollectionNode({ session, identity, object }: { session: string; identity: ConnectionKey; object: ObjectItem }) {
   const { t } = useTranslation("shell");
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
   /** A Redis key opens with a bounded command of its type, not a page of documents. */
-  const key = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine === "redis");
+  const key = useApp((s) => listedConnection(s.connections, identity)?.engine === "redis");
   const { row, revealed } = useRevealedRow(
-    (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
+    (r) => sameConnection(r.connection, identity) && r.schema === object.schema && r.name === object.name,
   );
   const open = async () => {
     setMenu(null);
     setError(null);
     try {
       const statement = await call(commands.browseStatement(session, object.schema, object.name, object.kind, object.comment ?? null));
-      if (statement !== null) openSqlTab(connectionId, session, object.schema, statement, true);
+      if (statement !== null) openSqlTab(identity, session, object.schema, statement, true);
     } catch (e) {
       setError(errorText(e));
     }
@@ -711,7 +712,7 @@ function DetailRow({ label, icon, onOpen }: { label: string; icon: TreeIconKind;
 
 function LeafRow({
   session,
-  connectionId,
+  identity,
   schema,
   label,
   detail,
@@ -720,7 +721,7 @@ function LeafRow({
   onChanged,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   schema: string;
   label: string;
   detail: string;
@@ -763,7 +764,7 @@ function LeafRow({
       {dropping && target && (
         <DropDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           schema={schema}
           name={label}
           target={target}
@@ -847,10 +848,15 @@ function BookmarkStar({ bookmark }: { bookmark: BookmarkItem }) {
 
 const RELATION_KINDS = ["table", "partitioned_table", "view", "materialized_view", "foreign_table"];
 
+/** A bookmark's connection, as the identity the page holds. */
+function bookmarkConnection(bookmark: BookmarkItem): ConnectionKey {
+  return { folder: bookmark.connection.folder ?? null, id: bookmark.connection.id };
+}
+
 /** Shows a bookmark's object in the tree, connecting first if needed: the user asked. */
 function showBookmark(bookmark: BookmarkItem) {
   useApp.getState().revealInExplorer({
-    connectionId: bookmark.connection.id,
+    connection: bookmarkConnection(bookmark),
     schema: bookmark.schema,
     name: bookmark.kind === "schema" ? undefined : bookmark.name,
     connect: true,
@@ -860,13 +866,13 @@ function showBookmark(bookmark: BookmarkItem) {
 /** Opens a bookmark's object (a table's rows, another object's DDL); a schema, or an object of
  *  a connection not connected in the explorer yet, is shown in the tree instead. */
 async function openBookmark(bookmark: BookmarkItem) {
-  if (bookmark.kind === "schema" || !explorerSessionOpen(useApp.getState().explorerConnected, bookmark.connection.id)) {
+  if (bookmark.kind === "schema" || !explorerSessionOpen(useApp.getState().explorerConnected, bookmarkConnection(bookmark))) {
     showBookmark(bookmark);
     return;
   }
   const { schema, name, kind } = bookmark;
   await openFound(
-    bookmark.connection.id,
+    bookmarkConnection(bookmark),
     RELATION_KINDS.includes(kind)
       ? { kind: "relation", object: { schema, name, kind, estimatedRows: null, comment: null } }
       : {
@@ -885,7 +891,7 @@ function BookmarksSection() {
     <div className="bookmarks">
       <Folder label={t("bookmarks")} count={bookmarks.length} initiallyOpen>
         {bookmarks.map((b) => (
-          <BookmarkRow key={`${b.connection.folder ?? ""}|${b.connection.id}|${b.schema}|${b.name}|${b.kind}|${b.detail}`} bookmark={b} />
+          <BookmarkRow key={JSON.stringify([connectionTag(bookmarkConnection(b)), b.schema, b.name, b.kind, b.detail])} bookmark={b} />
         ))}
       </Folder>
     </div>
@@ -894,7 +900,7 @@ function BookmarksSection() {
 
 function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
   const { t } = useTranslation("shell");
-  const connectionName = useApp((s) => s.connections.find((c) => c.id === bookmark.connection.id)?.name ?? bookmark.connection.id);
+  const connectionName = useApp((s) => listedConnection(s.connections, bookmarkConnection(bookmark))?.name ?? bookmark.connection.id);
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
   const label = bookmark.kind === "schema" ? bookmark.schema : bookmark.name;
@@ -1393,7 +1399,7 @@ export async function refreshConnections() {
   // A connection's own window (SDB-30) offers that connection only, in its explorer, its
   // pickers and its palette.
   const only = windowConnection();
-  app.setConnections(only === null ? list : list.filter((connection) => connection.id === only));
+  app.setConnections(only === null ? list : list.filter((connection) => sameConnection(keyOf(connection), only)));
   app.setWorkspace(await call(commands.workspaceInfo()));
 }
 
@@ -1450,7 +1456,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const revealConnection = useApp((s) => s.explorerReveal);
   useEffect(() => {
     if (!revealConnection) return;
-    const connection = connections.find((c) => c.id === revealConnection.connectionId);
+    const connection = listedConnection(connections, revealConnection.connection);
     if (connection) showConnectionFolder(connection.personal, folderOf(connection));
   }, [revealConnection?.nonce, connections]);
   const explorer = usePreferences((s) => s.explorer);
@@ -1460,7 +1466,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   // explorer (SDB-110).
   const tabConnections = useApp(useShallow((s) => connectedConnections(s.tabs)));
   /** Opened in the explorer or used by a connected tab. */
-  const connected = (c: ConnectionItem) => explorerSessionOpen(explorerConnected, c.id) || tabConnections.includes(c.id);
+  const connected = (c: ConnectionItem) => explorerSessionOpen(explorerConnected, keyOf(c)) || tabConnections.some((id) => tabOnConnection(id, keyOf(c)));
   // "Link with editor": the active tab's connection, schema and table, shown in the tree.
   const linked = useApp((s) => {
     const activeTab = s.tabs.find((tab) => tab.id === s.activeTab);
@@ -1471,18 +1477,18 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => {
     const tab = useApp.getState().tabs.find((t) => t.id === useApp.getState().activeTab);
     if (!explorer.linkWithEditor || !tab?.connectionId) return;
-    const connectionId = tab.connectionId;
+    const connection = connectionKey(tab.connectionId);
     const reveal = useApp.getState().revealInExplorer;
-    if (tab.table) return reveal({ connectionId, schema: tab.table.schema, name: tab.table.name });
+    if (tab.table) return reveal({ connection, schema: tab.table.schema, name: tab.table.name });
     // A query tab: the schema its session is on, asked only while it is idle.
-    if (!isConnected(tab) || isRunning(tab)) return reveal({ connectionId });
+    if (!isConnected(tab) || isRunning(tab)) return reveal({ connection });
     let current = true;
     call(commands.activeSchema(tab.id))
       .then((schema) => {
-        if (current) reveal(schema ? { connectionId, schema } : { connectionId });
+        if (current) reveal(schema ? { connection, schema } : { connection });
       })
       .catch(() => {
-        if (current) reveal({ connectionId });
+        if (current) reveal({ connection });
       });
     return () => {
       current = false;
@@ -1494,7 +1500,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const shown = (c: ConnectionItem) =>
     (!explorer.connectedOnly || connected(c)) &&
     hasTags(c, activeTags) &&
-    (connectionFound(c, filterText) || openConnections.includes(c.id));
+    (connectionFound(c, filterText) || holdsConnection(openConnections, keyOf(c)));
 
   /** What went wrong moving a connection to another folder. */
   const [moveError, setMoveError] = useState<string | null>(null);
@@ -1857,6 +1863,10 @@ function ConnectionNode({
   dropClass: string;
 }) {
   const { t } = useTranslation("shell");
+  /** The connection's identity (ADR-075), the same object while its folder and id stay: what
+   *  its nodes, its session and the catalog are keyed by. Effects depend on its `tag`. */
+  const key = useMemo(() => keyOf(connection), [connection.folder, connection.id]);
+  const tag = connectionTag(key);
   const marksRef = useFittingMarks();
   /** The outcome of copying this connection, or of an action of its menus, under its row. */
   const [rowNote, setRowNote] = useState<{ error: boolean; text: string } | null>(null);
@@ -1890,7 +1900,7 @@ function ConnectionNode({
   /** "Hide" / "Show only": the filter changes and the tree is read again. */
   const filterName: FilterName = (kind, names, action) => {
     useApp.getState().clearExplorerSelection();
-    void call(commands.filterExplorerName(connectionKey(connection.id), kind, names, action))
+    void call(commands.filterExplorerName(key, kind, names, action))
       .then((next) => {
         setFilters(next);
         void refreshAll();
@@ -1900,63 +1910,63 @@ function ConnectionNode({
   /** Opens the filter dialog with the saved patterns: one kind from a folder, or all. */
   function configureFilter(kind?: FilterKind) {
     setRowMenu(null);
-    void call(commands.getExplorerFilter(connectionKey(connection.id)))
+    void call(commands.getExplorerFilter(key))
       .then((filter) => setEditingFilters({ filter, kind }))
       .catch((e: unknown) => setError(errorText(e)));
   }
-  const session = explorerSession(connection.id);
+  const session = explorerSession(key);
   const actions = useObjectActions(session, schemas !== null);
   const principalActions = usePrincipalActions(session, schemas !== null);
   /** The account dialog that is open (ADR-048). */
   const [account, setAccount] = useState<AccountRequest | null>(null);
   useEffect(() => {
     const refresh = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === connection.id && schemas) void refreshAll();
+      if (sameConnection((event as CustomEvent<ConnectionKey>).detail, key) && schemas) void refreshAll();
     };
     window.addEventListener(EXPLORER_REFRESH_EVENT, refresh);
     return () => window.removeEventListener(EXPLORER_REFRESH_EVENT, refresh);
-  }, [connection.id, schemas]);
+  }, [tag, schemas]);
   // The explorer's session was lost or closed for being idle (ADR-029): the tree collapses and
   // says why; expanding it again reconnects, nothing else does.
   useEffect(() => {
     const closed = (event: Event) => {
-      const detail = (event as CustomEvent<{ connectionId: string; idleSeconds: number | null }>).detail;
-      if (detail.connectionId !== connection.id) return;
+      const detail = (event as CustomEvent<ExplorerSessionClosed>).detail;
+      if (!sameConnection(detail.connection, key)) return;
       setSchemas(null);
       setServerObjects([]);
       setOpen(false);
-      useApp.getState().setExplorerConnected(connection.id, false);
+      useApp.getState().setExplorerConnected(key, false);
       setError(detail.idleSeconds != null ? t("idleClosed", { minutes: Math.max(1, Math.round(detail.idleSeconds / 60)) }) : null);
     };
     window.addEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
     return () => window.removeEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
-  }, [connection.id, t]);
+  }, [tag, t]);
 
   function newQuery() {
-    newQueryOnConnection(connection.id);
+    newQueryOnConnection(key);
   }
 
   useEffect(() => {
-    useApp.getState().setConnectionOpen(connection.id, open);
-  }, [connection.id, open]);
+    useApp.getState().setConnectionOpen(key, open);
+  }, [tag, open]);
   // Asked to show something here: expand if connected in the explorer (connecting could ask
   // for a password), else only show the connection.
   const { row: connectionRow, revealed: connectionRevealed } = useRevealedRow(
-    (r) => r.connectionId === connection.id && (schemas === null ? !r.connect : r.schema === undefined),
+    (r) => sameConnection(r.connection, key) && (schemas === null ? !r.connect : r.schema === undefined),
   );
   const reveal = useApp((s) => s.explorerReveal);
   useEffect(() => {
-    if (reveal?.connectionId !== connection.id) return;
+    if (!reveal || !sameConnection(reveal.connection, key)) return;
     if (schemas !== null) setOpen(true);
     // A bookmark was opened: connecting is what the user asked for.
     else if (reveal.connect) void expand();
-  }, [reveal, connection.id, schemas]);
+  }, [reveal, tag, schemas]);
   useEffect(
     () => () => {
-      useApp.getState().setConnectionOpen(connection.id, false);
-      useApp.getState().setExplorerConnected(connection.id, false);
+      useApp.getState().setConnectionOpen(key, false);
+      useApp.getState().setExplorerConnected(key, false);
     },
-    [connection.id],
+    [tag],
   );
 
   async function toggle() {
@@ -1971,7 +1981,7 @@ function ConnectionNode({
     setBusy(true);
     setError(null);
     try {
-      if ((await openSession(session, connection.id)) === null) {
+      if ((await openSession(session, key)) === null) {
         setOpen(false);
         return;
       }
@@ -1987,7 +1997,7 @@ function ConnectionNode({
     // The connection may have been edited to point to another engine; asked again now, so
     // tables' menus have the list before they open.
     forgetExplorerSession(session);
-    const filter = await call(commands.getExplorerFilter(connectionKey(connection.id)));
+    const filter = await call(commands.getExplorerFilter(key));
     setFilters(filter);
     // Without its roles or logins the connection still shows its schemas.
     const [all, server] = await Promise.all([
@@ -1999,7 +2009,7 @@ function ConnectionNode({
     ]);
     setSchemas(all);
     setServerObjects(server);
-    useApp.getState().setExplorerConnected(connection.id, true);
+    useApp.getState().setExplorerConnected(key, true);
     void templatesOf(session).catch(() => undefined);
   }
 
@@ -2011,7 +2021,7 @@ function ConnectionNode({
     try {
       await load();
       setGeneration((g) => g + 1);
-      window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: connection.id }));
+      schemasRefreshed(key);
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -2033,7 +2043,7 @@ function ConnectionNode({
     <SchemaNode
       key={s.name}
       session={session}
-      connectionId={connection.id}
+      identity={key}
       schema={s.name}
       generation={generation}
       onRefreshAll={() => void refreshAll()}
@@ -2162,7 +2172,7 @@ function ConnectionNode({
             refresh: () => void refreshAll(),
             configureFilters: () => configureFilter(),
             createSchema: actions?.create.includes("schema")
-              ? () => openCreate(connection.id, session, "schema", "").catch((e: unknown) => setError(errorText(e)))
+              ? () => openCreate(key, session, "schema", "").catch((e: unknown) => setError(errorText(e)))
               : undefined,
             backup: backupFamily(connection.engine)
               ? () => openBackup(connection, session, "backup")
@@ -2213,7 +2223,7 @@ function ConnectionNode({
                     kind ? (
                       <AccountRow key={`${o.kind}:${o.name}`} object={o} kind={kind} actions={principalActions} onAct={setAccount} />
                     ) : o.hasDefinition ? (
-                      <ServerObjectRow key={`${o.kind}:${o.name}`} connectionId={connection.id} session={session} object={o} />
+                      <ServerObjectRow key={`${o.kind}:${o.name}`} identity={key} session={session} object={o} />
                     ) : (
                       <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
                         <span className="label">{o.name}</span>
@@ -2229,12 +2239,12 @@ function ConnectionNode({
         </div>
       )}
       {account?.action === "privileges" && (
-        <PrivilegesDialog session={session} connectionId={connection.id} target={account.target} onClose={() => setAccount(null)} />
+        <PrivilegesDialog session={session} identity={key} target={account.target} onClose={() => setAccount(null)} />
       )}
       {account && account.action !== "privileges" && (
         <AccountDialog
           session={session}
-          connectionId={connection.id}
+          identity={key}
           request={account}
           logins={serverObjects.filter((o) => o.kind === "login" && !o.system).map((o) => o.name)}
           onClose={() => setAccount(null)}
@@ -2263,8 +2273,8 @@ function ConnectionNode({
 
 /** An object outside every schema whose kind the core says may have a definition (a
  *  Materialize cluster, ADR-082): double-click, Enter or its menu opens it in a new tab. */
-function ServerObjectRow({ connectionId, session, object }: {
-  connectionId: string;
+function ServerObjectRow({ identity, session, object }: {
+  identity: ConnectionKey;
   session: string;
   object: ServerObjectItem;
 }) {
@@ -2274,7 +2284,7 @@ function ServerObjectRow({ connectionId, session, object }: {
   const openDefinition = () => {
     setMenu(null);
     setError(null);
-    void openServerObjectDefinition(connectionId, session, object).catch((e: unknown) => setError(errorText(e)));
+    void openServerObjectDefinition(identity, session, object).catch((e: unknown) => setError(errorText(e)));
   };
   return (
     <div className="node">
@@ -2314,7 +2324,7 @@ function ServerObjectRow({ connectionId, session, object }: {
 
 function SchemaNode({
   session,
-  connectionId,
+  identity,
   schema,
   generation,
   onRefreshAll,
@@ -2325,7 +2335,7 @@ function SchemaNode({
   onFilterName,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   schema: string;
   /** Changes when the connection refreshes all its schemas. */
   generation: number;
@@ -2361,18 +2371,18 @@ function SchemaNode({
       });
     return () => { current = false; };
   }, [menu, session]);
-  const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
+  const engine = useApp((s) => listedConnection(s.connections, identity)?.engine ?? "");
   /** Bumped by "Refresh schema": the tables already described read their details again. */
   const [refreshed, setRefreshed] = useState(0);
   const sort = useSortByName();
   const actions = useObjectActions(session);
   /** Whether its engine is queried with SQL: importing and the ER diagram write and read SQL
    *  (ADR-056). */
-  const sql = useApp((s) => s.connections.find((c) => c.id === connectionId)?.sql ?? true);
+  const sql = useApp((s) => listedConnection(s.connections, identity)?.sql ?? true);
   /** Redis's "collections" are its keys (ADR-056). */
-  const keys = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine === "redis");
+  const keys = useApp((s) => listedConnection(s.connections, identity)?.engine === "redis");
   /** The editor tab "Set as the editor's schema" applies to (`explorerActions.ts`). */
-  const editorTab = useApp(() => schemaEditorTab(connectionId));
+  const editorTab = useApp(() => schemaEditorTab(identity));
   /** A menu item's action, shared with the palette (`explorerActions.ts`): a failure is shown
    *  under the row. */
   const act = (action: () => unknown) => {
@@ -2397,12 +2407,14 @@ function SchemaNode({
       setOthers(rest);
       setObjects(relations);
       // The command palette lists what the tree has read (SDB-18).
-      useCatalog.getState().publish({ connectionId, schema, relations, others: rest, filter: objectFilter });
+      useCatalog.getState().publish({ connection: identity, schema, relations, others: rest, filter: objectFilter });
     } catch (e) {
       setError(errorText(e));
     }
   }
-  useEffect(() => () => useCatalog.getState().forget(connectionId, schema), [connectionId, schema]);
+  // Keyed by the tag: a new object with the same folder and id is the same connection.
+  const tag = connectionTag(identity);
+  useEffect(() => () => useCatalog.getState().forget(identity, schema), [tag, schema]);
 
   async function toggle() {
     setOpen(!open);
@@ -2416,7 +2428,7 @@ function SchemaNode({
     if (open) void load();
     else {
       setObjects(null);
-      useCatalog.getState().forget(connectionId, schema);
+      useCatalog.getState().forget(identity, schema);
     }
   }
 
@@ -2424,16 +2436,16 @@ function SchemaNode({
     setMenu(null);
     reload();
     setRefreshed((n) => n + 1);
-    window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: connectionId }));
+    schemasRefreshed(identity);
   }
 
   useOnChange(generation, reload);
   const childGeneration = `${generation}.${refreshed}`;
 
   const reveal = useApp((s) => s.explorerReveal);
-  const revealHere = reveal !== null && reveal.connectionId === connectionId && reveal.schema === schema;
+  const revealHere = reveal !== null && sameConnection(reveal.connection, identity) && reveal.schema === schema;
   const { row: schemaRow, revealed: schemaRevealed } = useRevealedRow(
-    (r) => r.connectionId === connectionId && r.schema === schema && r.name === undefined,
+    (r) => sameConnection(r.connection, identity) && r.schema === schema && r.name === undefined,
   );
   useEffect(() => {
     if (!revealHere || !reveal) return;
@@ -2486,9 +2498,9 @@ function SchemaNode({
         className={`row${schemaRevealed}`}
         onClick={(e) => { if (e.detail === 1) void toggle(); }}
         onDoubleClick={() => {
-          const database = explorerDatabase(connectionId, schema);
+          const database = explorerDatabase(identity, schema);
           if (!database) return;
-          const tab = useApp.getState().addTab(connectionId);
+          const tab = useApp.getState().addTab(tabKey(identity));
           connectTabFromExplorer(tab, session, database);
         }}
         role="button"
@@ -2502,7 +2514,7 @@ function SchemaNode({
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => [{ schema: "", names: [schema] }], setError)) return;
           if (isDropKey(e)) {
-            if (actions?.dropSchemas) act(() => dropSchema(connectionId, session, schema, onRefreshAll));
+            if (actions?.dropSchemas) act(() => dropSchema(identity, session, schema, onRefreshAll));
             return;
           }
           if (e.key === "Enter" || e.key === " ") {
@@ -2514,7 +2526,7 @@ function SchemaNode({
         <span className="twisty"><Icon name={open ? "chevronDown" : "chevronRight"} /></span>
         <TreeIcon kind="folder" />
         <span className="label">{schema}</span>
-        <BookmarkStar bookmark={{ connection: connectionKey(connectionId), schema, name: "", kind: "schema", detail: "" }} />
+        <BookmarkStar bookmark={{ connection: identity, schema, name: "", kind: "schema", detail: "" }} />
         {objects && (
           <span className="muted small">
             {(objects.length + others.length).toLocaleString(i18n.language)}
@@ -2529,7 +2541,7 @@ function SchemaNode({
             close={() => setMenu(null)}
             onError={setError}
           />
-          <BookmarkMenuItem bookmark={schemaBookmark(connectionId, schema)} close={() => setMenu(null)} onError={setError} />
+          <BookmarkMenuItem bookmark={schemaBookmark(identity, schema)} close={() => setMenu(null)} onError={setError} />
           {actions?.activeSchema && (
             <button
               role="menuitem"
@@ -2550,10 +2562,10 @@ function SchemaNode({
           {sql && (
             <>
               <hr />
-              <button role="menuitem" data-action="importNewTable" onClick={() => act(() => importIntoNewTable(connectionId, session, schema))}>
+              <button role="menuitem" data-action="importNewTable" onClick={() => act(() => importIntoNewTable(identity, session, schema))}>
                 {t("importNewTable")}
               </button>
-              <button role="menuitem" data-action="erDiagram" onClick={() => act(() => openSchemaDiagram(connectionId, session, schema, objectFilter))}>
+              <button role="menuitem" data-action="erDiagram" onClick={() => act(() => openSchemaDiagram(identity, session, schema, objectFilter))}>
                 {t("diagram.menuSchema")}
               </button>
               <button
@@ -2561,7 +2573,7 @@ function SchemaNode({
                 data-action="compareSchemas"
                 disabled={compareUnavailable !== null}
                 title={compareUnavailable ?? undefined}
-                onClick={() => act(() => compareSchemas(connectionId, schema))}
+                onClick={() => act(() => compareSchemas(identity, schema))}
               >
                 {t("compare.menu")}
               </button>
@@ -2569,7 +2581,7 @@ function SchemaNode({
           )}
           {schemaCreateKinds(actions).length > 0 && <hr />}
           {schemaCreateKinds(actions).map((kind) => (
-            <button key={kind} role="menuitem" data-action={`create:${kind}`} onClick={() => act(() => createInSchema(connectionId, session, schema, kind, refresh))}>
+            <button key={kind} role="menuitem" data-action={`create:${kind}`} onClick={() => act(() => createInSchema(identity, session, schema, kind, refresh))}>
               {t(`create.${kind}`)}
             </button>
           ))}
@@ -2584,7 +2596,7 @@ function SchemaNode({
           {actions?.dropSchemas && (
             <>
               <hr />
-              <DropMenuItem onClick={() => act(() => dropSchema(connectionId, session, schema, onRefreshAll))} />
+              <DropMenuItem onClick={() => act(() => dropSchema(identity, session, schema, onRefreshAll))} />
             </>
           )}
         </ObjectMenu>
@@ -2592,7 +2604,7 @@ function SchemaNode({
       {maintaining && (
         <MaintenanceDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           engine={engine}
           schema={schema}
           name={schema}
@@ -2630,7 +2642,7 @@ function SchemaNode({
                       return kind && actions?.create.includes(kind)
                         ? {
                             label: t(`create.${kind}`),
-                            run: () => act(() => createInSchema(connectionId, session, schema, kind, refresh)),
+                            run: () => act(() => createInSchema(identity, session, schema, kind, refresh)),
                           }
                         : undefined;
                     })()}
@@ -2638,13 +2650,13 @@ function SchemaNode({
                     {/* An engine whose language is not SQL opens its tables too with its own
                         statement (ADR-056): the table data tab and the object actions write SQL. */}
                     {relations.filter((o) => o.kind === "collection" || !sql).map((o) => (
-                      <CollectionNode key={o.name} session={session} connectionId={connectionId} object={o} />
+                      <CollectionNode key={o.name} session={session} identity={identity} object={o} />
                     ))}
                     {relations.filter((o) => o.kind !== "collection" && sql).map((o) => (
                       <ObjectNode
                         key={o.name}
                         session={session}
-                        connectionId={connectionId}
+                        identity={identity}
                         object={o}
                         triggers={triggersByTable.get(o.name) ?? []}
                         onSchemaChanged={refresh}
@@ -2658,7 +2670,7 @@ function SchemaNode({
                       <SchemaObjectNode
                         key={`${o.kind}:${o.name}:${o.detail ?? ""}`}
                         session={session}
-                        connectionId={connectionId}
+                        identity={identity}
                         object={o}
                         onSchemaChanged={refresh}
                         onFilterName={onFilterName}
@@ -2676,7 +2688,7 @@ function SchemaNode({
 
 function ObjectNode({
   session,
-  connectionId,
+  identity,
   object,
   triggers,
   onSchemaChanged,
@@ -2686,7 +2698,7 @@ function ObjectNode({
   onFilterName,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   object: ObjectItem;
   triggers: SchemaObjectItem[];
   /** After it was renamed or dropped: its schema reads its objects again. */
@@ -2713,7 +2725,7 @@ function ObjectNode({
   const [error, setError] = useState<string | null>(null);
   /** The maintenance action whose dialog is open (SDB-392). */
   const [maintaining, setMaintaining] = useState<MaintenanceKindItem | null>(null);
-  const engine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? "");
+  const engine = useApp((s) => listedConnection(s.connections, identity)?.engine ?? "");
   /** Runs one of the shared actions (`explorerActions.ts`) from this row's menu: closes it, and
    *  says what went wrong under the row. */
   const act = (action: () => unknown) => {
@@ -2723,19 +2735,19 @@ function ObjectNode({
       .then(action)
       .catch((e: unknown) => setError(errorText(e)));
   };
-  const rename = () => renameRelation(connectionId, session, object, onSchemaChanged);
-  const drop = () => dropRelation(connectionId, session, object, onSchemaChanged);
+  const rename = () => renameRelation(identity, session, object, onSchemaChanged);
+  const drop = () => dropRelation(identity, session, object, onSchemaChanged);
   const openDetails = (kind: TableDetailKind) => {
     const app = useApp.getState();
-    const existing = app.tabs.some((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
-    const tab = app.addTableDetailsTab(connectionId, object.schema, object.name, kind);
+    const existing = app.tabs.some((tab) => tabOnConnection(tab.connectionId, identity) && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
+    const tab = app.addTableDetailsTab(tabKey(identity), object.schema, object.name, kind);
     if (!existing) {
-      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+      connectTabFromExplorer(tab, session, explorerDatabase(identity, object.schema));
     }
   };
   const actions = useObjectActions(session);
   const { row: objectRow, revealed: objectRevealed } = useRevealedRow(
-    (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
+    (r) => sameConnection(r.connection, identity) && r.schema === object.schema && r.name === object.name,
   );
   /** Columns chosen with Ctrl+click, in the order chosen: a new index takes them so. */
   const [chosenColumns, setChosenColumns] = useState<string[]>([]);
@@ -2779,7 +2791,7 @@ function ObjectNode({
   }
   function refresh() {
     reloadDetails();
-    window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: connectionId }));
+    schemasRefreshed(identity);
   }
   useOnChange(generation, reloadDetails);
 
@@ -2790,7 +2802,7 @@ function ObjectNode({
   const openJoin = (inner: boolean) =>
     act(async () => openGeneratedSql(await call(commands.joinSql(session, selection.map((o) => ({ schema: o.schema, name: o.name })), inner))));
   /** Pages of the table in a table data tab (double-click or "View rows"). */
-  const preview = () => act(() => openRelationRows(connectionId, session, object));
+  const preview = () => act(() => openRelationRows(identity, session, object));
   async function countRows() {
     setMenu(null);
     setError(null);
@@ -2822,7 +2834,7 @@ function ObjectNode({
     };
   }, [menu, view, session]);
   const templates = relationTemplates(session, object);
-  const bookmark = relationBookmark(connectionId, object);
+  const bookmark = relationBookmark(identity, object);
   /** What "Copy" takes: every table chosen with Ctrl+click, or this one. */
   const copyPaths: ObjectPathItem[] = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, names: [o.name] }));
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
@@ -2907,7 +2919,7 @@ function ObjectNode({
           <button role="menuitem" data-action="openData" onClick={preview}>
             {t("sql.preview")}
           </button>
-          <button role="menuitem" data-action="openAsSql" onClick={() => act(() => openRelationSql(connectionId, session, object, "preview", true))}>
+          <button role="menuitem" data-action="openAsSql" onClick={() => act(() => openRelationSql(identity, session, object, "preview", true))}>
             {t("sql.openAsSql")}
           </button>
           <button role="menuitem" data-action="countRows" onClick={() => void countRows()}>
@@ -2916,18 +2928,18 @@ function ObjectNode({
           <button
             role="menuitem"
             data-action="export"
-            onClick={() => act(() => exportRelations(connectionId, session, (chosen ? selection : [object]).map((o) => ({ schema: o.schema, name: o.name }))))}
+            onClick={() => act(() => exportRelations(identity, session, (chosen ? selection : [object]).map((o) => ({ schema: o.schema, name: o.name }))))}
           >
             {chosen && selection.length > 1
               ? t("exportTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
               : t("exportTable")}
           </button>
           {!view && (
-            <button role="menuitem" data-action="import" onClick={() => act(() => importIntoTable(connectionId, session, object))}>
+            <button role="menuitem" data-action="import" onClick={() => act(() => importIntoTable(identity, session, object))}>
               {t("importData")}
             </button>
           )}
-          <button role="menuitem" data-action="copyToConnection" onClick={() => act(() => copyToConnection(connectionId, session, object))}>
+          <button role="menuitem" data-action="copyToConnection" onClick={() => act(() => copyToConnection(identity, session, object))}>
             {t("copyToConnection")}
           </button>
           {!view && (
@@ -2936,7 +2948,7 @@ function ObjectNode({
               data-action="erDiagram"
               onClick={() =>
                 act(() =>
-                  openRelationDiagram(connectionId, session, object, chosen && selection.length > 1 ? selection.map((o) => ({ schema: o.schema, name: o.name })) : null),
+                  openRelationDiagram(identity, session, object, chosen && selection.length > 1 ? selection.map((o) => ({ schema: o.schema, name: o.name })) : null),
                 )
               }
             >
@@ -2946,7 +2958,7 @@ function ObjectNode({
             </button>
           )}
           {object.kind === "view" && (
-            <button role="menuitem" data-action="editSource" onClick={() => act(() => editViewSource(connectionId, session, object))}>
+            <button role="menuitem" data-action="editSource" onClick={() => act(() => editViewSource(identity, session, object))}>
               {t("editSource")}
             </button>
           )}
@@ -2955,7 +2967,7 @@ function ObjectNode({
           <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
           <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
           {isPlainTable(object) && (
-            <button role="menuitem" data-action="duplicate" onClick={() => act(() => duplicateTable(connectionId, session, object))}>
+            <button role="menuitem" data-action="duplicate" onClick={() => act(() => duplicateTable(identity, session, object))}>
               {t("duplicate.menu")}
             </button>
           )}
@@ -2987,7 +2999,7 @@ function ObjectNode({
                 key={template}
                 role="menuitem"
                 data-action={`generate:${template}`}
-                onClick={() => act(() => openRelationSql(connectionId, session, object, template))}
+                onClick={() => act(() => openRelationSql(identity, session, object, template))}
               >
                 {t(`sql.${template}`)}
               </button>
@@ -3012,7 +3024,7 @@ function ObjectNode({
       {maintaining && (
         <MaintenanceDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           engine={engine}
           schema={object.schema}
           name={object.name}
@@ -3036,7 +3048,7 @@ function ObjectNode({
               <ColumnRow
                 key={c.name}
                 session={session}
-                connectionId={connectionId}
+                identity={identity}
                 schema={object.schema}
                 table={object.name}
                 onTableChanged={refresh}
@@ -3054,7 +3066,7 @@ function ObjectNode({
               <LeafRow
                 key={c.name ?? `${c.kind}:${i}`}
                 session={session}
-                connectionId={connectionId}
+                identity={identity}
                 schema={object.schema}
                 label={c.name ?? t(`constraintKinds.${c.kind}`)}
                 detail={c.definition}
@@ -3075,7 +3087,7 @@ function ObjectNode({
                 <LeafRow
                   key={fk.name}
                   session={session}
-                  connectionId={connectionId}
+                  identity={identity}
                   schema={object.schema}
                   label={fk.name}
                   detail={target}
@@ -3095,7 +3107,7 @@ function ObjectNode({
               <LeafRow
                 key={`${key.schema}.${key.table}:${key.name}`}
                 session={session}
-                connectionId={connectionId}
+                identity={identity}
                 schema={object.schema}
                 label={key.schema === object.schema ? key.table : `${key.schema}.${key.table}`}
                 detail={`${key.name}: (${key.otherColumns.join(", ")}) → (${key.columns.join(", ")})`}
@@ -3110,7 +3122,7 @@ function ObjectNode({
               <IndexNode
                 key={index.name}
                 session={session}
-                connectionId={connectionId}
+                identity={identity}
                 schema={object.schema}
                 table={object.name}
                 index={index}
@@ -3123,7 +3135,7 @@ function ObjectNode({
               <SchemaObjectNode
                 key={`${trigger.name}:${trigger.detail ?? ""}`}
                 session={session}
-                connectionId={connectionId}
+                identity={identity}
                 object={trigger}
                 onSchemaChanged={onSchemaChanged}
                 onFilterName={onFilterName}
@@ -3136,7 +3148,7 @@ function ObjectNode({
                 <LeafRow
                   key={`${partition.schema}.${partition.name}`}
                   session={session}
-                  connectionId={connectionId}
+                  identity={identity}
                   schema={object.schema}
                   label={partition.schema === object.schema ? partition.name : `${partition.schema}.${partition.name}`}
                   detail={partition.bound ?? t("tableDetails.defaultPartition")}
@@ -3158,7 +3170,7 @@ function ObjectNode({
 /** A column of a table: its menu can hide it, or show only it (ADR-025). */
 function ColumnRow({
   session,
-  connectionId,
+  identity,
   schema,
   table,
   onTableChanged,
@@ -3170,7 +3182,7 @@ function ColumnRow({
   onFilterName,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   schema: string;
   table: string;
   /** After a column was renamed or dropped: the table reads its columns again. */
@@ -3200,7 +3212,7 @@ function ColumnRow({
     setMenu(null);
     setError(null);
     try {
-      openSqlTab(connectionId, session, schema, await call(commands.newIndexSql(session, schema, table, indexColumns, kind)));
+      openSqlTab(identity, session, schema, await call(commands.newIndexSql(session, schema, table, indexColumns, kind)));
     } catch (e) {
       setError(errorText(e));
     }
@@ -3274,7 +3286,7 @@ function ColumnRow({
       {editing && (
         <StructureDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           schema={schema}
           table={table}
           columns={editing}
@@ -3288,7 +3300,7 @@ function ColumnRow({
       {renaming && (
         <ObjectChangeDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           schema={schema}
           title={t("objectChange.renameColumnTitle", { name: column.name, table })}
           confirmLabel={t("objectChange.rename")}
@@ -3308,7 +3320,7 @@ function ColumnRow({
       {dropping && (
         <DropDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           schema={schema}
           name={`${table}.${column.name}`}
           target={{ kind: "column", schema, table, name: column.name }}
@@ -3331,14 +3343,14 @@ function ColumnRow({
 /** An index: double-click or its menu opens its definition in a new tab (nothing runs). */
 function IndexNode({
   session,
-  connectionId,
+  identity,
   schema,
   table,
   index,
   onTableChanged,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   schema: string;
   table: string;
   index: IndexDetails;
@@ -3354,8 +3366,8 @@ function IndexNode({
   const openDefinition = () => {
     setMenu(null);
     const sql = index.definition.startsWith("--") ? index.definition : `${index.definition.trimEnd().replace(/;$/, "")};`;
-    const tab = addTab(connectionId, sql);
-    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, schema));
+    const tab = addTab(tabKey(identity), sql);
+    connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
   };
   return (
     <div className="node">
@@ -3406,7 +3418,7 @@ function IndexNode({
       {dropping && (
         <DropDialog
           session={session}
-          connectionId={connectionId}
+          identity={identity}
           schema={schema}
           name={index.name}
           target={{ kind: "index", schema, table, name: index.name, primary: index.primary }}
@@ -3429,13 +3441,13 @@ function IndexNode({
 /** A function, sequence, trigger, type…: double-click or the menu opens its definition. */
 function SchemaObjectNode({
   session,
-  connectionId,
+  identity,
   object,
   onSchemaChanged,
   onFilterName,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   object: SchemaObjectItem;
   /** After it was dropped: its schema reads its objects again. */
   onSchemaChanged(): void;
@@ -3446,9 +3458,9 @@ function SchemaObjectNode({
   const [error, setError] = useState<string | null>(null);
   const actions = useObjectActions(session);
   const { row, revealed } = useRevealedRow(
-    (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
+    (r) => sameConnection(r.connection, identity) && r.schema === object.schema && r.name === object.name,
   );
-  const bookmark = schemaObjectBookmark(connectionId, object);
+  const bookmark = schemaObjectBookmark(identity, object);
   /** A menu item's action, shared with the palette (`explorerActions.ts`, SDB-441): a failure is
    *  shown under the row. */
   const act = (action: () => unknown) => {
@@ -3458,8 +3470,8 @@ function SchemaObjectNode({
       .then(action)
       .catch((e: unknown) => setError(errorText(e)));
   };
-  const openDefinition = () => act(() => openObjectDefinition(connectionId, session, object));
-  const drop = () => act(() => dropSchemaObject(connectionId, session, object, onSchemaChanged));
+  const openDefinition = () => act(() => openObjectDefinition(identity, session, object));
+  const drop = () => act(() => dropSchemaObject(identity, session, object, onSchemaChanged));
 
   const routine =
     object.kind === "function" || object.kind === "procedure" || object.kind === "aggregate";
@@ -3515,17 +3527,17 @@ function SchemaObjectNode({
             {t("openDefinition")}
           </button>
           {canEditRoutineSource(object, actions) && (
-            <button role="menuitem" data-action="editSource" onClick={() => act(() => editRoutineSource(connectionId, session, object))}>
+            <button role="menuitem" data-action="editSource" onClick={() => act(() => editRoutineSource(identity, session, object))}>
               {t("editSource")}
             </button>
           )}
           {canRunRoutine(object, actions) && (
-            <button role="menuitem" data-action="runRoutine" onClick={() => act(() => openRoutineCall(connectionId, session, object, true))}>
+            <button role="menuitem" data-action="runRoutine" onClick={() => act(() => openRoutineCall(identity, session, object, true))}>
               {t("runRoutine")}
             </button>
           )}
           {canGenerateCall(object, actions) && (
-            <button role="menuitem" data-action="generateCall" onClick={() => act(() => openRoutineCall(connectionId, session, object))}>
+            <button role="menuitem" data-action="generateCall" onClick={() => act(() => openRoutineCall(identity, session, object))}>
               {t("generateCall")}
             </button>
           )}

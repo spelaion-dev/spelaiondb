@@ -10,6 +10,7 @@ import { isOpenFolder, switchFolder } from "./folders";
 import { openSavedPlan } from "./planFiles";
 import { openFilePath } from "./sqlFiles";
 import { useApp } from "./store";
+import { keyOf } from "./connectionKey";
 
 /** Opens what `request` asks for, in order: the folder, the files, the plan, the connection. */
 export async function openLaunchRequest(request: LaunchRequestItem): Promise<void> {
@@ -34,7 +35,7 @@ export async function openLaunchRequest(request: LaunchRequestItem): Promise<voi
     const connection = useApp.getState().connections.find((c) => c.id === request.connection);
     if (connection) {
       app.setSidebarSection("connections");
-      app.revealInExplorer({ connectionId: connection.id });
+      app.revealInExplorer({ connection: keyOf(connection) });
     } else {
       notes.push(i18n.t("shell:launch.noConnection", { id: request.connection }));
     }

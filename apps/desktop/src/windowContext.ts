@@ -4,10 +4,11 @@
 //
 // Every window is a view over the one core, so session keys must never collide between
 // windows: a window other than the main one prefixes its keys with its label
-// (`connection-2/tab-1`, `connection-2/meta:shop`). The core keeps keys opaque and records
+// (`connection-2/tab-1`, `connection-2/meta:[null,"~/shop"]`). The core keeps keys opaque and records
 // which window opened each session, to close only that window's sessions with it.
 
 import type { WindowContextItem } from "./bindings";
+import { connectionOfTag, connectionTag, type ConnectionKey } from "./connectionIdentity.ts";
 
 let current: WindowContextItem = { kind: "main" };
 
@@ -37,20 +38,21 @@ export function sessionPrefix(): string {
   return current.kind === "main" ? "" : `${current.label}/`;
 }
 
-/** The explorer's session on a connection, in this window. */
-export function explorerSession(connectionId: string): string {
-  return `${sessionPrefix()}meta:${connectionId}`;
+/** The explorer's session on a connection, in this window: keyed by its folder and its id
+ *  (ADR-075), so two folders' connections of the same id never share one. */
+export function explorerSession(connection: ConnectionKey): string {
+  return `${sessionPrefix()}meta:${connectionTag(connection)}`;
 }
 
 /** The connection whose explorer session in this window `session` is, or null. */
-export function explorerConnectionOf(session: string): string | null {
+export function explorerConnectionOf(session: string): ConnectionKey | null {
   const prefix = `${sessionPrefix()}meta:`;
-  return session.startsWith(prefix) ? session.slice(prefix.length) : null;
+  return session.startsWith(prefix) ? connectionOfTag(session.slice(prefix.length)) : null;
 }
 
 /** The connection this window was opened for, or null in the main window. */
-export function windowConnection(): string | null {
-  return current.kind === "connection" ? current.connection.id : null;
+export function windowConnection(): ConnectionKey | null {
+  return current.kind === "connection" ? { folder: current.connection.folder ?? null, id: current.connection.id } : null;
 }
 
 function unknownWindow(context: never): never {

@@ -7,6 +7,7 @@ import { call, commands, type OpenTabItem, type RestoredTabsItem } from "./api";
 import { connectionFailedRun, openSession } from "./connect";
 import { isModified } from "./sqlFiles";
 import { useApp, type Tab } from "./store";
+import { connectionKey } from "./connectionKey";
 import { CONNECTING, DISCONNECTED, connectFailed, connectedWith, hasSession } from "./tabState";
 
 /** Longest wait before the tabs as they are now go to the core. */
@@ -106,7 +107,7 @@ async function reconnectRestored() {
     const connectionId = tab.connectionId;
     useApp.getState().setConnection(id, CONNECTING);
     try {
-      const session = await openSession(id, connectionId);
+      const session = await openSession(id, connectionKey(connectionId));
       const now = useApp.getState().tabs.find((t) => t.id === id);
       if (!now || now.connectionId !== connectionId) {
         await call(commands.disconnect(id)).catch(() => undefined);

@@ -30,6 +30,7 @@ import type {
 import { chooseFolder, chooseOpenFile, openFilters } from "../dialogs";
 import { errorText as message, loadedValue, type Loaded } from "../dialogState";
 import { useJobPhase } from "../useDialogState";
+import type { ConnectionKey } from "../connectionKey";
 import { formatBytes } from "./ServerObservation";
 
 export type BackupFamily = "postgres" | "mysql" | "sqlite" | "duckdb";
@@ -51,7 +52,8 @@ export function familyRestores(family: BackupFamily): boolean {
 export interface BackupRequest {
   /** An open session of the connection (the explorer's): the run uses its tunnel and password. */
   session: string;
-  connectionId: string;
+  /** The connection's identity (ADR-075). */
+  connection: ConnectionKey;
   connectionName: string;
   family: BackupFamily;
   mode: "backup" | "restore";

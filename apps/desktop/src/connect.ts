@@ -4,27 +4,50 @@
 
 import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
 import { explorerSession } from "./windowContext";
-import { connectionKey } from "./connectionKey";
+import { connectionKey, listedConnection, tabKey, type ConnectionKey } from "./connectionKey";
 import { runningOutsideTransactions } from "./closeQuestion";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
 import { confirmUnsavedFiles, isModified } from "./sqlFiles";
 import { type RunState, type Tab, useApp, useDialogs } from "./store";
-import { CONNECTING, DISCONNECTED, connectFailed, connectedWith, hasPendingEdits, hasUnsavedEdits, isConnecting, isRunning, savingEdits, type OpenedSession } from "./tabState";
+import { CONNECTING, DISCONNECTED, connectFailed, connectedWith, explorerSessionOpen, hasPendingEdits, hasUnsavedEdits, isConnecting, isRunning, savingEdits, type OpenedSession } from "./tabState";
 
 /**
- * Fired on `window` with a connection id when the explorer refreshes all its schemas: editor
- * tabs on that connection reload the names their autocompletion offers.
+ * Fired on `window` with a connection's identity (ADR-075) when the explorer refreshes all its
+ * schemas: editor tabs on that connection reload the names their autocompletion offers. Sent
+ * with `schemasRefreshed`, never by hand, so its detail is always the pair.
  */
 export const SCHEMAS_REFRESHED_EVENT = "spelaion-schemas-refreshed";
 /**
- * Fired on `window` with `{ connectionId, idleSeconds }` when the explorer's own session of a
+ * Fired on `window` with `{ connection, idleSeconds }` when the explorer's own session of a
  * connection is lost or closed for being idle (ADR-029): its tree collapses, and expanding it
- * again reconnects.
+ * again reconnects. Sent with `explorerSessionClosed`.
  */
 export const EXPLORER_SESSION_CLOSED_EVENT = "spelaion-explorer-session-closed";
-/** A catalog change in a metadata tab asks the explorer to reread its objects. */
+/** A catalog change in a metadata tab asks the explorer to reread a connection's objects.
+ *  Sent with `refreshExplorer`, with the connection's identity. */
 export const EXPLORER_REFRESH_EVENT = "spelaion-explorer-refresh";
+
+/** What `EXPLORER_SESSION_CLOSED_EVENT` carries. */
+export interface ExplorerSessionClosed {
+  connection: ConnectionKey;
+  idleSeconds: number | null;
+}
+
+/** Tells the editor tabs that the explorer read `connection`'s schemas again. */
+export function schemasRefreshed(connection: ConnectionKey) {
+  window.dispatchEvent(new CustomEvent<ConnectionKey>(SCHEMAS_REFRESHED_EVENT, { detail: connection }));
+}
+
+/** Asks the explorer to read `connection`'s objects again. */
+export function refreshExplorer(connection: ConnectionKey) {
+  window.dispatchEvent(new CustomEvent<ConnectionKey>(EXPLORER_REFRESH_EVENT, { detail: connection }));
+}
+
+/** Tells the explorer that its own session on `connection` is gone. */
+export function explorerSessionClosed(connection: ConnectionKey, idleSeconds: number | null) {
+  window.dispatchEvent(new CustomEvent<ExplorerSessionClosed>(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connection, idleSeconds } }));
+}
 
 /**
  * Fired on `window` with `{ tabId, schema }` by "Set as the editor's schema" in the explorer:
@@ -207,19 +230,19 @@ export async function answerQuitRequest() {
 
 /** Returns the server version (and an editor tab's transaction), or null if the user
  *  cancelled. Throws if it fails. */
-export async function openSession(session: string, connectionId: string): Promise<OpenedSession | null> {
-  const version = await openSessionInner(session, connectionId);
+export async function openSession(session: string, connection: ConnectionKey): Promise<OpenedSession | null> {
+  const version = await openSessionInner(session, connection);
   return version === null ? null : opened(session, version);
 }
 
-async function openSessionInner(session: string, connectionId: string): Promise<string | null> {
+async function openSessionInner(session: string, key: ConnectionKey): Promise<string | null> {
   const app = useApp.getState();
   const dialogs = useDialogs.getState();
-  const connection = app.connections.find((c) => c.id === connectionId);
-  const name = connection?.name ?? connectionId;
+  const connection = listedConnection(app.connections, key);
+  const name = connection?.name ?? key.id;
   const editor = isEditorSession(session);
 
-  const connect = () => call(commands.connect(session, connectionKey(connectionId), null, false, editor));
+  const connect = () => call(commands.connect(session, key, null, false, editor));
   let outcome = await connect();
   if (outcome.kind === "untrusted") {
     const workspace = app.workspace?.workspace ?? null;
@@ -237,7 +260,7 @@ async function openSessionInner(session: string, connectionId: string): Promise<
     if (outcome.kind === "authFailed") error = outcome.message;
     const answer = await dialogs.askPassword(name, outcome.canRemember, error);
     if (!answer) return null;
-    outcome = await call(commands.connect(session, connectionKey(connectionId), answer.password, answer.remember, editor));
+    outcome = await call(commands.connect(session, key, answer.password, answer.remember, editor));
   }
   if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables" || outcome.kind === "cancelled") return null;
   // Setup statements the connection skipped (ADR-037) are said in the tab until dismissed.
@@ -265,7 +288,7 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
       // tab connects as a new one does, from the saved file, then to the database it wanted.
       const session = outcome.kind === "connected"
         ? await opened(tabId, outcome.serverVersion)
-        : await openSession(tabId, connectionId);
+        : await openSession(tabId, connectionKey(connectionId));
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) {
         if (session !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
@@ -286,17 +309,18 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
 }
 
 /** Open a query on a connection, independently of the explorer's expanded state. */
-export function newQueryOnConnection(connectionId: string): string {
+export function newQueryOnConnection(connection: ConnectionKey): string {
   const app = useApp.getState();
+  const connectionId = tabKey(connection);
   const tabId = app.addTab(connectionId);
-  if (app.explorerConnected.includes(connectionId)) {
-    connectTabFromExplorer(tabId, explorerSession(connectionId));
+  if (explorerSessionOpen(app.explorerConnected, connection)) {
+    connectTabFromExplorer(tabId, explorerSession(connection));
     return tabId;
   }
   useApp.getState().setConnection(tabId, CONNECTING);
   void (async () => {
     try {
-      const session = await openSession(tabId, connectionId);
+      const session = await openSession(tabId, connection);
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || !isConnecting(tab)) {
         if (session !== null) await call(commands.disconnect(tabId)).catch(() => undefined);
@@ -323,13 +347,13 @@ function failConnecting(tabId: string, connectionId: string, error: unknown) {
  *  written by the core), on a session of its own opened like `source`'s. */
 export function openTableData(connectionId: string, source: string, schema: string, table: string, filter = ""): string {
   const id = useApp.getState().addTableTab(connectionId, schema, table, filter);
-  connectTabFromExplorer(id, source, explorerDatabase(connectionId, schema));
+  connectTabFromExplorer(id, source, explorerDatabase(connectionKey(connectionId), schema));
   return id;
 }
 
 /** MySQL and MariaDB call databases schemas in their explorer. */
-export function explorerDatabase(connectionId: string, schema: string): string | undefined {
-  const engine = useApp.getState().connections.find((item) => item.id === connectionId)?.engine;
+export function explorerDatabase(connection: ConnectionKey, schema: string): string | undefined {
+  const engine = listedConnection(useApp.getState().connections, connection)?.engine;
   return engine === "mysql" || engine === "mariadb" ? schema : undefined;
 }
 

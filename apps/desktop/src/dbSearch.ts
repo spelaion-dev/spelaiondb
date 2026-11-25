@@ -22,7 +22,9 @@ export interface SearchColumn {
 }
 
 export interface SearchCatalogSchema {
-  connectionId: string;
+  /** The connection, as one text that tells two folders' connections apart (the page passes
+   *  its `connectionTag`, ADR-075); compared as it is, never read. */
+  connection: string;
   schema: string;
   relations: SearchRelation[];
   others: SearchSchemaObject[];
@@ -34,7 +36,8 @@ export type NameHitKind = "relation" | "schemaObject" | "column";
 
 export interface NameHit {
   kind: NameHitKind;
-  connectionId: string;
+  /** The `connection` of the schema it was found in. */
+  connection: string;
   schema: string;
   /** The relation, routine or other object; for a column, its table. */
   name: string;
@@ -86,11 +89,11 @@ export function searchNames(schemas: SearchCatalogSchema[], query: string, optio
   for (const entry of schemas) {
     for (const relation of entry.relations) {
       const score = nameScore(q, relation.name);
-      if (score !== null) hits.push({ kind: "relation", connectionId: entry.connectionId, schema: entry.schema, name: relation.name, type: relation.kind, score });
+      if (score !== null) hits.push({ kind: "relation", connection: entry.connection, schema: entry.schema, name: relation.name, type: relation.kind, score });
     }
     for (const object of entry.others) {
       const score = nameScore(q, object.name);
-      if (score !== null) hits.push({ kind: "schemaObject", connectionId: entry.connectionId, schema: entry.schema, name: object.name, type: object.kind, detail: object.detail ?? null, score });
+      if (score !== null) hits.push({ kind: "schemaObject", connection: entry.connection, schema: entry.schema, name: object.name, type: object.kind, detail: object.detail ?? null, score });
     }
     if (!options.columns) continue;
     for (const column of entry.columns ?? []) {
@@ -100,7 +103,7 @@ export function searchNames(schemas: SearchCatalogSchema[], query: string, optio
         const name = columnPart ? nameScore(columnPart, column.name) : 3;
         if (table !== null && name !== null) score = Math.max(table, name);
       }
-      if (score !== null) hits.push({ kind: "column", connectionId: entry.connectionId, schema: entry.schema, name: column.table, column: column.name, type: column.nativeType, score });
+      if (score !== null) hits.push({ kind: "column", connection: entry.connection, schema: entry.schema, name: column.table, column: column.name, type: column.nativeType, score });
     }
   }
   const order: Record<NameHitKind, number> = { relation: 0, schemaObject: 1, column: 2 };
@@ -109,20 +112,20 @@ export function searchNames(schemas: SearchCatalogSchema[], query: string, optio
     || order[a.kind] - order[b.kind]
     || (a.column ?? a.name).localeCompare(b.column ?? b.name)
     || a.name.localeCompare(b.name)
-    || a.connectionId.localeCompare(b.connectionId)
+    || a.connection.localeCompare(b.connection)
     || a.schema.localeCompare(b.schema));
   return { hits: hits.slice(0, Math.max(0, options.limit)), total: hits.length };
 }
 
 /** The schemas whose columns have not been read yet. */
-export function schemasWithoutColumns(schemas: SearchCatalogSchema[]): SearchCatalogSchema[] {
+export function schemasWithoutColumns<T extends Pick<SearchCatalogSchema, "columns">>(schemas: T[]): T[] {
   return schemas.filter((entry) => entry.columns === undefined);
 }
 
 /** The tables and views a data search can choose from, sorted by schema and name. */
-export function searchableTables(schemas: SearchCatalogSchema[], connectionId: string): { schema: string; table: string }[] {
+export function searchableTables(schemas: SearchCatalogSchema[], connection: string): { schema: string; table: string }[] {
   return schemas
-    .filter((entry) => entry.connectionId === connectionId)
+    .filter((entry) => entry.connection === connection)
     .flatMap((entry) => entry.relations.map((relation) => ({ schema: entry.schema, table: relation.name })))
     .sort((a, b) => a.schema.localeCompare(b.schema) || a.table.localeCompare(b.table));
 }

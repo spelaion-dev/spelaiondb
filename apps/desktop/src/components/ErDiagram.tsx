@@ -22,6 +22,7 @@ import { connectTabFromExplorer, explorerDatabase, openSession, openTableData } 
 import { chooseSavePath } from "../dialogs";
 import { openDiagram } from "../diagramTabs";
 import { useApp, type Tab } from "../store";
+import { connectionKey } from "../connectionKey";
 import { CONNECTING, DISCONNECTED, connectedWith, lostSession, statusName } from "../tabState";
 import { Icon } from "./Icons";
 import { ObjectMenu } from "./ObjectMenu";
@@ -394,7 +395,7 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
     setNeedsRefresh(true);
     useApp.getState().setConnection(tab.id, CONNECTING);
     try {
-      const session = await openSession(tab.id, tab.connectionId);
+      const session = await openSession(tab.id, connectionKey(tab.connectionId));
       useApp.getState().setConnection(tab.id, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
       useApp.getState().setConnection(tab.id, DISCONNECTED);
@@ -449,7 +450,7 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
     const app = useApp.getState();
     const existing = app.tabs.some((other) => other.connectionId === tab.connectionId && other.tableDetails?.schema === node.schema && other.tableDetails.name === node.name && other.tableDetails.kind === "columns");
     const id = app.addTableDetailsTab(tab.connectionId, node.schema, node.name, "columns");
-    if (!existing) connectTabFromExplorer(id, tab.id, explorerDatabase(tab.connectionId, node.schema));
+    if (!existing) connectTabFromExplorer(id, tab.id, explorerDatabase(connectionKey(tab.connectionId), node.schema));
   }
 
   const number = (n: number) => n.toLocaleString(i18n.language);

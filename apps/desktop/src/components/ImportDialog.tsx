@@ -19,7 +19,8 @@ import type {
   ImportSourceItem,
   IfExistsItem,
 } from "../bindings";
-import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase } from "../connect";
+import { connectTabFromExplorer, explorerDatabase, refreshExplorer } from "../connect";
+import { listedConnection, tabKey, type ConnectionKey } from "../connectionKey";
 import { isTextField, useFocusedPaste } from "../focusedPaste";
 import { readClipboardText } from "../clipboardText";
 import { chooseOpenFile } from "../dialogs";
@@ -35,7 +36,8 @@ export interface ImportRequest {
   /** An open session of the connection (the explorer's, or a tab's): the import opens its own
    *  from it, and reads the catalog on it. */
   session: string;
-  connectionId: string;
+  /** The connection's identity (ADR-075). */
+  connection: ConnectionKey;
   /** The schema to start in; `null`: the first the connection lists. */
   schema: string | null;
   /** An existing table to import into; `null`: a new table. */
@@ -90,7 +92,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const close = useImport((s) => s.close);
-  const connection = useApp((s) => s.connections.find((c) => c.id === request.connectionId)) ?? null;
+  const connection = useApp((s) => listedConnection(s.connections, request.connection)) ?? null;
   const [step, setStep] = useState<Step>("source");
   const [source, setSource] = useState<ImportSourceItem | null>(request.text != null ? { kind: "text", text: request.text } : null);
   const [preview, setPreview] = useState<ImportPreviewItem | null>(null);
@@ -324,7 +326,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
             schema: done.schema,
             table: done.table,
           });
-          if (done.createdTable) window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: request.connectionId }));
+          if (done.createdTable) refreshExplorer(request.connection);
           break;
         }
         case "needsConfirmation":
@@ -355,8 +357,8 @@ function ImportForm({ request }: { request: ImportRequest }) {
   }
 
   function openTable(target: { schema: string; table: string }) {
-    const tab = useApp.getState().addTableTab(request.connectionId, target.schema, target.table);
-    connectTabFromExplorer(tab, request.session, explorerDatabase(request.connectionId, target.schema));
+    const tab = useApp.getState().addTableTab(tabKey(request.connection), target.schema, target.table);
+    connectTabFromExplorer(tab, request.session, explorerDatabase(request.connection, target.schema));
     close();
   }
 

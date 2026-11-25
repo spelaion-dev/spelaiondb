@@ -25,6 +25,7 @@ import { openFilePath, recentFiles } from "../sqlFiles";
 import { folderSwitchBlocked, isOpenFolder, recentFolders, switchFolder } from "../folders";
 import type { RecentFolderItem } from "../bindings";
 import { useApp } from "../store";
+import { connectionTag, holdsConnection, keyOf } from "../connectionKey";
 
 /** At most this many matches are listed: typing more narrows them. */
 const MAX_RESULTS = 60;
@@ -119,24 +120,25 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
   );
 
   const otherEntries = useMemo<Entry[]>(() => {
-    const names = new Map(connections.map((c) => [c.id, c.name]));
+    const names = new Map(connections.map((c) => [connectionTag(keyOf(c)), c.name]));
     const entries: Entry[] = connections.map((connection) => ({
       kind: "object",
-      key: `connection:${connection.id}`,
+      key: `connection:${connectionTag(keyOf(connection))}`,
       item: { kind: "connection", connection },
       text: connection.name,
       detail: t("palette.connection"),
     }));
     for (const schema of Object.values(catalog)) {
-      const connectionName = names.get(schema.connectionId);
+      const tag = connectionTag(schema.connection);
+      const connectionName = names.get(tag);
       // Only what the explorer shows now: a connection still connected there.
-      if (connectionName === undefined || !connected.includes(schema.connectionId)) continue;
+      if (connectionName === undefined || !holdsConnection(connected, schema.connection)) continue;
       // A connection with one unnamed schema (SQLite's "main" is named) shows no schema row.
       if (schema.schema !== "") {
         entries.push({
           kind: "object",
-          key: `schema:${schema.connectionId}:${schema.schema}`,
-          item: { kind: "schema", connectionId: schema.connectionId, schema: schema.schema, filter: schema.filter ?? null },
+          key: `schema:${tag}:${schema.schema}`,
+          item: { kind: "schema", connection: schema.connection, schema: schema.schema, filter: schema.filter ?? null },
           text: schema.schema,
           detail: `${t("shell:kinds.schema")} · ${connectionName}`,
         });
@@ -144,8 +146,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
       for (const object of schema.relations) {
         entries.push({
           kind: "object",
-          key: `relation:${schema.connectionId}:${object.schema}:${object.name}`,
-          item: { kind: "relation", connectionId: schema.connectionId, object },
+          key: `relation:${tag}:${object.schema}:${object.name}`,
+          item: { kind: "relation", connection: schema.connection, object },
           text: object.name,
           detail: `${t(`shell:kinds.${object.kind}`)} · ${object.schema} · ${connectionName}`,
         });
@@ -153,8 +155,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
       schema.others.forEach((object, index) => {
         entries.push({
           kind: "object",
-          key: `other:${schema.connectionId}:${object.schema}:${object.kind}:${object.name}:${object.detail ?? ""}:${index}`,
-          item: { kind: "schemaObject", connectionId: schema.connectionId, object },
+          key: `other:${tag}:${object.schema}:${object.kind}:${object.name}:${object.detail ?? ""}:${index}`,
+          item: { kind: "schemaObject", connection: schema.connection, object },
           text: object.detail ? `${object.name}(${object.detail})` : object.name,
           detail: `${t(`shell:kinds.${object.kind}`)} · ${object.schema} · ${connectionName}`,
         });

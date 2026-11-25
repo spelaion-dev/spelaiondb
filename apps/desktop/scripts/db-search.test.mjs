@@ -6,8 +6,8 @@ import { nameScore, schemasWithoutColumns, searchNames, searchableTables } from 
 
 /** Five connections, as the explorer's catalog holds them after reading their schemas. */
 function catalog() {
-  const shop = (connectionId, schema) => ({
-    connectionId,
+  const shop = (connection, schema) => ({
+    connection,
     schema,
     relations: [
       { name: "orders", kind: "table" },
@@ -28,7 +28,7 @@ function catalog() {
     { ...shop("mysql", "shop"), columns: undefined },
     shop("sqlite", "main"),
     {
-      connectionId: "mssql",
+      connection: "mssql",
       schema: "dbo",
       relations: [{ name: "CustomerAudit", kind: "table" }],
       others: [{ name: "usp_GetCustomer", kind: "procedure" }],
@@ -51,7 +51,7 @@ test("one search answers from the catalog of five connections", () => {
   const { hits, total } = searchNames(catalog(), "customer_id", { columns: true, limit: 100 });
   // The column on every connection whose columns were read; MySQL's are not read yet.
   assert.deepEqual(
-    hits.map((h) => [h.connectionId, h.kind, h.name, h.column]),
+    hits.map((h) => [h.connection, h.kind, h.name, h.column]),
     [
       ["pg-prod", "column", "orders", "customer_id"],
       ["pg-staging", "column", "orders", "customer_id"],
@@ -60,10 +60,10 @@ test("one search answers from the catalog of five connections", () => {
   );
   assert.equal(total, 3);
   const customer = searchNames(catalog(), "customer", { columns: true, limit: 100 });
-  const connections = new Set(customer.hits.map((h) => h.connectionId));
+  const connections = new Set(customer.hits.map((h) => h.connection));
   assert.deepEqual([...connections].sort(), ["mssql", "mysql", "pg-prod", "pg-staging", "sqlite"]);
   // Tables before routines before columns, at the same score.
-  const first = customer.hits.filter((h) => h.connectionId === "pg-prod").map((h) => h.kind);
+  const first = customer.hits.filter((h) => h.connection === "pg-prod").map((h) => h.kind);
   assert.deepEqual(first, ["relation", "column", "schemaObject"]);
 });
 
@@ -79,7 +79,7 @@ test("columns can be left out, a dot matches table and column, and the limit kee
 });
 
 test("the schemas still to read and the tables a data search can choose", () => {
-  assert.deepEqual(schemasWithoutColumns(catalog()).map((s) => s.connectionId), ["mysql"]);
+  assert.deepEqual(schemasWithoutColumns(catalog()).map((s) => s.connection), ["mysql"]);
   assert.deepEqual(searchableTables(catalog(), "pg-prod"), [
     { schema: "public", table: "customers" },
     { schema: "public", table: "order_totals" },

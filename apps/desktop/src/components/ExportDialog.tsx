@@ -13,6 +13,7 @@ import type { ExportDefaultsItem, ExportFileOptions, ExportSummaryItem, ExportPr
 import { chooseFolder, chooseSavePath } from "../dialogs";
 import { errorText as message } from "../dialogState";
 import { useApp, useDialogs, type ResultMeta } from "../store";
+import { connectionKey, listedConnection, type ConnectionKey } from "../connectionKey";
 import { ended, partialText } from "../resultEnd";
 import { startJob } from "../jobs";
 import { useJobPhase } from "../useDialogState";
@@ -34,7 +35,7 @@ export type ExportRequest =
   /** A selection of a loaded result: its rows and shown columns. */
   | { kind: "selection"; session: string; result: ResultMeta; range: CellRange }
   /** Tables and views chosen in the explorer; `session` is the explorer's. */
-  | { kind: "tables"; session: string; connectionId: string; tables: { schema: string; name: string }[] };
+  | { kind: "tables"; session: string; connection: ConnectionKey; tables: { schema: string; name: string }[] };
 
 export const useExport = create<{ request: ExportRequest | null; open(request: ExportRequest): void; close(): void }>((set) => ({
   request: null,
@@ -81,8 +82,9 @@ function ExportForm({ request }: { request: ExportRequest }) {
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const close = useExport((s) => s.close);
   const connections = useApp((s) => s.connections);
-  const connectionId = request.kind === "selection" ? null : request.connectionId;
-  const connection = connections.find((c) => c.id === connectionId) ?? null;
+  // A tab names its connection by its id; the explorer's tables by its identity (ADR-075).
+  const key = request.kind === "tables" ? request.connection : request.kind === "result" && request.connectionId !== null ? connectionKey(request.connectionId) : null;
+  const connection = (key && listedConnection(connections, key)) ?? null;
   const result = request.kind === "tables" ? null : request.result;
   const canStream = request.kind === "result" && (request.sql !== null || request.table !== null);
   const [check, setCheck] = useState<RerunCheckItem | null>(null);

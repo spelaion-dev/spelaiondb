@@ -2,10 +2,12 @@
 // the core's: the dialog only holds its report, and asks the core for the script by its id.
 
 import { create } from "zustand";
+import type { ConnectionKey } from "./connectionIdentity.ts";
 
 /** The source of a comparison: a schema of a connection connected in the explorer. */
 export interface CompareSource {
-  connectionId: string;
+  /** The connection's identity (ADR-075). */
+  connection: ConnectionKey;
   schema: string;
 }
 
@@ -19,7 +21,7 @@ export const useSchemaCompare = create<{
   close: () => set({ source: null }),
 }));
 
-/** Opens the comparison's dialog with `schema` of `connectionId` as its source. */
-export function compareSchemas(connectionId: string, schema: string) {
-  useSchemaCompare.getState().open({ connectionId, schema });
+/** Opens the comparison's dialog with `schema` of `connection` as its source. */
+export function compareSchemas(connection: ConnectionKey, schema: string) {
+  useSchemaCompare.getState().open({ connection, schema });
 }

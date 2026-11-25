@@ -3,6 +3,7 @@ import { call, commands } from "./api";
 import { CompletionCache, completionCacheKey, type CompletionSnapshot } from "./completionCache";
 import { EMPTY_CATALOG, referencedCompletionTables } from "./sqlCompletion";
 import { SCHEMAS_REFRESHED_EVENT, EXPLORER_REFRESH_EVENT } from "./connect";
+import { connectionTag, type ConnectionKey } from "./connectionKey";
 
 const cache = new CompletionCache();
 const generations = new Map<string, number>();
@@ -10,7 +11,8 @@ const refreshEvents = new WeakMap<Event, number>();
 const initial: CompletionSnapshot = { catalog: EMPTY_CATALOG, loading: false, error: null };
 
 /** The same unfiltered catalog operations the explorer uses (ADR-025). The clone keeps
- * metadata reads off the user's actor/transaction, and takes credentials only inside Rust. */
+ * metadata reads off the user's actor/transaction, and takes credentials only inside Rust.
+ * `connection` is the connection's `connectionTag` (its folder and id, ADR-075), or null. */
 export function useCompletionCatalog(session: string, connection: string | null, workspace: string | null, database: string | null, connected: boolean, sql: string, engine: string | null) {
   const [snapshot, setSnapshot] = useState<CompletionSnapshot>(initial);
   const [defaultSchema, setDefaultSchema] = useState<string | null>(null);
@@ -18,9 +20,9 @@ export function useCompletionCatalog(session: string, connection: string | null,
   const [generation, setGeneration] = useState(() => generations.get(connection ?? "") ?? 0);
   useEffect(() => {
     const refresh = (event: Event) => {
-      const detail: unknown = (event as CustomEvent).detail;
-      const id = typeof detail === "string" ? detail : (detail as { connectionId?: string } | null)?.connectionId;
-      if (id === connection) {
+      // Both events carry the connection's identity (`schemasRefreshed`, `refreshExplorer`).
+      const detail = (event as CustomEvent<ConnectionKey | null>).detail;
+      if (connection !== null && detail && connectionTag(detail) === connection) {
         const next = refreshEvents.get(event) ?? (generations.get(connection) ?? 0) + 1;
         refreshEvents.set(event, next);
         generations.set(connection, next); setGeneration(next);
