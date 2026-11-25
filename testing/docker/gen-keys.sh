@@ -17,7 +17,10 @@ export MSYS_NO_PATHCONV=1
 
 [ -f keys/id_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -C "spelaion-test" -f keys/id_ed25519
 [ -f keys/id_ed25519_pass ] || ssh-keygen -q -t ed25519 -N "spelaion-test" -C "spelaion-test-pass" -f keys/id_ed25519_pass
-cat keys/id_ed25519.pub keys/id_ed25519_pass.pub > keys/authorized_keys
+# The bastions also let in the PuTTY test keys (SDB-528), which are committed with their tests.
+cat keys/id_ed25519.pub keys/id_ed25519_pass.pub \
+  ../../crates/spelaion-ssh/tests/fixtures/ppk/ppk_rsa.pub \
+  ../../crates/spelaion-ssh/tests/fixtures/ppk/ppk_ed25519.pub > keys/authorized_keys
 
 if [ ! -f keys/server.crt ]; then
   openssl req -x509 -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \

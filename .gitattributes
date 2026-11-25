@@ -7,3 +7,6 @@
 
 # Preserve the real HeidiSQL export byte for byte.
 crates/spelaion-config/tests/fixtures/heidisql/heidisql-12.22.txt binary
+
+# PuTTY keys made by puttygen (SDB-528), byte for byte: two of them keep Windows line endings.
+crates/spelaion-ssh/tests/fixtures/ppk/*.ppk binary
