@@ -5574,6 +5574,30 @@ try {
     const svg = chart.locator("svg.chart-svg");
     // The first text column is X and the first number the values: one bar per row.
     await note.filter({ hasText: "6 rows, one point each." }).waitFor();
+    // The pressed chart toggle is a pressed toggle, not a result tab (SDB-523): no tab underline,
+    // rounded on every corner, the accent's soft background.
+    {
+      const toggle = panel.getByRole("button", { name: "Show as grid" });
+      assert.equal(await toggle.getAttribute("aria-pressed"), "true");
+      const look = await toggle.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const soft = getComputedStyle(document.documentElement).getPropertyValue("--accent-soft").trim();
+        const probe = document.createElement("span");
+        probe.style.background = soft;
+        document.body.append(probe);
+        const expected = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return { shadow: style.boxShadow, bottomLeft: style.borderBottomLeftRadius, background: style.backgroundColor, expected };
+      });
+      assert.equal(look.shadow, "none", JSON.stringify(look));
+      assert.notEqual(look.bottomLeft, "0px", JSON.stringify(look));
+      assert.equal(look.background, look.expected, JSON.stringify(look));
+      const toolbar = panel.locator(".result-tabs");
+      await toolbar.screenshot({ path: join(shots, "sdb-523-chart-toggle-light.png") });
+      await setTheme("dark", "dark");
+      await toolbar.screenshot({ path: join(shots, "sdb-523-chart-toggle-dark.png") });
+      await setTheme("light", "light");
+    }
     assert.equal(await chart.getByRole("combobox", { name: "X axis" }).inputValue(), "0");
     await svg.locator(".chart-title", { hasText: "orders by country" }).waitFor();
     assert.equal(await svg.locator("rect").count(), 6);
