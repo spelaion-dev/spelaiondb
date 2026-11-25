@@ -32,6 +32,8 @@ export function TableDataBar(props: {
   /** For the filter box's memory (SDB-381): the tab's connection and session, the columns of
    *  the page on screen, and whether that page loaded without an error. */
   connectionId: string | null;
+  /** The other database of its connection the tab is on (ADR-074, SDB-505); null for its own. */
+  database: string | null;
   session: string;
   columns: string[];
   loaded: boolean;
@@ -68,6 +70,7 @@ export function TableDataBar(props: {
     >
       <TableFilterBox
         connectionId={props.connectionId}
+        database={props.database}
         session={props.session}
         schema={view.schema}
         name={view.name}

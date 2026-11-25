@@ -7,11 +7,11 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import { startJob, type Job } from "../jobs";
-import type { KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
+import type { ExplorerDatabaseItem_Serialize as ExplorerDatabaseItem, KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
-import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, schemasRefreshed, SET_ACTIVE_SCHEMA_EVENT, tabLabel } from "../connect";
+import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openTabSession, schemasRefreshed, SET_ACTIVE_SCHEMA_EVENT, tabLabel } from "../connect";
 import { detachResults, reattachResults, sendMirror, serveRequests, type ResultsMirror, type ResultsRequest } from "../resultsWindow";
 import { connectionTooltip } from "../connectionInfo";
 import { afterRun, endResult, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../runResults";
@@ -133,6 +133,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [database, setDatabase] = useState<string | null>(null);
   const [databaseBusy, setDatabaseBusy] = useState(false);
   const [databaseError, setDatabaseError] = useState(false);
+  /** A PostgreSQL connection that opens several databases (ADR-074, SDB-505): the databases the
+   *  tab can be on, as the core lists them (its connection's own first); null without a choice. */
+  const [tabDatabases, setTabDatabases] = useState<ExplorerDatabaseItem[] | null>(null);
+  const [tabDatabaseBusy, setTabDatabaseBusy] = useState(false);
   const [databaseRefresh, setDatabaseRefresh] = useState(0);
   const databaseBusyRef = useRef(false);
   const workspace = useApp((s) => s.workspace?.workspace ?? null);
@@ -830,7 +834,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function openTablePage(view: TableView) {
     let first = view;
     if (!view.filter && tab.connectionId) {
-      const saved = await call(commands.tableFilters(connectionKey(tab.connectionId), view.schema, view.name)).catch(() => null);
+      const saved = await call(commands.tableFilters(connectionKey(tab.connectionId), tab.database ?? null, view.schema, view.name)).catch(() => null);
       if (saved?.default) {
         first = { ...view, filter: saved.default };
         updateTab(tab.id, { table: first });
@@ -1043,6 +1047,47 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
   }
 
+  // Which databases a PostgreSQL tab can be on is the core's answer, read once it connects.
+  useEffect(() => {
+    if (tab.table || tabStatus !== "connected" || connection?.engine !== "postgres") {
+      setTabDatabases(null);
+      return;
+    }
+    let cancelled = false;
+    void call(commands.connectionDatabases(tab.id))
+      .then((listed) => { if (!cancelled) setTabDatabases(listed.kind === "several" ? listed.databases : null); })
+      .catch(() => { if (!cancelled) setTabDatabases(null); });
+    return () => { cancelled = true; };
+  }, [tab.id, tab.table, tabStatus, connection?.engine, tab.database]);
+
+  /** Another database for a PostgreSQL tab (ADR-074 point 4): a disconnect and a connect, never
+   *  a switch. Refused while a script runs (the core refuses too), asked about like any disconnect
+   *  while a transaction is open (ADR-031); nothing is run again, and the rows on screen, read by
+   *  the old session, stop being editable (ADR-061). The old session stays if the new one fails. */
+  async function changeTabDatabase(next: string) {
+    const own = tabDatabases?.find((d) => d.own)?.name ?? null;
+    if (!next || next === (tab.database ?? own) || running || tabDatabaseBusy) return;
+    if (pendingCount > 0 || saving.now() || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
+    // The old session stays if the new one fails: the tab is still connected to it.
+    const current = useApp.getState().tabs.find((item) => item.id === tab.id);
+    const before = current ? serverVersion(current) : null;
+    setTabDatabaseBusy(true);
+    setConnection(tab.id, CONNECTING);
+    try {
+      const version = await call(commands.changeTabDatabase(tab.id, next));
+      updateTab(tab.id, { database: next === own ? null : next });
+      setConnection(tab.id, connectedWith({ version }));
+      updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
+      setQueryTarget(null);
+    } catch (e) {
+      setConnection(tab.id, before !== null ? connectedWith({ version: before }) : DISCONNECTED);
+      setNotice({ text: t("databaseChangeFailed", { database: next, detail: message(e) }), error: true });
+    } finally {
+      setTabDatabaseBusy(false);
+    }
+  }
+
   async function changeDatabase(next: string) {
     if (pendingCount > 0 || saving.now() || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!next || databaseBusyRef.current) return;
@@ -1115,7 +1160,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
     setConnection(tab.id, CONNECTING);
     try {
-      const session = await openSession(tab.id, connectionKey(tab.connectionId));
+      // On the database the tab is on (ADR-074, SDB-505), never quietly another.
+      const session = await openTabSession(tab.id, connectionKey(tab.connectionId));
       if (session === null) {
         setConnection(tab.id, DISCONNECTED);
         return false;
@@ -1171,7 +1217,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
     // The rows on screen came from the other connection: read-only until run again (SDB-137).
     setQueryTarget(null);
-    updateTab(tab.id, { connectionId: id || null, connectionState: DISCONNECTED });
+    // Another connection starts on its own database (ADR-074, SDB-505).
+    updateTab(tab.id, { connectionId: id || null, database: null, connectionState: DISCONNECTED });
   }
 
   // "Run…" on a routine (ADR-047): the whole script once, as soon as the tab is connected and
@@ -1692,6 +1739,21 @@ export function EditorTab({ tab }: { tab: Tab }) {
         ) : (
           <button className="ghost" disabled={tabStatus === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
         ))}
+        {tabDatabases && tabStatus === "connected" && (
+          <select
+            aria-label={t("database")}
+            title={t("databasePostgresHint")}
+            name="tab-database"
+            value={tab.database ?? tabDatabases.find((d) => d.own)?.name ?? ""}
+            onChange={(e) => void changeTabDatabase(e.target.value)}
+            disabled={running || tabDatabaseBusy || historySaving || workspaceChanging || activeResult?.paging?.loading}
+          >
+            {/* A database with a connection of its own opens only there (ADR-074 point 3). */}
+            {tabDatabases.filter((d) => !d.ownedBy).map((d) => (
+              <option key={d.name} value={d.name}>{d.own ? t("databaseOwn", { name: d.name }) : d.name}</option>
+            ))}
+          </select>
+        )}
         {supportsSchema && tabStatus === "connected" && (
           <select
             aria-label={t("schema")}
@@ -1774,6 +1836,8 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
               <li key={i}>
                 {note.kind === "connectionMissing"
                   ? t("restore.connectionMissing", { connection: note.connection })
+                  : note.kind === "databaseMissing"
+                    ? t("restore.databaseMissing", { database: note.database })
                   : note.kind === "fileUnreadable"
                     ? t("restore.fileUnreadable", { message: note.message })
                     : t(`restore.${note.kind}`)}
@@ -1787,6 +1851,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
         {tab.table && (
           <TableDataBar
             view={tab.table}
+            database={tab.database ?? null}
             shown={tab.run?.results[0] ? (tab.run.results[0].total ?? tab.run.results[0].rows) : null}
             busy={running || savingEdits || pageLoading}
             onChange={changeView}

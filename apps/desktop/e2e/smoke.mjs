@@ -7327,6 +7327,46 @@ try {
     await page.keyboard.insertText("select current_database() where current_database() = 'spelaion_gis';");
     await run(gisPanel);
     await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+
+    // SDB-505: the tab's database picker. Choosing another is a disconnect and a connect, never
+    // a switch: back to the connection's own database, then to spelaion_gis again.
+    const picker = gisPanel.locator('select[name="tab-database"]');
+    assert.equal(await picker.inputValue(), "spelaion_gis");
+    await shot("sdb-505-database-picker");
+    await picker.selectOption("spelaion");
+    await gisPanel.locator(".status-connected").waitFor();
+    assert.equal(await picker.inputValue(), "spelaion");
+    await replaceQuery(gisPanel, "select current_database() where current_database() = 'spelaion';");
+    await run(gisPanel);
+    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    // With a transaction open, choosing another database asks first; Cancel keeps the session.
+    await replaceQuery(gisPanel, "begin;");
+    await run(gisPanel);
+    await gisPanel.locator(".tx-badge").waitFor();
+    await picker.selectOption("spelaion_gis");
+    const changeOpen = page.getByRole("dialog", { name: "Disconnect with an open transaction?" });
+    await changeOpen.getByRole("button", { name: "Cancel", exact: true }).click();
+    await changeOpen.waitFor({ state: "detached" });
+    await gisPanel.locator(".tx-badge").waitFor();
+    assert.equal(await picker.inputValue(), "spelaion");
+    await picker.selectOption("spelaion_gis");
+    await changeOpen.getByRole("button", { name: "Disconnect and roll back", exact: true }).click();
+    await changeOpen.waitFor({ state: "detached" });
+    await gisPanel.locator(".tx-badge").waitFor({ state: "detached" });
+    await gisPanel.locator(".status-connected").waitFor();
+    assert.equal(await picker.inputValue(), "spelaion_gis");
+    // A tab whose session ended connects again to its database, as a restored tab does when it
+    // runs: never quietly to the connection's own.
+    await replaceQuery(gisPanel, "select pg_terminate_backend(pg_backend_pid());");
+    await run(gisPanel);
+    await gisPanel.locator(".status-lost").getByRole("button", { name: "Reconnect" }).click();
+    await page.getByRole("dialog").getByText("Password for PG all databases").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await gisPanel.locator(".status-connected").waitFor();
+    await replaceQuery(gisPanel, "select current_database() where current_database() = 'spelaion_gis';");
+    await run(gisPanel);
+    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
     await page.locator(".tabbar .tab.active .close").click();
 
     // Disconnecting from its row closes its session; deleting the connection closes the rest.

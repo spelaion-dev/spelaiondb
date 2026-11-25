@@ -632,7 +632,7 @@ function CollectionNode({ session, identity, object }: { session: string; identi
   /** A Redis key opens with a bounded command of its type, not a page of documents. */
   const key = useApp((s) => listedConnection(s.connections, identity)?.engine === "redis");
   const { row, revealed } = useRevealedRow(
-    (r) => sameConnection(r.connection, identity) && r.schema === object.schema && r.name === object.name,
+    (r) => connectionTag(r.connection) === connectionTag(identity) && r.schema === object.schema && r.name === object.name,
   );
   const open = async () => {
     setMenu(null);
@@ -849,8 +849,9 @@ function BookmarkStar({ bookmark }: { bookmark: BookmarkItem }) {
 const RELATION_KINDS = ["table", "partitioned_table", "view", "materialized_view", "foreign_table"];
 
 /** A bookmark's connection, as the identity the page holds. */
+/** A bookmark's explorer key: its connection, on the database it is in (ADR-074, SDB-505). */
 function bookmarkConnection(bookmark: BookmarkItem): ConnectionKey {
-  return { folder: bookmark.connection.folder ?? null, id: bookmark.connection.id };
+  return onDatabase({ folder: bookmark.connection.folder ?? null, id: bookmark.connection.id }, bookmark.database ?? null);
 }
 
 /** Shows a bookmark's object in the tree, connecting first if needed: the user asked. */
@@ -866,7 +867,8 @@ function showBookmark(bookmark: BookmarkItem) {
 /** Opens a bookmark's object (a table's rows, another object's DDL); a schema, or an object of
  *  a connection not connected in the explorer yet, is shown in the tree instead. */
 async function openBookmark(bookmark: BookmarkItem) {
-  if (bookmark.kind === "schema" || !explorerSessionOpen(useApp.getState().explorerConnected, bookmarkConnection(bookmark))) {
+  // Another database's object is shown in the tree first: its row opens its session (SDB-505).
+  if (bookmark.kind === "schema" || bookmark.database || !explorerSessionOpen(useApp.getState().explorerConnected, bookmarkConnection(bookmark))) {
     showBookmark(bookmark);
     return;
   }
@@ -2406,6 +2408,14 @@ function DatabaseNode({
     connectTabFromExplorer(tab, session);
   }
 
+  // Asked to show something of this database (a bookmark, SDB-505): its row opens, connecting
+  // first when the reveal says the user asked for it; its schema rows then show the object.
+  const reveal = useApp((s) => s.explorerReveal);
+  useEffect(() => {
+    if (own || database.ownedBy || !reveal || !sameConnection(reveal.connection, identity) || databaseOf(reveal.connection) !== database.name) return;
+    if (schemas !== null) setOpen(true);
+    else if (reveal.connect) void expand();
+  }, [reveal, own, connectionTag(identity), database.name, schemas]);
   // "Refresh all schemas" on the connection reads an opened database again too.
   useOnChange(generation, () => {
     if (!own && schemas) void load().catch((e: unknown) => setError(errorText(e)));
@@ -2697,9 +2707,9 @@ function SchemaNode({
   const childGeneration = `${generation}.${refreshed}`;
 
   const reveal = useApp((s) => s.explorerReveal);
-  const revealHere = reveal !== null && sameConnection(reveal.connection, identity) && reveal.schema === schema;
+  const revealHere = reveal !== null && connectionTag(reveal.connection) === connectionTag(identity) && reveal.schema === schema;
   const { row: schemaRow, revealed: schemaRevealed } = useRevealedRow(
-    (r) => sameConnection(r.connection, identity) && r.schema === schema && r.name === undefined,
+    (r) => connectionTag(r.connection) === connectionTag(identity) && r.schema === schema && r.name === undefined,
   );
   useEffect(() => {
     if (!revealHere || !reveal) return;
@@ -3001,7 +3011,7 @@ function ObjectNode({
   };
   const actions = useObjectActions(session);
   const { row: objectRow, revealed: objectRevealed } = useRevealedRow(
-    (r) => sameConnection(r.connection, identity) && r.schema === object.schema && r.name === object.name,
+    (r) => connectionTag(r.connection) === connectionTag(identity) && r.schema === object.schema && r.name === object.name,
   );
   /** Columns chosen with Ctrl+click, in the order chosen: a new index takes them so. */
   const [chosenColumns, setChosenColumns] = useState<string[]>([]);
@@ -3712,7 +3722,7 @@ function SchemaObjectNode({
   const [error, setError] = useState<string | null>(null);
   const actions = useObjectActions(session);
   const { row, revealed } = useRevealedRow(
-    (r) => sameConnection(r.connection, identity) && r.schema === object.schema && r.name === object.name,
+    (r) => connectionTag(r.connection) === connectionTag(identity) && r.schema === object.schema && r.name === object.name,
   );
   const bookmark = schemaObjectBookmark(identity, object);
   /** A menu item's action, shared with the palette (`explorerActions.ts`, SDB-441): a failure is

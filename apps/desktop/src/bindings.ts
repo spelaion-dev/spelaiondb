@@ -586,13 +586,13 @@ export const commands = {
 	 *  as it reads it, and a default that no longer passes comes back as refused, never as a
 	 *  filter.
 	 */
-	tableFilters: (connection: ConnectionKeyItem_Deserialize, schema: string, name: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("table_filters", { connection, schema, name })),
+	tableFilters: (connection: ConnectionKeyItem_Deserialize, database: string | null, schema: string, name: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("table_filters", { connection, database, schema, name })),
 	/**  Remembers a filter the tab just used, checked by the core first. */
-	recordTableFilter: (connection: ConnectionKeyItem_Deserialize, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("record_table_filter", { connection, schema, name, filter })),
+	recordTableFilter: (connection: ConnectionKeyItem_Deserialize, database: string | null, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("record_table_filter", { connection, database, schema, name, filter })),
 	/**  Takes one filter out of a table's history. */
-	forgetTableFilter: (connection: ConnectionKeyItem_Deserialize, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, schema, name, filter })),
+	forgetTableFilter: (connection: ConnectionKeyItem_Deserialize, database: string | null, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, database, schema, name, filter })),
 	/**  Saves the filter a table's tab opens with (checked by the core), or drops it (`None`). */
-	setTableDefaultFilter: (connection: ConnectionKeyItem_Deserialize, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, schema, name, filter })),
+	setTableDefaultFilter: (connection: ConnectionKeyItem_Deserialize, database: string | null, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, database, schema, name, filter })),
 	/**
 	 *  Every column of a schema's relations, read with one catalog query on the explorer's
 	 *  session: metadata search keeps them with the schema (ADR-043).
@@ -1116,6 +1116,16 @@ export const commands = {
 	 *  the password typed for `source`. What the core refuses comes back as its reason.
 	 */
 	connectDatabase: (source: string, session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("connect_database", { source, session, database })),
+	/**
+	 *  Moves the editor tab `session` to `database` of its connection (ADR-074 point 4, SDB-505):
+	 *  on PostgreSQL a session never changes database, so this is a new session on that database,
+	 *  opened through the core (`open_other_database`, with its refusals) with the password typed
+	 *  for the tab, which then takes the tab's place; the old one is closed (its transaction, which
+	 *  the page asked about, rolls back). Refused while a run goes on. Nothing the user ran is run
+	 *  again; results the old session read stay, and are no longer editable (ADR-061: they are of
+	 *  that session). Answers the new session's server version.
+	 */
+	changeTabDatabase: (session: string, database: string) => typedError<string, string>(__TAURI_INVOKE("change_tab_database", { session, database })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
@@ -1591,6 +1601,8 @@ export type BookmarkItem = BookmarkItem_Serialize | BookmarkItem_Deserialize;
 export type BookmarkItem_Deserialize = {
 	/**  The connection's identity (ADR-075). */
 	connection: ConnectionKeyItem_Deserialize,
+	/**  The other database of the connection it is in (ADR-074, SDB-505); `None` for its own. */
+	database?: string | null,
 	/**  The schema the object is in, or the schema itself (with an empty `name`). */
 	schema: string,
 	name: string,
@@ -1603,6 +1615,8 @@ export type BookmarkItem_Deserialize = {
 export type BookmarkItem_Serialize = {
 	/**  The connection's identity (ADR-075). */
 	connection: ConnectionKeyItem_Serialize,
+	/**  The other database of the connection it is in (ADR-074, SDB-505); `None` for its own. */
+	database: string | null,
 	/**  The schema the object is in, or the schema itself (with an empty `name`). */
 	schema: string,
 	name: string,
@@ -5311,6 +5325,8 @@ export type OpenTabItem_Deserialize = {
 	title?: string | null,
 	text: string,
 	connection?: string | null,
+	/**  The other database of its connection it was on (ADR-074, SDB-505); `None` for its own. */
+	database?: string | null,
 	pinned: boolean,
 	onError?: OnErrorItem | null,
 	timeoutSeconds?: number | null,
@@ -5323,6 +5339,8 @@ export type OpenTabItem_Serialize = {
 	title: string | null,
 	text: string,
 	connection: string | null,
+	/**  The other database of its connection it was on (ADR-074, SDB-505); `None` for its own. */
+	database: string | null,
 	pinned: boolean,
 	onError: OnErrorItem | null,
 	timeoutSeconds: number | null,
@@ -6364,7 +6382,9 @@ export type RestoreDoneItem = {
 export type RestoreFormatItem = "auto" | "plain" | "custom" | "directory" | "tar";
 
 /**  Why a restored tab is not exactly as it was kept. */
-export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } | { kind: "fileMissing" } | { kind: "fileUnreadable"; message: string } | { kind: "fileChangedOnDisk" };
+export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } | 
+/**  Its connection no longer opens the database it was on (ADR-074): it is on its own now. */
+{ kind: "databaseMissing"; database: string } | { kind: "fileMissing" } | { kind: "fileUnreadable"; message: string } | { kind: "fileChangedOnDisk" };
 
 export type RestoreOptionsItem = { kind: "postgres"; clean: boolean; noOwner: boolean; create: boolean } | { kind: "mysql"; 
 /**  Empty: the connection's. */

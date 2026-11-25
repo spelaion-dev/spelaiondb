@@ -4,7 +4,7 @@
 // disconnected: the optional "reconnect at startup" only connects them, it never runs anything.
 
 import { call, commands, type OpenTabItem, type RestoredTabsItem } from "./api";
-import { connectionFailedRun, openSession } from "./connect";
+import { connectionFailedRun, openTabSession } from "./connect";
 import { isModified } from "./sqlFiles";
 import { useApp, type Tab } from "./store";
 import { connectionKey } from "./connectionKey";
@@ -33,6 +33,7 @@ function snapshot(tabs: Tab[], activeTab: string | null): { tabs: OpenTabItem[];
       title: tab.title ?? null,
       text: tab.sql,
       connection: tab.connectionId,
+      database: tab.connectionId ? (tab.database ?? null) : null,
       pinned: tab.pinned ?? false,
       onError: tab.runOptions?.onError ?? null,
       timeoutSeconds: tab.runOptions?.timeoutSeconds ?? null,
@@ -107,7 +108,7 @@ async function reconnectRestored() {
     const connectionId = tab.connectionId;
     useApp.getState().setConnection(id, CONNECTING);
     try {
-      const session = await openSession(id, connectionKey(connectionId));
+      const session = await openTabSession(id, connectionKey(connectionId));
       const now = useApp.getState().tabs.find((t) => t.id === id);
       if (!now || now.connectionId !== connectionId) {
         await call(commands.disconnect(id)).catch(() => undefined);

@@ -258,7 +258,12 @@
   for the user (templates included), and a database another connection with the same login
   (`session_source::same_login`, or its file's host, port and user when it does not resolve)
   has as its own, naming that connection. Agents never come here: the MCP server opens the
-  file's `database` only. `tests/postgres_other_databases.rs` opens one through the two-hop
+  file's `database` only. `change_session_database` (SDB-505) is a tab's change of database:
+  refused while its session runs a script (`OtherDatabaseError::Running`), then
+  `open_other_database`, which also goes back to the connection's own database, as its saved
+  file opens it, from a session on another. `file_opens_database` is whether a file still
+  opens a database, for restored tabs (`open_tabs.rs`, `RestoreNote::DatabaseMissing`).
+  `tests/postgres_other_databases.rs` opens one through the two-hop
   tunnel and tries each refusal; `spelaion-mcp`'s tests keep an agent on `all_databases` to
   its own database.
   Server observation (the process monitor's other views): `observe.rs` runs each statement
