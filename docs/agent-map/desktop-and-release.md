@@ -188,6 +188,22 @@
   `view.splitRight`, `view.splitDown`, `view.closeSplit` and `view.focusOtherPane`
   (`splitTab` and friends in `tabActions.ts`); none has default keys. The layout is not kept
   across restarts or a folder switch.
+- Windows (SDB-30, ADR-083): every window is built by `build_window` in `lib.rs` (never a
+  `WebviewWindowBuilder` elsewhere: WebView2 refuses a second webview with other switches) and
+  registered in `src-tauri/src/windows.rs` (`Windows`: what each window shows, where its closing
+  stands; its unit tests pin the transitions). The page reads its kind once in `main.tsx`
+  (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Session
+  keys come from `store.ts` (tabs) and `explorerSession` (explorer), both with `sessionPrefix()`:
+  never write `meta:${id}` or `tab-${n}` by hand. `DesktopSession::window` is set from the
+  calling window in `connect` / `connect_from_session`; `close_window_sessions` closes one
+  window's sessions. An event meant for one window is sent with `emit_to` and heard with
+  `events.x(getCurrentWebviewWindow()).listen` (a plain `listen` hears every target): SSH
+  questions of `connect` and the tests (`AppInteraction::for_window`), `QuitRequested` and
+  `LaunchRequested` (main only), `WindowCloseRequested`, `ResultsWindowClosed`. A tab and its
+  results window talk through `resultsWindow.ts` (`sendMirror` / `serveRequests` on the tab's
+  side, `ownerClient` on the other); a new callback of `Results` is a new `ResultsRequest`
+  kind, handled in `EditorTab`'s bridge, whose `switch` ends in a `never` check. Only the main
+  window restores and saves tabs, changes folder and checks for updates.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

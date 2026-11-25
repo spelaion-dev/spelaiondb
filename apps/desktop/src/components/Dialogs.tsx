@@ -473,7 +473,7 @@ function OpenTransactionsDialog() {
   if (!request) return null;
   const transactions = request.tabs.length > 0;
   // The title and the button name the gravest loss: a rollback, then a cancelled query.
-  const kind = transactions ? "" : request.running.length > 0 ? "Running" : "Unsaved";
+  const kind = transactions ? "" : request.running.length > 0 ? "Running" : request.unsaved.length > 0 ? "Unsaved" : "Unkept";
   const title = t(`openTransactions.title${kind}.${request.action}`);
   const proceed = t(`openTransactions.proceed${kind}.${request.action}`);
   return (
@@ -502,8 +502,17 @@ function OpenTransactionsDialog() {
           </ul>
         </>
       )}
+      {request.unkept.length > 0 && (
+        <>
+          <p>{t("openTransactions.unkept", { count: request.unkept.length })}</p>
+          <ul className="risk-list unkept-sql-list">
+            {request.unkept.map((tab) => <li key={tab}><strong>{tab}</strong></li>)}
+          </ul>
+        </>
+      )}
       {transactions && <p className="muted small">{t("openTransactions.hint")}</p>}
       {request.unsaved.length > 0 && <p className="muted small">{t("openTransactions.unsavedHint")}</p>}
+      {request.unkept.length > 0 && <p className="muted small">{t("openTransactions.unkeptHint")}</p>}
       <div className="modal-actions">
         <button ref={cancel} onClick={() => request.resolve(false)}>
           {t("openTransactions.cancel")}

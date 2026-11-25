@@ -10,7 +10,8 @@ import type { KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, Load
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
-import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
+import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT, tabLabel } from "../connect";
+import { detachResults, reattachResults, sendMirror, serveRequests, type ResultsMirror, type ResultsRequest } from "../resultsWindow";
 import { connectionTooltip } from "../connectionInfo";
 import { afterRun, endResult, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../runResults";
 import { ResultTabList } from "./ResultTabs";
@@ -32,7 +33,7 @@ import { EditorActionsButton } from "./EditorMenu";
 import { SqlEditor, type NameAction, type RunLabel, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { ScriptOutline } from "./ScriptOutline";
 import type { ResolvedName } from "../sqlCompletion";
-import { commandShortcut } from "../shortcuts";
+import { commandShortcut, commandTitle } from "../shortcuts";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
@@ -82,6 +83,10 @@ function statementEndKey(end: StatementEndItem): string {
     default:
       return unknownEnd(end);
   }
+}
+
+function unknownRequest(request: never): never {
+  throw new Error(`unknown results request: ${JSON.stringify(request as ResultsRequest)}`);
 }
 
 function unknownEnd(end: never): never {
@@ -1555,8 +1560,102 @@ export function EditorTab({ tab }: { tab: Tab }) {
         break;
     }
   };
-  const maximized = !tab.table && (tab.resultsMaximized ?? false);
+  // Results shown in their own window leave the editor the whole tab, never maximized.
+  const maximized = !tab.table && !tab.resultsWindow && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
+  const refreshDisabled = running || historySaving || databaseBusy || tabStatus !== "connected" || workspaceChanging || savingEdits || pageLoading || refreshRestoring;
+  // What the results panel calls back, the same whether it is here or in a window of its own
+  // (SDB-30: the results window asks, and these carry it out).
+  const resultsCallbacks = {
+    onCancelRun: () => void cancelRun(),
+    onQuerySort: tab.table ? undefined : sortQuery,
+    onRefresh: (result: number, row: number) => {
+      if (pendingCount > 0 || saving.now()) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+      if (tab.table) void loadPage(tab.table);
+      else void refreshQuery(result, row);
+    },
+    onLoadMore: loadMoreQueryRows,
+    onRunAgain: runFreedAgain,
+    onCountQuery: (id: number) => void countQueryResult(id),
+    onQueryPageSize: changeQueryPageSize,
+    onGoToRow: (result: number, row: number) => {
+      if (tab.table) goToTableRow(row);
+      else void goToQueryRow(result, row);
+    },
+    onLoadRows: (result: number, until: number | null) => loadQueryRowsUntil(result, until),
+    onCancelLoad: cancelRowLoad,
+    onSelect: (id: number | null) => updateRun(tab.id, (r) => ({ ...r, activeResult: id })),
+    onSorted: (result: number, sort: SortState[]) =>
+      updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) })),
+    onColumnFiltered: (result: number, columnFilters: ColumnFilterItem[], rows: number, total: number, filterMode?: FilterMode) =>
+      updateRun(tab.id, (r) => ({
+        ...r,
+        results: r.results.map((x) => (x.id === result ? { ...x, columnFilters, filterMode, rows, total } : x)),
+      })),
+    onFiltered: (result: number, filter: string | undefined, rows: number, total: number) =>
+      updateRun(tab.id, (r) => ({
+        ...r,
+        results: r.results.map((x) => (x.id === result ? { ...x, filter, rows, total } : x)),
+      })),
+  };
+  const resultsWindow = tab.table ? undefined : tab.resultsWindow;
+  const mirror: ResultsMirror = {
+    tab: tab.id,
+    name: tabLabel(tab),
+    connectionId: tab.connectionId,
+    run: tab.run,
+    running,
+    connectFailed: connectFailure(tab) !== null,
+    runStatus: runStatusLine,
+    cancelRequested,
+    refreshDisabled,
+    restoringView: refreshRestoring,
+  };
+  const latestResults = useRef({ callbacks: resultsCallbacks, mirror });
+  latestResults.current = { callbacks: resultsCallbacks, mirror };
+  // Every change of what the panel would show goes to the results window.
+  useEffect(() => {
+    if (resultsWindow) void sendMirror(resultsWindow, mirror).catch(() => undefined);
+  }, [resultsWindow, tab.run, tab.connectionId, mirror.name, running, mirror.connectFailed, runStatusLine, cancelRequested, refreshDisabled, refreshRestoring]);
+  // Its requests, carried out by this tab as its own panel's would be.
+  useEffect(() => {
+    if (!resultsWindow) return;
+    return serveRequests(tab.id, (request) => {
+      const { callbacks, mirror: now } = latestResults.current;
+      switch (request.kind) {
+        case "hello": return sendMirror(resultsWindow, now);
+        case "select": return callbacks.onSelect(request.id);
+        case "sorted": return callbacks.onSorted(request.result, request.sort);
+        case "filtered": return callbacks.onFiltered(request.result, request.filter, request.rows, request.total);
+        case "columnFiltered": return callbacks.onColumnFiltered(request.result, request.columnFilters, request.rows, request.total, request.filterMode);
+        case "refresh": return callbacks.onRefresh(request.result, request.row);
+        case "loadMore": return callbacks.onLoadMore(request.result);
+        case "runAgain": return callbacks.onRunAgain(request.result);
+        case "countQuery": return callbacks.onCountQuery(request.result);
+        case "queryPageSize": return callbacks.onQueryPageSize(request.size);
+        case "goToRow": return callbacks.onGoToRow(request.result, request.row);
+        case "loadRows": return callbacks.onLoadRows(request.result, request.until);
+        case "cancelLoad": return callbacks.onCancelLoad();
+        case "cancelRun": return callbacks.onCancelRun();
+        case "querySort": return callbacks.onQuerySort ? callbacks.onQuerySort(request.result, request.sort) : false;
+        default: return unknownRequest(request);
+      }
+    });
+  }, [tab.id, resultsWindow]);
+  // A tab that closes (or leaves with its folder) takes its results window with it.
+  const shownElsewhere = useRef<string | undefined>(undefined);
+  shownElsewhere.current = resultsWindow;
+  useEffect(() => () => {
+    if (shownElsewhere.current) void reattachResults(tab.id).catch(() => undefined);
+  }, [tab.id]);
+  const detach = async () => {
+    try {
+      const label = await detachResults(tab.id, tabLabel(tab));
+      updateTab(tab.id, { resultsWindow: label });
+    } catch (e) {
+      setNotice({ text: t("detach.failed", { reason: message(e) }), error: true });
+    }
+  };
   const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} title={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
@@ -1707,7 +1806,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
         <>
         {/* Maximized results hide the editor without unmounting it: its text, undo and
             cursor stay as they were. */}
-        <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane" hidden={maximized}>
+        <div style={{ flex: resultsWindow ? "1 1 0" : `${editorShare} 1 0` }} className="editor-pane" hidden={maximized}>
           <div className="editor-actions" role="toolbar" aria-label={t("editorActions")}>
             {running ? (
               <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} disabled={cancelRequested} onClick={() => void cancelRun()}>
@@ -1774,7 +1873,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
           : !tab.table && completion.loading ? <div className="muted small" role="status">{t("completion.loading")}</div> : null}
         <div
           className="divider"
-          hidden={maximized}
+          hidden={maximized || resultsWindow !== undefined}
           onPointerDown={startDrag}
           onDoubleClick={() => setEditorShare(0.42)}
           role="separator"
@@ -1796,62 +1895,42 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
         />
         </>
         )}
+        {resultsWindow ? (
+          // The results are in their own window (SDB-30): the run's status stays here, with the
+          // way to that window and back.
+          <div className="results-detached" role="status">
+            <Icon name="detach" />
+            <span className="results-detached-text">{running ? runStatusLine : t("detach.shownElsewhere")}</span>
+            <button onClick={() => void detach()}>{t("detach.show")}</button>
+            <button onClick={() => void reattachResults(tab.id).catch((e: unknown) => setNotice({ text: t("detach.failed", { reason: message(e) }), error: true }))}>{t("detach.reattach")}</button>
+          </div>
+        ) : (
         <div style={{ flex: tab.table || maximized ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
           {planOpen && plan ? <PlanViewer key={plan.id} summary={plan} controls={planControls} onBack={() => { setPlan(null); setPlanOpen(false); }} /> : <>{planOpen && planControls}<Results
             maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
+            onDetach={tab.table ? undefined : () => void detach()}
             run={tab.run}
             running={running}
-            connectFailed={connectFailure(tab) !== null}
+            connectFailed={mirror.connectFailed}
             runStatus={runStatusLine}
             cancelRequested={cancelRequested}
-            onCancelRun={() => void cancelRun()}
             session={tab.id}
             connectionId={tab.connectionId}
             table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
             serverSort={tab.table ? { sort: tab.table.sort ?? NO_TABLE_SORT, onSort: (sort) => void sortTable(sort) } : undefined}
-            onQuerySort={tab.table ? undefined : sortQuery}
             tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0, all: undefined, total: undefined }), connectionId: tab.connectionId } : undefined}
             keyTable={keyTable}
             editing={editing}
             columnComments={tab.table ? columnComments : undefined}
             editingState={editingState}
             pendingEdits={pendingCount > 0}
-            refreshDisabled={running || historySaving || databaseBusy || tabStatus !== "connected" || workspaceChanging || savingEdits || pageLoading || refreshRestoring}
+            refreshDisabled={refreshDisabled}
             restoringView={refreshRestoring}
-            onRefresh={(result, row) => {
-              if (pendingCount > 0 || saving.now()) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
-              if (tab.table) void loadPage(tab.table);
-              else void refreshQuery(result, row);
-            }}
-            onLoadMore={loadMoreQueryRows}
-            onRunAgain={runFreedAgain}
-            onCountQuery={(id) => void countQueryResult(id)}
-            onQueryPageSize={changeQueryPageSize}
             rowOffset={tab.table && !tab.table.all ? tab.table.page * tab.table.pageSize : 0}
-            onGoToRow={(result, row) => {
-              if (tab.table) goToTableRow(row);
-              else void goToQueryRow(result, row);
-            }}
-            onLoadRows={(result, until) => loadQueryRowsUntil(result, until)}
-            onCancelLoad={cancelRowLoad}
-            onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))}
-            onSorted={(result, sort) =>
-              updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
-            }
-            onColumnFiltered={(result, columnFilters, rows, total, filterMode) =>
-              updateRun(tab.id, (r) => ({
-                ...r,
-                results: r.results.map((x) => (x.id === result ? { ...x, columnFilters, filterMode, rows, total } : x)),
-              }))
-            }
-            onFiltered={(result, filter, rows, total) =>
-              updateRun(tab.id, (r) => ({
-                ...r,
-                results: r.results.map((x) => (x.id === result ? { ...x, filter, rows, total } : x)),
-              }))
-            }
+            {...resultsCallbacks}
           /></>}
         </div>
+        )}
       </div>
     </div>
   );
@@ -1885,7 +1964,7 @@ function errorRun(text: string, translation?: Translation, results: RunState["re
   };
 }
 
-function Results({
+export function Results({
   run,
   running,
   connectFailed,
@@ -1919,9 +1998,12 @@ function Results({
   onLoadRows,
   onCancelLoad,
   maximize,
+  onDetach,
 }: {
   /** The button that hides the SQL editor (SQL tabs only). */
   maximize?: { maximized: boolean; onToggle(): void };
+  /** Shows the results in a window of their own (SDB-30; SQL tabs only, not in that window). */
+  onDetach?: () => void;
   run: RunState | null;
   /** Its run is going (`tabState.ts`'s `isRunning`). */
   running: boolean;
@@ -2068,6 +2150,16 @@ function Results({
             <Icon name="transpose" />
           </button>
         </div>}
+        {onDetach && (
+          <button
+            className="ghost results-maximize results-detach"
+            aria-label={commandTitle(t("detach.action"), "results.detach")}
+            title={commandTitle(t("detach.action"), "results.detach")}
+            onClick={onDetach}
+          >
+            <Icon name="detach" />
+          </button>
+        )}
         {maximizeButton}
       </div>
       {running && <ResultRunProgress key={run.startedAt} startedAt={run.startedAt} status={runStatus} cancelRequested={cancelRequested} onCancel={onCancelRun} />}

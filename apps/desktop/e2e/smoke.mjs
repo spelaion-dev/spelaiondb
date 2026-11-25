@@ -3920,7 +3920,7 @@ try {
     const menu = await connectionMenu("Shop (SQLite)");
     const labels = () => menu.getByRole("menuitem").evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")));
     assert.deepEqual(await labels(), [
-      "New query", "Open object by name…", "Refresh all schemas",
+      "New query", "Open in a new window", "Open object by name…", "Refresh all schemas",
       "Edit…", "Configure filters…",
       "Back up…", "Run SQL file…",
       // Only Shop's own sessions are open here: nothing else to disconnect (SDB-395).
@@ -3957,6 +3957,97 @@ try {
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count + 1, tabsBefore);
     await page.keyboard.press("Control+w");
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count, tabsBefore);
+  }
+
+  step("windows: a tab's results in their own window without running the query again, and a connection in its own window whose closing leaves the main window's sessions (SDB-30)");
+  {
+    const context = page.context();
+    // What each window copies, captured instead of the system clipboard (one list per page;
+    // the main window's list, made by an earlier step, is kept).
+    const captureCopies = (target) => target.evaluate(() => {
+      if (window.__copied) return;
+      window.__copied = [];
+      navigator.clipboard.writeText = (text) => {
+        window.__copied.push(text);
+        return Promise.resolve();
+      };
+    });
+    const copyAll = async (target, grid) => {
+      const before = await target.evaluate(() => window.__copied.length);
+      await grid.locator(".grid-canvas").click({ position: { x: 60, y: 40 } });
+      await target.keyboard.press("Control+a");
+      await target.keyboard.press("Control+c");
+      await target.waitForFunction((n) => window.__copied.length === n + 1, before);
+      return target.evaluate(() => window.__copied[window.__copied.length - 1]);
+    };
+    // random(): a second run could never copy the same numbers.
+    const panel = await newQuery("Shop (SQLite)", "select abs(random()) as r union all select abs(random()) union all select abs(random())");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+    await captureCopies(page);
+    const inTab = await copyAll(page, panel);
+    assert.match(inTab, /^\d+\n\d+\n\d+$/);
+
+    // Show results in a new window: the tab keeps its editor and one line; the new window has
+    // the same results panel over the same stored result.
+    const [resultsPage] = await Promise.all([
+      context.waitForEvent("page"),
+      panel.getByRole("button", { name: "Show results in a new window" }).click(),
+    ]);
+    await resultsPage.locator(".results-window .grid-canvas").waitFor();
+    await panel.locator(".results-detached").waitFor();
+    assert.equal(await panel.locator(".results-pane").count(), 0);
+    assert.match(await resultsPage.locator(".results-window-title").innerText(), /^Results of /);
+    await captureCopies(resultsPage);
+    assert.equal(await copyAll(resultsPage, resultsPage.locator(".results-window")), inTab, "the same rows, read from the core, not run again");
+    await resultsPage.screenshot({ path: join(shots, "sdb-30-results-window.png") });
+    await shot("sdb-30-results-detached-tab");
+    // Re-attach: the window closes and the tab shows the same result again, still not run again.
+    await Promise.all([
+      resultsPage.waitForEvent("close"),
+      resultsPage.getByRole("button", { name: "Re-attach results" }).click(),
+    ]);
+    await panel.locator(".results-detached").waitFor({ state: "detached" });
+    assert.equal(await copyAll(page, panel), inTab);
+
+    // A connection in its own window: its own tab and session, its explorer offering only it.
+    const shop = await connectionMenu("Shop (SQLite)");
+    const [connectionPage] = await Promise.all([
+      context.waitForEvent("page"),
+      shop.getByRole("menuitem", { name: "Open in a new window" }).click(),
+    ]);
+    const ownPanel = connectionPage.locator(".tab-panel:not([hidden])");
+    await ownPanel.locator(".status-connected").waitFor();
+    assert.equal(await connectionPage.locator(".connection-row").count(), 1);
+    await ownPanel.locator(".cm-content").click();
+    await connectionPage.keyboard.insertText("select 41 + 1 as answer");
+    await ownPanel.locator(".cm-content").click();
+    await connectionPage.keyboard.press("Control+Shift+Enter");
+    await ownPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await captureCopies(connectionPage);
+    assert.equal(await copyAll(connectionPage, ownPanel), "42");
+    await connectionPage.screenshot({ path: join(shots, "sdb-30-connection-window.png") });
+    // Closing it asks about its own tab only (its SQL is kept nowhere else), then closes its
+    // session and none of the main window's.
+    await connectionPage.keyboard.press("Control+Shift+P");
+    const palette = connectionPage.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("close this window");
+    await connectionPage.keyboard.press("Enter");
+    const question = connectionPage.getByRole("dialog", { name: "Close the window with SQL that is not saved?" });
+    await question.waitFor();
+    await Promise.all([
+      connectionPage.waitForEvent("close"),
+      question.getByRole("button", { name: "Close and discard" }).click(),
+    ]);
+    // The main window's tab still has its session: it runs at once, with no question.
+    await panel.locator(".status-connected").waitFor();
+    await panel.locator(".cm-content").click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.insertText("select 'still connected' as s");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    assert.equal(await copyAll(page, panel), "still connected");
+    await page.keyboard.press("Control+w");
   }
   // Objects are in folders by type (ADR-024), with how many each holds.
   const tablesFolder = page.getByRole("button", { name: "Expand or collapse Tables", exact: true });

@@ -4,6 +4,7 @@
 // through repository trust like any other (ADR-022). Recent folders are the core's list.
 
 import { call, commands } from "./api";
+import { explorerSession, windowContext } from "./windowContext";
 import type { RecentFolderItem } from "./bindings";
 import { confirmLeaving } from "./connect";
 import { useApp } from "./store";
@@ -19,6 +20,8 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** Whether the folder cannot change now: it is changing, history is being saved, or a tab is
  *  connecting or running. */
 export function folderSwitchBlocked(state = useApp.getState()): boolean {
+  // The open folder is the whole app's: only the main window changes it (SDB-30).
+  if (windowContext().kind !== "main") return true;
   return state.workspaceChanging || state.historySaving.length > 0 || state.tabs.some(isBusy);
 }
 
@@ -34,6 +37,7 @@ export function isOpenFolder(path: string): boolean {
  *  explorer (`folderError`). */
 export async function switchFolder(path: string): Promise<boolean> {
   const app = useApp.getState();
+  if (windowContext().kind !== "main") return false;
   // A connection ID can refer to a different server in the next folder: the tabs on screen
   // are kept under this folder and the next folder's own tabs come back (ADR-036).
   if (app.tabs.some(isConnecting) || app.historySaving.length > 0) return false;
@@ -59,7 +63,7 @@ export async function switchFolder(path: string): Promise<boolean> {
   try {
     const sessions = [
       ...now.tabs.map((t) => t.id),
-      ...now.connections.map((c) => `meta:${c.id}`),
+      ...now.connections.map((c) => explorerSession(c.id)),
     ];
     // The core stops the runs the user agreed to cancel, then the sessions close.
     const running = now.tabs.filter(isRunning).map((t) => t.id);

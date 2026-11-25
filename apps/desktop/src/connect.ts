@@ -3,10 +3,11 @@
 // backend; they are never kept in the state.
 
 import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
+import { explorerSession } from "./windowContext";
 import { runningOutsideTransactions } from "./closeQuestion";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
-import { confirmUnsavedFiles } from "./sqlFiles";
+import { confirmUnsavedFiles, isModified } from "./sqlFiles";
 import { type RunState, type Tab, useApp, useDialogs } from "./store";
 import { CONNECTING, DISCONNECTED, connectFailed, connectedWith, hasPendingEdits, hasUnsavedEdits, isConnecting, isRunning, savingEdits, type OpenedSession } from "./tabState";
 
@@ -132,13 +133,46 @@ export async function confirmOpenTransactions(sessions: string[], action: "close
  * user accepted; nothing is applied, committed or saved either way. Unsaved `.sql` text is not
  * asked about: tabs come back with it (ADR-036).
  */
-export async function confirmLeaving(action: "quit" | "folder", open: string[]): Promise<boolean> {
+export async function confirmLeaving(action: "quit" | "folder" | "close", open: string[], unkept: string[] = []): Promise<boolean> {
   const tabs = useApp.getState().tabs;
   const unsaved = tabs.filter(hasUnsavedEdits).map((t) => t.id);
   // A tab with an open transaction is asked about once, under it (SDB-253).
   const running = runningOutsideTransactions(tabs.filter(isRunning).map((t) => t.id), open);
-  if (open.length === 0 && running.length === 0 && unsaved.length === 0) return true;
-  return useDialogs.getState().askOpenTransactions(open.map(tabName), action, running.map(tabName), unsaved.map(tabName));
+  if (open.length === 0 && running.length === 0 && unsaved.length === 0 && unkept.length === 0) return true;
+  return useDialogs.getState().askOpenTransactions(open.map(tabName), action, running.map(tabName), unsaved.map(tabName), unkept.map(tabName));
+}
+
+/** A connection window's editor tabs whose SQL would be lost with the window (SDB-30): no
+ *  file, or a file with changes not saved. The main window's tabs come back after a restart
+ *  (ADR-036); a connection window's are kept nowhere. */
+function unkeptTabs(): string[] {
+  return useApp.getState().tabs
+    .filter((tab) => !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram)
+    .filter((tab) => (tab.file ? isModified(tab) : tab.sql.trim() !== ""))
+    .map((tab) => tab.id);
+}
+
+let answeringClose = false;
+
+/**
+ * This connection window was asked to close (its title bar, or the main window quitting,
+ * SDB-30): it closes at once when nothing would be lost, else asks about its own tabs only:
+ * their open transactions, running queries, row edits and SQL kept nowhere else. Closing goes
+ * through the core, which closes this window's sessions and none of another window's.
+ */
+export async function answerWindowCloseRequest() {
+  if (answeringClose) return;
+  answeringClose = true;
+  try {
+    const mine = new Set(useApp.getState().tabs.map((tab) => tab.id));
+    const open = (await call(commands.quitOpenTransactions()).catch(() => [] as string[])).filter((id) => mine.has(id));
+    if (await confirmLeaving("close", open, unkeptTabs())) await call(commands.closeWindow());
+    else await call(commands.windowStaysOpen());
+  } catch {
+    await call(commands.windowStaysOpen()).catch(() => undefined);
+  } finally {
+    answeringClose = false;
+  }
 }
 
 let answeringQuit = false;
@@ -154,6 +188,12 @@ export async function answerQuitRequest() {
   if (answeringQuit) return;
   answeringQuit = true;
   try {
+    // Each connection window first, one at a time, asking its own questions (SDB-30); one that
+    // stays open stops quitting.
+    if (!(await call(commands.closeOtherWindows()).catch(() => false))) {
+      await call(commands.quitCancelled());
+      return;
+    }
     const open = await call(commands.quitOpenTransactions()).catch(() => [] as string[]);
     if (await confirmLeaving("quit", open)) await call(commands.quitApp());
     else await call(commands.quitCancelled());
@@ -249,7 +289,7 @@ export function newQueryOnConnection(connectionId: string): string {
   const app = useApp.getState();
   const tabId = app.addTab(connectionId);
   if (app.explorerConnected.includes(connectionId)) {
-    connectTabFromExplorer(tabId, `meta:${connectionId}`);
+    connectTabFromExplorer(tabId, explorerSession(connectionId));
     return tabId;
   }
   useApp.getState().setConnection(tabId, CONNECTING);

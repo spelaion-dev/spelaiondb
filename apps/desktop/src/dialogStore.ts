@@ -81,6 +81,8 @@ export interface OpenTransactionsRequest {
   running: string[];
   /** Tabs whose row edits not applied yet are discarded. */
   unsaved: string[];
+  /** Tabs whose SQL is kept nowhere else (a connection window's, SDB-30): it is lost. */
+  unkept: string[];
   action: "close" | "disconnect" | "quit" | "folder";
   resolve(proceed: boolean): void;
 }
@@ -130,7 +132,7 @@ interface DialogStore extends Shown {
   /** Every request of each kind, the one shown first. */
   queued: { [K in QuestionKind]: Requests[K][] };
   interactions: InteractionItem[];
-  askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"], running?: string[], unsaved?: string[]): Promise<boolean>;
+  askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"], running?: string[], unsaved?: string[], unkept?: string[]): Promise<boolean>;
   askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
   askChoice(request: Omit<ChoiceRequest, "resolve">): Promise<string | null>;
   askParams(names: string[], previous: Record<string, string>, variables?: boolean): Promise<Record<string, string> | null>;
@@ -213,7 +215,7 @@ export const useDialogs = create<DialogStore>((set, get) => {
     askTrust: (workspace) => ask("trust", { workspace }),
     askChange: (change) => ask("change", change),
     askVariables: (names) => ask("variables", { names }),
-    askOpenTransactions: (tabs, action, running = [], unsaved = []) => ask("openTransactions", { tabs, running, unsaved, action }),
+    askOpenTransactions: (tabs, action, running = [], unsaved = [], unkept = []) => ask("openTransactions", { tabs, running, unsaved, unkept, action }),
     stopScriptQuestions: (tabs) => {
       for (const question of get().queued.scriptError.filter((q) => tabs.includes(q.tab))) question.resolve("stop");
     },

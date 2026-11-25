@@ -1237,6 +1237,38 @@ export const commands = {
 	 *  committed, applied or saved; the servers roll back open transactions.
 	 */
 	quitApp: () => typedError<null, string>(__TAURI_INVOKE("quit_app")),
+	windowContext: () => __TAURI_INVOKE<WindowContextItem>("window_context"),
+	/**
+	 *  Opens `connection` in a window of its own, titled `title`: its own tabs and explorer, its
+	 *  own sessions, over the same core. Nothing is connected or run until its page asks.
+	 */
+	openConnectionWindow: (connection: string, title: string) => typedError<string, string>(__TAURI_INVOKE("open_connection_window", { connection, title })),
+	/**
+	 *  Shows the results of the calling window's editor tab `tab` in a window of their own, or
+	 *  brings forward the one already showing them. The rows stay in the core's store: the new
+	 *  window asks for windows of the same results by id, and nothing is run again.
+	 */
+	openResultsWindow: (tab: string, title: string) => typedError<string, string>(__TAURI_INVOKE("open_results_window", { tab, title })),
+	/**
+	 *  Closes the results window of the calling window's tab `tab` ("Re-attach results"): the
+	 *  tab hears `ResultsWindowClosed` and shows them again. Nothing if there is none.
+	 */
+	closeResultsWindow: (tab: string) => typedError<null, string>(__TAURI_INVOKE("close_results_window", { tab })),
+	/**
+	 *  Closes the calling window (not the main one, which quits): the sessions it opened close
+	 *  first, through the same path as closing their tabs. Another window's sessions are not
+	 *  touched. Its page has asked whatever closing would lose.
+	 */
+	closeWindow: () => typedError<null, string>(__TAURI_INVOKE("close_window")),
+	/**  The calling window's page went back from its closing question. */
+	windowStaysOpen: () => typedError<null, string>(__TAURI_INVOKE("window_stays_open")),
+	/**
+	 *  Before the main window quits, every connection window is asked to close, one at a time,
+	 *  each asking its own questions (its page closes at once when nothing would be lost).
+	 *  `false`: one stayed open, and quitting stops. A window whose page never answers is closed
+	 *  by a second click on its own close button, which answers `true` here.
+	 */
+	closeOtherWindows: () => typedError<boolean, string>(__TAURI_INVOKE("close_other_windows")),
 };
 
 /** Events */
@@ -1248,10 +1280,12 @@ export const events = {
 	pluginInstallChanged: makeEvent<PluginInstallChanged, PluginInstallChanged>("plugin-install-changed"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
+	resultsWindowClosed: makeEvent<ResultsWindowClosed, ResultsWindowClosed>("results-window-closed"),
 	runChanged: makeEvent<RunChanged, RunChanged>("run-changed"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
 	transactionChanged: makeEvent<TransactionChanged, TransactionChanged>("transaction-changed"),
 	updateChanged: makeEvent<UpdateChanged_Serialize, UpdateChanged_Deserialize>("update-changed"),
+	windowCloseRequested: makeEvent<WindowCloseRequested, WindowCloseRequested>("window-close-requested"),
 };
 
 /* Types */
@@ -6062,6 +6096,14 @@ export type ResultTabItem_Serialize = {
 	pinned: boolean,
 };
 
+/**
+ *  The results window of the editor tab `tab` closed: the tab shows its results again. Sent
+ *  only to the window that owns the tab.
+ */
+export type ResultsWindowClosed = {
+	tab: string,
+};
+
 /**  A masked cell's value, revealed on the user's request (ADR-051). */
 export type RevealedCellItem = RevealedCellItem_Serialize | RevealedCellItem_Deserialize;
 
@@ -7459,6 +7501,23 @@ export type VariableItem = {
 	name: string,
 	value: string,
 };
+
+/**
+ *  A window other than the main one was asked to close while its sessions are open (its title
+ *  bar, or quitting): its page looks for what closing would lose, asks, and calls
+ *  `close_window` or `window_stays_open`. Sent only to that window.
+ */
+export type WindowCloseRequested = Record<string, never>;
+
+/**  What the page of a window shows, as the registry says it (ADR-060: read, never guessed). */
+export type WindowContextItem = { kind: "main" } | 
+/**
+ *  `label` prefixes the window's session keys (`connection-2/tab-1`), so no two windows
+ *  ever name the same session.
+ */
+{ kind: "connection"; label: string; connectionId: string } | 
+/**  The results of `owner`'s editor tab `tab` (its session key). */
+{ kind: "results"; label: string; owner: string; tab: string };
 
 /**  Why a window of rows could not be read (`fetch_window`, SDB-367). */
 export type WindowErrorItem = 

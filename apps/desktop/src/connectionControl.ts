@@ -6,6 +6,7 @@
 // connection is expanded.
 
 import { call, commands } from "./api";
+import { explorerSession } from "./windowContext";
 import { runningOutsideTransactions } from "./closeQuestion";
 import { EXPLORER_SESSION_CLOSED_EVENT, tabName } from "./connect";
 import { useApp, useDialogs, type Tab } from "./store";
@@ -50,7 +51,7 @@ export async function disconnectAll(keep: string | null): Promise<boolean> {
   await Promise.all(tabs.filter(isRunning).map((tab) => call(commands.cancel(tab.id)).catch(() => undefined)));
   await Promise.all(ids.map((id) => call(commands.disconnect(id)).catch(() => undefined)));
   for (const id of ids) app.setConnection(id, DISCONNECTED);
-  await Promise.all(explorer.map((id) => call(commands.disconnect(`meta:${id}`)).catch(() => undefined)));
+  await Promise.all(explorer.map((id) => call(commands.disconnect(explorerSession(id))).catch(() => undefined)));
   for (const id of explorer) {
     app.setExplorerConnected(id, false);
     // The tree folds, as when its session is lost; expanding it connects again.

@@ -94,6 +94,7 @@
   "hideNames": "Hide the {{count}} chosen",
   "showOnlyNames": "Show only the {{count}} chosen",
   "newQuery": "New query",
+  "openWindow": "Open in a new window",
   "loadingDetails": "Loading table details…",
   "connecting": "Connecting…",
   "quickFilter": "Filter the explorer",
@@ -636,6 +637,21 @@
     "unsaved_other": "These tabs have row changes that were not applied. They will be lost:",
     "unsavedHint": "To keep the row changes, cancel and press Save changes in the tab first.",
     "proceedUnsaved": {
+      "close": "Close and discard",
+      "disconnect": "Disconnect and discard",
+      "quit": "Quit and discard",
+      "folder": "Open and discard"
+    },
+    "titleUnkept": {
+      "close": "Close the window with SQL that is not saved?",
+      "disconnect": "Disconnect with SQL that is not saved?",
+      "quit": "Quit with SQL that is not saved?",
+      "folder": "Open another folder with SQL that is not saved?"
+    },
+    "unkept_one": "This tab's SQL is kept only in this window. It will be lost:",
+    "unkept_other": "These tabs' SQL is kept only in this window. It will be lost:",
+    "unkeptHint": "To keep it, cancel and save it to a file, or copy it to a tab of the main window.",
+    "proceedUnkept": {
       "close": "Close and discard",
       "disconnect": "Disconnect and discard",
       "quit": "Quit and discard",

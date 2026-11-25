@@ -1418,6 +1418,54 @@ select {
   background: var(--accent);
 }
 .split-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* A tab whose results are in their own window (SDB-30): one bar in the results' place. */
+.results-detached {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-md);
+  min-height: var(--bar-h);
+  padding: 0 var(--space-lg);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.results-detached .results-detached-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The results window itself: its bar, then the same results panel as in the tab. */
+.results-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+}
+.results-window-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-md);
+  height: var(--bar-h);
+  padding: 0 var(--space-lg);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.results-window-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: var(--leading-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.results-window-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
 .welcome {
   margin: auto;
   width: min(520px, 100%);

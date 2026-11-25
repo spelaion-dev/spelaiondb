@@ -94,6 +94,7 @@
   "hideNames": "Ocultar los {{count}} elegidos",
   "showOnlyNames": "Mostrar solo los {{count}} elegidos",
   "newQuery": "Nueva consulta",
+  "openWindow": "Abrir en una ventana nueva",
   "loadingDetails": "Cargando detalles de la tabla…",
   "connecting": "Conectando…",
   "quickFilter": "Filtrar el explorador",
@@ -636,6 +637,21 @@
     "unsaved_other": "Estas pestañas tienen cambios de filas sin aplicar. Se perderán:",
     "unsavedHint": "Para conservar los cambios de filas, cancela y pulsa Guardar cambios en la pestaña primero.",
     "proceedUnsaved": {
+      "close": "Cerrar y descartar",
+      "disconnect": "Desconectar y descartar",
+      "quit": "Salir y descartar",
+      "folder": "Abrir y descartar"
+    },
+    "titleUnkept": {
+      "close": "¿Cerrar la ventana con SQL sin guardar?",
+      "disconnect": "¿Desconectar con SQL sin guardar?",
+      "quit": "¿Salir con SQL sin guardar?",
+      "folder": "¿Abrir otra carpeta con SQL sin guardar?"
+    },
+    "unkept_one": "El SQL de esta pestaña solo se guarda en esta ventana. Se perderá:",
+    "unkept_other": "El SQL de estas pestañas solo se guarda en esta ventana. Se perderá:",
+    "unkeptHint": "Para conservarlo, cancela y guárdalo en un archivo, o cópialo a una pestaña de la ventana principal.",
+    "proceedUnkept": {
       "close": "Cerrar y descartar",
       "disconnect": "Desconectar y descartar",
       "quit": "Salir y descartar",

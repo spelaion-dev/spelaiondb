@@ -8,6 +8,14 @@
   "resizeSidebar": "Resize the connections panel",
   "resizeSidebarHint": "Drag to resize the connections panel. Double-click to reset.",
   "preferenceLoadError": "Could not load your preferences:",
+  "detach": {
+    "windowTitle": "Results of {{name}} — SpelaionDB",
+    "connectionTitle": "{{name}} — SpelaionDB",
+    "results": "Show results in a new window",
+    "reattach": "Re-attach results",
+    "openConnection": "Open the connection in a new window",
+    "closeWindow": "Close this window"
+  },
   "split": {
     "right": "Split right",
     "down": "Split down",

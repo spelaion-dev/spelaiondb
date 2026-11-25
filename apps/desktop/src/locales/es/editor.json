@@ -926,6 +926,16 @@
   },
   "maximizeResults": "Maximizar los resultados ({{shortcut}})",
   "restoreResults": "Mostrar el editor ({{shortcut}})",
+  "detach": {
+    "action": "Mostrar los resultados en una ventana nueva",
+    "shownElsewhere": "Los resultados se muestran en su propia ventana.",
+    "show": "Mostrar la ventana de resultados",
+    "reattach": "Volver a acoplar los resultados",
+    "failed": "No se pudo abrir la ventana de resultados: {{reason}}",
+    "heading": "Resultados de {{name}}",
+    "waiting": "Esperando a la pestaña del editor…",
+    "reattachHint": "Los vuelve a mostrar en la pestaña del editor y cierra esta ventana."
+  },
   "files": {
     "sqlFiles": "Archivos SQL",
     "allFiles": "Todos los archivos",

@@ -29,7 +29,9 @@ import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
 import { ErDiagramView } from "./components/ErDiagram";
-import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest, tabLabel } from "./connect";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest, answerWindowCloseRequest, newQueryOnConnection, tabLabel } from "./connect";
+import { explorerConnectionOf, windowConnection, windowContext } from "./windowContext";
 import { DEFAULT_SHARE, MAX_SHARE, MIN_SHARE, paneOf, resized, type Pane, type SplitLayout } from "./splitView";
 import { commandSpec, globalCommandFor, type CommandId } from "./commandRegistry";
 import { commandShortcut, commandTitle } from "./shortcuts";
@@ -139,8 +141,17 @@ export default function App() {
   }
 
   useEffect(() => {
-    // The open folder's tabs come back disconnected, with their text (ADR-036).
+    const context = windowContext();
+    const ownConnection = windowConnection();
     void loadConnections().finally(async () => {
+      // A connection's own window (SDB-30) starts with a new query on it, connected as a
+      // double click in the explorer connects one; nothing of the folder's tabs comes with it,
+      // and nothing it opens is kept for the next start.
+      if (ownConnection !== null) {
+        if (useApp.getState().connections.some((connection) => connection.id === ownConnection)) newQueryOnConnection(ownConnection);
+        return;
+      }
+      // The open folder's tabs come back disconnected, with their text (ADR-036).
       await restoreTabs();
       const path = await commands.startupPlanPath();
       if (path) await openSavedPlan(path);
@@ -150,18 +161,23 @@ export default function App() {
     });
     // Which engines need a plugin that is not installed (ADR-055), for the picker and failures.
     watchPlugins();
-    const unlisten = events.interactionRequest.listen((e) =>
+    // What the core sends to this window only (SDB-30) is heard on this window: a plain
+    // `listen` would also hear what is meant for another one.
+    const here = getCurrentWebviewWindow();
+    const unlisten = events.interactionRequest(here).listen((e) =>
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );
     // Nobody waits for that answer any more (a stopped connection test, ADR-032).
-    const unlistenClosed = events.interactionClosed.listen((e) => useDialogs.getState().popInteraction(e.payload.id));
+    const unlistenClosed = events.interactionClosed(here).listen((e) => useDialogs.getState().popInteraction(e.payload.id));
     // A tab whose session died, or was closed for being idle (ADR-029), shows it; nothing
-    // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses.
+    // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses. Session
+    // keys never repeat between windows, so another window's sessions change nothing here.
     const unlistenLost = events.sessionLost.listen((e) => {
       const { session, reason, idleSeconds, openTransaction } = e.payload;
       useApp.getState().setConnection(session, sessionLost(reason, idleSeconds, openTransaction));
-      if (session.startsWith("meta:")) {
-        window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: session.slice("meta:".length), idleSeconds } }));
+      const explorerConnection = explorerConnectionOf(session);
+      if (explorerConnection !== null) {
+        window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: explorerConnection, idleSeconds } }));
       }
     });
     // The core keeps each editor tab's transaction (ADR-031); the tab only shows it.
@@ -177,9 +193,16 @@ export default function App() {
       useApp.getState().updateTab(e.payload.session, { runState: e.payload.state });
     });
     // Closing the window with sessions open: the core held it; the UI quits or asks (SDB-140).
-    const unlistenQuit = events.quitRequested.listen(() => void answerQuitRequest());
+    // Only the main window quits; a connection window closes itself (SDB-30).
+    const unlistenQuit = context.kind === "main"
+      ? events.quitRequested(here).listen(() => void answerQuitRequest())
+      : events.windowCloseRequested(here).listen(() => void answerWindowCloseRequest());
     // A second launch (or Finder) asked this window to open something (SDB-397).
-    const unlistenLaunch = events.launchRequested.listen((e) => void openLaunchRequest(e.payload.request));
+    const unlistenLaunch = events.launchRequested(here).listen((e) => void openLaunchRequest(e.payload.request));
+    // A tab's results window closed (SDB-30): the tab shows its results again.
+    const unlistenResults = events.resultsWindowClosed(here).listen((e) => {
+      useApp.getState().updateTab(e.payload.tab, { resultsWindow: undefined });
+    });
     // Global shortcuts: the registry's (commandRegistry.ts), the same commands as the menus and
     // the command palette. Ctrl+Tab is the tab bar's switcher (TabBar.tsx).
     const onKey = (e: KeyboardEvent) => {
@@ -204,6 +227,7 @@ export default function App() {
       void unlistenRun.then((f) => f());
       void unlistenQuit.then((f) => f());
       void unlistenLaunch.then((f) => f());
+      void unlistenResults.then((f) => f());
       window.removeEventListener("keydown", onKey);
     };
   }, []);

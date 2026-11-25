@@ -1,6 +1,7 @@
 // Side panel: open repository, connections (by folder) and schema explorer.
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { explorerSession, windowConnection } from "../windowContext";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { chooseFolder, workspaceParent } from "../dialogs";
@@ -1387,7 +1388,11 @@ function Folder({
 
 export async function refreshConnections() {
   const app = useApp.getState();
-  app.setConnections(await call(commands.listConnections()));
+  const list = await call(commands.listConnections());
+  // A connection's own window (SDB-30) offers that connection only, in its explorer, its
+  // pickers and its palette.
+  const only = windowConnection();
+  app.setConnections(only === null ? list : list.filter((connection) => connection.id === only));
   app.setWorkspace(await call(commands.workspaceInfo()));
 }
 
@@ -1898,7 +1903,7 @@ function ConnectionNode({
       .then((filter) => setEditingFilters({ filter, kind }))
       .catch((e: unknown) => setError(errorText(e)));
   }
-  const session = `meta:${connection.id}`;
+  const session = explorerSession(connection.id);
   const actions = useObjectActions(session, schemas !== null);
   const principalActions = usePrincipalActions(session, schemas !== null);
   /** The account dialog that is open (ADR-048). */

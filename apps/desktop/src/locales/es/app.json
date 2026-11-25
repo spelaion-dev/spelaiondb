@@ -8,6 +8,14 @@
   "resizeSidebar": "Ajustar la anchura del panel de conexiones",
   "resizeSidebarHint": "Arrastra para ajustar el panel de conexiones. Doble clic para restablecer.",
   "preferenceLoadError": "No se pudieron cargar tus preferencias:",
+  "detach": {
+    "windowTitle": "Resultados de {{name}} — SpelaionDB",
+    "connectionTitle": "{{name}} — SpelaionDB",
+    "results": "Mostrar los resultados en una ventana nueva",
+    "reattach": "Volver a acoplar los resultados",
+    "openConnection": "Abrir la conexión en una ventana nueva",
+    "closeWindow": "Cerrar esta ventana"
+  },
   "split": {
     "right": "Dividir a la derecha",
     "down": "Dividir hacia abajo",
