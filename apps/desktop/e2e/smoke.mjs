@@ -7370,7 +7370,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const connection = (await invoke("list_connections")).find((item) => item.name === "MySQL (Docker)");
     const session = "e2e-process-confirmation";
     try {
-      const outcome = await invoke("connect", { session, connection: connection.id, password: "spelaion", remember: false, editor: false });
+      // A connection is named by its folder and its id (ADR-075), as the page names it.
+      const key = { folder: connection.folder ?? null, id: connection.id };
+      const outcome = await invoke("connect", { session, connection: key, password: "spelaion", remember: false, editor: false });
       if (outcome.kind !== "connected") throw new Error(`unexpected connection outcome: ${outcome.kind}`);
       const snapshot = await invoke("list_processes", { session });
       const row = snapshot.processes.find((item) => item.id === snapshot.ownId);
