@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type DependenciesItem, type NewIndexKindItem, type ObjectActionsItem, type ObjectPropertiesItem, type ObjectTargetItem, type PartitioningItem, type SchemaObjectItem, type TableDetails, type TableKeyItem } from "../api";
-import { connectTabFromExplorer, explorerDatabase, openSession, openTableData, refreshExplorer } from "../connect";
+import { connectTabFromExplorer, explorerDatabase, openTabSession, openTableData, refreshExplorer } from "../connect";
 import { connectionKey } from "../connectionKey";
 import { useApp, type Tab } from "../store";
 import { CONNECTING, DISCONNECTED, connectFailure, connectedWith, lostSession, statusName } from "../tabState";
@@ -83,7 +83,7 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
     setDetails(null);
     useApp.getState().setConnection(tab.id, CONNECTING);
     try {
-      const session = await openSession(tab.id, connectionKey(tab.connectionId));
+      const session = await openTabSession(tab.id, connectionKey(tab.connectionId));
       useApp.getState().setConnection(tab.id, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
       useApp.getState().setConnection(tab.id, DISCONNECTED);

@@ -11,11 +11,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use spelaion_config::{Config, ConnectionId, Resolver, Source, SystemBackend, TrustStore, load};
+use spelaion_config::{
+    Config, ConnectionId, Resolver, Safeguards, Source, SystemBackend, TrustStore, load,
+};
 use spelaion_core::{
     Configuration, ConnectionDatabases, CoreEvent, Engines, OpenConnection, OpenOptions,
     OtherDatabaseError, ResultStore, RunState, Session, TunnelPool, change_session_database,
     connection_databases, database_owner, open_connection, open_other_database,
+};
+use spelaion_core::{
+    DataSearchOptions, DataSearchRequest, DiagramScope, JobCancel, PrincipalKind, PrincipalTarget,
+    PrivilegeChange, PrivilegeScope, PrivilegeTarget, SearchTable, apply_privilege_change,
+    data_search, privilege_plan, read_er_model,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, SecretRequest};
@@ -237,6 +244,16 @@ async fn make(host: &str, port: u16) {
     .expect("the own database's schema");
 }
 
+/// Runs a script on `session`, failing on any error.
+async fn run_on(session: &Session, script: &str) {
+    let events: Vec<CoreEvent> = session.run_script(script).collect().await;
+    for event in &events {
+        if let CoreEvent::StatementFailed { error, .. } = event {
+            panic!("{script}: {}", error.message)
+        }
+    }
+}
+
 /// What `connection_databases` answers, as names.
 async fn opened(own: &OpenConnection) -> Vec<String> {
     match connection_databases(own).await {
@@ -456,6 +473,99 @@ async fn postgres_all_databases_are_what_the_server_lists_and_nothing_else() {
             .unwrap(),
         REPORTS
     );
+    // SDB-506: what is opened for that database works on it. A data search and an ER diagram
+    // read in its session find its tables, which the connection's own database does not have.
+    run_on(
+        &reports.session,
+        "DROP TABLE IF EXISTS core_other_items;
+         CREATE TABLE core_other_items (id int PRIMARY KEY, label text);
+         INSERT INTO core_other_items VALUES (1, 'marker_in_reports');
+         DROP ROLE IF EXISTS core_other_grantee;
+         CREATE ROLE core_other_grantee",
+    )
+    .await;
+    let searched = data_search(
+        &reports.session,
+        &DataSearchRequest {
+            value: "marker_in_reports".into(),
+            tables: vec![SearchTable {
+                schema: "public".into(),
+                table: "core_other_items".into(),
+            }],
+            options: DataSearchOptions::default(),
+        },
+        &JobCancel::new(),
+        &|_| {},
+    )
+    .await
+    .expect("searching reports");
+    assert_eq!(searched.hits, 1, "{searched:?}");
+    let public = DiagramScope::Schema {
+        schema: "public".into(),
+        filter: None,
+    };
+    let model = read_er_model(reports.session.connection().as_ref(), &public, |_| {})
+        .await
+        .expect("reading reports' diagram");
+    assert!(
+        model.tables.iter().any(|t| t.name == "core_other_items"),
+        "reports' table is in its diagram"
+    );
+    let own_model = read_er_model(all.session.connection().as_ref(), &public, |_| {})
+        .await
+        .expect("reading the own database's diagram");
+    assert!(
+        !own_model
+            .tables
+            .iter()
+            .any(|t| t.name == "core_other_items"),
+        "not in the connection's own database"
+    );
+    // A grant made in its session is in that database: roles are the server's.
+    let change = PrivilegeChange {
+        grantee: PrincipalTarget {
+            kind: PrincipalKind::Role,
+            name: "core_other_grantee".into(),
+        },
+        target: PrivilegeTarget {
+            scope: Some(PrivilegeScope::Table),
+            database: String::new(),
+            schema: "public".into(),
+            name: "core_other_items".into(),
+            columns: Vec::new(),
+        },
+        privileges: vec!["SELECT".into()],
+        revoke: false,
+        grant_option: false,
+    };
+    let shown = privilege_plan(reports.session.dialect().as_ref(), &change)
+        .unwrap()
+        .script();
+    apply_privilege_change(
+        &reports.session,
+        &change,
+        &shown,
+        false,
+        &Safeguards::default(),
+        true,
+    )
+    .await
+    .expect("granting in reports");
+    assert_eq!(
+        value(
+            &reports.session,
+            "select has_table_privilege('core_other_grantee', 'public.core_other_items', 'SELECT')::text"
+        )
+        .await
+        .unwrap(),
+        "true"
+    );
+    run_on(
+        &reports.session,
+        "DROP TABLE core_other_items; DROP ROLE core_other_grantee",
+    )
+    .await;
+
     // A tab's change of database is refused while its script runs (SDB-505): nothing the user
     // ran is cut short.
     let running = reports.session.run_script("select pg_sleep(2)");

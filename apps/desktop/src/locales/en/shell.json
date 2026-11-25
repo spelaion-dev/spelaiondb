@@ -441,6 +441,7 @@
     "failed": "Could not change the account: {{detail}}"
   },
   "privileges": {
+    "database": "Grants in database",
     "menu": "Privileges…",
     "title": "Privileges of {{name}}",
     "has": "What it has",

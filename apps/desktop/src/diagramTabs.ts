@@ -5,7 +5,7 @@ import { call, commands } from "./api";
 import type { DiagramScopeItem_Deserialize, SavedDiagramItem_Serialize as SavedDiagramItem } from "./bindings";
 import { explorerSession } from "./windowContext";
 import { connectionKey, holdsConnection } from "./connectionKey";
-import { connectTabFromExplorer, explorerDatabase, openSession } from "./connect";
+import { connectTabFromExplorer, explorerDatabase, openSession, sourceDatabase } from "./connect";
 import { useApp } from "./store";
 import { CONNECTING, DISCONNECTED, connectFailed, connectedWith } from "./tabState";
 
@@ -24,7 +24,9 @@ export function openDiagram(connectionId: string, scope: DiagramScopeItem_Deseri
   if (scope.kind === "schema" && scope.filter && scope.filter.include.length === 0 && scope.filter.exclude.length === 0) {
     scope = { ...scope, filter: null };
   }
-  const [tab, created] = useApp.getState().addDiagramTab(connectionId, scope);
+  // The database it is read from is the source's (ADR-074, SDB-506): a schema of the same name
+  // in another database of the connection is another diagram.
+  const [tab, created] = useApp.getState().addDiagramTab(connectionId, scope, undefined, sourceDatabase(source));
   if (!created) return;
   const schema = scopeSchema(scope);
   connectTabFromExplorer(tab, source, schema === undefined ? undefined : explorerDatabase(connectionKey(connectionId), schema));

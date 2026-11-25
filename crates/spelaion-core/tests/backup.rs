@@ -22,8 +22,8 @@ use spelaion_core::backup::{
     ToolSource, run_dump, run_restore,
 };
 use spelaion_core::{
-    CoreEvent, Engines, JobCancel, OpenConnection, OpenOptions, ResultStore, RouteOptions,
-    TunnelPool, open_connection,
+    Configuration, CoreEvent, Engines, JobCancel, OpenConnection, OpenOptions, ResultStore,
+    RouteOptions, TunnelPool, open_connection, open_other_database,
 };
 use spelaion_driver_api::{Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, SecretRequest};
@@ -622,4 +622,149 @@ async fn mariadb_dumps_and_restores_through_two_hops() {
         "mariadb:11.4",
     )
     .await;
+}
+
+/// ADR-074, SDB-506: a dump taken from another database of a PostgreSQL connection holds that
+/// database's tables, its file is named after that database, and it restores into it; a restore
+/// from another database of a read-only connection is refused before anything runs.
+#[tokio::test]
+async fn postgres_dumps_and_restores_another_database_of_a_connection() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Ok(pg) = std::env::var("SPELAION_TEST_PG") else {
+        eprintln!("SPELAION_TEST_PG not set: test skipped");
+        return;
+    };
+    let (host, port) = pg.rsplit_once(':').unwrap();
+    let ws = Workspace::new("pg-other-database");
+    for (id, extra) in [("tenants", ""), ("tenants_ro", "read_only = true\n")] {
+        ws.write(
+            &format!(".spelaion/connections/{id}.toml"),
+            &format!(
+                "schema_version = 1\nengine = \"postgres\"\nhost = \"{host}\"\nport = {port}\ndatabase = \"spelaion\"\nuser = \"spelaion\"\npassword = {{ secret = \"prompt\" }}\nall_databases = true\n{extra}"
+            ),
+        );
+    }
+    let config = load(Some(&ws.base.join("repo")), &ws.base.join("user"));
+    let mut trust = TrustStore::load(&ws.base.join("user")).unwrap();
+    trust.trust(&config).unwrap();
+    let configuration = Configuration {
+        config: &config,
+        trust: &trust,
+        backend: &SystemBackend,
+    };
+    let engines = Engines::builtin();
+    let other_of = async |own: &OpenConnection| {
+        open_other_database(
+            own,
+            "core_backup_other",
+            &configuration,
+            &engines,
+            OpenOptions {
+                tunnels: ws.tunnels.clone(),
+                known_hosts: ws.known_hosts(),
+                interaction: Arc::new(AcceptHosts),
+                password: Some(Secret::new("spelaion")),
+                read_only_session: false,
+            },
+            Arc::new(ResultStore::new()),
+        )
+        .await
+    };
+    let own = ws.open("tenants", "spelaion").await;
+    // CREATE DATABASE has no IF NOT EXISTS: an error that it exists is fine.
+    let _: Vec<CoreEvent> = own
+        .session
+        .run_script("CREATE DATABASE core_backup_other")
+        .collect()
+        .await;
+    let other = other_of(&own).await.expect("opening core_backup_other");
+    exec(
+        &other,
+        "DROP TABLE IF EXISTS backup_other_items;
+         CREATE TABLE backup_other_items (id int PRIMARY KEY, name text);
+         INSERT INTO backup_other_items VALUES (1, 'only in the other database');",
+    )
+    .await;
+
+    let log = Log::default();
+    let summary = run_dump(
+        &other.resolved,
+        Some(Secret::new("spelaion")),
+        ws.route(),
+        &DumpRequest {
+            tools: tools(PG_IMAGE),
+            folder: ws.out(),
+            name_pattern: "{database}".into(),
+            extra_args: String::new(),
+            options: DumpOptions::Postgres(PgDumpOptions {
+                format: PgFormat::Plain,
+                ..PgDumpOptions::default()
+            }),
+        },
+        None,
+        &JobCancel::new(),
+        &log.sink(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("dump: {e}\n{:#?}", log.texts()));
+    let name = summary
+        .path
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        name.starts_with("core_backup_other"),
+        "named after its database: {name}"
+    );
+    let dumped = std::fs::read_to_string(&summary.path).unwrap();
+    assert!(
+        dumped.contains("backup_other_items"),
+        "the other database's table is in it"
+    );
+
+    exec(&other, "DROP TABLE backup_other_items").await;
+    let restore = RestoreRequest {
+        tools: tools(PG_IMAGE),
+        input: summary.path.clone(),
+        format: RestoreFormat::Auto,
+        extra_args: String::new(),
+        options: RestoreOptions::Postgres(PgRestoreOptions::default()),
+    };
+    let log = Log::default();
+    run_restore(
+        &other.resolved,
+        Some(Secret::new("spelaion")),
+        ws.route(),
+        &restore,
+        true,
+        &JobCancel::new(),
+        &log.sink(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("restore: {e}\n{:#?}", log.texts()));
+    assert_eq!(
+        rows(&other, "SELECT name FROM backup_other_items").await,
+        [["only in the other database".to_string()]]
+    );
+
+    // The connection's read-only mode is every database's (ADR-074 point 2).
+    let own_ro = ws.open("tenants_ro", "spelaion").await;
+    let other_ro = other_of(&own_ro).await.expect("opening it read-only");
+    let refused = run_restore(
+        &other_ro.resolved,
+        Some(Secret::new("spelaion")),
+        ws.route(),
+        &restore,
+        true,
+        &JobCancel::new(),
+        &|_| panic!("nothing runs on a read-only connection"),
+    )
+    .await;
+    assert!(matches!(refused, Err(BackupError::ReadOnly)), "{refused:?}");
+
+    exec(&other, "DROP TABLE backup_other_items").await;
+    for open in [other_ro, own_ro, other, own] {
+        open.close().await;
+    }
 }

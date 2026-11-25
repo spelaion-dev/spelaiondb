@@ -28,7 +28,7 @@ import type {
   DiagramSummaryItem_Serialize as DiagramSummary,
   TableNameItem,
 } from "../bindings";
-import { connectTabFromExplorer, explorerDatabase, openSession, openTableData } from "../connect";
+import { connectTabFromExplorer, explorerDatabase, openTabSession, openTableData } from "../connect";
 import { chooseSavePath } from "../dialogs";
 import { SAVE_DIAGRAM_EVENT, openDiagram } from "../diagramTabs";
 import { NOTE_WIDTH, placeNewNote } from "../erNotes";
@@ -755,7 +755,8 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
     setNeedsRefresh(true);
     useApp.getState().setConnection(tab.id, CONNECTING);
     try {
-      const session = await openSession(tab.id, connectionKey(tab.connectionId));
+      // On the database it was opened on (ADR-074, SDB-506), never quietly another.
+      const session = await openTabSession(tab.id, connectionKey(tab.connectionId));
       useApp.getState().setConnection(tab.id, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
       useApp.getState().setConnection(tab.id, DISCONNECTED);

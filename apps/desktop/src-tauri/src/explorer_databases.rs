@@ -282,6 +282,13 @@ pub async fn connect_database(
     };
     let (own, password, history_workspace, connection_folder, definition) = {
         let sessions = state.sessions.lock().await;
+        // Already open on that database from this explorer session: nothing to do.
+        if sessions.get(&session).is_some_and(|open| {
+            open.explorer_parent.as_deref() == Some(source.as_str())
+                && open.open.resolved.params.database == database
+        }) {
+            return Ok(());
+        }
         let source = sessions
             .get(&source)
             .ok_or("the connection's explorer session is closed")?;

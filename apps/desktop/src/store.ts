@@ -403,10 +403,12 @@ interface AppStore {
    *  `filter` when given (a followed foreign key's, written by the core). */
   addTableTab(connectionId: string, schema: string, name: string, filter?: string): string;
   addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
-  /** Opens an ER diagram tab, or shows the one already open on the same scope (or on the same
-   *  saved diagram, ADR-084). The second value says whether the tab is new (and needs
+  /** Opens an ER diagram tab, or shows the one already open on the same scope and database (or
+   *  on the same saved diagram, ADR-084). An unsaved diagram is read from `database` of a
+   *  PostgreSQL connection that opens several (ADR-074, SDB-506; null: its own); a saved one
+   *  from the connection's own. The second value says whether the tab is new (and needs
    *  connecting). */
-  addDiagramTab(connectionId: string, scope: DiagramScopeItem_Deserialize, saved?: { id: number; name: string }): [string, boolean];
+  addDiagramTab(connectionId: string, scope: DiagramScopeItem_Deserialize, saved?: { id: number; name: string }, database?: string | null): [string, boolean];
   /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
   closeTabs(ids: string[]): void;
   /** Opens again the last closed query tab (its connection, SQL and name, not its results). */
@@ -538,16 +540,18 @@ export const useApp = create<AppStore>((set) => ({
     app.updateTab(id, { tableDetails: { schema, name, kind } });
     return id;
   },
-  addDiagramTab: (connectionId, scope, saved): [string, boolean] => {
+  addDiagramTab: (connectionId, scope, saved, database = null): [string, boolean] => {
     const app = useApp.getState();
     const key = JSON.stringify(scope);
-    // A saved diagram has a tab of its own; an unsaved one is found by its scope.
+    // A saved diagram has a tab of its own; an unsaved one is found by its scope and database.
     const existing = app.tabs.find((tab) =>
       tab.connectionId === connectionId && tab.diagram &&
-      (saved ? tab.savedDiagram?.id === saved.id : !tab.savedDiagram && JSON.stringify(tab.diagram) === key));
+      (saved
+        ? tab.savedDiagram?.id === saved.id
+        : !tab.savedDiagram && (tab.database ?? null) === database && JSON.stringify(tab.diagram) === key));
     if (existing) { app.setActiveTab(existing.id); return [existing.id, false]; }
     const id = app.addTab(connectionId, "");
-    app.updateTab(id, saved ? { diagram: scope, savedDiagram: saved } : { diagram: scope });
+    app.updateTab(id, saved ? { diagram: scope, savedDiagram: saved } : { diagram: scope, database });
     return [id, true];
   },
   closedTabs: [],
