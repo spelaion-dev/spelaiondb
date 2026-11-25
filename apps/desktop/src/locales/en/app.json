@@ -8,6 +8,15 @@
   "resizeSidebar": "Resize the connections panel",
   "resizeSidebarHint": "Drag to resize the connections panel. Double-click to reset.",
   "preferenceLoadError": "Could not load your preferences:",
+  "split": {
+    "right": "Split right",
+    "down": "Split down",
+    "close": "Close split",
+    "focusOther": "Focus the other split pane",
+    "resize": "Resize the split panes",
+    "resizeHint": "Drag to resize the split panes. Double-click to make them equal.",
+    "pane": "{{name}}, split pane"
+  },
   "update": {
     "available": "SpelaionDB {{version}} is available (you have {{current}}).",
     "install": "Install and restart",

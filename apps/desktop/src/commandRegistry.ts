@@ -98,6 +98,12 @@ export const COMMANDS = [
   { id: "results.copyUpdates", category: "data", label: "app:commands.copySelectionUpdates" },
   { id: "results.exportSelection", category: "data", label: "app:commands.exportSelection" },
   { id: "results.maximize", category: "view", label: "app:commands.maximizeResults", shortcut: "Ctrl+Alt+M", scope: "global" },
+  // Two tabs at once (SDB-30): each pane is a tab with its own session. No default keys: the
+  // user can give them some (SDB-447).
+  { id: "view.splitRight", category: "view", label: "app:split.right", menus: ["tab"] },
+  { id: "view.splitDown", category: "view", label: "app:split.down", menus: ["tab"] },
+  { id: "view.closeSplit", category: "view", label: "app:split.close", menus: ["tab"] },
+  { id: "view.focusOtherPane", category: "view", label: "app:split.focusOther" },
   { id: "file.open", category: "file", label: "app:files.open", shortcut: "Ctrl+O", scope: "global", menus: ["file", "welcome"] },
   { id: "file.openPlan", category: "file", label: "editor:plan.open", menus: ["file"] },
   { id: "file.save", category: "file", label: "app:tabs.saveFile", shortcut: "Ctrl+S", scope: "global", menus: ["tab"] },

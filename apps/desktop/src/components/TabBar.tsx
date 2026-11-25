@@ -11,6 +11,7 @@ import { isModified } from "../sqlFiles";
 import { startRename } from "../tabActions";
 import { type Tab, useApp } from "../store";
 import { isRunning, statusName, transactionOf } from "../tabState";
+import { paneOf } from "../splitView";
 import { FileMenuButton } from "./FileMenu";
 import { Icon } from "./Icons";
 import { KEYS, type CommandId } from "../commandRegistry";
@@ -176,10 +177,12 @@ function TabItem({ id, index, active, renaming, marks, strip }: {
     const tab = s.tabs.find((item) => item.id === id);
     return tab ? tabView(tab) : null;
   }));
+  // Shown in the other pane of a split (SDB-30).
+  const beside = useApp((s) => !active && paneOf(s.layout, id) !== null);
   if (!view) return null;
   const { tabIds, swallowClick, dragRef, updateDrag, dropIndex, focusTab, openMenuAt, setMenu } = strip;
   const setActiveTab = useApp.getState().setActiveTab;
-  const classes = ["tab", active ? "active" : "", view.pinned ? "pinned" : "", marks].filter(Boolean).join(" ");
+  const classes = ["tab", active ? "active" : "", beside ? "beside" : "", view.pinned ? "pinned" : "", marks].filter(Boolean).join(" ");
   return (
     <div
       id={`workspace-${id}`}
@@ -413,6 +416,10 @@ function TabMenu({ id, x, y, onClose }: { id: string; x: number; y: number; onCl
       {item("tab.rename")}
       {item("tab.duplicate")}
       {item("tab.pin")}
+      <hr />
+      {item("view.splitRight")}
+      {item("view.splitDown")}
+      {item("view.closeSplit")}
       {!tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && (
         <>
           <hr />
