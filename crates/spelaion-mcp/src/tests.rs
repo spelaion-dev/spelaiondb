@@ -274,7 +274,7 @@ async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning()
         OpenOptions {
             tunnels: server.state.tunnels.clone(),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: dir.join("known_hosts"),
             },
@@ -466,7 +466,7 @@ async fn server_plans_return_the_core_tree_and_never_analyze() {
             OpenOptions {
                 tunnels: server.state.tunnels.clone(),
                 known_hosts: KnownHosts {
-                    team_file: None,
+                    team_files: Vec::new(),
                     user_file: None,
                     app_file: dir.join("known_hosts"),
                 },
@@ -1600,7 +1600,7 @@ async fn admin_connection(server: &SpelaionMcp, id: &str, user_dir: &Path) -> Op
         OpenOptions {
             tunnels: server.state.tunnels.clone(),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: user_dir.join("known_hosts"),
             },
@@ -1752,7 +1752,7 @@ async fn tunnelled_sessions_ended_by_the_server_are_replaced() {
             OpenOptions {
                 tunnels: Arc::new(TunnelPool::new()),
                 known_hosts: KnownHosts {
-                    team_file: None,
+                    team_files: Vec::new(),
                     user_file: None,
                     app_file: user_dir.join("known_hosts"),
                 },

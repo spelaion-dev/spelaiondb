@@ -64,7 +64,7 @@ impl Workspace {
 
     fn known_hosts(&self) -> KnownHosts {
         KnownHosts {
-            team_file: None,
+            team_files: Vec::new(),
             user_file: None,
             app_file: self.base.join("user/known_hosts"),
         }

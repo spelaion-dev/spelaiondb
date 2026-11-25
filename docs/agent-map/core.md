@@ -8,6 +8,12 @@
   PostgreSQL rolls back only a failed one, ADR-086: never around transaction control, never in
   the history, `transaction::statement_savepoint` says which engines, `tests/script_runs.rs`)
   and `ResultStore` (results in the core, served in Arrow IPC windows).
+  The `TunnelPool` shares one SSH chain between connections only when `tunnel_pool_key`
+  (`open.rs`) is the same: the connection's layer, the folder whose profile it is, the teams'
+  `known_hosts` it is checked against (ADR-075: two folders' profiles of the same name and
+  settings, or one profile checked against different folders' host keys, are never one chain),
+  its name, settings, proxy, SSM and hops. A new field of `ResolvedTunnel` that changes what
+  the chain is or how it is verified goes into that key.
   A stored result's end is one type, `ResultEnd` (SDB-367, ADR-060): `Loading`, `Whole`, or
   `Partial(PartialReason)` (cancelled, failed, timed out, connection lost). Only `session.rs`
   sets it, where a statement's stream stops (and `end_on_panic` for a run that panics), and it
