@@ -67,6 +67,7 @@ mod plans_clickhouse;
 mod plans_mysql;
 mod plans_sqlite_duckdb;
 mod plans_sqlserver;
+mod postgres_databases;
 mod privileges;
 mod properties;
 mod query_pages;
