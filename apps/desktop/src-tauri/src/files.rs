@@ -3,10 +3,13 @@
 //! often the tabs are written and checks them before they come back; these commands carry it.
 
 use spelaion_desktop_macros::command;
+use std::collections::HashMap;
 use std::path::Path;
 
+use spelaion_config::{ConnectionFile, Source};
 use spelaion_core::{
-    FileError, FileFormat, SaveCheck, SavedTabs, read_sql_file, restore_tabs, write_sql_file,
+    FileError, FileFormat, SaveCheck, read_sql_file, restore_window_tabs, tab_scope, window_sets,
+    write_sql_file,
 };
 use tauri::State;
 
@@ -120,43 +123,84 @@ pub(crate) async fn forget_recent_file(path: String, state: State<'_, AppState>)
         .map_err(|e| e.to_string())
 }
 
-/// The open folder's kept tabs, checked by the core: every one comes back disconnected,
-/// with its text and a note when its connection or file is gone. Nothing is run.
+/// What the window keeps tabs under (ADR-075): each open folder's key, in the order they were
+/// opened, then the window's empty key (personal connections and none). Each key once, with
+/// the identifiers of the connections a tab kept under it may come back on: that folder's own
+/// for a folder's key, the personal ones for the window's.
+async fn tab_scopes(state: &AppState) -> Vec<(String, HashMap<String, ConnectionFile>)> {
+    let mut scopes: Vec<(String, HashMap<String, ConnectionFile>)> = Vec::new();
+    let connections_of = |config: &spelaion_config::Config, source| {
+        config
+            .connections
+            .iter()
+            .filter(|c| c.id.source == source)
+            .map(|c| (c.id.to_string(), c.file.clone()))
+            .collect::<HashMap<_, _>>()
+    };
+    for config in state.open_configs().await {
+        let scope = spelaion_config::repository_scope(&config);
+        if !scope.is_empty() && !scopes.iter().any(|(s, _)| *s == scope) {
+            scopes.push((scope, connections_of(&config, Source::Workspace)));
+        }
+    }
+    let shown = state.config().await;
+    scopes.push((String::new(), connections_of(&shown, Source::User)));
+    scopes
+}
+
+/// The file of connection `id` as a tab kept under `scope` finds it: in that folder, or among
+/// the personal connections, since tabs kept before ADR-075 under the folder that was open may
+/// be on a personal one (they are kept in the window from now). Never in another folder.
+fn connection_file<'a>(
+    scopes: &'a [(String, HashMap<String, ConnectionFile>)],
+    personal: &'a HashMap<String, ConnectionFile>,
+    scope: &str,
+    id: &str,
+) -> Option<&'a ConnectionFile> {
+    personal.get(id).or_else(|| {
+        scopes
+            .iter()
+            .find(|(s, _)| s == scope)
+            .and_then(|(_, connections)| connections.get(id))
+    })
+}
+
+/// The kept tabs of the window and of every open folder (ADR-075), checked by the core: every
+/// one comes back disconnected, in the window's order, with its text and a note when its
+/// connection or file is gone. A connection is looked up in the folder the tab was kept under
+/// (and personal ones among the personal connections), never in another folder. Nothing is run.
 #[command]
 pub(crate) async fn restore_tabs_for_workspace(
     state: State<'_, AppState>,
 ) -> CmdResult<RestoredTabsItem> {
-    // What the folder's tabs were written under before anything else is (a reload may run).
+    // What the tabs were written under before anything else is (a reload may run).
     state.tabs.flush().await.map_err(|e| e.to_string())?;
-    let (scope, connections) = {
-        let config = state.config().await;
-        (
-            spelaion_config::repository_scope(&config),
-            config
-                .connections
-                .iter()
-                .map(|c| (c.id.to_string(), c.file.clone()))
-                .collect::<std::collections::HashMap<_, _>>(),
-        )
-    };
-    let saved = state
-        .history
-        .open_tabs(scope.clone())
-        .await
-        .map_err(|e| e.to_string())?;
+    let scopes = tab_scopes(&state).await;
+    let personal: HashMap<String, ConnectionFile> = scopes
+        .last()
+        .map(|(_, connections)| connections.clone())
+        .unwrap_or_default();
+    let mut sets = Vec::with_capacity(scopes.len());
+    for (scope, _) in &scopes {
+        let saved = state
+            .history
+            .open_tabs(scope.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        sets.push((scope.clone(), saved));
+    }
     let reconnect = state
         .history
         .reconnect_on_start()
         .await
         .map_err(|e| e.to_string())?;
     let (tabs, active) = tokio::task::spawn_blocking(move || {
-        restore_tabs(
-            saved,
-            |id| connections.contains_key(id),
+        restore_window_tabs(
+            sets,
+            |scope, id| connection_file(&scopes, &personal, scope, id).is_some(),
             // Which database a connection still opens is the core's rule (ADR-074).
-            |id, database| {
-                connections
-                    .get(id)
+            |scope, id, database| {
+                connection_file(&scopes, &personal, scope, id)
                     .is_some_and(|file| spelaion_core::file_opens_database(file, database))
             },
         )
@@ -164,12 +208,15 @@ pub(crate) async fn restore_tabs_for_workspace(
     .await
     .map_err(|e| e.to_string())?;
     Ok(RestoredTabsItem {
-        scope,
         tabs: tabs
             .into_iter()
-            .map(|t| RestoredTabItem {
-                tab: t.tab.into(),
-                notes: t.notes.into_iter().map(Into::into).collect(),
+            .map(|(scope, t)| {
+                let mut tab: OpenTabItem = t.tab.into();
+                tab.folder = (!scope.is_empty() && tab.connection.is_some()).then_some(scope);
+                RestoredTabItem {
+                    tab,
+                    notes: t.notes.into_iter().map(Into::into).collect(),
+                }
             })
             .collect(),
         active: active.and_then(|i| u32::try_from(i).ok()),
@@ -177,20 +224,30 @@ pub(crate) async fn restore_tabs_for_workspace(
     })
 }
 
-/// The open tabs as they are now, for the folder `scope` (from `restore_tabs_for_workspace`).
-/// The core writes them within a second (ADR-036).
+/// The window's tabs as they are now, in the tab bar's order (ADR-075): the core keeps each
+/// under its connection's folder, or under the window's key, and writes them within a second
+/// (ADR-036). Closed folders keep the tabs they had.
 #[command]
 pub(crate) async fn save_tabs(
-    scope: String,
     tabs: Vec<OpenTabItem>,
     active: Option<u32>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let tabs = SavedTabs {
-        tabs: tabs.into_iter().map(Into::into).collect(),
-        active: active.map(|i| i as usize),
-    };
-    state.tabs.update(scope, tabs);
+    let open: Vec<String> = tab_scopes(&state)
+        .await
+        .into_iter()
+        .map(|(scope, _)| scope)
+        .collect();
+    let tabs = tabs
+        .into_iter()
+        .map(|tab| {
+            let scope = tab_scope(tab.connection.as_deref(), tab.folder.as_deref());
+            (scope, tab.into())
+        })
+        .collect();
+    state
+        .tabs
+        .update_window(window_sets(&open, tabs, active.map(|i| i as usize)));
     Ok(())
 }
 

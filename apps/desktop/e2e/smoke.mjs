@@ -390,7 +390,12 @@ try {
 
   async function newQuery(connection, sql) {
     // Double-clicking a connection opens a new query on it (its row has no buttons, SDB-102).
-    await page.locator(`.connection-row:has-text("${connection}") > .label`).dblclick();
+    // A name matches any row containing it; a RegExp is matched against the row's label alone,
+    // for a name that imported connections also contain (`/^analytics$/`).
+    const label = connection instanceof RegExp
+      ? page.locator(".connection-row > .label", { hasText: connection })
+      : page.locator(`.connection-row:has-text("${connection}") > .label`);
+    await label.dblclick();
     const panel = page.locator(".tab-panel:not([hidden])");
     // Preserve the run-time password checks below: cancel the new tab's initial prompt,
     // then Run will ask again. Connections that need no prompt finish normally.
@@ -10961,6 +10966,47 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.press("Control+o");
     await page.locator(".tabbar .tab.active .tab-label", { hasText: "restart.sql" }).waitFor();
     await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    // A tab belongs to its connection's folder (ADR-075, SDB-501). With another folder open,
+    // the tab on the demo folder's Shop (SQLite) is kept for it and goes; a tab on the personal
+    // analytics connection, the console without one and the file stay. Coming back brings the
+    // demo folder's tab back, in its place.
+    await newQuery(/^analytics$/, "select 'personal_tab_marker';");
+    const firstLines = async () => {
+      const lines = [];
+      const tabs = page.locator(".tabbar .tab");
+      for (let i = 0; i < await tabs.count(); i++) {
+        await tabs.nth(i).click();
+        await page.locator(".tabbar .tab.active").nth(0).waitFor();
+        lines.push((await page.locator(".tab-panel:not([hidden]) .cm-content").innerText()).split("\n")[0]);
+      }
+      return lines;
+    };
+    const openFolder = async (folder) => {
+      await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
+      await page.getByTitle("Open another folder").click();
+      await page.getByRole("menu", { name: "Folders" }).getByRole("menuitem", { name: "Open folder…" }).click();
+      await page.waitForFunction((expected) => document.querySelectorAll('.connection-row').length > 0
+        && [...document.querySelectorAll(".connection-row")].some((row) => row.textContent.includes("analytics"))
+        && [...document.querySelectorAll(".connection-row")].some((row) => row.textContent.includes("Shop (SQLite)")) === expected, folder === demo);
+      await page.evaluate(() => delete window.__spelaionOpenFolder);
+    };
+    const inDemo = ["select 'restart_console_marker' as restored;", "-- second console, no connection", "select 'restart_file_marker';", "select 'personal_tab_marker';"];
+    assert.deepEqual(await firstLines(), inDemo);
+    const elsewhere = join(userDir, "tabs-elsewhere");
+    mkdirSync(elsewhere, { recursive: true });
+    await openFolder(elsewhere);
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 3);
+    assert.deepEqual(await firstLines(), inDemo.slice(1));
+    await shot("sdb-501-personal-tabs-in-another-folder");
+    await openFolder(demo);
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 4);
+    assert.deepEqual(await firstLines(), inDemo);
+    // Back to the three tabs this step keeps: the personal one closes, the file is shown.
+    await page.locator(".tabbar .tab").nth(3).click();
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 3);
+    await page.locator(".tabbar .tab", { hasText: "restart.sql" }).click();
+    await page.locator(".tabbar .tab.active .tab-label", { hasText: "restart.sql" }).waitFor();
     // An unsaved change: it comes back unsaved.
     await page.locator(".tab-panel:not([hidden]) .cm-content").click();
     await page.keyboard.press("Control+End");

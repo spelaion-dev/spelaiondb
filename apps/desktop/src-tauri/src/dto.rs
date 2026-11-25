@@ -7103,6 +7103,10 @@ pub struct OpenTabItem {
     pub connection: Option<String>,
     /// The other database of its connection it was on (ADR-074, SDB-505); `None` for its own.
     pub database: Option<String>,
+    /// The folder of its connection, as the page holds it (ADR-075; none for a personal
+    /// connection or none): the core keeps the tab under it (`tab_scope`).
+    #[serde(default)]
+    pub folder: Option<String>,
     pub pinned: bool,
     pub on_error: Option<OnErrorItem>,
     pub timeout_seconds: Option<u32>,
@@ -7128,6 +7132,8 @@ impl From<OpenTabItem> for spelaion_core::SavedTab {
                 line_ending: f.format.line_ending.into(),
                 modified: f.modified,
             }),
+            // Its place in the window is the core's to give (`window_sets`).
+            window_position: None,
         }
     }
 }
@@ -7139,6 +7145,7 @@ impl From<spelaion_core::SavedTab> for OpenTabItem {
             text: t.text,
             connection: t.connection,
             database: t.database,
+            folder: None,
             pinned: t.pinned,
             on_error: t.on_error.map(Into::into),
             timeout_seconds: t.timeout_seconds,
@@ -7199,12 +7206,11 @@ pub struct RestoredTabItem {
     pub notes: Vec<RestoreNoteItem>,
 }
 
-/// The open folder's kept tabs, checked by the core. They come back disconnected.
+/// The kept tabs of the window and of every open folder (ADR-075), checked by the core and in
+/// the window's order. They come back disconnected.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoredTabsItem {
-    /// Which folder they belong to: sent back with every `save_tabs`.
-    pub scope: String,
     pub tabs: Vec<RestoredTabItem>,
     pub active: Option<u32>,
     /// The personal "reconnect at startup" setting: connect only, never run.

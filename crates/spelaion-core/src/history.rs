@@ -81,38 +81,38 @@ fn refusal(
 
 enum Request {
     HistoryPage {
-        workspace: String,
+        workspaces: Vec<String>,
         filter: HistoryFilter,
         limit: usize,
         offset: usize,
         reply: Reply<HistoryPage>,
     },
     HistoryDatabases {
-        workspace: String,
+        workspaces: Vec<String>,
         reply: Reply<Vec<String>>,
     },
     PinHistory {
-        workspace: String,
+        workspaces: Vec<String>,
         id: i64,
         pinned: bool,
         reply: Reply<bool>,
     },
     ExportHistory {
-        workspace: String,
+        workspaces: Vec<String>,
         filter: HistoryFilter,
         path: PathBuf,
         cancel: std::sync::Arc<crate::JobCancel>,
         reply: Reply<usize>,
     },
     SnippetPage {
-        workspace: String,
+        workspaces: Vec<String>,
         filter: SnippetFilter,
         limit: usize,
         offset: usize,
         reply: Reply<Vec<Snippet>>,
     },
     SnippetFolders {
-        workspace: String,
+        workspaces: Vec<String>,
         reply: Reply<Vec<SnippetFolder>>,
     },
     CreateSnippetFolder {
@@ -421,6 +421,10 @@ enum Request {
     SaveOpenTabs {
         workspace: String,
         tabs: SavedTabs,
+        reply: Reply<()>,
+    },
+    SaveWindowTabs {
+        sets: Vec<(String, SavedTabs)>,
         reply: Reply<()>,
     },
     OpenTabs {
@@ -771,56 +775,65 @@ impl QueryHistory {
                                 .send(store.record_history_database(&entry, database.as_deref()));
                         }
                         Request::HistoryPage {
-                            workspace,
+                            workspaces,
                             filter,
                             limit,
                             offset,
                             reply,
                         } => {
                             let _ = reply.send(
-                                store.history_page(&workspace, &filter, limit, offset).map(
-                                    |mut page| {
+                                store
+                                    .history_page_in(&workspaces, &filter, limit, offset)
+                                    .map(|mut page| {
                                         for entry in &mut page.entries {
                                             redact_history(entry);
                                         }
                                         page
-                                    },
-                                ),
+                                    }),
                             );
                         }
-                        Request::HistoryDatabases { workspace, reply } => {
-                            let _ = reply.send(store.history_databases(&workspace));
+                        Request::HistoryDatabases { workspaces, reply } => {
+                            let _ = reply.send(store.history_databases_in(&workspaces));
                         }
                         Request::PinHistory {
-                            workspace,
+                            workspaces,
                             id,
                             pinned,
                             reply,
                         } => {
-                            let _ = reply.send(store.pin_history(&workspace, id, pinned));
+                            let _ = reply.send(store.pin_history_in(&workspaces, id, pinned));
                         }
                         Request::ExportHistory {
-                            workspace,
+                            workspaces,
                             filter,
                             path,
                             cancel,
                             reply,
                         } => {
-                            let _ = reply
-                                .send(export_history(&store, &workspace, &filter, &path, &cancel));
+                            let _ = reply.send(export_history(
+                                &store,
+                                &workspaces,
+                                &filter,
+                                &path,
+                                &cancel,
+                            ));
                         }
                         Request::SnippetPage {
-                            workspace,
+                            workspaces,
                             filter,
                             limit,
                             offset,
                             reply,
                         } => {
-                            let _ =
-                                reply.send(store.snippet_page(&workspace, &filter, limit, offset));
+                            let _ = reply.send(store.snippet_page_in(
+                                &workspaces,
+                                &filter,
+                                limit,
+                                offset,
+                            ));
                         }
-                        Request::SnippetFolders { workspace, reply } => {
-                            let _ = reply.send(store.snippet_folders(&workspace));
+                        Request::SnippetFolders { workspaces, reply } => {
+                            let _ = reply.send(store.snippet_folders_in(&workspaces));
                         }
                         Request::CreateSnippetFolder {
                             workspace,
@@ -891,6 +904,9 @@ impl QueryHistory {
                             reply,
                         } => {
                             let _ = reply.send(store.save_open_tabs(&workspace, &tabs));
+                        }
+                        Request::SaveWindowTabs { sets, reply } => {
+                            let _ = reply.send(store.save_window_tabs(&sets));
                         }
                         Request::OpenTabs { workspace, reply } => {
                             let _ = reply.send(store.open_tabs(&workspace));
@@ -1604,6 +1620,16 @@ impl QueryHistory {
         .await
     }
 
+    /// Replaces the open tabs kept for each of these workspaces, in one transaction (ADR-075:
+    /// a window's tabs, each under its connection's folder; see [`crate::window_sets`]).
+    pub async fn save_window_tabs(
+        &self,
+        sets: Vec<(String, SavedTabs)>,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SaveWindowTabs { sets, reply })
+            .await
+    }
+
     /// The open tabs kept for `workspace`, as saved; [`crate::restore_tabs`] checks them.
     pub async fn open_tabs(&self, workspace: String) -> Result<SavedTabs, HistoryError> {
         self.request(|reply| Request::OpenTabs { workspace, reply })
@@ -1657,13 +1683,13 @@ impl QueryHistory {
 
     pub async fn history_page(
         &self,
-        workspace: String,
+        workspaces: Vec<String>,
         filter: HistoryFilter,
         limit: usize,
         offset: usize,
     ) -> Result<HistoryPage, HistoryError> {
         self.request(|reply| Request::HistoryPage {
-            workspace,
+            workspaces,
             filter,
             limit,
             offset,
@@ -1671,18 +1697,21 @@ impl QueryHistory {
         })
         .await
     }
-    pub async fn history_databases(&self, workspace: String) -> Result<Vec<String>, HistoryError> {
-        self.request(|reply| Request::HistoryDatabases { workspace, reply })
+    pub async fn history_databases(
+        &self,
+        workspaces: Vec<String>,
+    ) -> Result<Vec<String>, HistoryError> {
+        self.request(|reply| Request::HistoryDatabases { workspaces, reply })
             .await
     }
     pub async fn pin_history(
         &self,
-        workspace: String,
+        workspaces: Vec<String>,
         id: i64,
         pinned: bool,
     ) -> Result<bool, HistoryError> {
         self.request(|reply| Request::PinHistory {
-            workspace,
+            workspaces,
             id,
             pinned,
             reply,
@@ -1691,13 +1720,13 @@ impl QueryHistory {
     }
     pub async fn export_history(
         &self,
-        workspace: String,
+        workspaces: Vec<String>,
         filter: HistoryFilter,
         path: PathBuf,
         cancel: std::sync::Arc<crate::JobCancel>,
     ) -> Result<usize, HistoryError> {
         self.request(|reply| Request::ExportHistory {
-            workspace,
+            workspaces,
             filter,
             path,
             cancel,
@@ -1707,13 +1736,13 @@ impl QueryHistory {
     }
     pub async fn snippet_page(
         &self,
-        workspace: String,
+        workspaces: Vec<String>,
         filter: SnippetFilter,
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Snippet>, HistoryError> {
         self.request(|reply| Request::SnippetPage {
-            workspace,
+            workspaces,
             filter,
             limit,
             offset,
@@ -1723,9 +1752,9 @@ impl QueryHistory {
     }
     pub async fn snippet_folders(
         &self,
-        workspace: String,
+        workspaces: Vec<String>,
     ) -> Result<Vec<SnippetFolder>, HistoryError> {
-        self.request(|reply| Request::SnippetFolders { workspace, reply })
+        self.request(|reply| Request::SnippetFolders { workspaces, reply })
             .await
     }
     pub async fn create_snippet_folder(
@@ -1926,7 +1955,7 @@ fn redact_history(entry: &mut HistoryEntry) {
 /// Local SQL export: one store snapshot, bounded pages, no query execution, atomic replacement.
 fn export_history(
     store: &Store,
-    workspace: &str,
+    workspaces: &[String],
     filter: &HistoryFilter,
     path: &std::path::Path,
     cancel: &crate::JobCancel,
@@ -1935,7 +1964,7 @@ fn export_history(
     use std::io::Write;
     // Dropped on any error or cancel, which deletes the temporary file.
     let mut writer = std::io::BufWriter::new(AtomicWriter::create(path, NewFileMode::Default)?);
-    let count = store.visit_history(workspace, filter, |entries| {
+    let count = store.visit_history_in(workspaces, filter, |entries| {
         for entry in entries {
             if cancel.is_cancelled() {
                 return Err(std::io::Error::new(
@@ -2674,7 +2703,7 @@ mod tests {
             "{events:?}"
         );
         let page = history
-            .history_page("/repo".into(), HistoryFilter::default(), 50, 0)
+            .history_page(vec!["/repo".into()], HistoryFilter::default(), 50, 0)
             .await
             .unwrap();
         assert_eq!(
@@ -2814,7 +2843,7 @@ mod tests {
             Some(CoreEvent::ScriptFinished { executed: 2, .. })
         ));
         let page = history
-            .history_page("/repo".into(), HistoryFilter::default(), 50, 0)
+            .history_page(vec!["/repo".into()], HistoryFilter::default(), 50, 0)
             .await
             .unwrap();
         let first = page
@@ -2846,7 +2875,7 @@ mod tests {
         ));
         assert_eq!(
             history
-                .history_page("/repo".into(), HistoryFilter::default(), 1, 0)
+                .history_page(vec!["/repo".into()], HistoryFilter::default(), 1, 0)
                 .await
                 .unwrap()
                 .entries[0]
@@ -2968,7 +2997,7 @@ mod tests {
         ));
         assert!(
             history
-                .history_page("/repo".into(), HistoryFilter::default(), 50, 0)
+                .history_page(vec!["/repo".into()], HistoryFilter::default(), 50, 0)
                 .await
                 .unwrap()
                 .entries
@@ -3006,7 +3035,7 @@ mod tests {
             ))
             .unwrap();
         let page = history
-            .history_page("/repo".into(), HistoryFilter::default(), 50, 0)
+            .history_page(vec!["/repo".into()], HistoryFilter::default(), 50, 0)
             .await
             .unwrap();
         for row in &page.entries {
@@ -3027,7 +3056,7 @@ mod tests {
         let output = path.with_file_name("history.sql");
         let count = history
             .export_history(
-                "/repo".into(),
+                vec!["/repo".into()],
                 HistoryFilter::default(),
                 output.clone(),
                 Arc::new(crate::JobCancel::new()),
@@ -3047,7 +3076,7 @@ mod tests {
         assert!(
             history
                 .export_history(
-                    "/repo".into(),
+                    vec!["/repo".into()],
                     HistoryFilter::default(),
                     output.clone(),
                     cancel
@@ -3071,7 +3100,7 @@ mod tests {
             crate::test_files::assert_keeps_mode_and_links("history", |path| {
                 let count = tokio::task::block_in_place(|| {
                     handle.block_on(history.export_history(
-                        "/repo".into(),
+                        vec!["/repo".into()],
                         HistoryFilter::default(),
                         path.to_path_buf(),
                         Arc::new(crate::JobCancel::new()),

@@ -529,7 +529,18 @@
   `spelaion-config::atomic_file`, which keeps the mode and follows links, a content hash that
   refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
   writes them at most a second after a change) and checks them before they come back
-  (`restore_tabs`): never results, secrets or session state, and nothing is run.
+  (`restore_tabs`): never results, secrets or session state, and nothing is run. A tab belongs
+  to its connection's folder (ADR-075, SDB-501): `tab_scope` keeps a folder's connection's tab
+  under that folder and a personal connection's, or one without a connection, under the
+  window's empty key; `window_sets` splits a window's tabs that way, each with its place in the
+  window (`open_tabs.window_position`), and gives every open folder a set, so a folder whose
+  tabs were all closed keeps none while a closed folder keeps its own; `TabKeeper::update_window`
+  writes them together (`Store::save_window_tabs`, one transaction). `restore_window_tabs` puts
+  the open folders' and the window's sets back in the window's order (tabs kept before places
+  existed after the others, folder by folder), each connection looked up only in the folder it
+  was kept under. History and saved queries list every open folder's and the personal ones
+  (`history_page`, `snippet_page` and the rest take the open folders' keys; each entry has its
+  `workspace`).
   `session_setup.rs` (ADR-037) applies a connection's `[session]` table every time a session
   opens (isolation level, default schema, setup statements), from `open_connection`; on a
   read-only connection, a Production type and sessions that only read

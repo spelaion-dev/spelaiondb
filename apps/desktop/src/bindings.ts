@@ -303,15 +303,18 @@ export const commands = {
 	recentFiles: () => typedError<RecentFileItem[], string>(__TAURI_INVOKE("recent_files")),
 	forgetRecentFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("forget_recent_file", { path })),
 	/**
-	 *  The open folder's kept tabs, checked by the core: every one comes back disconnected,
-	 *  with its text and a note when its connection or file is gone. Nothing is run.
+	 *  The kept tabs of the window and of every open folder (ADR-075), checked by the core: every
+	 *  one comes back disconnected, in the window's order, with its text and a note when its
+	 *  connection or file is gone. A connection is looked up in the folder the tab was kept under
+	 *  (and personal ones among the personal connections), never in another folder. Nothing is run.
 	 */
 	restoreTabsForWorkspace: () => typedError<RestoredTabsItem_Serialize, string>(__TAURI_INVOKE("restore_tabs_for_workspace")),
 	/**
-	 *  The open tabs as they are now, for the folder `scope` (from `restore_tabs_for_workspace`).
-	 *  The core writes them within a second (ADR-036).
+	 *  The window's tabs as they are now, in the tab bar's order (ADR-075): the core keeps each
+	 *  under its connection's folder, or under the window's key, and writes them within a second
+	 *  (ADR-036). Closed folders keep the tabs they had.
 	 */
-	saveTabs: (scope: string, tabs: OpenTabItem_Deserialize[], active: number | null) => typedError<null, string>(__TAURI_INVOKE("save_tabs", { scope, tabs, active })),
+	saveTabs: (tabs: OpenTabItem_Deserialize[], active: number | null) => typedError<null, string>(__TAURI_INVOKE("save_tabs", { tabs, active })),
 	/**  Writes the tabs waiting now (before switching folders). */
 	flushTabs: () => typedError<null, string>(__TAURI_INVOKE("flush_tabs")),
 	getReconnectOnStart: () => typedError<boolean, string>(__TAURI_INVOKE("get_reconnect_on_start")),
@@ -5327,6 +5330,11 @@ export type OpenTabItem_Deserialize = {
 	connection?: string | null,
 	/**  The other database of its connection it was on (ADR-074, SDB-505); `None` for its own. */
 	database?: string | null,
+	/**
+	 *  The folder of its connection, as the page holds it (ADR-075; none for a personal
+	 *  connection or none): the core keeps the tab under it (`tab_scope`).
+	 */
+	folder?: string | null,
 	pinned: boolean,
 	onError?: OnErrorItem | null,
 	timeoutSeconds?: number | null,
@@ -5341,6 +5349,11 @@ export type OpenTabItem_Serialize = {
 	connection: string | null,
 	/**  The other database of its connection it was on (ADR-074, SDB-505); `None` for its own. */
 	database: string | null,
+	/**
+	 *  The folder of its connection, as the page holds it (ADR-075; none for a personal
+	 *  connection or none): the core keeps the tab under it (`tab_scope`).
+	 */
+	folder: string | null,
 	pinned: boolean,
 	onError: OnErrorItem | null,
 	timeoutSeconds: number | null,
@@ -6419,23 +6432,28 @@ export type RestoredTabItem_Serialize = {
 	notes: RestoreNoteItem[],
 };
 
-/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+/**
+ *  The kept tabs of the window and of every open folder (ADR-075), checked by the core and in
+ *  the window's order. They come back disconnected.
+ */
 export type RestoredTabsItem = RestoredTabsItem_Serialize | RestoredTabsItem_Deserialize;
 
-/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+/**
+ *  The kept tabs of the window and of every open folder (ADR-075), checked by the core and in
+ *  the window's order. They come back disconnected.
+ */
 export type RestoredTabsItem_Deserialize = {
-	/**  Which folder they belong to: sent back with every `save_tabs`. */
-	scope: string,
 	tabs: RestoredTabItem_Deserialize[],
 	active?: number | null,
 	/**  The personal "reconnect at startup" setting: connect only, never run. */
 	reconnect: boolean,
 };
 
-/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+/**
+ *  The kept tabs of the window and of every open folder (ADR-075), checked by the core and in
+ *  the window's order. They come back disconnected.
+ */
 export type RestoredTabsItem_Serialize = {
-	/**  Which folder they belong to: sent back with every `save_tabs`. */
-	scope: string,
 	tabs: RestoredTabItem_Serialize[],
 	active: number | null,
 	/**  The personal "reconnect at startup" setting: connect only, never run. */
