@@ -114,3 +114,19 @@
   safeguards only add up across layers, so nothing can loosen Production. Any change there
   needs tests that try to get around it (`tests/connection_types.rs`); `types_edit.rs` writes
   the user's types.
+  Several folders open (ADR-075, SDB-497): each folder is one `Config`, loaded alone with the
+  personal layer; never build a `Config` or a resolver over two repositories. A folder's
+  connection sees its own folder and the personal layer: its folder's types, its folder's
+  `known_hosts`, its folder's network profiles and then the personal ones, whatever else is
+  open. A personal connection sees every open folder, only to tighten, through
+  `Resolver::with_open_folders` (the open folders' `Config`s, in the order they were opened):
+  its type's safeguards and masked columns add up across every open, trusted folder
+  (`ConnectionTypes::load_open`; looks from the user, then the first folder that defines the
+  type, then the built-in one), any folder whose types file does not load or changed since it
+  was trusted refuses the typed personal connections it touches, every trusted folder's
+  `known_hosts` goes with its tunnel (`ResolvedTunnel::known_hosts`, all read by
+  `spelaion-ssh`), and a network profile it names is a personal one first, else the one open
+  folder's that has it (`Resolver::network_profile`), refused, naming the folders, when
+  several have it. A tunnel carries the folder whose profile it is (`ResolvedTunnel::folder`).
+  Without `with_open_folders`, or with one folder, it is today's resolver. Any change there
+  needs tests that try to get around it (`tests/several_folders.rs`).

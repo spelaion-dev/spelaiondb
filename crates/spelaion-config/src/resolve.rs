@@ -1,5 +1,13 @@
 //! From configuration to parameters ready to connect: variables substituted, paths
 //! resolved and secrets read.
+//!
+//! Each open folder is one `Config`, loaded alone with the personal layer (ADR-075): no
+//! resolver ever reads two repositories for a folder's connection, which sees its own folder
+//! and the personal layer. Only a personal connection reads every open folder
+//! ([`Resolver::with_open_folders`]), and only to tighten: their types' safeguards add up,
+//! every folder's `known_hosts` is checked, and a network profile it names is a personal one,
+//! else the one open folder's that has it (two folders that have it refuse it). With one
+//! folder open, this is the resolver of that folder, as before several could be open.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -152,9 +160,14 @@ impl ResolvedConnection {
 pub struct ResolvedTunnel {
     pub name: String,
     pub hops: Vec<ResolvedHop>,
-    /// The team's `.spelaion/known_hosts` (ADR-022), checked before the user's own files:
-    /// only from a trusted repository and only as the user trusted it.
-    pub known_hosts: Option<PathBuf>,
+    /// The teams' `.spelaion/known_hosts` (ADR-022), checked before the user's own files:
+    /// only from a trusted repository and only as the user trusted it. A folder's connection
+    /// gets its own folder's; a personal one every open, trusted folder's (ADR-075), and a
+    /// key any of them pins differently blocks.
+    pub known_hosts: Vec<PathBuf>,
+    /// The folder whose network profile it is (its root, as loaded); `None` for a personal
+    /// one. Two folders' profiles of the same name and settings are two tunnels.
+    pub folder: Option<PathBuf>,
     pub options: TunnelSettings,
     /// The first hop is reached through it; with no hops, it reaches the database (ADR-027).
     pub proxy: Option<ResolvedProxy>,
@@ -248,6 +261,9 @@ pub struct Resolver<'a> {
     config: &'a Config,
     trust: &'a TrustStore,
     backend: &'a dyn SecretBackend,
+    /// Every folder the window holds open, in the order they were opened (ADR-075); empty:
+    /// `config`'s alone.
+    open: Vec<&'a Config>,
 }
 
 impl<'a> Resolver<'a> {
@@ -256,6 +272,100 @@ impl<'a> Resolver<'a> {
             config,
             trust,
             backend,
+            open: Vec::new(),
+        }
+    }
+
+    /// The folders the window holds open, in the order they were opened, each loaded alone
+    /// with the personal layer (ADR-075): what a personal connection reads, only to tighten.
+    /// A folder's connection still reads only `config`, its own. Without this (or with one
+    /// folder) a personal connection reads `config`'s folder, as with one folder open.
+    pub fn with_open_folders(mut self, open: &[&'a Config]) -> Self {
+        self.open = open.to_vec();
+        self
+    }
+
+    /// The folders a connection from `source` reads beyond its own file, each once: its own
+    /// folder for a folder's connection, every open one for a personal connection.
+    fn folders_for(&self, source: Source) -> Vec<&'a Config> {
+        let all = match source {
+            Source::Workspace => vec![self.config],
+            Source::User if self.open.is_empty() => vec![self.config],
+            Source::User => self.open.clone(),
+        };
+        let mut folders: Vec<&'a Config> = Vec::new();
+        for config in all {
+            if !folders
+                .iter()
+                .any(|other| other.workspace_root == config.workspace_root)
+            {
+                folders.push(config);
+            }
+        }
+        folders
+    }
+
+    /// The network profile `name` that `entry` uses, and the folder's configuration it comes
+    /// from (whose root its paths, its trust and its keychain names belong to). A folder's
+    /// connection: its own folder's, then a personal one (`Config::tunnel_for`). A personal
+    /// connection: a personal one, else the one open folder's that has it; two folders that
+    /// have it refuse it, naming them, rather than pick one (ADR-075).
+    fn network_profile(
+        &self,
+        entry: &ConnectionEntry,
+        name: &str,
+    ) -> Result<(&'a Config, &'a TunnelEntry), ResolveError> {
+        let missing = || -> ResolveError {
+            ConfigError::new(
+                &entry.file_path,
+                format!("tunnel {name:?} does not exist in .spelaion/tunnels/"),
+            )
+            .into()
+        };
+        if entry.id.source == Source::Workspace {
+            let tunnel = self
+                .config
+                .tunnel_for(Source::Workspace, name)
+                .ok_or_else(missing)?;
+            return Ok((self.config, tunnel));
+        }
+        if let Some(tunnel) = self
+            .config
+            .tunnels
+            .iter()
+            .find(|t| t.source == Source::User && t.name == name)
+        {
+            return Ok((self.config, tunnel));
+        }
+        let found: Vec<(&'a Config, &'a TunnelEntry)> = self
+            .folders_for(Source::User)
+            .into_iter()
+            .filter_map(|config| {
+                config
+                    .tunnels
+                    .iter()
+                    .find(|t| t.source == Source::Workspace && t.name == name)
+                    .map(|tunnel| (config, tunnel))
+            })
+            .collect();
+        match found.as_slice() {
+            [] => Err(missing()),
+            [one] => Ok(*one),
+            several => {
+                let folders = several
+                    .iter()
+                    .filter_map(|(config, _)| config.workspace_root.as_deref())
+                    .map(|root| root.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(ConfigError::new(
+                    &entry.file_path,
+                    format!(
+                        "the network profile {name:?} is in several open folders ({folders}): a personal connection uses a folder's only when one folder has it; give it a personal one, or close the others"
+                    ),
+                )
+                .into())
+            }
         }
     }
 
@@ -368,7 +478,7 @@ impl<'a> Resolver<'a> {
             kubectl: typed(&form.kubectl),
         };
         // An editor lists before a resource is chosen: an empty one is not an error here.
-        self.kubernetes_fields(profile, settings, own, &profile.file_path)
+        self.kubernetes_fields(self.config, profile, settings, own, &profile.file_path)
     }
 
     /// Resolves a connection that has not been saved yet (to test it from the UI). The same
@@ -400,7 +510,10 @@ impl<'a> Resolver<'a> {
         let file = &entry.file;
         // Before any secret is read: a type the team changed waits for the user's review, and
         // a file that does not load stops every typed connection (ADR-029).
-        let kind = ConnectionTypes::load(self.config, self.trust).resolve(file.env.as_deref())?;
+        // A personal connection's type tightens with every open folder's (ADR-075).
+        let kind =
+            ConnectionTypes::load_open(&self.folders_for(entry.id.source), self.config, self.trust)
+                .resolve(file.env.as_deref())?;
         let text = |value: &Option<String>| -> Result<Option<String>, ResolveError> {
             value
                 .as_deref()
@@ -414,26 +527,22 @@ impl<'a> Resolver<'a> {
         let profile = match &file.tunnel {
             None => None,
             Some(name) => {
-                let tunnel = self
-                    .config
-                    .tunnel_for(entry.id.source, name)
-                    .ok_or_else(|| {
-                        ConfigError::new(
-                            &entry.file_path,
-                            format!("tunnel {name:?} does not exist in .spelaion/tunnels/"),
-                        )
-                    })?;
+                let (owner, tunnel) = self.network_profile(entry, name)?;
                 if tunnel.source == Source::Workspace {
-                    let root = self.base_dir(Source::Workspace)?;
+                    let root = self.base_dir_in(owner, Source::Workspace)?;
                     self.trust
                         .check_tunnel(&root, tunnel)
                         .map_err(|change| ResolveError::Changed { root, change })?;
                 }
-                Some(tunnel)
+                Some((owner, tunnel))
             }
         };
-        let kube_profile =
-            profile.and_then(|t| t.file.kubernetes.as_ref().map(|settings| (t, settings)));
+        let kube_profile = profile.and_then(|(owner, t)| {
+            t.file
+                .kubernetes
+                .as_ref()
+                .map(|settings| (owner, t, settings))
+        });
         let field = |v: &Option<String>| text(v).map(|v| v.filter(|v| !v.trim().is_empty()));
         let kubernetes = match (kube_profile, &file.kubernetes) {
             (None, None) => None,
@@ -455,7 +564,7 @@ impl<'a> Resolver<'a> {
                     kubectl: field(&k.kubectl)?.unwrap_or_else(|| "kubectl".into()),
                 })
             }
-            (Some((profile, settings)), own) => {
+            (Some((owner, profile, settings)), own) => {
                 if file.engine.is_file() {
                     return Err(ConfigError::new(
                         &entry.file_path,
@@ -480,7 +589,13 @@ impl<'a> Resolver<'a> {
                     },
                     None => KubeFields::default(),
                 };
-                Some(self.kubernetes_with_profile(profile, settings, own, &entry.file_path)?)
+                Some(self.kubernetes_with_profile(
+                    owner,
+                    profile,
+                    settings,
+                    own,
+                    &entry.file_path,
+                )?)
             }
         };
         let host = match text(&file.host)? {
@@ -551,14 +666,15 @@ impl<'a> Resolver<'a> {
         )?;
 
         // A Kubernetes profile is not an SSH tunnel: it became `kubernetes` above.
-        let tunnel = match profile.filter(|t| t.file.kubernetes.is_none()) {
+        let tunnel = match profile.filter(|(_, t)| t.file.kubernetes.is_none()) {
             None => None,
-            Some(tunnel) => {
+            Some((owner, tunnel)) => {
                 // The tunnel's relative paths belong to its own layer: a personal connection
-                // may use a repository tunnel and the reverse (`Config::tunnel_for`). Its trust
+                // may use a repository tunnel and the reverse (`network_profile`). Its trust
                 // was checked above, before anything of it was used.
-                let tunnel_base = self.base_dir(tunnel.source)?;
+                let tunnel_base = self.base_dir_in(owner, tunnel.source)?;
                 let mut resolved = self.resolve_tunnel(
+                    owner,
                     &tunnel.name,
                     tunnel.source,
                     &tunnel.file,
@@ -566,7 +682,7 @@ impl<'a> Resolver<'a> {
                     &tunnel.file_path,
                 )?;
                 // A changed shared file stops the connection until it is reviewed.
-                resolved.known_hosts = self.team_known_hosts(true)?;
+                resolved.known_hosts = self.team_known_hosts(entry.id.source, true)?;
                 Some(resolved)
             }
         };
@@ -623,12 +739,13 @@ impl<'a> Resolver<'a> {
     /// comes from one of them, never both, and the resource from one of them.
     fn kubernetes_with_profile(
         &self,
+        owner: &Config,
         profile: &TunnelEntry,
         settings: &KubernetesProfileConfig,
         own: KubeFields,
         connection_path: &Path,
     ) -> Result<ResolvedKubernetes, ResolveError> {
-        let resolved = self.kubernetes_fields(profile, settings, own, connection_path)?;
+        let resolved = self.kubernetes_fields(owner, profile, settings, own, connection_path)?;
         if resolved.resource.is_empty() {
             return Err(ConfigError::new(
                 connection_path,
@@ -645,15 +762,17 @@ impl<'a> Resolver<'a> {
     }
 
     /// The profile's values are expanded where the profile lives, and its kubeconfig resolved
-    /// against the profile's layer; a field both set is refused.
+    /// against the profile's layer (in `owner`, the folder it comes from); a field both set is
+    /// refused.
     fn kubernetes_fields(
         &self,
+        owner: &Config,
         profile: &TunnelEntry,
         settings: &KubernetesProfileConfig,
         own: KubeFields,
         connection_path: &Path,
     ) -> Result<ResolvedKubernetes, ResolveError> {
-        let base = self.base_dir(profile.source)?;
+        let base = self.base_dir_in(owner, profile.source)?;
         let shared = |v: &Option<String>| -> Result<Option<String>, ResolveError> {
             v.as_deref()
                 .filter(|v| !v.trim().is_empty())
@@ -713,8 +832,9 @@ impl<'a> Resolver<'a> {
         let mut file = entry.file.clone();
         file.session.setup = None;
         let mut texts = crate::vars::text_values(&file);
+        // A profile that cannot be chosen is reported when it is looked up, after this.
         if let Some(name) = &entry.file.tunnel
-            && let Some(tunnel) = self.config.tunnel_for(entry.id.source, name)
+            && let Ok((_, tunnel)) = self.network_profile(entry, name)
         {
             texts.extend(crate::vars::text_values(&tunnel.file));
         }
@@ -766,11 +886,15 @@ impl<'a> Resolver<'a> {
 
     /// Directory relative paths are resolved against; checks trust.
     fn base_dir(&self, source: Source) -> Result<PathBuf, ResolveError> {
+        self.base_dir_in(self.config, source)
+    }
+
+    /// The same, in the folder `config` was loaded for.
+    fn base_dir_in(&self, config: &Config, source: Source) -> Result<PathBuf, ResolveError> {
         match source {
-            Source::User => Ok(self.config.user_dir.clone()),
+            Source::User => Ok(config.user_dir.clone()),
             Source::Workspace => {
-                let root = self
-                    .config
+                let root = config
                     .workspace_root
                     .clone()
                     .expect("repository connection without a root");
@@ -791,39 +915,53 @@ impl<'a> Resolver<'a> {
         let base = self.base_dir(draft.source)?;
         let path = draft.path(self.config)?;
         let file = draft.to_file(self.config)?;
-        let mut resolved =
-            self.resolve_tunnel(&draft.file_name()?, draft.source, &file, &base, &path)?;
+        let mut resolved = self.resolve_tunnel(
+            self.config,
+            &draft.file_name()?,
+            draft.source,
+            &file,
+            &base,
+            &path,
+        )?;
         // Testing a tunnel from its editor: an unreviewed shared file is left out (the hosts
         // are then asked about, as without one), not an error.
-        resolved.known_hosts = self.team_known_hosts(false)?;
+        resolved.known_hosts = self.team_known_hosts(draft.source, false)?;
         Ok(resolved)
     }
 
-    /// The team's `.spelaion/known_hosts`, if the open repository has one, is trusted and the
-    /// file is as the user trusted it. `strict`: a changed file is an error to review;
-    /// otherwise it is just not used.
-    fn team_known_hosts(&self, strict: bool) -> Result<Option<PathBuf>, ResolveError> {
-        let Some(root) = self.config.workspace_root.as_deref() else {
-            return Ok(None);
-        };
-        let path = crate::trust::team_known_hosts(root);
-        if !path.is_file() || !self.trust.is_trusted(root) {
-            return Ok(None);
+    /// The teams' `.spelaion/known_hosts` a tunnel of a connection from `source` is checked
+    /// against: each folder it reads (`folders_for`) that has one, is trusted and has it as
+    /// the user trusted it. `strict`: a changed file is an error to review; otherwise it is
+    /// just not used.
+    fn team_known_hosts(&self, source: Source, strict: bool) -> Result<Vec<PathBuf>, ResolveError> {
+        let mut files = Vec::new();
+        for config in self.folders_for(source) {
+            let Some(root) = config.workspace_root.as_deref() else {
+                continue;
+            };
+            let path = crate::trust::team_known_hosts(root);
+            if !path.is_file() || !self.trust.is_trusted(root) {
+                continue;
+            }
+            match self.trust.check_known_hosts(root) {
+                Ok(()) => files.push(path),
+                Err(change) if strict => {
+                    return Err(ResolveError::Changed {
+                        root: root.to_path_buf(),
+                        change,
+                    });
+                }
+                Err(_) => {}
+            }
         }
-        match self.trust.check_known_hosts(root) {
-            Ok(()) => Ok(Some(path)),
-            Err(change) if strict => Err(ResolveError::Changed {
-                root: root.to_path_buf(),
-                change,
-            }),
-            Err(_) => Ok(None),
-        }
+        Ok(files)
     }
 
     /// Hops ready to open: variables substituted, key paths resolved against `base` and
     /// passwords read (keychain entries named by [`tunnel_account`]).
     fn resolve_tunnel(
         &self,
+        owner: &Config,
         name: &str,
         source: Source,
         file: &TunnelFile,
@@ -845,7 +983,7 @@ impl<'a> Resolver<'a> {
                 password: self.password(
                     errors_at,
                     hop.password.as_ref(),
-                    &tunnel_account(self.config, source, name, i),
+                    &tunnel_account(owner, source, name, i),
                 )?,
                 command: hop.command.clone(),
             });
@@ -864,7 +1002,7 @@ impl<'a> Resolver<'a> {
                 password: self.password(
                     errors_at,
                     proxy.password.as_ref(),
-                    &proxy_account(self.config, source, name),
+                    &proxy_account(owner, source, name),
                 )?,
             }),
         };
@@ -888,7 +1026,11 @@ impl<'a> Resolver<'a> {
         Ok(ResolvedTunnel {
             name: name.to_string(),
             hops,
-            known_hosts: None,
+            known_hosts: Vec::new(),
+            folder: match source {
+                Source::Workspace => owner.workspace_root.clone(),
+                Source::User => None,
+            },
             options: TunnelSettings::of(file),
             proxy,
             ssm,

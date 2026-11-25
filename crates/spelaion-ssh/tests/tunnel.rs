@@ -49,7 +49,7 @@ impl TempKnownHosts {
 
     fn known(&self) -> KnownHosts {
         KnownHosts {
-            team_file: None,
+            team_files: Vec::new(),
             user_file: None,
             app_file: self.0.join("known_hosts"),
         }
@@ -60,7 +60,7 @@ impl TempKnownHosts {
         let team = self.0.join("team_known_hosts");
         std::fs::write(&team, content).unwrap();
         KnownHosts {
-            team_file: Some(team),
+            team_files: vec![team],
             ..self.known()
         }
     }

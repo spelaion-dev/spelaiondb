@@ -3581,11 +3581,11 @@ fn the_teams_known_hosts_is_used_only_as_trusted() {
             .resolve(&ws("orders"))
             .map(|r| r.tunnel.unwrap().known_hosts)
     };
-    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+    assert_eq!(known(&trust).unwrap(), vec![hosts.clone()]);
 
     // Comments and blank lines are not changes.
     std::fs::write(&hosts, format!("{TEAM_HOSTS}\n# another comment\n")).unwrap();
-    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+    assert_eq!(known(&trust).unwrap(), vec![hosts.clone()]);
 
     // Another key for the bastion: the connection waits for a review, and says what changed.
     std::fs::write(&hosts, TEAM_HOSTS.replace("Qdp2", "XXXX")).unwrap();
@@ -3608,14 +3608,14 @@ fn the_teams_known_hosts_is_used_only_as_trusted() {
     let tested = Resolver::new(&config, &trust, &backend)
         .resolve_tunnel_draft(&draft)
         .unwrap();
-    assert_eq!(tested.known_hosts, None);
+    assert!(tested.known_hosts.is_empty());
 
     // Accepting it records it; then it is used again.
     let mut trust = trust;
     trust
         .accept(&config, spelaion_config::KNOWN_HOSTS_ITEM)
         .unwrap();
-    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+    assert_eq!(known(&trust).unwrap(), vec![hosts.clone()]);
 
     // Added after trusting: new, so reviewed before it is used.
     std::fs::remove_file(&hosts).unwrap();
@@ -3623,7 +3623,7 @@ fn the_teams_known_hosts_is_used_only_as_trusted() {
     trust
         .accept(&config, spelaion_config::KNOWN_HOSTS_ITEM)
         .unwrap();
-    assert_eq!(known(&trust).unwrap(), None);
+    assert!(known(&trust).unwrap().is_empty());
     std::fs::write(&hosts, TEAM_HOSTS).unwrap();
     assert!(changed(known(&trust).map(|_| ())).new);
 }

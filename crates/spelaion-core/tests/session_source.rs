@@ -94,7 +94,7 @@ async fn after_a_saved_edit_a_session_made_from_an_open_one_uses_the_saved_file(
         OpenOptions {
             tunnels: Arc::new(TunnelPool::new()),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: folder.user().join("known_hosts"),
             },

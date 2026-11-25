@@ -129,7 +129,7 @@ fn round_trip(addr: SocketAddr, text: &str) -> String {
 
 fn known() -> KnownHosts {
     KnownHosts {
-        team_file: None,
+        team_files: Vec::new(),
         user_file: None,
         app_file: std::env::temp_dir().join(format!("spelaion-ssm-kh-{}", std::process::id())),
     }
@@ -457,7 +457,7 @@ async fn hops_go_on_from_an_ssm_session() {
     let tunnel = Tunnel::connect(
         &spec,
         &KnownHosts {
-            team_file: None,
+            team_files: Vec::new(),
             user_file: None,
             app_file: dir.join("known_hosts"),
         },

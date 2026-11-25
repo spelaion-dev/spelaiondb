@@ -37,6 +37,7 @@ mod reader_properties;
 mod redis;
 mod search;
 mod session_setup;
+mod several_folders;
 mod tableplus;
 mod tdengine;
 mod trust_updates;

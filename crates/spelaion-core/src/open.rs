@@ -759,17 +759,7 @@ async fn start_tunnel(
         }
         (Some(resolved_tunnel), None) => {
             let spec = tunnel_spec(resolved_tunnel);
-            // Same layer, name, settings, proxy, SSM and hops = same tunnel. Secrets are not
-            // part of the key (their Debug is `***`).
-            let key = format!(
-                "{:?}|{}|{:?}|{:?}|{:?}|{:?}",
-                resolved.id.source,
-                resolved_tunnel.name,
-                resolved_tunnel.options,
-                resolved_tunnel.proxy,
-                resolved_tunnel.ssm,
-                resolved_tunnel.hops
-            );
+            let key = tunnel_pool_key(resolved.id.source, resolved_tunnel);
             let known_hosts = team_known_hosts(resolved_tunnel, known_hosts);
             let tunnel = tunnels
                 .get_or_connect(key, &spec, &known_hosts, interaction)
@@ -926,12 +916,32 @@ pub(crate) fn tunnel_spec(tunnel: &ResolvedTunnel) -> TunnelSpec {
     }
 }
 
-/// The team's reviewed server keys come first (ADR-022).
+/// The teams' reviewed server keys come first (ADR-022): every folder's the resolver gave the
+/// tunnel (ADR-075).
 pub(crate) fn team_known_hosts(tunnel: &ResolvedTunnel, base: &KnownHosts) -> KnownHosts {
     KnownHosts {
-        team_file: tunnel.known_hosts.clone(),
+        team_files: tunnel.known_hosts.clone(),
         ..base.clone()
     }
+}
+
+/// What tells one pooled SSH tunnel from another: the connection's layer, the folder whose
+/// profile it is, the teams' `known_hosts` it is verified against (ADR-075), and its name,
+/// settings, proxy, SSM and hops. Two folders' profiles of the same name and settings, or one
+/// profile checked against different folders' host keys, are never one chain. Secrets are not
+/// part of the key (their Debug is `***`).
+fn tunnel_pool_key(source: spelaion_config::Source, tunnel: &ResolvedTunnel) -> String {
+    format!(
+        "{:?}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}",
+        source,
+        tunnel.folder,
+        tunnel.known_hosts,
+        tunnel.name,
+        tunnel.options,
+        tunnel.proxy,
+        tunnel.ssm,
+        tunnel.hops
+    )
 }
 
 /// The database's address, as the tunnel's last hop must reach it.
@@ -1052,5 +1062,80 @@ fn hop_spec(hop: &ResolvedHop) -> HopSpec {
             Password::Prompt { .. } | Password::None => None,
         },
         command: hop.command.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use spelaion_config::{Password, ResolvedHop, ResolvedTunnel, Source, SshAuth, TunnelSettings};
+
+    use super::tunnel_pool_key;
+
+    /// The same profile, `bastion` to `bastion.internal`, from `folder` (none: personal),
+    /// checked against these teams' `known_hosts`.
+    fn bastion(folder: Option<&str>, known_hosts: &[&str]) -> ResolvedTunnel {
+        ResolvedTunnel {
+            name: "bastion".into(),
+            hops: vec![ResolvedHop {
+                host: "bastion.internal".into(),
+                port: 22,
+                user: "ops".into(),
+                auth: vec![SshAuth::Agent],
+                identity_file: None,
+                password: Password::None,
+                command: None,
+            }],
+            known_hosts: known_hosts.iter().map(PathBuf::from).collect(),
+            folder: folder.map(PathBuf::from),
+            options: TunnelSettings {
+                keepalive_interval: Some(Duration::from_secs(30)),
+                keepalive_count: 3,
+                connect_timeout: Duration::from_secs(10),
+            },
+            proxy: None,
+            ssm: None,
+        }
+    }
+
+    /// Several folders open (ADR-075): two folders' tunnels of the same name and settings are
+    /// two pool entries, and so is one tunnel checked against different folders' host keys,
+    /// so no chain is ever verified against another folder's `known_hosts`. One folder: the
+    /// same profile is one entry, as before.
+    #[test]
+    fn two_folders_identical_tunnels_are_two_pool_entries() {
+        let key = |source, tunnel: &ResolvedTunnel| tunnel_pool_key(source, tunnel);
+        let a = bastion(Some("/work/a"), &["/work/a/.spelaion/known_hosts"]);
+        let b = bastion(Some("/work/b"), &["/work/b/.spelaion/known_hosts"]);
+        assert_eq!(
+            key(Source::Workspace, &a),
+            key(Source::Workspace, &a.clone())
+        );
+        assert_ne!(key(Source::Workspace, &a), key(Source::Workspace, &b));
+        // The same files, another folder's profile: still two.
+        let b_with_a_hosts = bastion(Some("/work/b"), &["/work/a/.spelaion/known_hosts"]);
+        assert_ne!(
+            key(Source::Workspace, &a),
+            key(Source::Workspace, &b_with_a_hosts)
+        );
+        // A personal profile checked against A's host keys (A's connection) and against A's
+        // and B's (a personal connection): two chains.
+        let for_a = bastion(None, &["/work/a/.spelaion/known_hosts"]);
+        let for_personal = bastion(
+            None,
+            &[
+                "/work/a/.spelaion/known_hosts",
+                "/work/b/.spelaion/known_hosts",
+            ],
+        );
+        assert_ne!(
+            key(Source::Workspace, &for_a),
+            key(Source::User, &for_personal)
+        );
+        assert_ne!(key(Source::User, &for_a), key(Source::User, &for_personal));
+        // The connection's layer still tells them apart, as before.
+        assert_ne!(key(Source::Workspace, &for_a), key(Source::User, &for_a));
     }
 }

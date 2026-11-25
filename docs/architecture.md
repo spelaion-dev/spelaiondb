@@ -34,6 +34,16 @@ and every new audit entry records the folder beside the id. A PostgreSQL connect
 sits beside this identity, never inside it (ADR-074). Still one folder open: the desktop's
 commands and the page take the type in the next steps of SDB-495.
 
+**What a connection sees with several folders open (ADR-075)**
+Each folder is one `Config`, loaded alone with the personal layer: no configuration or resolver
+ever holds two repositories. A folder's connection sees its own folder and the personal layer.
+A personal connection sees every open folder, and only to tighten (`Resolver::with_open_folders`):
+its type's safeguards add up across every trusted folder, every folder's `known_hosts` checks
+its tunnel (a key any of them pins differently blocks), and a network profile it names is a
+personal one, else the one folder's that has it (two refuse it). The tunnel pool never shares a
+chain between two folders' profiles, nor between different folders' host keys. With one folder
+open this is what it always was; the desktop opens several in a later step.
+
 **Opening a connection**
 1. `spelaion-config` loads `.spelaion/` and the personal directory, and resolves the
    connection (variables, paths, secrets). Repository connections require trusting it.

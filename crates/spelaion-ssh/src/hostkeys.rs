@@ -12,10 +12,12 @@ use crate::{HostInfo, Interaction, SshError};
 /// Where fingerprints are looked up and stored.
 #[derive(Debug, Clone)]
 pub struct KnownHosts {
-    /// The team's `.spelaion/known_hosts`, reviewed in git (ADR-022): looked up first, so a
+    /// The teams' `.spelaion/known_hosts`, reviewed in git (ADR-022): looked up first, so a
     /// newcomer's first connection is already verified. Read, never written. The caller
-    /// passes it only from a trusted repository and only as the user trusted it.
-    pub team_file: Option<PathBuf>,
+    /// passes each only from a trusted repository and only as the user trusted it: a folder's
+    /// connection its own folder's, a personal one every open folder's (ADR-075). Every one is
+    /// read, and a key any of them pins differently blocks.
+    pub team_files: Vec<PathBuf>,
     /// The user's `~/.ssh/known_hosts`: read, never written.
     pub user_file: Option<PathBuf>,
     /// SpelaionDB's own file, where accepted fingerprints are stored.
@@ -29,19 +31,20 @@ impl KnownHosts {
         let user_file =
             std::env::var_os(var).map(|home| PathBuf::from(home).join(".ssh").join("known_hosts"));
         Self {
-            team_file: None,
+            team_files: Vec::new(),
             user_file,
             app_file: app_dir.join("known_hosts"),
         }
     }
 
-    /// In order: the team's, the user's, SpelaionDB's. The first file that names the host
-    /// decides: a matching key is accepted, a different one is a blocking error.
+    /// In order: the teams', the user's, SpelaionDB's (what `verify` reads).
     fn files(&self) -> impl Iterator<Item = &PathBuf> {
-        self.team_file
-            .iter()
-            .chain(self.user_file.iter())
-            .chain(std::iter::once(&self.app_file))
+        self.team_files.iter().chain(self.own_files())
+    }
+
+    /// The user's and SpelaionDB's: after the teams', the first that names the host decides.
+    fn own_files(&self) -> impl Iterator<Item = &PathBuf> {
+        self.user_file.iter().chain(std::iter::once(&self.app_file))
     }
 }
 
@@ -250,6 +253,67 @@ fn check_contents(content: &str, host: &str, port: u16, presented: &PublicKey) -
     }
 }
 
+/// What one file says about a hop's key.
+enum Decision {
+    /// It pins the key presented, and no other for the host.
+    Trusted,
+    /// It does not name the host (or does not exist).
+    Unknown,
+    /// It pins another key, refuses the key, or cannot be read: the reason is in `outcome`.
+    Stopped,
+}
+
+/// Reads one file and checks the presented key against it.
+fn decide(
+    file: &PathBuf,
+    hop: usize,
+    host: &str,
+    port: u16,
+    key: &PublicKey,
+    outcome: &Mutex<Option<SshError>>,
+) -> Decision {
+    let stop = |error: SshError| {
+        *outcome.lock().expect("lock poisoned") = Some(error);
+        Decision::Stopped
+    };
+    let bytes = match std::fs::read(file) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Decision::Unknown,
+        Err(e) => {
+            return stop(SshError::Hop {
+                hop,
+                host: host.to_string(),
+                message: format!("could not read {}: {e}", file.display()),
+            });
+        }
+    };
+    let content = match host_fields(&bytes) {
+        Ok(content) => content,
+        Err(line) => {
+            return stop(SshError::Hop {
+                hop,
+                host: host.to_string(),
+                message: format!("{}:{line}: invalid host key entry", file.display()),
+            });
+        }
+    };
+    match check_contents(&content, host, port, key) {
+        HostFile::Trusted => Decision::Trusted,
+        HostFile::Unknown => Decision::Unknown,
+        HostFile::Changed(line) => stop(SshError::HostKeyChanged {
+            hop,
+            host: host.to_string(),
+            file: file.clone(),
+            line,
+        }),
+        HostFile::Refused(line, message) => stop(SshError::Hop {
+            hop,
+            host: host.to_string(),
+            message: format!("{}:{line}: {message}", file.display()),
+        }),
+    }
+}
+
 /// Checks a hop's key. Returns `true` if it is accepted; otherwise leaves the reason in
 /// `outcome` (russh only accepts a boolean).
 pub(crate) async fn verify(
@@ -267,50 +331,27 @@ pub(crate) async fn verify(
         PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
         PublicKeyOrCertificate::Certificate(cert) => PublicKey::new(cert.public_key().clone(), ""),
     };
-    for file in known.files() {
-        let bytes = match std::fs::read(file) {
-            Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                *outcome.lock().expect("lock poisoned") = Some(SshError::Hop {
-                    hop,
-                    host: host.to_string(),
-                    message: format!("could not read {}: {e}", file.display()),
-                });
-                return false;
-            }
-        };
-        let content = match host_fields(&bytes) {
-            Ok(content) => content,
-            Err(line) => {
-                *outcome.lock().expect("lock poisoned") = Some(SshError::Hop {
-                    hop,
-                    host: host.to_string(),
-                    message: format!("{}:{line}: invalid host key entry", file.display()),
-                });
-                return false;
-            }
-        };
-        match check_contents(&content, host, port, &key) {
-            HostFile::Trusted => return true,
-            HostFile::Unknown => {}
-            HostFile::Changed(line) => {
-                *outcome.lock().expect("lock poisoned") = Some(SshError::HostKeyChanged {
-                    hop,
-                    host: host.to_string(),
-                    file: file.clone(),
-                    line,
-                });
-                return false;
-            }
-            HostFile::Refused(line, message) => {
-                *outcome.lock().expect("lock poisoned") = Some(SshError::Hop {
-                    hop,
-                    host: host.to_string(),
-                    message: format!("{}:{line}: {message}", file.display()),
-                });
-                return false;
-            }
+    let decide = |file: &PathBuf| decide(file, hop, host, port, &key, outcome);
+    // Every team's file first, all of them (ADR-075): a key one pins differently blocks even
+    // when another pins the one presented, so no open folder's pins can be outvoted. With one
+    // folder open this is the first file, as before.
+    let mut pinned_by_a_team = false;
+    for file in &known.team_files {
+        match decide(file) {
+            Decision::Trusted => pinned_by_a_team = true,
+            Decision::Unknown => {}
+            Decision::Stopped => return false,
+        }
+    }
+    if pinned_by_a_team {
+        return true;
+    }
+    // Then the user's and SpelaionDB's: the first that names the host decides.
+    for file in known.own_files() {
+        match decide(file) {
+            Decision::Trusted => return true,
+            Decision::Unknown => {}
+            Decision::Stopped => return false,
         }
     }
 
@@ -520,13 +561,81 @@ mod tests {
         )
         .unwrap();
         let known = KnownHosts {
-            team_file: Some(team),
+            team_files: vec![team],
             user_file: Some(user),
             app_file: dir.join("missing"),
         };
         assert_eq!(pinned_algorithms(&known, "server", 22), [P256]);
         assert_eq!(pinned_algorithms(&known, "elsewhere", 22), [RSA]);
         assert!(pinned_algorithms(&known, "unknown", 22).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What `verify` says of the key `ED` for `server`, with these teams' files (in order) and
+    /// a user's file that pins `ED`; an unknown host is refused (no dialog).
+    async fn verdict(
+        team_files: Vec<std::path::PathBuf>,
+        dir: &std::path::Path,
+    ) -> Result<(), crate::SshError> {
+        let user = dir.join("user");
+        std::fs::write(&user, format!("server ssh-ed25519 {ED}\n")).unwrap();
+        let known = KnownHosts {
+            team_files,
+            user_file: Some(user),
+            app_file: dir.join("missing"),
+        };
+        let ui: std::sync::Arc<dyn crate::Interaction> = std::sync::Arc::new(crate::NonInteractive);
+        let key = russh::keys::PublicKeyOrCertificate::PublicKey {
+            key: russh::keys::parse_public_key_base64(ED).unwrap(),
+            hash_alg: None,
+        };
+        let outcome = std::sync::Mutex::new(None);
+        if super::verify(&known, &ui, 0, "server", 22, &key, &outcome).await {
+            Ok(())
+        } else {
+            Err(outcome.into_inner().unwrap().expect("a refusal says why"))
+        }
+    }
+
+    /// With several folders open (ADR-075), every folder's file is read: a key any of them
+    /// pins differently blocks, whichever comes first and whatever the others or the user's
+    /// own file say. One folder's file decides as before.
+    #[tokio::test]
+    async fn a_key_any_open_folder_pins_differently_blocks() {
+        let dir =
+            std::env::temp_dir().join(format!("spelaion-folders-hosts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, content: String| {
+            let path = dir.join(name);
+            std::fs::write(&path, content).unwrap();
+            path
+        };
+        let a = write("a", format!("server ssh-ed25519 {ED}\n"));
+        let b = write("b", format!("server ssh-ed25519 {OTHER}\n"));
+        let silent = write("silent", format!("elsewhere ssh-ed25519 {OTHER}\n"));
+        let blocked_by = |result: Result<(), crate::SshError>, file: &std::path::Path| match result
+        {
+            Err(crate::SshError::HostKeyChanged { file: named, .. }) => assert_eq!(named, file),
+            other => panic!(
+                "expected a changed key in {}, got {other:?}",
+                file.display()
+            ),
+        };
+
+        // One folder: its pin decides, as before several could be open.
+        verdict(vec![a.clone()], &dir).await.unwrap();
+        blocked_by(verdict(vec![b.clone()], &dir).await, &b);
+        // Two: the folder that pins another key blocks, in either order, even though the
+        // other folder and the user's file pin the key presented.
+        blocked_by(verdict(vec![a.clone(), b.clone()], &dir).await, &b);
+        blocked_by(verdict(vec![b.clone(), a.clone()], &dir).await, &b);
+        // A folder that does not name the host leaves it to the others.
+        verdict(vec![silent.clone(), a.clone()], &dir)
+            .await
+            .unwrap();
+        // No folder names it: the user's file decides, as before.
+        verdict(vec![silent.clone()], &dir).await.unwrap();
+        verdict(Vec::new(), &dir).await.unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

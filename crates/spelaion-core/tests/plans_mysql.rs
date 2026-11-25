@@ -65,7 +65,7 @@ async fn open(variable: &str, engine: Engine, read_only: bool) -> Option<OpenCon
             OpenOptions {
                 tunnels: Arc::new(TunnelPool::new()),
                 known_hosts: KnownHosts {
-                    team_file: None,
+                    team_files: Vec::new(),
                     user_file: None,
                     app_file: std::env::temp_dir().join("unused-plan-known-hosts"),
                 },

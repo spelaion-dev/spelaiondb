@@ -1,8 +1,12 @@
 # Ssh
 
 - `crates/spelaion-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
-  it receives a `TunnelSpec`. `KnownHosts` checks the team's `.spelaion/known_hosts` first
-  (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Each hop
+  it receives a `TunnelSpec`. `KnownHosts` checks the teams' `.spelaion/known_hosts` first
+  (ADR-022; the resolver passes each only when trusted and unchanged: a folder's connection its
+  folder's, a personal one every open folder's, ADR-075), all of them: a key any of them pins
+  differently blocks, and one pinning the presented key is enough only when none differs
+  (`hostkeys::verify`, `a_key_any_open_folder_pins_differently_blocks`). Then the user's and
+  SpelaionDB's, where the first that names the host decides. Each hop
   asks its server for the key types pinned for it first (`hostkeys::pinned_algorithms`, as
   OpenSSH does), so a file that pins only an ECDSA or RSA key still verifies the server; the
   check never changes. A tunnel's `TunnelState` is opening, up, down (with its reason) or
