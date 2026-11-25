@@ -1449,6 +1449,30 @@ pub struct WorkspaceInfo {
     pub problems: Vec<String>,
 }
 
+/// The folders the window holds open (ADR-075, SDB-500), in the order they were opened. The
+/// page shows the last one (`WorkspaceInfo`) until it shows several.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFoldersItem {
+    pub folders: Vec<OpenFolderItem>,
+}
+
+/// One open folder.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFolderItem {
+    /// The path as it was chosen.
+    pub path: String,
+    /// Its canonical root: what `close_folder` takes, and what a connection's folder is.
+    pub root: String,
+    /// It is (inside) a repository: it has a `.spelaion` folder.
+    pub repository: bool,
+    /// The repository is trusted (ADR-022).
+    pub trusted: bool,
+    /// Its configuration files with errors, with file:line:column.
+    pub problems: Vec<String>,
+}
+
 /// What a connection type asks for (ADR-029).
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

@@ -269,7 +269,7 @@ pub async fn scan_connections(
             return Err(e.to_string());
         }
     };
-    let config = state.config.read().await;
+    let config = state.config().await;
     vet_setups(&state, &config, &mut found)?;
     Ok(ImportScan {
         dir: place,
@@ -382,7 +382,7 @@ pub async fn import_connections(
         .into_iter()
         .filter(|c| action_of(&c.id).is_some_and(|a| a != DuplicateAction::Skip))
         .collect();
-    vet_setups(&state, &*state.config.read().await, &mut chosen)?;
+    vet_setups(&state, &*state.config().await, &mut chosen)?;
     let mut report = ImportReport {
         imported: Vec::new(),
         replaced: Vec::new(),
@@ -487,14 +487,13 @@ async fn import_one(
     let mut created_tunnel = false;
     if let Some((tunnel, passwords)) = &plan.tunnel {
         let exists = state
-            .config
-            .read()
+            .config()
             .await
             .tunnels
             .iter()
             .any(|t| t.source == source && t.name == tunnel_name);
         if !exists {
-            let config = state.config.read().await;
+            let config = state.config().await;
             let file = tunnel.to_file(&config).map_err(|e| e.to_string())?;
             let name = spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
                 .map_err(|e| e.to_string())?;
@@ -507,7 +506,7 @@ async fn import_one(
     }
     if action == DuplicateAction::Replace {
         let replaced = {
-            let config = state.config.read().await;
+            let config = state.config().await;
             match spelaion_config::find_duplicate(&config, connection, source) {
                 Some(existing) => {
                     let id = existing.id.clone();
@@ -553,7 +552,7 @@ async fn import_one(
     for name in spelaion_config::import_names(&base, client) {
         draft.name = name;
         let added = {
-            let config = state.config.read().await;
+            let config = state.config().await;
             let file = draft.to_file(&config).map_err(|e| e.to_string())?;
             check_setup_before_saving(state, &config, &file)?;
             let result = spelaion_config::add_connection(

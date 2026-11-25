@@ -10,7 +10,7 @@ pub async fn history_page(
     offset: u32,
     state: State<'_, AppState>,
 ) -> CmdResult<HistoryPageItem> {
-    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     let page = state
         .history
         .history_page(workspace, filter.into(), limit as usize, offset as usize)
@@ -24,7 +24,7 @@ pub async fn history_page(
 }
 #[command]
 pub async fn history_databases(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
-    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .history_databases(workspace)
@@ -33,7 +33,7 @@ pub async fn history_databases(state: State<'_, AppState>) -> CmdResult<Vec<Stri
 }
 #[command]
 pub async fn pin_history(id: u32, pinned: bool, state: State<'_, AppState>) -> CmdResult<bool> {
-    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .pin_history(workspace, id.into(), pinned)
@@ -49,7 +49,7 @@ pub async fn export_history(
 ) -> CmdResult<u32> {
     let running = crate::jobs::start(&state, crate::jobs::JobKind::Export, &job);
     let cancel = running.cancel().clone();
-    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     let result = state
         .history
         .export_history(workspace, filter.into(), path.into(), cancel)
@@ -68,7 +68,7 @@ pub async fn snippet_page(
     offset: u32,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<SnippetItem>> {
-    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .snippet_page(
@@ -87,7 +87,7 @@ pub async fn snippet_page(
 }
 #[command]
 pub async fn snippet_folders(state: State<'_, AppState>) -> CmdResult<Vec<SnippetFolderItem>> {
-    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .snippet_folders(workspace)
@@ -106,7 +106,7 @@ pub async fn snippet_folders(state: State<'_, AppState>) -> CmdResult<Vec<Snippe
 }
 #[command]
 pub async fn create_snippet_folder(name: String, state: State<'_, AppState>) -> CmdResult<u32> {
-    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .create_snippet_folder(workspace, name)
@@ -120,7 +120,7 @@ pub async fn move_snippet(
     folder: Option<u32>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let workspace = spelaion_config::repository_scope(&*state.config.read().await);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .move_snippet(workspace, id.into(), folder.map(i64::from))

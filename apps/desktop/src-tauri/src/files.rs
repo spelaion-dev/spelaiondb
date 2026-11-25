@@ -129,7 +129,7 @@ pub(crate) async fn restore_tabs_for_workspace(
     // What the folder's tabs were written under before anything else is (a reload may run).
     state.tabs.flush().await.map_err(|e| e.to_string())?;
     let (scope, connections) = {
-        let config = state.config.read().await;
+        let config = state.config().await;
         (
             spelaion_config::repository_scope(&config),
             config
