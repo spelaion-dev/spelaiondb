@@ -132,6 +132,34 @@ pub fn status(decision: Decision) -> &'static str {
     }
 }
 
+/// What kind of call an entry records (SDB-32), read from its tool so the Activity tab can say
+/// "read", "write" or "catalog" beside how it ended: a refused write then reads as one at a
+/// glance. An entry without a tool (written before 0.7, or the log being cleared) or with one
+/// this build does not know is `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditAction {
+    /// A statement that only reads: `run_query`, `explain_query`.
+    Read,
+    /// A statement that may write: `execute_write`.
+    Write,
+    /// A look at the catalog or the connections, no statement of the agent's:
+    /// `list_connections`, `list_objects`, `describe_table`, `search_schema`.
+    Catalog,
+    Unknown,
+}
+
+/// The kind of call `tool` makes.
+pub fn action(tool: Option<&str>) -> AuditAction {
+    match tool {
+        Some("run_query" | "explain_query") => AuditAction::Read,
+        Some("execute_write") => AuditAction::Write,
+        Some("list_connections" | "list_objects" | "describe_table" | "search_schema") => {
+            AuditAction::Catalog
+        }
+        Some(_) | None => AuditAction::Unknown,
+    }
+}
+
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ`.
 pub fn iso_time(at_ms: i64) -> String {
     let secs = at_ms.div_euclid(1000);
@@ -188,7 +216,7 @@ pub fn write_audit(
         AuditFormat::Csv => {
             writeln!(
                 out,
-                "time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder"
+                "time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder,database"
             )?;
             for entry in entries.iter().map(redacted) {
                 let fields = [
@@ -205,6 +233,9 @@ pub fn write_audit(
                     // The connection's folder (ADR-075); empty for a personal connection and
                     // for entries written before 0.17.
                     entry.folder.clone().unwrap_or_default(),
+                    // The database the statement ran in (SDB-32); empty where the engine has
+                    // none to tell apart from the connection, and before 0.18.
+                    entry.database.clone().unwrap_or_default(),
                 ];
                 let line = fields
                     .iter()
@@ -231,6 +262,7 @@ pub fn write_audit(
                         "duration_ms": e.duration_ms,
                         "detail": e.detail,
                         "folder": e.folder,
+                        "database": e.database,
                     })
                 })
                 .collect();
@@ -338,11 +370,11 @@ mod tests {
         assert_eq!(
             lines.next(),
             Some(
-                "time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder"
+                "time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder,database"
             )
         );
         assert!(
-            text.contains("2025-11-07T21:13:20.123Z,s1,claude-code,~/shop,run_query,\"select 1,\n2\",ok,2,5,\"note, with \"\"quotes\"\"\",\n"),
+            text.contains("2025-11-07T21:13:20.123Z,s1,claude-code,~/shop,run_query,\"select 1,\n2\",ok,2,5,\"note, with \"\"quotes\"\"\",,\n"),
             "{text}"
         );
         assert!(
@@ -385,15 +417,59 @@ mod tests {
         write_audit(&entries, AuditFormat::Csv, &mut csv).unwrap();
         let csv = String::from_utf8(csv).unwrap();
         assert!(
-            csv.contains(",ok,2,5,\"note, with \"\"quotes\"\"\",/work/service-a\n"),
+            csv.contains(",ok,2,5,\"note, with \"\"quotes\"\"\",/work/service-a,\n"),
             "{csv}"
         );
-        assert!(csv.contains(",/work/service-b\n"), "{csv}");
+        assert!(csv.contains(",/work/service-b,\n"), "{csv}");
         let mut json = Vec::new();
         write_audit(&entries, AuditFormat::Json, &mut json).unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&json).unwrap();
         assert_eq!(parsed[0]["folder"], "/work/service-a");
         assert_eq!(parsed[1]["folder"], "/work/service-b");
+    }
+
+    #[test]
+    fn both_exports_carry_the_database() {
+        // SDB-32: the database a statement ran in, empty where there is none.
+        let sales = AuditEntry {
+            database: Some("sales".into()),
+            ..entry("select 1", Decision::Executed)
+        };
+        let none = entry("select 2", Decision::Executed);
+        let mut csv = Vec::new();
+        write_audit(&[sales.clone(), none.clone()], AuditFormat::Csv, &mut csv).unwrap();
+        let csv = String::from_utf8(csv).unwrap();
+        assert!(csv.contains(",select 1,ok,2,5,"), "{csv}");
+        assert!(
+            csv.contains("\"note, with \"\"quotes\"\"\",,sales\n"),
+            "{csv}"
+        );
+        assert!(csv.ends_with("\"note, with \"\"quotes\"\"\",,\n"), "{csv}");
+        let mut json = Vec::new();
+        write_audit(&[sales, none], AuditFormat::Json, &mut json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(parsed[0]["database"], "sales");
+        assert_eq!(parsed[1]["database"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_calls_action_comes_from_its_tool() {
+        assert_eq!(action(Some("run_query")), AuditAction::Read);
+        assert_eq!(action(Some("explain_query")), AuditAction::Read);
+        assert_eq!(action(Some("execute_write")), AuditAction::Write);
+        for tool in [
+            "list_connections",
+            "list_objects",
+            "describe_table",
+            "search_schema",
+        ] {
+            assert_eq!(action(Some(tool)), AuditAction::Catalog, "{tool}");
+        }
+        assert_eq!(action(None), AuditAction::Unknown);
+        assert_eq!(
+            action(Some("a_tool_from_a_later_version")),
+            AuditAction::Unknown
+        );
     }
 
     #[test]

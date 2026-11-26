@@ -4978,6 +4978,10 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .mcp-status-refused { color: var(--tone-amber); border-color: var(--tone-amber); }
 .mcp-status-cleared { color: var(--muted); }
 .mcp-status-unknown { color: var(--muted); }
+/* What kind of call it was (SDB-32), beside how it ended: a refused write reads as one. */
+.mcp-action { font-size: var(--text-xs); font-weight: 600; color: var(--muted); }
+.mcp-action-write { color: var(--fg); }
+.mcp-open { display: block; margin-top: var(--space-2xs); }
 .mcp-empty { padding: 32px 12px; text-align: center; color: var(--muted); }
 .mcp-session-filter { margin: 0 0 8px; }
 

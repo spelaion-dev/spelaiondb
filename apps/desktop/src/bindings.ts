@@ -1504,6 +1504,9 @@ export type AnalyzeUnavailable =
 /**  The engine has no ANALYZE that executes the query (SQLite). */
 "engine";
 
+/**  What kind of call an MCP entry records (SDB-32), as the core reads it from the tool. */
+export type AuditActionItem = "read" | "write" | "catalog" | "unknown";
+
 /**  One MCP call, with its secrets already masked by the core. */
 export type AuditEventItem = AuditEventItem_Serialize | AuditEventItem_Deserialize;
 
@@ -1525,6 +1528,13 @@ export type AuditEventItem_Deserialize = {
 	 *  written before 0.17.
 	 */
 	folder?: string | null,
+	/**
+	 *  The database the statement ran in (SDB-32), where the engine has one to tell apart from
+	 *  the connection; none otherwise, and for entries written before 0.18.
+	 */
+	database?: string | null,
+	/**  What kind of call it was, from its tool (SDB-32): read, write or catalog. */
+	action: AuditActionItem,
 };
 
 /**  One MCP call, with its secrets already masked by the core. */
@@ -1545,6 +1555,13 @@ export type AuditEventItem_Serialize = {
 	 *  written before 0.17.
 	 */
 	folder: string | null,
+	/**
+	 *  The database the statement ran in (SDB-32), where the engine has one to tell apart from
+	 *  the connection; none otherwise, and for entries written before 0.18.
+	 */
+	database: string | null,
+	/**  What kind of call it was, from its tool (SDB-32): read, write or catalog. */
+	action: AuditActionItem,
 };
 
 export type AuditFilterItem = AuditFilterItem_Serialize | AuditFilterItem_Deserialize;

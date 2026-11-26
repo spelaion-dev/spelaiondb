@@ -104,7 +104,11 @@
     "folder": "Carpeta",
     "allFolders": "Todas las carpetas",
     "noFolder": "Sin carpeta",
-    "noFolderHint": "Una conexión personal, o una llamada registrada antes de que hubiera carpetas"
+    "noFolderHint": "Una conexión personal, o una llamada registrada antes de que hubiera carpetas",
+    "database": "Base de datos",
+    "noDatabaseHint": "El motor no tiene una base de datos distinta de la conexión, o la llamada se registró antes de la 0.18",
+    "openInEditor": "Abrir en el editor",
+    "action": { "read": "Lectura", "write": "Escritura", "catalog": "Catálogo", "unknown": "Otra" }
   },
   "security": {
     "output": {
