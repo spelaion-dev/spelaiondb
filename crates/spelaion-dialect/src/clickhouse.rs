@@ -1,6 +1,6 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
-use crate::{is_white_space_at, trimmed};
+use crate::scanner::{self, RegionKind, SemicolonScanner};
 
 /// ClickHouse dialect, as ClickHouse's own lexer reads text: `'…'`, `"…"` and `` `…` `` with
 /// backslash escapes and doubled quotes, `--` comments and `#` ones (followed by a space or
@@ -18,7 +18,7 @@ impl Dialect for ClickhouseDialect {
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, skip_non_code)
+        scanner::code_ranges(SemicolonScanner::new(script, opening))
     }
 
     /// Always in backticks, with `\` and `` ` `` escaped: names are case-sensitive and many
@@ -33,61 +33,31 @@ fn is_ident_byte(c: u8) -> bool {
 }
 
 fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    let mut i = 0;
-
-    while i < b.len() {
-        if let Some(end) = skip_non_code(script, i) {
-            let comment = matches!(b[i], b'-' | b'#' | b'/');
-            if !comment {
-                has_code = true;
-            }
-            i = end.max(i + 1);
-            continue;
-        }
-        match b[i] {
-            b';' => {
-                if has_code {
-                    spans.extend(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-            }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
-                }
-                i += 1;
-            }
-        }
-    }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
-    }
-    spans
+    scanner::statements(SemicolonScanner::new(script, opening))
 }
 
-/// The byte after the string, quoted name, comment or heredoc that starts at `i`; `None` when
-/// none starts there.
-fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+/// The string, quoted name, comment or heredoc that starts at byte `i`, with the byte after it;
+/// `None` when none starts there. The scanner's one reading of them (ClickHouse's statements end
+/// at a `;` outside them: [`SemicolonScanner`]).
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
     match *b.get(i)? {
-        q @ (b'\'' | b'"' | b'`') => Some(skip_quoted(b, i, q)),
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(line_end(b, i)),
-        b'#' if matches!(b.get(i + 1), Some(b' ' | b'!')) => Some(line_end(b, i)),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i)),
+        b'\'' => Some((RegionKind::String, skip_quoted(b, i, b'\''))),
+        q @ (b'"' | b'`') => Some((RegionKind::QuotedName, skip_quoted(b, i, q))),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((RegionKind::Comment, line_end(b, i))),
+        b'#' if matches!(b.get(i + 1), Some(b' ' | b'!')) => {
+            Some((RegionKind::Comment, line_end(b, i)))
+        }
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((RegionKind::Comment, block_comment_end(b, i))),
         b'$' if i == 0 || !is_ident_byte(b[i - 1]) => {
             let tag_end = heredoc_tag(b, i)?;
             let tag = &script[i..=tag_end];
-            Some(
+            Some((
+                RegionKind::QuotedBody,
                 script[tag_end + 1..]
                     .find(tag)
                     .map_or(b.len(), |p| tag_end + 1 + p + tag.len()),
-            )
+            ))
         }
         _ => None,
     }

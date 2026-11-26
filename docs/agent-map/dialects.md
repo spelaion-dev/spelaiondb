@@ -66,6 +66,9 @@
   names and comments through `opening`, ends any statement at a line holding only `/` and
   decides at a statement's first code whether it is a PL/SQL unit (`is_plsql`, whose words read
   `opening` too; the guard calls it). `skip_non_code` is `opening` without the kind.
+  ClickHouse has moved (SDB-456): its `opening` in `clickhouse.rs` reads strings, names (both
+  with backslash escapes), `--` and `# ` comments, nested block comments and `$tag$` heredocs,
+  for the `SemicolonScanner`.
   Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
   word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
