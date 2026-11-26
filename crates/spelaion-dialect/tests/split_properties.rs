@@ -910,6 +910,51 @@ const KNOWN: &[Known] = &[
         card: "SDB-514",
         shape: |_, script, span| span.text(script).starts_with('\\'),
     },
+    // `a;@a'`: a `@` after a `;` on the same line is SQL in the script (a client command line
+    // starts its line, ADR-078), but the statement on its own starts with it, a command line;
+    // and in MySQL `a;DELIMITER $$` then a `@x` line reads a `DELIMITER` line, then a command
+    // line, only on its own. A statement that starts in the middle of its line, with a command line in its
+    // text on its own. Such a line is refused wherever it is read, never sent.
+    Known {
+        labels: &[
+            "postgres",
+            "mysql",
+            "mariadb",
+            "mysql[NO_BACKSLASH_ESCAPES]",
+            "mysql[ANSI_QUOTES]",
+            "mysql[ANSI,NO_BACKSLASH_ESCAPES]",
+            "sqlite",
+            "libsql",
+            "sqlserver",
+            "duckdb",
+            "clickhouse",
+            "trino",
+            "presto",
+            "oracle",
+            "databend",
+            "spanner",
+            "flightsql",
+            "dremio",
+            "gizmosql",
+            "hive",
+            "spark",
+            "kyuubi",
+            "impala",
+        ],
+        property: "reads_alike_alone",
+        card: "SDB-541",
+        shape: |_, script, span| {
+            let line_start = script[..span.start].rfind('\n').map_or(0, |p| p + 1);
+            let mid_line = !script[line_start..span.start]
+                .chars()
+                .all(char::is_whitespace);
+            let command_line = |line: &str| {
+                let line = line.trim_start().as_bytes();
+                line.first() == Some(&b'@') && line.get(1).is_some_and(u8::is_ascii_alphabetic)
+            };
+            mid_line && span.text(script).split('\n').any(command_line)
+        },
+    },
     // `\u{a0}$$ … $$`: after white space outside ASCII, a `$` opens no `$tag$` body (nor an
     // `N` or `q` one of Oracle's prefixed strings) in the script, because the byte before it
     // counts as part of a name; the statement on its own starts with the `$`, which opens one.

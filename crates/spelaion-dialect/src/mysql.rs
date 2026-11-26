@@ -54,6 +54,11 @@ impl Dialect for MysqlDialect {
         "mysql"
     }
 
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
+    }
+
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script, Quoting::DEFAULT)
     }
@@ -81,6 +86,11 @@ struct MysqlModeDialect {
 impl Dialect for MysqlModeDialect {
     fn name(&self) -> &'static str {
         "mysql"
+    }
+
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
     }
 
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
@@ -200,6 +210,8 @@ enum Opening {
     Quoted {
         quote: u8,
     },
+    /// A client command line (ADR-078), where a statement could begin.
+    Command,
     StatementEnd,
 }
 
@@ -236,6 +248,11 @@ impl<'a> MysqlScanner<'a> {
                 return Some((Opening::Delimiter { line_end }, line_end));
             }
         }
+        if !self.has_code
+            && let Some(end) = crate::scanner::command_line(script, i)
+        {
+            return Some((Opening::Command, end));
+        }
         if let Some(end) = comment_end(bytes, i) {
             let executable = is_executable_comment(&bytes[i..]);
             return Some((Opening::Comment { executable }, end));
@@ -268,6 +285,13 @@ impl<'a> MysqlScanner<'a> {
                 // statement.
                 self.start = (line_end + 1).min(self.script.len());
                 RegionKind::MetaLine { statement: None }
+            }
+            Opening::Command => {
+                // A statement of its own, which the session refuses wherever nothing resolves
+                // it; its newline is white space of what follows.
+                let statement = crate::trimmed(self.script, range.start, range.end);
+                self.start = end;
+                RegionKind::MetaLine { statement }
             }
             Opening::Comment { executable } => {
                 // The server runs the body of an executable comment.
@@ -307,7 +331,7 @@ impl<'a> MysqlScanner<'a> {
     fn may_open(&self, b: u8) -> bool {
         opens_in_code(b)
             || b == self.delimiter_start
-            || (!self.has_code && b.eq_ignore_ascii_case(&b'd'))
+            || (!self.has_code && (b.eq_ignore_ascii_case(&b'd') || b == b'@'))
     }
 
     /// Reads one byte of code, as the `mysql` client does: white space leaves the statement as

@@ -17,8 +17,8 @@ use proptest::test_runner::{Config, RngSeed};
 use spelaion_config::Safeguards;
 use spelaion_core::{
     ImportFormat, ImportSource, ParseOptions, Risk, SourceEncoding, bind_params, check_read_only,
-    check_script, classify_read_only, classify_read_only_connection, guess_options, preview,
-    read_sql_file, script_params, script_risks,
+    check_script, check_write, classify_read_only, classify_read_only_connection, guess_options,
+    preview, read_sql_file, script_params, script_risks,
 };
 use spelaion_dialect::{MysqlDialect, for_engine};
 use spelaion_driver_api::{Dialect, StatementSpan};
@@ -1052,5 +1052,74 @@ proptest! {
                 }
             }
         }
+    }
+}
+
+/// The engines whose dialect reads client command lines (ADR-078): every SQL one.
+const COMMAND_ENGINES: &[&str] = &[
+    "postgres",
+    "mysql",
+    "mariadb",
+    "sqlite",
+    "sqlserver",
+    "duckdb",
+    "clickhouse",
+    "trino",
+    "oracle",
+    "databend",
+    "spanner",
+    "hive",
+    "flightsql",
+];
+
+/// A client command line hidden in a place a statement can go: first, after comments or blank
+/// lines, after another statement, before another.
+fn hidden_command() -> BoxedStrategy<(&'static str, String)> {
+    (
+        prop::sample::select(COMMAND_ENGINES),
+        prop::sample::select(vec![
+            "",
+            "-- note\n",
+            "/* note */\n",
+            "\n\n",
+            "  ",
+            "select 1;\n",
+        ]),
+        prop::sample::select(vec![
+            "set", "unset", "echo", "include", "export", "spool", "Set",
+        ]),
+        text_of(" =x'\"$;-/*:", 12),
+        prop::sample::select(vec!["", "\nselect 2", "\n;select 3", "\r\nselect 4 from t"]),
+    )
+        .prop_map(|(engine, before, word, rest, after)| {
+            (engine, format!("{before}@{word}{rest}{after}"))
+        })
+        .boxed()
+}
+
+proptest! {
+    #![proptest_config(config(512))]
+
+    /// A client command line (ADR-078), wherever it hides, is never run for agents
+    /// (`classify_read_only`, the write check), passes no read-only connection's barrier, and is
+    /// a statement its dialect refuses before anything is sent (the session's refusal, which
+    /// every run reads: setup, a file's, a plan's, the streaming export's).
+    #[test]
+    fn a_hidden_command_line_is_never_run_outside_the_editor((engine, sql) in hidden_command()) {
+        let _turn = crate::serial::file_turn(module_path!());
+        let dialect = dialect(engine);
+        let name = dialect.name();
+        prop_assert!(classify_read_only(name, &sql).is_err(), "{}: {:?} read for agents", engine, sql);
+        prop_assert!(check_write(dialect.as_ref(), &sql).is_err(), "{}: {:?} written for agents", engine, sql);
+        prop_assert!(
+            classify_read_only_connection(name, &sql).is_err(),
+            "{}: {:?} allowed on a read-only connection", engine, sql
+        );
+        prop_assert!(check_read_only(dialect.as_ref(), &sql).is_err(), "{}: {:?} passed the read-only check", engine, sql);
+        let refused = dialect
+            .split_statements(&sql)
+            .iter()
+            .any(|span| dialect.refuse_statement(span.text(&sql)).is_some());
+        prop_assert!(refused, "{}: {:?} holds no statement its dialect refuses", engine, sql);
     }
 }

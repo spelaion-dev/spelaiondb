@@ -90,5 +90,14 @@
   again at every `;`. `words` and `batch_class`, which the guard reads, read the scanner's code
   ranges.
   Every SQL dialect has moved: a rule a splitter learns (a quote, a meta line, white space)
-  goes into its scanner alone, and every reader has it. Every dialect but SQL Server answers
+  goes into its scanner alone, and every reader has it.
+  Client command lines (ADR-078, SDB-466): every SQL dialect's scanner reads a line that starts
+  with `@` and an ASCII letter, with only white space before it on its line and no code yet in
+  the statement (`scanner::command_line`), as a `MetaLine` statement of its own, with no strings
+  or comments in it; anywhere else an `@` is what it was (a string, `SELECT` then `@x := 1`,
+  Spanner's `@{…}` hint). Every SQL dialect's `refuse_statement` refuses it
+  (`refuse_client_command`: a known command that nothing resolves, `@export` for good, an
+  unknown `@word`). CQL and TDengine, which are not SQL (ADR-056), have none. A new SQL dialect
+  checks for the line where a statement could begin and refuses it the same way
+  (`tests/command_lines.rs`). Every dialect but SQL Server answers
   `None` to `first_word` for now, and the guard reads the word through its `code_ranges`.

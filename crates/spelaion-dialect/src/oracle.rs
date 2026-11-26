@@ -23,6 +23,11 @@ impl Dialect for OracleDialect {
         "oracle"
     }
 
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
+    }
+
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script)
     }
@@ -292,6 +297,27 @@ impl Iterator for OracleScanner<'_> {
                 self.i = end;
                 return Some(Region {
                     kind: RegionKind::StatementEnd { statement },
+                    range: i..end,
+                });
+            }
+            if !self.has_code
+                && let Some(end) = scanner::command_line(script, i)
+            {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                // A client command line (ADR-078): a statement of its own, which the session
+                // refuses wherever nothing resolves it. Its newline is white space of what
+                // follows.
+                let statement = trimmed(script, i, end);
+                self.i = end;
+                self.start = end;
+                self.plsql = false;
+                return Some(Region {
+                    kind: RegionKind::MetaLine { statement },
                     range: i..end,
                 });
             }
