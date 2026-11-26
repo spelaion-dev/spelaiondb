@@ -69,6 +69,9 @@
   ClickHouse has moved (SDB-456): its `opening` in `clickhouse.rs` reads strings, names (both
   with backslash escapes), `--` and `# ` comments, nested block comments and `$tag$` heredocs,
   for the `SemicolonScanner`.
+  Trino has moved (SDB-456): `opening` in `trino.rs` is standard SQL's reading (`'…'`, `"…"`,
+  `--`, block comments that do not nest), which the standard dialect (`standard.rs`, the Flight
+  SQL engines) reads too, through `trino::split` and `trino::code_ranges`.
   Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
   word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,

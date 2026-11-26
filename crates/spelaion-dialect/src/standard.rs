@@ -27,7 +27,7 @@ impl Dialect for StandardDialect {
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, crate::trino::skip_non_code)
+        crate::trino::code_ranges(script)
     }
 
     /// Always in double quotes, a `"` doubled.
