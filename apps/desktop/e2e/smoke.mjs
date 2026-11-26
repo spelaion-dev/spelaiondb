@@ -6035,11 +6035,84 @@ try {
       await openMap();
       await page.waitForTimeout(500);
       assert.equal(tileRequests.length, asked, "the tiles kept by the core are not asked again");
+      await viewerToggle.click();
+      await viewer.waitFor({ state: "detached" });
+
+      // SDB-533: OpenStreetMap, once chosen, can be turned off again: unticked, it stays off
+      // when the settings are read again from the core, and Remove takes the server away. A
+      // window opened while it was on (a connection's own, SDB-30) follows the change: it used
+      // to keep tiles on and save them on again with its next change.
+      const storedMap = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_map_preferences"));
+      await withSettings("map", async (settings) => {
+        await settings.getByRole("button", { name: "Use OpenStreetMap" }).click();
+        await page.waitForFunction(() => document.querySelector('input[name="tileUrl"]')?.value === "https://tile.openstreetmap.org/{z}/{x}/{y}.png" && document.querySelector('input[name="mapTiles"]')?.checked);
+        await page.waitForFunction(() => !document.querySelector(".settings-page input:disabled"));
+      });
+      assert.equal((await storedMap()).tiles, true, "choosing OpenStreetMap turns tiles on");
+      const shopMenu = await connectionMenu("Shop (SQLite)");
+      const [otherWindow] = await Promise.all([
+        page.context().waitForEvent("page"),
+        shopMenu.getByRole("menuitem", { name: "Open in a new window" }).click(),
+      ]);
+      const otherTiles = otherWindow.locator('input[name="mapTiles"]');
+      const otherSettings = async (action) => {
+        await otherWindow.locator(".activity-bar .settings-button").click();
+        const dialog = otherWindow.locator(".settings-dialog");
+        await dialog.locator(`.settings-nav button:nth-child(${CATEGORY.map})`).click();
+        await otherTiles.waitFor();
+        await action();
+        await dialog.locator(".wizard-header button").click();
+        await dialog.waitFor({ state: "detached" });
+      };
+      await otherSettings(async () => assert.ok(await otherTiles.isChecked(), "the other window starts with tiles on"));
+      await withSettings("map", async (settings) => {
+        await settings.locator('input[name="mapTiles"]').uncheck();
+        await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.checked === false && !document.querySelector(".settings-page input:disabled"));
+        assert.equal(await settings.locator(".error").count(), 0, "turning tiles off is accepted");
+      });
+      const osmOff = {
+        tiles: false,
+        tileName: "OpenStreetMap",
+        tileUrl: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        tileAttribution: "© OpenStreetMap contributors",
+        tileAttributionUrl: "https://www.openstreetmap.org/copyright",
+      };
+      assert.deepEqual(await storedMap(), osmOff, "tiles stay off and the server is kept");
+      // The other window shows them off too, and its next change keeps them off.
+      await otherSettings(async () => {
+        await otherWindow.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.checked === false);
+        await otherWindow.locator('input[name="tileAttribution"]').fill("© OpenStreetMap contributors.");
+        await otherWindow.keyboard.press("Enter");
+        await otherWindow.waitForFunction(() => !document.querySelector(".settings-page input:disabled"));
+        await otherWindow.waitForTimeout(300);
+      });
+      assert.deepEqual(await storedMap(), { ...osmOff, tileAttribution: "© OpenStreetMap contributors." }, "a change in the other window does not turn tiles on again");
+      // That window closes on its own command, with no SQL to ask about.
+      await otherWindow.keyboard.press("Control+Shift+P");
+      await otherWindow.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("close this window");
+      await Promise.all([otherWindow.waitForEvent("close"), otherWindow.keyboard.press("Enter")]);
+      await withSettings("map", async (settings) => {
+        assert.equal(await settings.locator('input[name="mapTiles"]').isChecked(), false, "still off when the settings open again");
+        assert.equal(await settings.locator('input[name="tileAttribution"]').inputValue(), "© OpenStreetMap contributors.", "the other window's change shows here");
+        await settings.getByRole("button", { name: "Remove tile server" }).click();
+        await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.disabled === true && document.querySelector('input[name="tileUrl"]')?.value === "");
+      });
+      assert.deepEqual(await storedMap(), { tiles: false, tileName: "", tileUrl: "", tileAttribution: "", tileAttributionUrl: "" }, "Remove leaves no server");
+      // Opened again with tiles off: a plain background, and nothing asked of any server.
+      const before = tileRequests.length;
+      await viewerToggle.click();
+      await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
+      await viewer.getByText(/^Plain background: no map tiles are loaded\./).waitFor();
+      await page.waitForTimeout(500);
+      assert.equal(await mapHost.locator(".map-tiles").count(), 0);
+      assert.equal(tileRequests.length, before, "with tiles off the core asks nothing");
     } finally {
       // A dialog left open by a failure above is closed first, so the cleanup cannot hide it.
       if (await page.locator(".settings-dialog").count()) await page.locator(".settings-dialog .wizard-header button").click();
+      // The steps above end with the server removed; one that failed earlier may have left it.
       await withSettings("map", async (settings) => {
-        await settings.getByRole("button", { name: "Remove tile server" }).click();
+        const remove = settings.getByRole("button", { name: "Remove tile server" });
+        if (await remove.count()) await remove.click();
         await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.disabled === true);
       });
       tileServer.close();

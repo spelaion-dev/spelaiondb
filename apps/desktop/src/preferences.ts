@@ -2,7 +2,7 @@
 // personal state.db; this module only applies them to the document and keeps the UI state.
 
 import { create } from "zustand";
-import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
+import { call, commands, events, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
 import type { EditorPreferencesItem, MapPreferencesItem, SidePanelItem, SizeStepsItem } from "./bindings";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 import { createSaveQueue, savedSetting } from "./saveQueue";
@@ -138,6 +138,8 @@ const saved = {
   map: savedSetting(DEFAULT_MAP),
   reconnectOnStart: savedSetting(false),
 };
+/** Whether this window follows the map's preferences saved by any window (SDB-533). */
+let followingMap = false;
 
 export const usePreferences = create<PreferencesStore>((set, get) => ({
   language: "system",
@@ -155,6 +157,15 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
   saving: null,
   error: null,
   async load() {
+    // Every window shows the map's preferences the core stores, whichever window saved them:
+    // one opened earlier would otherwise keep drawing tiles turned off, and save them on again.
+    if (!followingMap) {
+      followingMap = true;
+      void events.mapPreferencesChanged.listen((event) => {
+        const shown = saved.map.changedElsewhere(event.payload.preferences);
+        if (shown) set({ map: shown });
+      });
+    }
     const [language, theme, explorer, grid, script, reconnect, editor, map, interfaceSize, steps, sidePanel] = await Promise.allSettled([
       call(commands.getLanguage()),
       call(commands.getTheme()),
@@ -293,12 +304,16 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
     set({ error: null, ...(optimistic ? { map: next } : {}) });
     return enqueue("map", async () => {
       try {
-        await call(commands.setMapPreferences(next));
-        saved.map.succeeded(next);
-        set({ map: next });
+        // What the core stored is shown, not what was asked for.
+        const stored = await call(commands.setMapPreferences(next));
+        saved.map.succeeded(stored);
+        set({ map: stored });
         return true;
       } catch (e) {
-        const back = optimistic ? saved.map.failed(ticket) : undefined;
+        // Every change ends in `succeeded` or `failed`, also one that was not shown at once:
+        // otherwise it stays pending and no value saved in another window shows here again.
+        const fallback = saved.map.failed(ticket);
+        const back = optimistic ? fallback : undefined;
         set({ ...(back ? { map: back } : {}), error: { setting: "map", phase: "save", detail: errorText(e) } });
         return false;
       }
