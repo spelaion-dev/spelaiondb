@@ -3,12 +3,31 @@
 //! request is made at all and keeps the cache. The page never names an address: neither a
 //! tile's nor the attribution's link.
 
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use spelaion_core::tiles::{TileCache, TileRequest, TileResponse, TileTransport};
 use spelaion_desktop_macros::command;
 use tauri::State;
+use tauri_specta::Event as _;
 
 use crate::dto::MapPreferencesItem;
 use crate::{AppState, CmdResult};
+
+/// The map's preferences the core stored after a change (SDB-533), sent to every window: each
+/// shows them as they are, so tiles turned off in one window are off in all of them.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct MapPreferencesChanged {
+    pub preferences: MapPreferencesItem,
+}
+
+/// Sends the stored preferences to every window. A window that misses it keeps what it had
+/// until it next reads them; the core still refuses every tile with tiles off.
+pub fn announce_map_preferences(app: &tauri::AppHandle, preferences: MapPreferencesItem) {
+    if let Err(e) = (MapPreferencesChanged { preferences }).emit(app) {
+        eprintln!("the map's preferences were saved but not sent to every window: {e}");
+    }
+}
 
 /// The app's tile cache: `tile-cache` next to `state.db`, fetching through `spelaion-tile-http`.
 pub fn cache(user_dir: &std::path::Path) -> TileCache {

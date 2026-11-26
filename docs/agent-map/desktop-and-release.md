@@ -192,7 +192,12 @@
   `WebviewWindowBuilder` elsewhere: WebView2 refuses a second webview with other switches) and
   registered in `src-tauri/src/windows.rs` (`Windows`: what each window shows, where its closing
   stands; its unit tests pin the transitions). The page reads its kind once in `main.tsx`
-  (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Session
+  (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Each
+  window reads the preferences once at start (`preferences.ts`'s `load`): a preference saved in
+  one window reaches the others only through an event from the core. The map's does
+  (`set_map_preferences` answers the stored value and sends `MapPreferencesChanged`; the page
+  applies it through `savedSetting.changedElsewhere`, SDB-533), so tiles turned off anywhere are
+  off in every window and a window opened earlier cannot save them on again. Session
   keys come from `store.ts` (tabs) and `explorerSession` (explorer), both with `sessionPrefix()`:
   never write `meta:…` or `tab-${n}` by hand. A PostgreSQL connection that opens several
   databases (ADR-074, SDB-504) has a database level in the explorer (`DatabaseNode` in

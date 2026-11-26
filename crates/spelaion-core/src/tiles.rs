@@ -756,6 +756,55 @@ mod tests {
         assert_eq!(kept, 0, "the tile past the limit was removed");
     }
 
+    /// SDB-533: OpenStreetMap, once chosen, is turned off by unticking tiles and taken away by
+    /// Remove, each read back from the store as saved, and then no tile is asked of it.
+    #[tokio::test]
+    async fn openstreetmap_turns_off_and_is_removed() {
+        let path = std::env::temp_dir().join(format!("spelaion-osm-off-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let (cache, seen) = cache_with("osm-off", vec![ok(&[])]);
+        let store = spelaion_store::Store::open(&path).unwrap();
+        let chosen = OPENSTREETMAP.preferences();
+        store.set_map_preferences(&chosen).unwrap();
+        assert_eq!(store.get_map_preferences().unwrap(), chosen);
+
+        // Unticked, as the settings page saves it: the server stays, tiles are off, also once
+        // the store is opened again.
+        let off = MapPreferences {
+            tiles: false,
+            ..chosen.clone()
+        };
+        store.set_map_preferences(&off).unwrap();
+        drop(store);
+        let store = spelaion_store::Store::open(&path).unwrap();
+        let read = store.get_map_preferences().unwrap();
+        assert_eq!(read, off);
+        assert_eq!(
+            cache.tile(&read, 1, 0, 0, 0).await,
+            Err(TileError::TilesOff)
+        );
+
+        // Chosen again, then removed: every field empty and tiles off.
+        store.set_map_preferences(&chosen).unwrap();
+        store
+            .set_map_preferences(&MapPreferences::default())
+            .unwrap();
+        drop(store);
+        let store = spelaion_store::Store::open(&path).unwrap();
+        let read = store.get_map_preferences().unwrap();
+        assert_eq!(read, MapPreferences::default());
+        assert_eq!(
+            cache.tile(&read, 1, 0, 0, 0).await,
+            Err(TileError::TilesOff)
+        );
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "nothing was asked of OpenStreetMap"
+        );
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn the_preset_is_a_valid_server_and_opts_in() {
         let preferences = OPENSTREETMAP.preferences();

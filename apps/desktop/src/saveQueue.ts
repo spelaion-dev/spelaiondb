@@ -29,6 +29,8 @@ export function createSaveQueue<S>(onBusy: (setting: S | null) => void) {
 export function savedSetting<T>(initial: T) {
   let saved = initial;
   let newest = 0;
+  /** Changes of this window not yet saved or failed. */
+  let pending = 0;
   return {
     /** The value the core has: loaded at start, then each successful save. */
     get saved(): T {
@@ -41,16 +43,27 @@ export function savedSetting<T>(initial: T) {
     /** A change starts: its ticket. */
     change(): number {
       newest += 1;
+      pending += 1;
       return newest;
     },
     /** Its save succeeded (saves run in order, so this is the newest saved value). */
     succeeded(value: T): void {
+      pending -= 1;
       saved = value;
     },
     /** Its save failed: the value to show again, or `undefined` when a newer change is on its
-     *  way and what is shown must stay. */
+     *  way and what is shown must stay. Called for every change that does not succeed, also one
+     *  that was not shown at once, or it stays pending and `changedElsewhere` shows nothing. */
     failed(ticket: number): T | undefined {
+      pending -= 1;
       return ticket === newest ? saved : undefined;
+    },
+    /** The core says it now stores `value`, saved from any window (SDB-533): it is what a failed
+     *  change goes back to, and the value to show, or `undefined` while a change of this window
+     *  is on its way: that change shows, and is saved after it. */
+    changedElsewhere(value: T): T | undefined {
+      saved = value;
+      return pending === 0 ? value : undefined;
     },
   };
 }

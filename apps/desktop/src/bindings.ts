@@ -246,8 +246,13 @@ export const commands = {
 	timeZones: () => typedError<string[], string>(__TAURI_INVOKE("time_zones")),
 	/**  The map view's background (ADR-045): tiles from the user's tile server, off by default. */
 	getMapPreferences: () => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("get_map_preferences")),
-	/**  Saves the map's preferences; the core checks the tile server first. */
-	setMapPreferences: (preferences: MapPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
+	/**
+	 *  Saves the map's preferences; the core checks the tile server first. Answers what the core
+	 *  stored, and sends it to every window (`MapPreferencesChanged`, SDB-533): a window opened
+	 *  before the change would otherwise keep the old value, draw tiles that were turned off and
+	 *  save them on again with its next change.
+	 */
+	setMapPreferences: (preferences: MapPreferencesItem) => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
 	/**
 	 *  Tile `z/x/y` of map view `view`, from the stored tile server, as a `data:` image. Refused with
 	 *  tiles off, past the view's requests, or when the server sends no image.
@@ -1363,6 +1368,7 @@ export const events = {
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
 	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
+	mapPreferencesChanged: makeEvent<MapPreferencesChanged, MapPreferencesChanged>("map-preferences-changed"),
 	pluginInstallChanged: makeEvent<PluginInstallChanged, PluginInstallChanged>("plugin-install-changed"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
@@ -4765,6 +4771,14 @@ export type MapNote =
  *  SQL Server plugin that names the column's type draws it.
  */
 "sqlServerTypeUnknown";
+
+/**
+ *  The map's preferences the core stored after a change (SDB-533), sent to every window: each
+ *  shows them as they are, so tiles turned off in one window are off in all of them.
+ */
+export type MapPreferencesChanged = {
+	preferences: MapPreferencesItem,
+};
 
 /**  The map view's background (ADR-045): tiles from the user's server, off by default. */
 export type MapPreferencesItem = {

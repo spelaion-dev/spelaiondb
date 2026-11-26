@@ -729,17 +729,30 @@ async fn set_side_panel(hidden: bool, width: u32, state: State<'_, AppState>) ->
         .map_err(|e| e.to_string())
 }
 
-/// Saves the map's preferences; the core checks the tile server first.
+/// Saves the map's preferences; the core checks the tile server first. Answers what the core
+/// stored, and sends it to every window (`MapPreferencesChanged`, SDB-533): a window opened
+/// before the change would otherwise keep the old value, draw tiles that were turned off and
+/// save them on again with its next change.
 #[command]
 async fn set_map_preferences(
     preferences: MapPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> CmdResult<()> {
+) -> CmdResult<MapPreferencesItem> {
     state
         .history
         .set_map_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let stored = MapPreferencesItem::from(
+        state
+            .history
+            .map_preferences()
+            .await
+            .map_err(|e| e.to_string())?,
+    );
+    tiles::announce_map_preferences(&app, stored.clone());
+    Ok(stored)
 }
 
 /// Every geometry of a result's column, in the current view, for one map (ADR-045): GeoJSON
@@ -7115,6 +7128,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             QuitRequested,
             plugins::PluginInstallChanged,
             plugins::PluginsChanged,
+            tiles::MapPreferencesChanged,
             launch::LaunchRequested,
             update_state::UpdateChanged,
             windows::WindowCloseRequested,
