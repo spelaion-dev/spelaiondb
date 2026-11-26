@@ -10,7 +10,8 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 /// What a script run does when a statement fails.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum OnError {
     /// The run stops at the failed statement; the rest is not run.
     #[default]

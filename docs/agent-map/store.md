@@ -11,7 +11,11 @@
   `tabs.rs`, each table's filter history and default filter in `table_filters.rs`, saved ER
   diagrams in `er_diagrams.rs` (ADR-084: a name and a document per workspace and connection,
   never interpreted here; `spelaion-core`'s `er/saved.rs` writes and checks the document; a
-  moved connection keeps them); later the schema cache). A new migration is appended to `MIGRATIONS` and its test finds it by its text,
+  moved connection keeps them), saved tasks and their runs in `tasks.rs` (ADR-089: a name unique
+  ignoring case, a folder label and a document `spelaion-core`'s `task/` writes and checks; each
+  run a row written when it starts and again when it ends, from the app or the CLI, the newest
+  100 per task kept, its log cut at a line to 256 KiB; a question is not a run:
+  `forget_task_run`); later the schema cache). A new migration is appended to `MIGRATIONS` and its test finds it by its text,
   never by "the last one". `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
   Which personal settings move to another computer with the settings file (SDB-31) is

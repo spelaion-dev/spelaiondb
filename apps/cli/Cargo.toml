@@ -14,10 +14,11 @@ path = "src/main.rs"
 spelaion-config.workspace = true
 spelaion-core.workspace = true
 spelaion-mcp.workspace = true
+spelaion-ssh.workspace = true
 spelaion-store.workspace = true
 anyhow.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 
 [lints]
 workspace = true

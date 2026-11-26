@@ -251,7 +251,8 @@ fn formats(options: &ParseOptions) -> Result<Formats, ImportError> {
 }
 
 /// Where the rows go.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ImportTarget {
     Existing {
         schema: String,
@@ -266,7 +267,8 @@ pub enum ImportTarget {
 }
 
 /// What a new table does when its name is taken.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum IfExists {
     Fail,
     /// Load into the table that is there.
@@ -276,7 +278,8 @@ pub enum IfExists {
 }
 
 /// Where one column of the source goes, in the source's order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ColumnMapping {
     /// Not imported (deleted from the preview).
     Skip,

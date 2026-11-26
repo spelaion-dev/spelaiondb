@@ -488,6 +488,25 @@
   and restores PostgreSQL, MySQL and MariaDB through the two hops of `testing/docker` with the
   tools of the official images (`docker run`), or those in `SPELAION_TEST_DB_TOOLS`; any change
   there needs tests that try to leak the password.
+  `task/` (ADR-089, SDB-33) saves an export, import, dump, restore, embedded copy, DuckDB import
+  or `.sql` file run as a named task and runs it again. `document.rs` is the versioned JSON
+  document, written from the core's own request types (their serde derives are its format:
+  `task/tests.rs` pins version 1, so a change to `ExportFormat`, `CsvOptions`, `ParseOptions`,
+  `DumpOptions` and the like that breaks it needs a new version and a reader for the old one),
+  checked when saved and every time it is read back (a document that fails is unreadable and
+  runs nothing), and `check_secrets` refuses any text holding one of the connection's resolved
+  secrets or a secret-named `key=value` in a tool's arguments (`secrets_of`, the `Redactor`).
+  A task's tools are `Detect` or a folder, never a program. `run.rs`: `resolve_connection` is
+  the one way the app and the CLI resolve a task's connection (a repository one from its folder
+  alone with the personal layer; a personal one with the folders the task recorded, through
+  `Resolver::with_open_folders`); `run_task` records the run, asks for a prompt password before
+  anything opens, prepares the run with the functions the dialogs call (`rerun_check` and
+  `script_risks`, `plan_import`, `preview_dump`, `preview_restore`, `plan_sql_file`), stops for a
+  yes exactly where the run by hand asks (`Questions::Ask` answers the question and records
+  nothing; `Questions::Refuse`, the CLI, records it refused or failed), runs it in a session of
+  its own through the same job functions and records the ending with the log, every line
+  through the run's `Redactor`. An export never writes over a file (`free_path`). The tests
+  with databases are `apps/cli/tests/task.rs` (the app's run and the real binary).
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
   hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
   `Tunnel::probe`, login and session setup with the same safeguards as opening a session), its own

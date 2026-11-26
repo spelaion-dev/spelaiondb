@@ -15,7 +15,8 @@ use super::xlsx::SheetRows;
 use crate::sql_file::{decode_utf16, windows_1252_char};
 
 /// How the source is written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ImportFormat {
     Csv,
     Tsv,
@@ -28,7 +29,8 @@ pub enum ImportFormat {
 }
 
 /// The text encoding of a file. The clipboard is always text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SourceEncoding {
     /// A byte order mark says it; otherwise UTF-8 when the start of the file is valid UTF-8,
     /// else Windows-1252.
@@ -48,7 +50,9 @@ pub enum ImportSource {
 }
 
 /// How the source is read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct ParseOptions {
     pub format: ImportFormat,
     pub encoding: SourceEncoding,

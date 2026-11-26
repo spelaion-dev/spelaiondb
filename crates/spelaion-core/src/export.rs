@@ -18,7 +18,8 @@ use crate::edit::{UpdateCopyError, UpdateTable};
 use crate::generate::qualified;
 use crate::results::StoredResult;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ExportFormat {
     /// Tab-separated, for pasting into spreadsheets. NULL is an empty cell.
     Tsv,
@@ -97,7 +98,8 @@ impl ExportFormat {
 pub const MAX_ROWS_PER_INSERT: usize = 10_000;
 
 /// How SQL keywords are written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum KeywordCase {
     #[default]
     Upper,
@@ -105,7 +107,8 @@ pub enum KeywordCase {
 }
 
 /// How table and column names are written, before the engine quotes them where it must.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NameCase {
     #[default]
     AsIs,
@@ -125,7 +128,9 @@ impl NameCase {
 
 /// How a SQL export writes its statements (SDB-391). The default is what the clipboard and
 /// earlier exports wrote: one `INSERT` per row, keywords in upper case, names as they are.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct SqlOptions {
     /// Rows per `INSERT`, from 1 to [`MAX_ROWS_PER_INSERT`]; SQL Server's statements hold at
     /// most 1,000 rows (error 10738 beyond), so they are split there.
@@ -181,7 +186,9 @@ pub(crate) fn upsert_supported(engine: &str) -> bool {
 }
 
 /// How JSON and NDJSON write values (SDB-391).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct JsonOptions {
     /// Timestamps in ISO 8601 (`2024-03-04T10:00:00.5`, `…Z` with a time zone) instead of the
     /// database's text (`2024-03-04 10:00:00.5`). Values ISO cannot hold (infinity, BC) keep
@@ -202,7 +209,9 @@ impl Default for JsonOptions {
 
 /// How CSV and TSV fields are written (ADR-034). The default is what the clipboard uses:
 /// a comma, NULL as an empty field and no formula escaping.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct CsvOptions {
     /// Field separator of CSV (`,`, `;`, `|`…). TSV always uses a tab.
     pub delimiter: char,
@@ -240,7 +249,8 @@ impl CsvOptions {
 }
 
 /// The character encoding of an exported file (ADR-034).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum TextEncoding {
     Utf8,
     /// UTF-8 starting with a byte order mark, so spreadsheets (Excel) read accents correctly.
