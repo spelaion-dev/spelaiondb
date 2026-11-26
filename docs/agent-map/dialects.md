@@ -15,6 +15,9 @@
   where its variables live (the guard still checks each statement in it). SQLite's
   `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
   dot-command away from the server's shell: any change to them needs its tests there too.
+  `skip_quote_or_comment` is also `SqliteScanner`'s one reading of quotes and comments; until
+  `remote.rs` moves onto the scanner (SDB-456), `code_line_starts` is the one loop of its own
+  left, and it must read what the scanner reads.
 - White space is one rule for every splitter (SDB-434): Unicode's, as `str::trim` reads it
   (a no-break space, a vertical tab, U+2028, U+3000 too). `lib.rs`'s `is_white_space_at` says
   whether a byte is white space, `white_space_before` whether a word may start after it, and
@@ -49,8 +52,11 @@
   `[names]`, nested comments, `GO` lines (a statement end, code; a `--` comment after the `GO`
   is a comment), `BEGIN … END` blocks and the rest of a batch a `DECLARE` or a module takes;
   `split`, `code_ranges`, `first_word` and `counts_rows` read its regions, and it gives the
-  guard its first word (`Dialect::first_word`). Every other dialect, PostgreSQL and MySQL
-  included for now, answers `None` there and the guard reads the word through its
+  guard its first word (`Dialect::first_word`). SQLite has moved (SDB-456): `SqliteScanner` in
+  `sqlite.rs` reads quotes and comments through `skip_quote_or_comment` and keeps a
+  `CREATE [TEMP] TRIGGER`'s `BEGIN … END` depth from the statement's first words; `split` and
+  `code_ranges` read its regions. Every other dialect, PostgreSQL, MySQL and SQLite included for
+  now, answers `None` there and the guard reads the word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
   white space) must be copied into its other readers (`code_ranges`'s skip function) in the
   same change: that gap is what SDB-436, 437 and 439 were.
