@@ -13,6 +13,7 @@ mod serial;
 mod beekeeper;
 mod cassandra;
 mod config;
+mod connection_transfer;
 mod connection_types;
 mod copies;
 mod datagrip;

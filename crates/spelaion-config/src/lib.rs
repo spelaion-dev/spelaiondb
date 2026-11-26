@@ -14,6 +14,8 @@ pub mod atomic_file;
 mod beekeeper;
 mod check;
 mod conn_url;
+mod connection_transfer;
+mod connections_file;
 mod copy;
 mod datagrip;
 mod dbeaver;
@@ -52,6 +54,13 @@ pub use accounts::{connection_account, proxy_account, tunnel_account};
 pub use beekeeper::{BeekeeperError, beekeeper_dir, read_beekeeper};
 pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
+pub use connection_transfer::{
+    ConnectionsExported, ImportItem, ImportResult, ItemKind, ItemOutcome, ItemState, TransferError,
+    export_connections, import_connections, preview_connections_import, read_connections_file,
+};
+pub use connections_file::{
+    CONNECTIONS_FILE_MAX, CONNECTIONS_FILE_VERSION, ConnectionsFileError, EXPORT_PASSWORD_MIN,
+};
 pub use copy::{
     ClipboardConnection, Duplicated, MAX_CLIPBOARD_TEXT, Pasted, connection_clipboard_text,
     duplicate_connection, paste_connection,

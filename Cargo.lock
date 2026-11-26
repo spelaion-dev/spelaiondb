@@ -195,6 +195,7 @@ dependencies = [
  "blake2",
  "cpufeatures 0.3.1",
  "password-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -5731,9 +5732,12 @@ name = "spelaion-config"
 version = "0.17.0"
 dependencies = [
  "aes 0.8.4",
+ "aes-gcm",
  "apple-native-keyring-store",
+ "argon2",
  "cbc 0.1.2",
  "dbus-secret-service-keyring-store",
+ "getrandom 0.4.3",
  "hmac 0.13.0",
  "keyring-core",
  "pbkdf2",
@@ -5753,6 +5757,7 @@ dependencies = [
  "url",
  "windows-native-keyring-store",
  "windows-registry",
+ "zeroize",
 ]
 
 [[package]]

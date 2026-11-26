@@ -18,6 +18,7 @@ import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { SnippetSettings } from "./SnippetSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
+import { ConnectionTransferSettings } from "./ConnectionTransferSettings";
 import { TransferSettings } from "./TransferSettings";
 import { LogSettings } from "./LogSettings";
 import { ScreenBoundary } from "./ScreenBoundary";
@@ -78,7 +79,12 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "appearance" && <AppearanceSettings />}
         {category === "language" && <LanguageSettings />}
         {category === "explorer" && <ExplorerSettings />}
-        {category === "connections" && <ConnectionSettings />}
+        {category === "connections" && (
+          <>
+            <ConnectionSettings />
+            <ConnectionTransferSettings />
+          </>
+        )}
         {category === "types" && <ConnectionTypesSettings />}
         {category === "masking" && <MaskingSettings />}
         {category === "history" && <HistorySettings />}

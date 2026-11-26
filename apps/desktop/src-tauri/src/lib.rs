@@ -5,6 +5,7 @@ mod app_lifecycle;
 mod backup;
 mod clipboard_text;
 mod connection_import;
+mod connection_transfer;
 mod dashboard;
 mod diagnostics;
 mod diagram;
@@ -7065,6 +7066,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             settings_transfer::import_settings,
             log_viewer::read_log,
             log_viewer::export_log,
+            connection_transfer::export_personal_connections,
+            connection_transfer::preview_connections_file,
+            connection_transfer::import_connections_file,
             list_connections,
             list_history,
             library::history_page,
