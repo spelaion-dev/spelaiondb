@@ -14,6 +14,16 @@
   "database": "Base de datos",
   "noDatabase": "— Sin base de datos —",
   "loadingDatabases": "Cargando bases de datos…",
+  "runWait": {
+    "connecting": "Esperando para ejecutar: conectando…",
+    "databases": "Esperando para ejecutar: cargando bases de datos…",
+    "history": "Esperando para ejecutar: guardando el historial…",
+    "restoring": "Esperando para ejecutar: restaurando los resultados…",
+    "dontRun": "No ejecutar",
+    "connectionFailed": "No se ejecutó: la conexión no se abrió. Conecta y vuelve a ejecutarlo: nada se repite solo.",
+    "folderChanging": "La carpeta está cambiando: vuelve a ejecutarlo cuando esté abierta.",
+    "folderChanged": "No se ejecutó: la carpeta cambió. Vuelve a ejecutarlo cuando esté abierta."
+  },
   "databaseLoadFailed": "No se pudieron cargar las bases de datos",
   "retryDatabases": "Reintentar",
   "reconnect": "Reconectar",

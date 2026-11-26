@@ -14,6 +14,16 @@
   "database": "Database",
   "noDatabase": "— No database —",
   "loadingDatabases": "Loading databases…",
+  "runWait": {
+    "connecting": "Waiting to run: connecting…",
+    "databases": "Waiting to run: loading databases…",
+    "history": "Waiting to run: saving the history…",
+    "restoring": "Waiting to run: restoring the results…",
+    "dontRun": "Don't run",
+    "connectionFailed": "Did not run: the connection did not open. Connect, then run it again: nothing is re-run on its own.",
+    "folderChanging": "The folder is changing: run it again once it is open.",
+    "folderChanged": "Did not run: the folder changed. Run it again once it is open."
+  },
   "databaseLoadFailed": "Could not load databases",
   "retryDatabases": "Retry",
   "reconnect": "Reconnect",
