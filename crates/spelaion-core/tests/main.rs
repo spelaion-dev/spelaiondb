@@ -92,6 +92,7 @@ mod session_setup;
 mod session_source;
 mod session_sqlite;
 mod session_sqlserver;
+mod settings_transfer;
 mod shown_databases;
 mod spanner;
 mod tdengine;

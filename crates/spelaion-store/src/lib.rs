@@ -15,6 +15,7 @@ mod er_diagrams;
 mod export;
 mod library;
 mod map;
+mod portable;
 mod shortcuts;
 mod side_panel;
 mod table_filters;
@@ -38,6 +39,10 @@ pub use library::{
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,
     check_attribution_link, check_tile_server,
+};
+pub use portable::{
+    PORTABLE_KEY_MAX, PORTABLE_VALUE_MAX, PortableReplace, is_portable_setting,
+    is_this_computer_setting,
 };
 pub use shortcuts::{SHORTCUT_COMMAND_MAX, ShortcutOverride, is_command_id};
 pub use side_panel::{
@@ -1204,6 +1209,17 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "journal_mode", "wal")?;
         let mut store = Self { conn };
+        store.migrate()?;
+        Ok(store)
+    }
+
+    /// A store that lives only in memory, with every migration: for checking rows from outside
+    /// (a settings file, SDB-31) with the same triggers and readers before the user's store is
+    /// touched.
+    pub fn open_in_memory() -> Result<Self, StoreError> {
+        let mut store = Self {
+            conn: Connection::open_in_memory()?,
+        };
         store.migrate()?;
         Ok(store)
     }

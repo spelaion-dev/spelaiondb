@@ -79,6 +79,7 @@ mod session;
 mod session_read_only;
 mod session_setup;
 pub mod session_source;
+mod settings_transfer;
 mod shortcuts;
 mod shown;
 mod sort;
@@ -292,6 +293,10 @@ pub use session_read_only::{SessionReadOnlyError, set_session_read_only};
 pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
     isolation_statement, read_only_statement, setup_is_restricted, vet_imported_setup,
+};
+pub use settings_transfer::{
+    SETTINGS_FILE_MAX, SETTINGS_FILE_VERSION, SettingsSummary, SettingsTransferError,
+    export_settings, import_settings, preview_settings,
 };
 pub use shortcuts::{MAX_SHORTCUT_LENGTH, MAX_SHORTCUT_OVERRIDES, ShortcutError, check_shortcut};
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};

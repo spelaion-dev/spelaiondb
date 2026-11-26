@@ -416,5 +416,38 @@
     "move": "Pasar las teclas",
     "save": "Guardar",
     "saving": "Guardando…"
+  },
+  "transfer": {
+    "title": "Exportar e importar",
+    "hint": "Lleva tus ajustes a otro ordenador: apariencia, editor, rejilla, scripts, mapa, atajos de teclado, fragmentos del editor, los ajustes del servidor MCP, tus variables, columnas enmascaradas y tipos de conexión. El archivo no lleva conexiones ni contraseñas.",
+    "export": "Exportar ajustes…",
+    "import": "Importar ajustes…",
+    "fileType": "Ajustes de SpelaionDB",
+    "exportTitle": "Exportar ajustes",
+    "importTitle": "Importar ajustes",
+    "working": {
+      "export": "Exportando ajustes…",
+      "preview": "Leyendo el archivo…",
+      "import": "Importando ajustes…"
+    },
+    "exported": "Se exportaron {{total}} ajustes a {{path}}.",
+    "previewTitle": "¿Importar estos ajustes?",
+    "from": "Exportados por SpelaionDB {{version}} el {{at}}.",
+    "counts": "{{settings}} ajustes, {{shortcuts}} atajos cambiados y {{snippets}} fragmentos del editor",
+    "variables": "Variables que se definen: {{names}}",
+    "tunnelPorts": "Puertos locales de los túneles SSH: de {{min}} a {{max}}",
+    "maskingAdded": "Columnas enmascaradas que se añaden: {{patterns}}",
+    "typesAdded": "Tipos de conexión que se añaden: {{types}}",
+    "typesKept": "Tipos de conexión que se quedan como están aquí: {{types}}",
+    "mcpReadOnlyKept": "El modo de solo lectura para agentes sigue activado aquí, aunque el archivo lo tenga desactivado.",
+    "skipped": "Se omite, desconocido para esta versión: {{names}}",
+    "replaceNote": "Los ajustes del archivo sustituyen a los tuyos aquí, y uno que no tenga vuelve a su valor por defecto. Las variables, las columnas enmascaradas y los tipos de conexión solo se añaden. Nada cambia hasta que importes.",
+    "cancel": "Cancelar",
+    "importAction": "Importar ajustes",
+    "importedTitle": "Ajustes importados",
+    "failed": {
+      "export": "No se pudieron exportar los ajustes: {{detail}}",
+      "import": "No se pudieron importar los ajustes: {{detail}}. No se cambió nada."
+    }
   }
 }

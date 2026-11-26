@@ -14,3 +14,10 @@
   moved connection keeps them); later the schema cache). A new migration is appended to `MIGRATIONS` and its test finds it by its text,
   never by "the last one". `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
+  Which personal settings move to another computer with the settings file (SDB-31) is
+  `portable.rs`: exact keys and key families that are preferences of the app, and the keys that
+  name this computer's folders and programs (`recent_folders`, `backup.folder`, the backup tool
+  folders), which never move. A new personal setting must be put on one side or the other:
+  `every_key_the_store_writes_is_portable_or_of_this_computer` fails until it is.
+  `replace_portable_settings` replaces the portable rows whole in one transaction (the triggers
+  still refuse what they do not know) and never turns the MCP read-only mode off.

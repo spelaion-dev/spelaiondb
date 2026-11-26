@@ -1059,6 +1059,51 @@ impl From<EditorSnippetItem> for spelaion_core::EditorSnippet {
     }
 }
 
+/// What a settings file holds, and what importing it changes or changed (SDB-31).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsSummaryItem {
+    pub app_version: String,
+    pub exported_at: String,
+    /// Settings other than shortcuts and snippets.
+    pub settings: u32,
+    pub shortcuts: u32,
+    pub snippets: u32,
+    /// `${user.…}` variables that are new or get another value.
+    pub variables: Vec<String>,
+    /// The tunnels' local port range it sets, as `[min, max]`.
+    pub tunnel_ports: Option<TunnelPortsItem>,
+    pub masking_added: Vec<String>,
+    pub types_added: Vec<String>,
+    pub types_kept: Vec<String>,
+    /// The MCP read-only mode is on here and stays on, though the file has it off.
+    pub mcp_read_only_kept: bool,
+    /// What the file has that this version does not know, left out.
+    pub skipped: Vec<String>,
+}
+
+impl From<spelaion_core::SettingsSummary> for SettingsSummaryItem {
+    fn from(summary: spelaion_core::SettingsSummary) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            app_version: summary.app_version,
+            exported_at: summary.exported_at,
+            settings: count(summary.settings),
+            shortcuts: count(summary.shortcuts),
+            snippets: count(summary.snippets),
+            variables: summary.variables,
+            tunnel_ports: summary
+                .tunnel_ports
+                .map(|(min, max)| TunnelPortsItem { min, max }),
+            masking_added: summary.masking_added,
+            types_added: summary.types_added,
+            types_kept: summary.types_kept,
+            mcp_read_only_kept: summary.mcp_read_only_kept,
+            skipped: summary.skipped,
+        }
+    }
+}
+
 /// One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
 /// app's registry and the keys it now has, as the registry writes them, or none.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

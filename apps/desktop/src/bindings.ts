@@ -1095,6 +1095,16 @@ export const commands = {
 	userMasking: () => typedError<UserMaskingItem, string>(__TAURI_INVOKE("user_masking")),
 	/**  Sets the user's own column masking patterns. They apply to sessions opened from then on. */
 	setUserMasking: (patterns: string[]) => typedError<null, string>(__TAURI_INVOKE("set_user_masking", { patterns })),
+	/**  Writes the personal settings to `path`, which the user chose in the save dialog. */
+	exportSettings: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("export_settings", { path })),
+	/**  What importing the settings file at `path` would change; nothing is written. */
+	previewSettingsImport: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("preview_settings_import", { path })),
+	/**
+	 *  Imports the settings file at `path`, checked whole by the core first. The configuration is
+	 *  read again and every window takes the new interface size; the page reloads its own
+	 *  preferences.
+	 */
+	importSettings: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("import_settings", { path })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
@@ -7206,6 +7216,51 @@ export type SessionLost_Serialize = {
 	 *  (ADR-031).
 	 */
 	openTransaction: boolean,
+};
+
+/**  What a settings file holds, and what importing it changes or changed (SDB-31). */
+export type SettingsSummaryItem = SettingsSummaryItem_Serialize | SettingsSummaryItem_Deserialize;
+
+/**  What a settings file holds, and what importing it changes or changed (SDB-31). */
+export type SettingsSummaryItem_Deserialize = {
+	appVersion: string,
+	exportedAt: string,
+	/**  Settings other than shortcuts and snippets. */
+	settings: number,
+	shortcuts: number,
+	snippets: number,
+	/**  `${user.…}` variables that are new or get another value. */
+	variables: string[],
+	/**  The tunnels' local port range it sets, as `[min, max]`. */
+	tunnelPorts?: TunnelPortsItem | null,
+	maskingAdded: string[],
+	typesAdded: string[],
+	typesKept: string[],
+	/**  The MCP read-only mode is on here and stays on, though the file has it off. */
+	mcpReadOnlyKept: boolean,
+	/**  What the file has that this version does not know, left out. */
+	skipped: string[],
+};
+
+/**  What a settings file holds, and what importing it changes or changed (SDB-31). */
+export type SettingsSummaryItem_Serialize = {
+	appVersion: string,
+	exportedAt: string,
+	/**  Settings other than shortcuts and snippets. */
+	settings: number,
+	shortcuts: number,
+	snippets: number,
+	/**  `${user.…}` variables that are new or get another value. */
+	variables: string[],
+	/**  The tunnels' local port range it sets, as `[min, max]`. */
+	tunnelPorts: TunnelPortsItem | null,
+	maskingAdded: string[],
+	typesAdded: string[],
+	typesKept: string[],
+	/**  The MCP read-only mode is on here and stays on, though the file has it off. */
+	mcpReadOnlyKept: boolean,
+	/**  What the file has that this version does not know, left out. */
+	skipped: string[],
 };
 
 /**
