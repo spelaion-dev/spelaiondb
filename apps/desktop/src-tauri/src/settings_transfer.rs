@@ -39,8 +39,8 @@ pub async fn preview_settings_import(
 }
 
 /// Imports the settings file at `path`, checked whole by the core first. The configuration is
-/// read again and every window takes the new interface size; the page reloads its own
-/// preferences.
+/// read again, every window takes the new interface size and reads every preference again
+/// (`PreferencesChanged`, SDB-535).
 #[command]
 pub async fn import_settings(
     path: String,
@@ -57,5 +57,6 @@ pub async fn import_settings(
             let _ = window.set_zoom(crate::interface_scale(size));
         }
     }
+    crate::preferences_sync::announce(&app, &crate::preferences_sync::PreferenceKind::ALL);
     Ok(summary.into())
 }

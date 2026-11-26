@@ -205,11 +205,15 @@
   registered in `src-tauri/src/windows.rs` (`Windows`: what each window shows, where its closing
   stands; its unit tests pin the transitions). The page reads its kind once in `main.tsx`
   (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Each
-  window reads the preferences once at start (`preferences.ts`'s `load`): a preference saved in
-  one window reaches the others only through an event from the core. The map's does
-  (`set_map_preferences` answers the stored value and sends `MapPreferencesChanged`; the page
-  applies it through `savedSetting.changedElsewhere`, SDB-533), so tiles turned off anywhere are
-  off in every window and a window opened earlier cannot save them on again. Session
+  window reads its personal preferences once at start (`preferences.ts`, the shortcuts, the
+  snippets, the display format, the update check). Every command that saves one, and the
+  settings import, ends with `preferences_sync::announce` (`PreferencesChanged`: which kinds
+  changed, SDB-533, SDB-535); each window reads those again from the core
+  (`preferenceSync.ts`, an exhaustive switch over `PreferenceKind`), and a setting it is still
+  saving keeps what it shows (`savedSetting.changedElsewhere`). A new personal preference a
+  window keeps gets a `PreferenceKind` and an announce in its setter, or a window opened earlier
+  shows the old value and saves it back. The side panel is left out: each window's layout.
+  Session
   keys come from `store.ts` (tabs) and `explorerSession` (explorer), both with `sessionPrefix()`:
   never write `meta:…` or `tab-${n}` by hand. A PostgreSQL connection that opens several
   databases (ADR-074, SDB-504) has a database level in the explorer (`DatabaseNode` in

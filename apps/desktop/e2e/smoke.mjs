@@ -4193,6 +4193,58 @@ try {
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count, tabsBefore);
   }
 
+  step("preferences follow every window: changed in the main window, shown in a connection's window, never written back from it (SDB-535)");
+  {
+    const storedGrid = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_grid_preferences"));
+    const before = await storedGrid();
+    const shop = await connectionMenu("Shop (SQLite)");
+    const [other] = await Promise.all([
+      page.context().waitForEvent("page"),
+      shop.getByRole("menuitem", { name: "Open in a new window" }).click(),
+    ]);
+    await other.locator(".activity-bar .settings-button").waitFor();
+    const otherAppearance = async (action) => {
+      await other.locator(".activity-bar .settings-button").click();
+      const dialog = other.locator(".settings-dialog");
+      await dialog.locator(`.settings-nav button:nth-child(${CATEGORY.appearance})`).click();
+      await dialog.locator('input[name="zebra"]').waitFor();
+      await action(dialog);
+      await dialog.locator(".wizard-header button").click();
+      await dialog.waitFor({ state: "detached" });
+    };
+    await otherAppearance(async (dialog) => assert.equal(await dialog.locator('input[name="zebra"]').isChecked(), before.zebra));
+    // Changed in the main window: the theme and the grid's zebra rows.
+    await setTheme("dark", "dark");
+    await setGridLook({ zebra: !before.zebra });
+    await other.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    // The other window shows the grid as stored, and its own change keeps the main window's.
+    await otherAppearance(async (dialog) => {
+      await other.waitForFunction((zebra) => document.querySelector('input[name="zebra"]')?.checked === zebra, !before.zebra);
+      await dialog.locator('input[name="nullText"]').click();
+      await other.waitForFunction((nullText) => {
+        const input = document.querySelector('input[name="nullText"]');
+        return input?.checked === nullText && !input.matches(":disabled");
+      }, !before.nullText);
+    });
+    await page.waitForFunction(async (nullText) => (await window.__TAURI_INTERNALS__.invoke("get_grid_preferences")).nullText === nullText, !before.nullText);
+    const after = await storedGrid();
+    assert.equal(after.zebra, !before.zebra, "the other window did not write the old zebra rows back");
+    assert.equal(after.nullText, !before.nullText);
+    // And the main window shows the other window's change.
+    await withSettings("appearance", async (settings) => {
+      await page.waitForFunction((nullText) => document.querySelector('input[name="nullText"]')?.checked === nullText, !before.nullText);
+      assert.equal(await settings.locator('input[name="zebra"]').isChecked(), !before.zebra);
+    });
+    // Back as they were, from the main window; the other window closes with nothing to ask.
+    await setGridLook({ zebra: before.zebra, nullText: before.nullText });
+    await setTheme("light", "light");
+    await other.waitForFunction(() => document.documentElement.dataset.theme === "light");
+    await other.keyboard.press("Control+Shift+P");
+    await other.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("close this window");
+    await Promise.all([other.waitForEvent("close"), other.keyboard.press("Enter")]);
+    assert.deepEqual(await storedGrid(), before);
+  }
+
   step("windows: a tab's results in their own window without running the query again, and a connection in its own window whose closing leaves the main window's sessions (SDB-30)");
   {
     const context = page.context();

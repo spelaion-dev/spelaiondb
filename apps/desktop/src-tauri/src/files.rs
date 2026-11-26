@@ -285,11 +285,17 @@ pub(crate) async fn get_reconnect_on_start(state: State<'_, AppState>) -> CmdRes
 #[command]
 pub(crate) async fn set_reconnect_on_start(
     enabled: bool,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_reconnect_on_start(enabled)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::preferences_sync::announce(
+        &app,
+        &[crate::preferences_sync::PreferenceKind::ReconnectOnStart],
+    );
+    Ok(())
 }
