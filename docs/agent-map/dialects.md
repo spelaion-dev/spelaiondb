@@ -12,12 +12,12 @@
   `Dialect::with_sql_mode` gives the session's dialect, which `spelaion-core`'s `sql_mode.rs`
   reads when the session opens and after a statement that names `sql_mode`. T-SQL batches
   (`GO`, `BEGIN … END`) are split in `sqlserver.rs`; a `DECLARE` keeps the rest of its batch,
-  where its variables live (the guard still checks each statement in it). SQLite's
-  `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
-  dot-command away from the server's shell: any change to them needs its tests there too.
-  `skip_quote_or_comment` is also `SqliteScanner`'s one reading of quotes and comments; until
-  `remote.rs` moves onto the scanner (SDB-456), `code_line_starts` is the one loop of its own
-  left, and it must read what the scanner reads.
+  where its variables live (the guard still checks each statement in it). The remote
+  SQLite check (`remote.rs`, ADR-065 step 6) reads SQLite's scanner through `sqlite.rs`'s
+  `statement_start` and `code_line_starts`, both built from `SqliteScanner`'s regions, and keeps
+  only the `sqlite3` shell's own line rules (a line starting with `.` or `#`) to itself: it is
+  what keeps a dot-command away from the server's shell, so any change to SQLite's scanner
+  needs `remote.rs`'s tests too.
 - White space is one rule for every splitter (SDB-434): Unicode's, as `str::trim` reads it
   (a no-break space, a vertical tab, U+2028, U+3000 too). `lib.rs`'s `is_white_space_at` says
   whether a byte is white space, `white_space_before` whether a word may start after it, and
@@ -89,8 +89,6 @@
   tells an unapplied `BEGIN … BATCH` (whose `;` do not end it) without reading the statement
   again at every `;`. `words` and `batch_class`, which the guard reads, read the scanner's code
   ranges.
-  Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
-  word through its
-  `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
-  white space) must be copied into its other readers (`code_ranges`'s skip function) in the
-  same change: that gap is what SDB-436, 437 and 439 were.
+  Every SQL dialect has moved: a rule a splitter learns (a quote, a meta line, white space)
+  goes into its scanner alone, and every reader has it. Every dialect but SQL Server answers
+  `None` to `first_word` for now, and the guard reads the word through its `code_ranges`.

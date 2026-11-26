@@ -268,7 +268,7 @@ fn code_ranges(script: &str) -> Vec<std::ops::Range<usize>> {
 
 /// A quoted string or identifier, or a comment, with the offset just past it (the end of the
 /// text when it is not closed).
-pub enum Skipped {
+enum Skipped {
     /// `'…'`, `"…"`, `` `…` `` or `[…]`: part of the statement.
     Quoted(usize),
     /// `--…` up to and with its line break, or `/*…*/`.
@@ -276,7 +276,7 @@ pub enum Skipped {
 }
 
 /// What starts at byte `i` of `script`: the scanner's one reading of quotes and comments.
-pub fn skip_quote_or_comment(script: &str, i: usize) -> Option<Skipped> {
+fn skip_quote_or_comment(script: &str, i: usize) -> Option<Skipped> {
     let b = script.as_bytes();
     match *b.get(i)? {
         c @ (b'\'' | b'"' | b'`') => Some(Skipped::Quoted(skip_until(b, i + 1, c, true))),
@@ -296,22 +296,50 @@ pub fn skip_quote_or_comment(script: &str, i: usize) -> Option<Skipped> {
     }
 }
 
-/// The offsets of the lines of `sql` that start outside a quote or a comment (the first
-/// line included).
+/// The offsets of the lines of `sql` that start outside a quote or a comment (the first line
+/// included), read from the scanner's regions: a line that starts where a quote or a comment
+/// starts counts, one that starts inside it does not. The remote SQLite check reads it to keep
+/// a line the `sqlite3` shell would take for one of its commands away from the shell.
 pub fn code_line_starts(sql: &str) -> Vec<usize> {
     let b = sql.as_bytes();
+    let starts_line = |p: usize| p == 0 || b[p - 1] == b'\n';
     let mut starts = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        if i == 0 || b[i - 1] == b'\n' {
-            starts.push(i);
+    for region in SqliteScanner::new(sql) {
+        if region.kind.is_code() {
+            starts.extend(region.range.filter(|&p| starts_line(p)));
+        } else if starts_line(region.range.start) {
+            starts.push(region.range.start);
         }
-        i = match skip_quote_or_comment(sql, i) {
-            Some(Skipped::Quoted(end) | Skipped::Comment(end)) => end,
-            None => i + 1,
-        };
     }
     starts
+}
+
+/// Where the statement's first word is: past the white space and the comments that lead it,
+/// read from the scanner's regions; the end of `sql` when nothing else is in it. The remote
+/// SQLite check looks for the `sqlite3` shell's own lines there.
+pub fn statement_start(sql: &str) -> usize {
+    for region in SqliteScanner::new(sql) {
+        match region.kind {
+            RegionKind::Comment => {}
+            RegionKind::Code => {
+                let text = &sql[region.range.clone()];
+                let rest = text.trim_start();
+                // White space alone: what follows it may still be a comment.
+                if !rest.is_empty() {
+                    return region.range.end - rest.len();
+                }
+            }
+            RegionKind::String
+            | RegionKind::QuotedName
+            | RegionKind::ExecutableComment
+            | RegionKind::QuotedBody
+            | RegionKind::MetaLine { .. }
+            | RegionKind::CopyData
+            | RegionKind::CopyEnd
+            | RegionKind::StatementEnd { .. } => return region.range.start,
+        }
+    }
+    sql.len()
 }
 
 fn is_trigger(words: &[String]) -> bool {

@@ -1,7 +1,9 @@
 # ADR-065: One lexical scanner per dialect, read by everything that needs to know what is code
 
-- **Status:** Accepted (being implemented: the scanner type and PostgreSQL, SDB-453; MySQL and
-  MariaDB, SDB-454; SQL Server and the guard's first word, SDB-455; SQLite, SDB-456)
+- **Status:** Accepted (implemented: the scanner type and PostgreSQL, SDB-453; MySQL and
+  MariaDB, SDB-454; SQL Server and the guard's first word, SDB-455; SQLite, DuckDB, Oracle,
+  ClickHouse, Trino, Hive, Spanner, Databend, TDengine, CQL and the remote SQLite check,
+  SDB-456)
 - **Date:** 2026-11-23
 - **Extends:** ADR-005 (each engine has a dialect) and ADR-041 (the dialects and the barriers
   live in the core; a plugin names one of the core's dialects, or none)

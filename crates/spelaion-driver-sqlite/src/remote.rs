@@ -30,7 +30,7 @@ use spelaion_sqlite_schema::details;
 use spelaion_sqlite_schema::typing::{is_dml, is_query};
 use spelaion_sqlite_schema::{ResultBuilder, ResultColumn, SqlValue};
 
-use crate::dialect::{self, Skipped, SqliteDialect};
+use crate::dialect::{self, SqliteDialect};
 
 /// Oldest `sqlite3` with `-safe`.
 const SAFE_MODE_SINCE: &str = "3.37";
@@ -67,7 +67,7 @@ pub(crate) fn command_line(program: &str, path: &str, read_only: bool) -> Result
 /// in progress, and skips a line starting with `#` there; a line that is only white space or
 /// a comment starts no statement. So the statement is looked at where the shell will look.
 pub(crate) fn check_statement(sql: &str) -> Result<&str> {
-    let statement = &sql[statement_start(sql)..];
+    let statement = &sql[dialect::statement_start(sql)..];
     if statement.starts_with(['.', '#']) {
         return Err(DriverError::Other(
             "commands of the sqlite3 shell (a line starting with a dot or #) are not run on the server"
@@ -84,18 +84,6 @@ pub(crate) fn check_statement(sql: &str) -> Result<&str> {
         ));
     }
     Ok(statement)
-}
-
-/// Where the statement's first word is: past leading white space and comments.
-fn statement_start(sql: &str) -> usize {
-    let mut i = 0;
-    loop {
-        i = sql.len() - sql[i..].trim_start().len();
-        match dialect::skip_quote_or_comment(sql, i) {
-            Some(Skipped::Comment(end)) => i = end,
-            Some(Skipped::Quoted(_)) | None => return i,
-        }
-    }
 }
 
 /// What is written to `sqlite3` for a statement: the statement, `;` on a line of its own (a
