@@ -103,7 +103,11 @@ keychain.
    password read from `env:` or `op://`, a `keychain:<name>` that is another connection's or
    profile's entry (`repo:…`, `~/…`), or a `${…}` variable other than `${user.…}` (which could
    put the environment into a host name, as ADR-030 refuses for a paste). An export never carries
-   another connection's entry either.
+   another connection's entry either. **An imported item never reads a password this computer
+   already keeps:** a `keychain:<name>` is imported only when the file carries its value and
+   this computer keeps no other password under that name; and an item's own entry the file
+   carries no value for is cleared on import (a replaced connection's old password is then
+   asked, never sent to the host the file chose).
 
 9. **Secrets go to the keychain, never to a file.** Each item is written whole or not at all: its
    secrets first, each through `secrets::store` (written and read back), then its file through

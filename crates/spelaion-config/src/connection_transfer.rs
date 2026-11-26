@@ -175,6 +175,55 @@ fn keychain_entry(spec: Option<&SecretSpec>, default_account: &str) -> Option<St
     }
 }
 
+/// The keychain entry a password spec reads on this computer, and whether the file names it
+/// (`keychain:<name>`) rather than taking the connection's or profile's own entry.
+fn keychain_target(spec: Option<&SecretSpec>, default_account: &str) -> Option<(String, bool)> {
+    match spec?.secret.parse::<SecretRef>().ok()? {
+        SecretRef::Keychain(Some(name)) if names_another_entry(&name, default_account) => None,
+        SecretRef::Keychain(Some(name)) => {
+            let named = name != default_account;
+            Some((name, named))
+        }
+        SecretRef::Keychain(None) => Some((default_account.to_string(), false)),
+        SecretRef::Env(_)
+        | SecretRef::OnePassword(_)
+        | SecretRef::Command(_)
+        | SecretRef::Prompt => None,
+    }
+}
+
+/// Why a named keychain entry keeps an item out of an import: the file does not carry its
+/// value, so the connection would read whatever this computer keeps under that name (another
+/// connection's password, perhaps) and send it to a server the file chose; or this computer
+/// already keeps another password under that name, which the import would replace. An imported
+/// item never reads a password this computer already keeps.
+fn named_entry_refusal(
+    backend: &dyn SecretBackend,
+    spec: Option<&SecretSpec>,
+    default_account: &str,
+    carried: Option<&String>,
+) -> Option<String> {
+    let (account, named) = keychain_target(spec, default_account)?;
+    if !named {
+        return None;
+    }
+    let Some(value) = carried else {
+        return Some(format!(
+            "its password is the keychain entry {account}, which the file does not carry: an imported connection never reads a password this computer already keeps"
+        ));
+    };
+    if !backend.keychain_available() {
+        return None;
+    }
+    match backend.keychain_get(&account) {
+        Ok(Some(existing)) if existing != *value => Some(format!(
+            "the keychain entry {account} already holds another password on this computer"
+        )),
+        Ok(_) => None,
+        Err(e) => Some(format!("could not read the keychain entry {account}: {e}")),
+    }
+}
+
 /// Reads one keychain entry into `secrets` under `role`.
 fn carry(
     backend: &dyn SecretBackend,
@@ -383,10 +432,12 @@ fn variables_refusal(text: &str) -> Option<String> {
 /// elsewhere, names another connection's keychain entry, or uses a variable of the environment.
 fn connection_refusal(
     config: &Config,
+    backend: &dyn SecretBackend,
     id: &str,
     file: &ConnectionFile,
-    text: &str,
+    item: &Item,
 ) -> Option<String> {
+    let text = &item.file;
     let own = connection_account(
         config,
         &ConnectionId {
@@ -395,6 +446,14 @@ fn connection_refusal(
         },
     );
     if let Some(why) = secret_refusal(file.password.as_ref(), &own) {
+        return Some(why);
+    }
+    if let Some(why) = named_entry_refusal(
+        backend,
+        file.password.as_ref(),
+        &own,
+        item.secrets.get("password"),
+    ) {
         return Some(why);
     }
     if file.sqlite3.is_some() {
@@ -412,7 +471,14 @@ fn connection_refusal(
 
 /// Why a network profile is not imported, if it is not: as a connection, and a hop that runs a
 /// command or an `aws` program.
-fn profile_refusal(config: &Config, name: &str, file: &TunnelFile, text: &str) -> Option<String> {
+fn profile_refusal(
+    config: &Config,
+    backend: &dyn SecretBackend,
+    name: &str,
+    file: &TunnelFile,
+    item: &Item,
+) -> Option<String> {
+    let text = &item.file;
     if file.hops.iter().any(|hop| hop.command.is_some()) {
         return Some("a hop runs a command".into());
     }
@@ -421,10 +487,18 @@ fn profile_refusal(config: &Config, name: &str, file: &TunnelFile, text: &str) -
         if let Some(why) = secret_refusal(hop.password.as_ref(), &own) {
             return Some(why);
         }
+        let carried = item.secrets.get(&format!("hop:{}", i + 1));
+        if let Some(why) = named_entry_refusal(backend, hop.password.as_ref(), &own, carried) {
+            return Some(why);
+        }
     }
     if let Some(proxy) = &file.proxy {
         let own = proxy_account(config, Source::User, name);
         if let Some(why) = secret_refusal(proxy.password.as_ref(), &own) {
+            return Some(why);
+        }
+        let carried = item.secrets.get("proxy");
+        if let Some(why) = named_entry_refusal(backend, proxy.password.as_ref(), &own, carried) {
             return Some(why);
         }
     }
@@ -475,7 +549,11 @@ struct Checked<T> {
     file: Result<T, ItemState>,
 }
 
-fn check_connection(config: &Config, item: Item) -> Checked<ConnectionFile> {
+fn check_connection(
+    config: &Config,
+    backend: &dyn SecretBackend,
+    item: Item,
+) -> Checked<ConnectionFile> {
     let path = config
         .user_dir
         .join("connections")
@@ -492,7 +570,7 @@ fn check_connection(config: &Config, item: Item) -> Checked<ConnectionFile> {
     };
     let file =
         file.and_then(
-            |file| match connection_refusal(config, &item.id, &file, &item.file) {
+            |file| match connection_refusal(config, backend, &item.id, &file, &item) {
                 Some(why) => Err(ItemState::Refused(why)),
                 None => Ok(file),
             },
@@ -505,7 +583,7 @@ fn check_connection(config: &Config, item: Item) -> Checked<ConnectionFile> {
     Checked { item, name, file }
 }
 
-fn check_profile(config: &Config, item: Item) -> Checked<TunnelFile> {
+fn check_profile(config: &Config, backend: &dyn SecretBackend, item: Item) -> Checked<TunnelFile> {
     let path = config
         .user_dir
         .join("tunnels")
@@ -520,12 +598,13 @@ fn check_profile(config: &Config, item: Item) -> Checked<TunnelFile> {
             item.id
         )))
     };
-    let file = file.and_then(
-        |file| match profile_refusal(config, &item.id, &file, &item.file) {
-            Some(why) => Err(ItemState::Refused(why)),
-            None => Ok(file),
-        },
-    );
+    let file =
+        file.and_then(
+            |file| match profile_refusal(config, backend, &item.id, &file, &item) {
+                Some(why) => Err(ItemState::Refused(why)),
+                None => Ok(file),
+            },
+        );
     let name = item.id.clone();
     Checked { item, name, file }
 }
@@ -537,6 +616,7 @@ struct Opened {
 
 fn open_and_check(
     config: &Config,
+    backend: &dyn SecretBackend,
     bytes: &[u8],
     password: &Secret,
 ) -> Result<Opened, TransferError> {
@@ -544,13 +624,13 @@ fn open_and_check(
     let profiles: Vec<Checked<TunnelFile>> = plain
         .network_profiles
         .into_iter()
-        .map(|item| check_profile(config, item))
+        .map(|item| check_profile(config, backend, item))
         .collect();
     let connections = plain
         .connections
         .into_iter()
         .map(|item| {
-            let mut checked = check_connection(config, item);
+            let mut checked = check_connection(config, backend, item);
             // A connection whose profile in the file will not be imported is not either.
             if let Ok(file) = &checked.file
                 && let Some(name) = file.tunnel.as_deref()
@@ -600,10 +680,11 @@ fn profile_exists(config: &Config, name: &str) -> bool {
 /// Opens a connections file and says what importing each item would do. Nothing is written.
 pub fn preview_connections_import(
     config: &Config,
+    backend: &dyn SecretBackend,
     bytes: &[u8],
     password: &Secret,
 ) -> Result<Vec<ImportItem>, TransferError> {
-    let opened = open_and_check(config, bytes, password)?;
+    let opened = open_and_check(config, backend, bytes, password)?;
     let mut items = Vec::new();
     for checked in &opened.profiles {
         items.push(ImportItem {
@@ -632,23 +713,52 @@ struct Before {
     value: Option<Secret>,
 }
 
+/// What importing an item does to one keychain entry its file reads: write the value the file
+/// carries, or, when it carries none, make sure nothing this computer already keeps there is
+/// read by the imported item (the entry is cleared, so the password is asked when connecting).
+struct Planned {
+    account: String,
+    value: Option<Secret>,
+    /// The file names the entry (`keychain:<name>`): one that already holds another password
+    /// is never replaced.
+    named: bool,
+}
+
 /// Writes an item's secrets, then its file; when a step fails, the keychain entries it
 /// changed are put back and the file is not written.
 fn write_item(
     backend: &dyn SecretBackend,
-    secrets: &[(String, Secret)],
+    planned: &[Planned],
     path: &Path,
     text: &str,
 ) -> Result<(), String> {
     let mut before: Vec<Before> = Vec::new();
     let result = (|| {
-        for (account, secret) in secrets {
-            let value = backend.keychain_get(account)?.map(Secret::new);
-            before.push(Before {
-                account: account.clone(),
-                value,
-            });
-            store(backend, account, secret.expose())?;
+        for entry in planned {
+            let existing = backend.keychain_get(&entry.account)?;
+            match (&entry.value, existing) {
+                (Some(value), Some(existing)) if entry.named && existing != value.expose() => {
+                    return Err(format!(
+                        "the keychain entry {} already holds another password on this computer",
+                        entry.account
+                    ));
+                }
+                (Some(value), existing) => {
+                    before.push(Before {
+                        account: entry.account.clone(),
+                        value: existing.map(Secret::new),
+                    });
+                    store(backend, &entry.account, value.expose())?;
+                }
+                (None, Some(existing)) => {
+                    before.push(Before {
+                        account: entry.account.clone(),
+                        value: Some(Secret::new(existing)),
+                    });
+                    backend.keychain_delete(&entry.account)?;
+                }
+                (None, None) => {}
+            }
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -666,8 +776,21 @@ fn write_item(
     result
 }
 
-/// The keychain accounts of a connection's secrets on this computer.
-fn connection_secrets(config: &Config, checked: &Checked<ConnectionFile>) -> Vec<(String, Secret)> {
+fn plan(
+    spec: Option<&SecretSpec>,
+    default_account: &str,
+    carried: Option<&String>,
+) -> Option<Planned> {
+    let (account, named) = keychain_target(spec, default_account)?;
+    Some(Planned {
+        account,
+        value: carried.map(|value| Secret::new(value.clone())),
+        named,
+    })
+}
+
+/// The keychain entries a connection's file reads on this computer, with what to do to each.
+fn connection_secrets(config: &Config, checked: &Checked<ConnectionFile>) -> Vec<Planned> {
     let Ok(file) = &checked.file else {
         return Vec::new();
     };
@@ -675,26 +798,36 @@ fn connection_secrets(config: &Config, checked: &Checked<ConnectionFile>) -> Vec
         source: Source::User,
         path: checked.item.id.clone(),
     };
-    let account = keychain_entry(file.password.as_ref(), &connection_account(config, &id));
-    match (account, checked.item.secrets.get("password")) {
-        (Some(account), Some(value)) => vec![(account, Secret::new(value.clone()))],
-        _ => Vec::new(),
-    }
+    plan(
+        file.password.as_ref(),
+        &connection_account(config, &id),
+        checked.item.secrets.get("password"),
+    )
+    .into_iter()
+    .collect()
 }
 
-fn profile_secrets(config: &Config, checked: &Checked<TunnelFile>) -> Vec<(String, Secret)> {
+fn profile_secrets(config: &Config, checked: &Checked<TunnelFile>) -> Vec<Planned> {
     let Ok(file) = &checked.file else {
         return Vec::new();
     };
-    profile_accounts(config, &checked.item.id, file)
-        .into_iter()
-        .filter_map(|(role, account)| {
-            Some((
-                account?,
-                Secret::new(checked.item.secrets.get(&role)?.clone()),
-            ))
-        })
-        .collect()
+    let name = &checked.item.id;
+    let mut planned = Vec::new();
+    for (i, hop) in file.hops.iter().enumerate() {
+        planned.extend(plan(
+            hop.password.as_ref(),
+            &tunnel_account(config, Source::User, name, i),
+            checked.item.secrets.get(&format!("hop:{}", i + 1)),
+        ));
+    }
+    if let Some(proxy) = &file.proxy {
+        planned.extend(plan(
+            proxy.password.as_ref(),
+            &proxy_account(config, Source::User, name),
+            checked.item.secrets.get("proxy"),
+        ));
+    }
+    planned
 }
 
 /// Imports a connections file: every item checked first, then the profiles and the
@@ -709,7 +842,7 @@ pub fn import_connections(
     replace_connections: &[String],
     replace_profiles: &[String],
 ) -> Result<Vec<ImportResult>, TransferError> {
-    let opened = open_and_check(config, bytes, password)?;
+    let opened = open_and_check(config, backend, bytes, password)?;
     let keychain = backend.keychain_available();
     let mut results = Vec::new();
     let mut profiles_written: Vec<String> = Vec::new();
