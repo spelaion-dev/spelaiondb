@@ -55,8 +55,15 @@
   guard its first word (`Dialect::first_word`). SQLite has moved (SDB-456): `SqliteScanner` in
   `sqlite.rs` reads quotes and comments through `skip_quote_or_comment` and keeps a
   `CREATE [TEMP] TRIGGER`'s `BEGIN … END` depth from the statement's first words; `split` and
-  `code_ranges` read its regions. Every other dialect, PostgreSQL, MySQL and SQLite included for
-  now, answers `None` there and the guard reads the word through its
+  `code_ranges` read its regions.
+  DuckDB has moved (SDB-456): its statements end at a `;` outside what `opening` in `duckdb.rs`
+  reads (strings, `E'…'` too, quoted names, nested comments, `$tag$` bodies), so its scanner is
+  `scanner.rs`'s `SemicolonScanner` given that `opening`; `split` and `code_ranges` read its
+  regions through `scanner.rs`'s `statements` and `code_ranges`. A dialect whose words decide
+  nothing about where a statement ends moves the same way: an `Opening` of its own, the shared
+  scanner.
+  Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
+  word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
   white space) must be copied into its other readers (`code_ranges`'s skip function) in the
   same change: that gap is what SDB-436, 437 and 439 were.

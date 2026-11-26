@@ -82,3 +82,130 @@ impl RegionKind {
         }
     }
 }
+
+/// The statements a scanner's regions give: what a dialect's splitter answers.
+pub(crate) fn statements(regions: impl Iterator<Item = Region>) -> Vec<StatementSpan> {
+    regions
+        .filter_map(|region| region.kind.statement())
+        .collect()
+}
+
+/// The code a scanner's regions hold, adjacent regions joined: what a dialect's `code_ranges`
+/// answers.
+pub(crate) fn code_ranges(regions: impl Iterator<Item = Region>) -> Vec<Range<usize>> {
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    for region in regions {
+        if !region.kind.is_code() || region.range.is_empty() {
+            continue;
+        }
+        match ranges.last_mut() {
+            Some(last) if last.end >= region.range.start => {
+                last.end = last.end.max(region.range.end);
+            }
+            _ => ranges.push(region.range),
+        }
+    }
+    ranges
+}
+
+/// A dialect's one reading of what opens a region other than code at a byte: the region's kind
+/// and the byte after it, or `None` when only code starts there.
+pub(crate) type Opening = fn(&str, usize) -> Option<(RegionKind, usize)>;
+
+/// The scanner of a dialect whose statements end at a `;` outside the regions its [`Opening`]
+/// reads (strings, names, comments, quoted bodies), and whose words decide nothing about where
+/// a statement ends: DuckDB, ClickHouse, Trino, Hive, Spanner, Databend. A statement holds code
+/// once it holds anything but white space (the shared rule) and comments.
+pub(crate) struct SemicolonScanner<'a> {
+    script: &'a str,
+    opening: Opening,
+    /// Where the next region starts.
+    i: usize,
+    /// Where the current statement starts.
+    start: usize,
+    /// Whether the current statement holds code yet.
+    has_code: bool,
+    /// The end of the script was reached.
+    ended: bool,
+}
+
+impl<'a> SemicolonScanner<'a> {
+    pub(crate) fn new(script: &'a str, opening: Opening) -> Self {
+        Self {
+            script,
+            opening,
+            i: 0,
+            start: 0,
+            has_code: false,
+            ended: false,
+        }
+    }
+}
+
+impl Iterator for SemicolonScanner<'_> {
+    type Item = Region;
+
+    fn next(&mut self) -> Option<Region> {
+        let script = self.script;
+        let b = script.as_bytes();
+        let len = b.len();
+        let code = self.i;
+        while self.i < len {
+            let i = self.i;
+            if let Some((kind, end)) = (self.opening)(script, i) {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                if kind != RegionKind::Comment {
+                    self.has_code = true;
+                }
+                self.i = end.max(i + 1);
+                return Some(Region {
+                    kind,
+                    range: i..self.i,
+                });
+            }
+            if b[i] == b';' {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                let statement = crate::trimmed(script, self.start, i).filter(|_| self.has_code);
+                self.i = i + 1;
+                self.start = i + 1;
+                self.has_code = false;
+                return Some(Region {
+                    kind: RegionKind::StatementEnd { statement },
+                    range: i..i + 1,
+                });
+            }
+            if !crate::is_white_space_at(script, i) {
+                self.has_code = true;
+            }
+            self.i += 1;
+        }
+        if code < len {
+            return Some(Region {
+                kind: RegionKind::Code,
+                range: code..len,
+            });
+        }
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        // The end of the script ends the last statement.
+        let statement = crate::trimmed(script, self.start, len).filter(|_| self.has_code)?;
+        Some(Region {
+            kind: RegionKind::StatementEnd {
+                statement: Some(statement),
+            },
+            range: len..len,
+        })
+    }
+}
