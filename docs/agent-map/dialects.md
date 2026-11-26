@@ -62,6 +62,10 @@
   regions through `scanner.rs`'s `statements` and `code_ranges`. A dialect whose words decide
   nothing about where a statement ends moves the same way: an `Opening` of its own, the shared
   scanner.
+  Oracle has moved (SDB-456): `OracleScanner` in `oracle.rs` reads strings (`q'[…]'`, `N'…'`),
+  names and comments through `opening`, ends any statement at a line holding only `/` and
+  decides at a statement's first code whether it is a PL/SQL unit (`is_plsql`, whose words read
+  `opening` too; the guard calls it). `skip_non_code` is `opening` without the kind.
   Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
   word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
